@@ -298,6 +298,226 @@ def build_html_report(results, period_start, period_end):
     return html
 
 
+def build_manager_email(manager_data, period_label):
+    """Build Joe's Monday morning motivational coaching email.
+
+    Written to inspire action, give clarity on who to focus on, and
+    make the sales manager feel like they have a clear game plan.
+    """
+    cs = manager_data["coaching_summary"]
+    at = manager_data["agent_trends"]
+    kpi = manager_data["kpi"]
+    tw = manager_data["team_weeks"]
+    curr_totals = tw[0]["totals"] if tw else {}
+
+    meeting = cs["meeting_kpi"]
+    total = cs["total_agents"]
+    pct = cs["pct_meeting"]
+
+    # Pick motivational opener based on team performance
+    if pct >= 80:
+        opener = "The team is firing on all cylinders. Let's keep the momentum going and push for 100%."
+        emoji = "🔥"
+    elif pct >= 50:
+        opener = f"We're making progress — {meeting} out of {total} agents are hitting KPIs. A few targeted conversations this week can move the needle."
+        emoji = "💪"
+    elif pct >= 25:
+        opener = f"Only {meeting} of {total} agents met KPIs last week. This is your opportunity to coach the team up. Small wins compound."
+        emoji = "📈"
+    else:
+        opener = f"Tough week — only {meeting} of {total} hit KPIs. But every great team has weeks like this. Your coaching this week will set the tone for the rest of the month."
+        emoji = "🎯"
+
+    html = f"""
+    <html>
+    <head><style>
+        body {{ font-family: -apple-system, 'Segoe UI', Arial, sans-serif; color: #333; max-width: 680px; margin: 0 auto; padding: 20px; line-height: 1.6; }}
+        h1 {{ color: #1a1a2e; font-size: 20px; margin-bottom: 4px; }}
+        h2 {{ color: #0f3460; font-size: 16px; margin-top: 28px; margin-bottom: 8px; border-bottom: 2px solid #e8e8e8; padding-bottom: 4px; }}
+        .opener {{ background: linear-gradient(135deg, #0f3460, #16213e); color: white; padding: 20px 24px; border-radius: 10px; margin: 16px 0; font-size: 15px; line-height: 1.7; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 13px; }}
+        th {{ background: #0f3460; color: white; padding: 8px 10px; text-align: left; font-size: 12px; }}
+        td {{ padding: 7px 10px; border-bottom: 1px solid #e8e8e8; }}
+        tr:nth-child(even) {{ background: #f8f9fb; }}
+        .grade {{ font-size: 16px; font-weight: 800; text-align: center; }}
+        .grade-A {{ color: #28a745; }} .grade-B {{ color: #3B8AFF; }} .grade-C {{ color: #e67e22; }}
+        .grade-D {{ color: #dc3545; }} .grade-F {{ color: #dc3545; }}
+        .pass {{ color: #28a745; font-weight: 600; }}
+        .fail {{ color: #dc3545; font-weight: 600; }}
+        .muted {{ color: #999; }}
+        .action {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 14px 18px; margin: 10px 0; border-radius: 6px; }}
+        .action.red {{ background: #f8d7da; border-left-color: #dc3545; }}
+        .action.green {{ background: #d4edda; border-left-color: #28a745; }}
+        .action.blue {{ background: #e8f0fe; border-left-color: #3B8AFF; }}
+        .stat-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }}
+        .stat-box {{ background: #f0f4f8; border-radius: 8px; padding: 14px 16px; flex: 1; min-width: 90px; text-align: center; }}
+        .stat-box .num {{ font-size: 26px; font-weight: 700; color: #0f3460; }}
+        .stat-box .lbl {{ font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }}
+        .tag {{ display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }}
+        .tag-pass {{ background: #d4edda; color: #155724; }}
+        .tag-fail {{ background: #f8d7da; color: #721c24; }}
+        .tag-warn {{ background: #fff3cd; color: #856404; }}
+        .footer {{ color: #888; font-size: 11px; margin-top: 30px; border-top: 1px solid #eee; padding-top: 10px; }}
+    </style></head>
+    <body>
+
+    <h1>{emoji} Monday Game Plan — {period_label}</h1>
+    <p style="color:#666;margin-top:0;">KPI Targets: Calls ≥{kpi['min_calls']} • Convos ≥{kpi['min_convos']} • OOC ≤{kpi['max_ooc']}</p>
+
+    <div class="opener">
+        <strong>Good morning, Joe.</strong><br><br>
+        {opener}<br><br>
+        <strong>{meeting}/{total}</strong> agents met KPIs last week. Here's your coaching playbook.
+    </div>
+    """
+
+    # ---- Team Snapshot ----
+    html += """<h2>📊 Team Numbers</h2><div class="stat-row">"""
+    html += f'<div class="stat-box"><div class="num">{curr_totals.get("calls",0)}</div><div class="lbl">Calls</div></div>'
+    html += f'<div class="stat-box"><div class="num">{curr_totals.get("convos",0)}</div><div class="lbl">Convos</div></div>'
+    html += f'<div class="stat-box"><div class="num">{curr_totals.get("texts",0)}</div><div class="lbl">Texts</div></div>'
+    html += f'<div class="stat-box"><div class="num">{curr_totals.get("appts_set",0)}</div><div class="lbl">Appts</div></div>'
+    html += f'<div class="stat-box"><div class="num">{cs["team_call_to_convo"]}%</div><div class="lbl">Connect Rate</div></div>'
+    html += "</div>"
+
+    # ---- Scorecard ----
+    html += '<h2>📋 Agent Scorecard</h2>'
+    html += '<table><tr><th>Grade</th><th>Agent</th><th>Calls</th><th>Convos</th><th>Texts</th><th>Appts</th><th>Connect %</th><th>KPI</th></tr>'
+    for a in at:
+        c = a["current"]
+        grade_cls = f"grade-{a['grade']}"
+        kpi_tag = '<span class="tag tag-pass">PASS</span>' if a["kpi_pass"] else '<span class="tag tag-fail">FAIL</span>'
+        html += f"""<tr>
+            <td class="grade {grade_cls}">{a['grade']}</td>
+            <td><strong>{a['name']}</strong></td>
+            <td>{c['calls']}</td>
+            <td>{c['convos']}</td>
+            <td>{c.get('texts',0)}</td>
+            <td>{c['appts_set']}</td>
+            <td>{a['call_to_convo']}%</td>
+            <td>{kpi_tag}</td>
+        </tr>"""
+    html += "</table>"
+
+    # ---- Your Coaching Plan ----
+    html += '<h2>🎯 Your Coaching Plan</h2>'
+
+    # Accountability
+    acct = [a for a in at if a["coaching_type"] == "accountability"]
+    if acct:
+        html += '<div class="action red"><strong>🚨 Accountability 1-on-1s (Schedule ASAP)</strong><br>'
+        html += '<p style="font-size:13px;margin:6px 0">These agents need a direct conversation about activity expectations. Focus on: <em>call blocking, daily schedule, removing distractions.</em></p>'
+        for a in acct:
+            html += f'<p style="margin:4px 0"><strong>{a["name"]}</strong> (Grade {a["grade"]}) — {a["insights"][0] if a["insights"] else "Needs discussion"}</p>'
+        html += '</div>'
+
+    # Skill coaching
+    skill = [a for a in at if a["coaching_type"] == "skill"]
+    if skill:
+        html += '<div class="action"><strong>📋 Skill Coaching (Role-play / Call Review)</strong><br>'
+        html += '<p style="font-size:13px;margin:6px 0">These agents are making effort but need help converting. Try: <em>listen to their last 3 calls, role-play objection handling, review scripts.</em></p>'
+        for a in skill:
+            html += f'<p style="margin:4px 0"><strong>{a["name"]}</strong> (Grade {a["grade"]}) — {a["insights"][0] if a["insights"] else "Conversion coaching"}</p>'
+        html += '</div>'
+
+    # Praise
+    praise = [a for a in at if a["coaching_type"] == "praise"]
+    if praise:
+        html += '<div class="action green"><strong>🌟 Recognize This Week</strong><br>'
+        html += '<p style="font-size:13px;margin:6px 0">Public praise reinforces the behavior you want. Consider: team shoutout, pair them with struggling agents as mentors.</p>'
+        for a in praise:
+            html += f'<p style="margin:4px 0"><strong>{a["name"]}</strong> (Grade {a["grade"]}) — {a["insights"][0] if a["insights"] else "Meeting KPIs"}</p>'
+        html += '</div>'
+
+    # ---- Quick Wins ----
+    html += '<h2>⚡ Quick Wins for This Week</h2>'
+    html += '<div class="action blue">'
+    html += '<ol style="font-size:13px;margin:0;padding-left:20px">'
+
+    # Dynamic quick wins based on data
+    if acct:
+        html += f'<li><strong>Schedule 1-on-1s with {", ".join(a["name"].split()[0] for a in acct)}</strong> — by Tuesday EOD.</li>'
+    if skill:
+        html += f'<li><strong>Pull call recordings for {", ".join(a["name"].split()[0] for a in skill)}</strong> — listen to their last 3 calls and prep coaching notes.</li>'
+
+    # Text activity insight
+    low_text = [a for a in at if a["current"].get("texts", 0) < 10 and a["current"]["calls"] > 0]
+    if low_text:
+        html += f'<li><strong>Text follow-up gap:</strong> {", ".join(a["name"].split()[0] for a in low_text)} have low text output. Remind agents: every missed call needs a text follow-up.</li>'
+
+    # Connect rate insight
+    low_connect = [a for a in at if a["call_to_convo"] < 5 and a["current"]["calls"] >= 10]
+    if low_connect:
+        html += f'<li><strong>Timing review:</strong> {", ".join(a["name"].split()[0] for a in low_connect)} have very low connect rates. Check what times they\'re calling — early morning and 4-6pm convert best.</li>'
+
+    if praise:
+        html += f'<li><strong>Team huddle shoutout:</strong> Recognize {", ".join(a["name"].split()[0] for a in praise)} in front of the team.</li>'
+
+    html += '<li><strong>End of week:</strong> Check if KPI numbers improved before the next Monday audit.</li>'
+    html += '</ol></div>'
+
+    # Footer
+    html += f"""
+    <p class="footer">
+        Legacy Home Team KPI Audit — Generated {datetime.now().strftime('%A, %B %d at %I:%M %p')}<br>
+        View the full dashboard: <a href="https://web-production-3363cc.up.railway.app/">KPI Dashboard</a>
+    </p>
+    </body></html>
+    """
+    return html
+
+
+def send_manager_email(manager_data, period_label):
+    """Send Joe's Monday morning coaching email. CC Barry."""
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    if not api_key:
+        print("\n⚠  SENDGRID_API_KEY not set.")
+        return False
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail, To
+    except ImportError:
+        return False
+
+    html_body = build_manager_email(manager_data, period_label)
+    cs = manager_data["coaching_summary"]
+    meeting = cs["meeting_kpi"]
+    total = cs["total_agents"]
+
+    subject = f"🎯 Your Monday Game Plan — {meeting}/{total} agents at KPI — {period_label}"
+
+    # Joe + Barry (CC)
+    recipients = [
+        getattr(config, "MANAGER_EMAIL", "thejoefu@gmail.com"),
+    ] + list(config.EMAIL_RECIPIENTS)
+    # Deduplicate
+    seen = set()
+    unique = []
+    for e in recipients:
+        if e not in seen:
+            seen.add(e)
+            unique.append(e)
+
+    to_list = [To(email) for email in unique]
+
+    message = Mail(
+        from_email=config.EMAIL_FROM,
+        to_emails=to_list,
+        subject=subject,
+        html_content=html_body,
+    )
+
+    try:
+        sg = SendGridAPIClient(api_key)
+        sg.send(message)
+        print(f"\n✅ Manager email sent to {len(unique)} recipients")
+        return True
+    except Exception as e:
+        print(f"\n❌ Failed to send manager email: {e}")
+        return False
+
+
 def send_report(results, period_start, period_end):
     """Send the audit report via SendGrid."""
     api_key = os.environ.get("SENDGRID_API_KEY")

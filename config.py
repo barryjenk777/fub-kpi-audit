@@ -137,3 +137,6 @@ EMAIL_RECIPIENTS = [
 # (API cannot manage shared inboxes, so this person is tasked manually)
 LIVE_CALLS_ADMIN = "Fhalen Tendencia"
 LIVE_CALLS_ADMIN_EMAIL = "fhalen@yourfriendlyagent.net"  # Update with Fhalen's real email
+
+# Sales Manager email (Joe's Monday morning coaching email)
+MANAGER_EMAIL = "thejoefu@gmail.com"

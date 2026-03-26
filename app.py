@@ -323,18 +323,27 @@ def api_send_email():
 
 @app.route("/api/manager")
 def api_manager():
-    """Sales Manager tab — 4 weeks of agent trends + focus list."""
+    """Sales Manager tab — deep coaching intelligence for Joe."""
     try:
         client = FUBClient()
-        weeks_data = []
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Fetch 4 weeks of data
-        for week_num in range(1, 5):
-            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            until = today - timedelta(days=7 * (week_num - 1))
+        # Current KPI thresholds (so Joe sees the same bar the agents are held to)
+        apply_saved_settings()
+        kpi = {
+            "min_calls": config.MIN_OUTBOUND_CALLS,
+            "min_convos": config.MIN_CONVERSATIONS,
+            "max_ooc": config.MAX_OUT_OF_COMPLIANCE,
+        }
+
+        # ---- Fetch 4 weeks of data ----
+        weeks_data = []
+        agent_map = auto_detect_agents(client)
+
+        for week_num in range(4):
+            until = today - timedelta(days=7 * week_num)
             since = until - timedelta(days=7)
 
-            agent_map = auto_detect_agents(client)
             all_calls = client.get_calls(since=since, until=until)
             all_appointments = client.get_appointments(since=since, until=until)
 
@@ -343,112 +352,273 @@ def api_manager():
                 uid = user["id"]
                 outbound, convos, talk_secs = count_calls_for_user(all_calls, uid)
                 appts_set, appts_met = count_appointments_for_user(all_appointments, uid)
+
+                # Text messages for current week only (expensive call)
+                texts_out = 0
+                if week_num == 0:
+                    try:
+                        texts_out, _ = client.count_texts_for_user(uid, since=since, until=until)
+                    except Exception:
+                        texts_out = 0
+
+                # OOC count (current week only)
+                ooc_total = 0
+                if week_num == 0:
+                    try:
+                        ooc_total, _, _ = count_compliance_violations(
+                            client, uid, config.COMPLIANCE_TAG
+                        )
+                    except Exception:
+                        pass
+
                 week_agents[name] = {
                     "calls": outbound,
                     "convos": convos,
                     "appts_set": appts_set,
                     "appts_met": appts_met,
                     "talk_secs": talk_secs,
+                    "texts": texts_out,
+                    "ooc": ooc_total,
                 }
 
-            week_label = f"{since.strftime('%b %d')} - {(until - timedelta(days=1)).strftime('%b %d')}"
+            week_label = f"{since.strftime('%b %d')} – {(until - timedelta(days=1)).strftime('%b %d')}"
             weeks_data.append({"label": week_label, "agents": week_agents})
 
-        # Build per-agent trend analysis
+        # ---- Build per-agent analysis ----
         agent_names = sorted(weeks_data[0]["agents"].keys())
         agent_trends = []
 
-        for name in agent_names:
-            weeks = []
-            for wd in weeks_data:
-                w = wd["agents"].get(name, {"calls": 0, "convos": 0, "appts_set": 0, "appts_met": 0, "talk_secs": 0})
-                weeks.append(w)
+        def trend_dir(curr_val, prev_val):
+            if prev_val == 0 and curr_val == 0:
+                return "flat"
+            if prev_val == 0:
+                return "up"
+            pct = ((curr_val - prev_val) / prev_val) * 100
+            if pct > 15:
+                return "up"
+            elif pct < -15:
+                return "down"
+            return "flat"
 
-            # Current = week 0, previous = week 1
+        def pct_change(curr_val, prev_val):
+            if prev_val == 0:
+                return 100 if curr_val > 0 else 0
+            return round(((curr_val - prev_val) / prev_val) * 100)
+
+        for name in agent_names:
+            weeks = [wd["agents"].get(name, {"calls": 0, "convos": 0, "appts_set": 0, "appts_met": 0, "talk_secs": 0, "texts": 0, "ooc": 0}) for wd in weeks_data]
             curr = weeks[0]
             prev = weeks[1] if len(weeks) > 1 else curr
 
-            # Trend calculation
-            def trend(curr_val, prev_val):
-                if prev_val == 0 and curr_val == 0:
-                    return "flat"
-                if prev_val == 0:
-                    return "up"
-                pct = ((curr_val - prev_val) / prev_val) * 100
-                if pct > 15:
-                    return "up"
-                elif pct < -15:
-                    return "down"
-                return "flat"
+            calls_trend = trend_dir(curr["calls"], prev["calls"])
+            convos_trend = trend_dir(curr["convos"], prev["convos"])
 
-            def pct_change(curr_val, prev_val):
-                if prev_val == 0:
-                    return 100 if curr_val > 0 else 0
-                return round(((curr_val - prev_val) / prev_val) * 100)
+            # ---- KPI Pass/Fail for this agent ----
+            calls_pass = curr["calls"] >= kpi["min_calls"]
+            convos_pass = curr["convos"] >= kpi["min_convos"]
+            ooc_pass = curr.get("ooc", 0) <= kpi["max_ooc"]
+            kpi_pass = calls_pass and convos_pass and ooc_pass
 
-            calls_trend = trend(curr["calls"], prev["calls"])
-            convos_trend = trend(curr["convos"], prev["convos"])
+            # ---- Agent Grade (A-F based on weighted score) ----
+            # Calls: 0-100% of target = 0-35 pts
+            # Convos: 0-100%+ of target = 0-30 pts
+            # Appts: 0-2+ = 0-20 pts
+            # OOC penalty: -15 if over threshold
+            call_score = min(curr["calls"] / max(kpi["min_calls"], 1), 1.5) * 35
+            convo_score = min(curr["convos"] / max(kpi["min_convos"], 1), 2.0) * 30
+            appt_score = min(curr["appts_set"] * 10, 20)
+            ooc_penalty = -15 if not ooc_pass else 0
+            total_score = call_score + convo_score + appt_score + ooc_penalty
+            total_score = max(0, min(100, total_score))
 
-            # Concern score: higher = more concerning
+            if total_score >= 85:
+                grade = "A"
+            elif total_score >= 70:
+                grade = "B"
+            elif total_score >= 55:
+                grade = "C"
+            elif total_score >= 35:
+                grade = "D"
+            else:
+                grade = "F"
+
+            # ---- Conversion efficiency ----
+            call_to_convo = round(curr["convos"] / curr["calls"] * 100) if curr["calls"] > 0 else 0
+            convo_to_appt = round(curr["appts_set"] / curr["convos"] * 100) if curr["convos"] > 0 else 0
+
+            # ---- Avg talk time per conversation ----
+            avg_talk = round(curr["talk_secs"] / curr["convos"]) if curr["convos"] > 0 else 0
+            avg_talk_min = round(avg_talk / 60, 1)
+
+            # ---- Activity consistency (how many of 4 weeks had calls > 0) ----
+            active_weeks = sum(1 for w in weeks if w["calls"] > 0)
+
+            # ---- Concern score (higher = needs more attention) ----
             concern = 0
             if curr["calls"] == 0:
-                concern += 50
-            if calls_trend == "down":
-                concern += 30
-            if convos_trend == "down":
-                concern += 20
-            # Declining 2+ weeks in a row
-            if len(weeks) >= 3 and weeks[0]["calls"] < weeks[1]["calls"] < weeks[2]["calls"]:
+                concern += 60
+            elif not calls_pass:
                 concern += 25
-
-            # Build insight sentences
-            insights = []
-            if curr["calls"] == 0:
-                insights.append(f"{name} made 0 calls this week.")
-            elif calls_trend == "down":
-                drop = pct_change(curr["calls"], prev["calls"])
-                insights.append(f"Calls dropped {abs(drop)}% from last week ({prev['calls']} → {curr['calls']}).")
+            if calls_trend == "down":
+                concern += 20
+            if convos_trend == "down":
+                concern += 15
             if curr["convos"] == 0 and prev.get("convos", 0) == 0:
-                insights.append(f"0 conversations for 2 weeks straight.")
-            if convos_trend == "down" and curr["convos"] < prev.get("convos", 0):
-                insights.append(f"Conversations declining ({prev['convos']} → {curr['convos']}).")
+                concern += 25
+            if not ooc_pass:
+                concern += 15
+            # Multi-week decline
+            if len(weeks) >= 3 and weeks[0]["calls"] < weeks[1]["calls"] < weeks[2]["calls"]:
+                concern += 20
+            # Low efficiency: making calls but no conversations
+            if curr["calls"] >= 20 and curr["convos"] == 0:
+                concern += 20
+            # Consistent inactivity
+            if active_weeks <= 1:
+                concern += 15
+
+            # ---- Coaching insights (actionable sentences for Joe) ----
+            insights = []
+            coaching_type = None  # "accountability" | "skill" | "praise"
+
+            if curr["calls"] == 0:
+                insights.append(f"Zero calls this week — schedule an accountability check-in immediately.")
+                coaching_type = "accountability"
+            elif not calls_pass:
+                gap = kpi["min_calls"] - curr["calls"]
+                insights.append(f"Only {curr['calls']} calls — {gap} short of the {kpi['min_calls']} minimum. Needs a call block schedule.")
+                coaching_type = "accountability"
+            elif calls_trend == "down":
+                drop = abs(pct_change(curr["calls"], prev["calls"]))
+                insights.append(f"Calls dropped {drop}% week-over-week ({prev['calls']} → {curr['calls']}).")
+                coaching_type = "accountability"
+
+            if curr["calls"] >= 20 and curr["convos"] == 0:
+                insights.append(f"Making {curr['calls']} calls but 0 conversations — may need script coaching or call review.")
+                coaching_type = "skill"
+            elif curr["calls"] > 0 and call_to_convo < 5 and curr["convos"] > 0:
+                insights.append(f"Low call-to-convo rate ({call_to_convo}%) — review call approach and timing.")
+                coaching_type = "skill"
+
+            if curr["convos"] > 0 and curr["appts_set"] == 0:
+                insights.append(f"Having conversations but not converting to appointments — needs close/ask coaching.")
+                coaching_type = "skill"
+
+            if curr["convos"] == 0 and prev.get("convos", 0) == 0:
+                insights.append(f"Zero conversations for 2 weeks running.")
+
+            if avg_talk_min > 0 and avg_talk_min < 2.5:
+                insights.append(f"Avg convo only {avg_talk_min}m — calls may be ending before building rapport.")
+
+            if not ooc_pass:
+                insights.append(f"{curr.get('ooc', 0)} leads out of compliance (max {kpi['max_ooc']}) — clear Maverick nudges.")
+
+            # Positive signals
+            if kpi_pass and calls_trend != "down":
+                insights.append(f"Meeting all KPIs — acknowledge and challenge to stretch.")
+                coaching_type = "praise"
+            if curr["appts_set"] > 0 and curr["appts_met"] > 0:
+                set_to_met = round(curr["appts_met"] / curr["appts_set"] * 100)
+                if set_to_met >= 70:
+                    insights.append(f"Strong show rate ({set_to_met}%) — solid follow-through.")
+
+            if not coaching_type:
+                coaching_type = "skill" if curr["calls"] > 0 else "accountability"
 
             agent_trends.append({
                 "name": name,
                 "current": curr,
                 "previous": prev,
-                "weeks": [w for w in weeks],  # [current, prev, 2wk ago, 3wk ago]
+                "weeks": weeks,
                 "calls_trend": calls_trend,
                 "convos_trend": convos_trend,
                 "calls_change": pct_change(curr["calls"], prev["calls"]),
                 "convos_change": pct_change(curr["convos"], prev["convos"]),
+                "grade": grade,
+                "score": round(total_score),
+                "kpi_pass": kpi_pass,
+                "calls_pass": calls_pass,
+                "convos_pass": convos_pass,
+                "ooc_pass": ooc_pass,
+                "call_to_convo": call_to_convo,
+                "convo_to_appt": convo_to_appt,
+                "avg_talk_min": avg_talk_min,
+                "active_weeks": active_weeks,
                 "concern": concern,
                 "insights": insights,
+                "coaching_type": coaching_type,
             })
 
         # Sort by concern (worst first)
         agent_trends.sort(key=lambda a: a["concern"], reverse=True)
 
-        # Team totals per week
+        # ---- Team totals per week ----
         team_weeks = []
         for wd in weeks_data:
-            totals = {"calls": 0, "convos": 0, "appts_set": 0}
+            totals = {"calls": 0, "convos": 0, "appts_set": 0, "talk_secs": 0, "texts": 0}
             for ag in wd["agents"].values():
                 totals["calls"] += ag["calls"]
                 totals["convos"] += ag["convos"]
                 totals["appts_set"] += ag["appts_set"]
+                totals["talk_secs"] += ag.get("talk_secs", 0)
+                totals["texts"] += ag.get("texts", 0)
             team_weeks.append({"label": wd["label"], "totals": totals})
 
-        # Focus list: bottom third by concern
-        focus_count = max(len(agent_trends) // 3, 1)
-        focus_list = agent_trends[:focus_count]
+        # ---- Team-wide coaching summary ----
+        total_agents = len(agent_trends)
+        meeting_kpi = sum(1 for a in agent_trends if a["kpi_pass"])
+        need_accountability = [a["name"] for a in agent_trends if a["coaching_type"] == "accountability"]
+        need_skill = [a["name"] for a in agent_trends if a["coaching_type"] == "skill"]
+        praise_list = [a["name"] for a in agent_trends if a["coaching_type"] == "praise"]
+
+        # Team call-to-convo rate
+        tc = team_weeks[0]["totals"]
+        team_c2c = round(tc["convos"] / tc["calls"] * 100) if tc["calls"] > 0 else 0
+
+        coaching_summary = {
+            "total_agents": total_agents,
+            "meeting_kpi": meeting_kpi,
+            "pct_meeting": round(meeting_kpi / total_agents * 100) if total_agents > 0 else 0,
+            "need_accountability": need_accountability,
+            "need_skill": need_skill,
+            "praise_list": praise_list,
+            "team_call_to_convo": team_c2c,
+        }
 
         return jsonify({
             "agent_trends": agent_trends,
             "team_weeks": team_weeks,
-            "focus_list": focus_list,
+            "coaching_summary": coaching_summary,
+            "kpi": kpi,
             "week_labels": [wd["label"] for wd in weeks_data],
         })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/send-manager-email", methods=["POST"])
+def api_send_manager_email():
+    """Send Joe's Monday morning coaching email."""
+    try:
+        from email_report import send_manager_email
+
+        # Get manager data
+        import json as _json
+        with app.test_client() as tc:
+            resp = tc.get("/api/manager")
+            mgr_data = _json.loads(resp.data)
+
+        if "error" in mgr_data:
+            return jsonify({"error": mgr_data["error"]}), 500
+
+        period = mgr_data["team_weeks"][0]["label"] if mgr_data["team_weeks"] else "This Week"
+        success = send_manager_email(mgr_data, period)
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"error": "Send failed. Check SENDGRID_API_KEY."}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
