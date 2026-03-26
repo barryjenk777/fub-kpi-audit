@@ -195,13 +195,23 @@ def build_excluded_person_ids(client, all_calls):
 
 def calculate_speed_to_lead(client, user_id, since):
     """
-    Calculate average speed-to-lead for recently assigned leads.
+    Calculate average speed-to-lead for newly routed leads only.
+
+    Only measures leads that were auto-assigned to the agent via lead
+    routing (createdVia = API or Email Parsing), NOT leads the agent
+    picked up from the pond or created manually.
+
+    Excludes Sphere leads (past clients, not purchased).
     Returns (avg_minutes, num_leads_measured) or (None, 0).
     """
+    # Routed lead sources — these are new leads pushed to the agent
+    ROUTED_VIA = {"api", "email parsing"}
+    excluded_sources = {s.lower() for s in config.EXCLUDED_LEAD_SOURCES}
+
     people = client.get_people(
         assigned_user_id=user_id,
         created_since=since,
-        limit=50
+        limit=100
     )
 
     if not people:
@@ -209,6 +219,16 @@ def calculate_speed_to_lead(client, user_id, since):
 
     speeds = []
     for person in people:
+        # Only measure leads that were routed to the agent (not pond/manual)
+        created_via = (person.get("createdVia") or "").lower()
+        if created_via not in ROUTED_VIA:
+            continue
+
+        # Skip Sphere and other excluded sources
+        source = (person.get("source") or "").lower()
+        if source in excluded_sources:
+            continue
+
         created_at = person.get("created")
         if not created_at or not isinstance(created_at, str):
             continue
@@ -234,6 +254,7 @@ def calculate_speed_to_lead(client, user_id, since):
 
         if first_contact and first_contact > created_dt:
             diff_minutes = (first_contact - created_dt).total_seconds() / 60
+            # Only count reasonable values (< 24 hours)
             if diff_minutes < 1440:
                 speeds.append(diff_minutes)
 
