@@ -257,6 +257,50 @@ class FUBClient:
             params["dateFrom"] = since.strftime("%Y-%m-%d")
         return self._get_paginated("textMessages", params)
 
+    def count_texts_for_user(self, user_id, since=None, until=None):
+        """Count outbound texts for a user by scanning calls for their phone,
+        then querying textMessages by fromNumber. Returns (outbound, total)."""
+        # Get user's phone number from their recent calls
+        calls = self.get_calls(since=since, until=until)
+        phone = None
+        for c in calls:
+            if c.get("userId") == user_id and c.get("fromNumber"):
+                phone = c["fromNumber"]
+                break
+
+        if not phone:
+            return 0, 0
+
+        # Fetch texts by this phone number
+        since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None
+        limit = 100
+        offset = 0
+        outbound = 0
+        total = 0
+
+        while offset < 2000:
+            params = {"limit": limit, "offset": offset, "fromNumber": phone}
+            data = self._request("GET", "textMessages", params=params)
+            items = data.get("textMessages", data.get("textmessages", []))
+
+            if not items:
+                break
+
+            for msg in items:
+                created = msg.get("created", "")
+                if since_str and created < since_str:
+                    return outbound, total
+                total += 1
+                direction = (msg.get("direction") or "").lower()
+                if direction == "outbound" or not msg.get("isIncoming", True):
+                    outbound += 1
+
+            if len(items) < limit:
+                break
+            offset += limit
+
+        return outbound, total
+
     # ---- Tasks ----
 
     def get_tasks(self, user_id=None, status=None):
@@ -267,6 +311,21 @@ class FUBClient:
         if status:
             params["status"] = status
         return self._get_paginated("tasks", params)
+
+    # ---- People (individual) ----
+
+    def get_person(self, person_id):
+        """Get a single person by ID."""
+        return self._request("GET", f"people/{person_id}")
+
+    def add_tag(self, person_id, tag):
+        """Add a tag to a person."""
+        person = self.get_person(person_id)
+        tags = person.get("tags", []) or []
+        if tag not in tags:
+            tags.append(tag)
+            return self._request("PUT", f"people/{person_id}", json_data={"tags": tags})
+        return person
 
     @property
     def request_count(self):

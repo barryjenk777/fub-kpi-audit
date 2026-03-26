@@ -39,7 +39,24 @@ MAX_OUT_OF_COMPLIANCE = 100
 EXCLUDED_USERS = [
     "Barry Jenkins",
     "Fhalen Tendencia",
+    "Joseph Fuscaldo",
 ]
+
+
+# =============================================================================
+# ROLE-SPECIFIC USER IDS
+# =============================================================================
+
+# Sales Manager — tracked on the "Sales Manager" tab
+MANAGER_USER_ID = 50       # Joseph Fuscaldo
+MANAGER_NAME = "Joseph Fuscaldo"
+
+# ISA — tracked on the "ISA Performance" tab
+ISA_USER_ID = 46           # Fhalen Tendencia
+ISA_NAME = "Fhalen Tendencia"
+
+# Tag applied to leads where ISA set an appointment but agent hasn't followed up
+DROPPED_BALL_TAG = "Fhalen_Pending"
 
 # Agents to NEVER remove from the priority group even if they miss KPIs
 # (e.g., team leader who should always receive transfers as fallback)

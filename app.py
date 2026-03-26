@@ -321,6 +321,344 @@ def api_send_email():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/manager")
+def api_manager():
+    """Sales Manager tab — 4 weeks of agent trends + focus list."""
+    try:
+        client = FUBClient()
+        weeks_data = []
+
+        # Fetch 4 weeks of data
+        for week_num in range(1, 5):
+            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            until = today - timedelta(days=7 * (week_num - 1))
+            since = until - timedelta(days=7)
+
+            agent_map = auto_detect_agents(client)
+            all_calls = client.get_calls(since=since, until=until)
+            all_appointments = client.get_appointments(since=since, until=until)
+
+            week_agents = {}
+            for name, user in agent_map.items():
+                uid = user["id"]
+                outbound, convos, talk_secs = count_calls_for_user(all_calls, uid)
+                appts_set, appts_met = count_appointments_for_user(all_appointments, uid)
+                week_agents[name] = {
+                    "calls": outbound,
+                    "convos": convos,
+                    "appts_set": appts_set,
+                    "appts_met": appts_met,
+                    "talk_secs": talk_secs,
+                }
+
+            week_label = f"{since.strftime('%b %d')} - {(until - timedelta(days=1)).strftime('%b %d')}"
+            weeks_data.append({"label": week_label, "agents": week_agents})
+
+        # Build per-agent trend analysis
+        agent_names = sorted(weeks_data[0]["agents"].keys())
+        agent_trends = []
+
+        for name in agent_names:
+            weeks = []
+            for wd in weeks_data:
+                w = wd["agents"].get(name, {"calls": 0, "convos": 0, "appts_set": 0, "appts_met": 0, "talk_secs": 0})
+                weeks.append(w)
+
+            # Current = week 0, previous = week 1
+            curr = weeks[0]
+            prev = weeks[1] if len(weeks) > 1 else curr
+
+            # Trend calculation
+            def trend(curr_val, prev_val):
+                if prev_val == 0 and curr_val == 0:
+                    return "flat"
+                if prev_val == 0:
+                    return "up"
+                pct = ((curr_val - prev_val) / prev_val) * 100
+                if pct > 15:
+                    return "up"
+                elif pct < -15:
+                    return "down"
+                return "flat"
+
+            def pct_change(curr_val, prev_val):
+                if prev_val == 0:
+                    return 100 if curr_val > 0 else 0
+                return round(((curr_val - prev_val) / prev_val) * 100)
+
+            calls_trend = trend(curr["calls"], prev["calls"])
+            convos_trend = trend(curr["convos"], prev["convos"])
+
+            # Concern score: higher = more concerning
+            concern = 0
+            if curr["calls"] == 0:
+                concern += 50
+            if calls_trend == "down":
+                concern += 30
+            if convos_trend == "down":
+                concern += 20
+            # Declining 2+ weeks in a row
+            if len(weeks) >= 3 and weeks[0]["calls"] < weeks[1]["calls"] < weeks[2]["calls"]:
+                concern += 25
+
+            # Build insight sentences
+            insights = []
+            if curr["calls"] == 0:
+                insights.append(f"{name} made 0 calls this week.")
+            elif calls_trend == "down":
+                drop = pct_change(curr["calls"], prev["calls"])
+                insights.append(f"Calls dropped {abs(drop)}% from last week ({prev['calls']} → {curr['calls']}).")
+            if curr["convos"] == 0 and prev.get("convos", 0) == 0:
+                insights.append(f"0 conversations for 2 weeks straight.")
+            if convos_trend == "down" and curr["convos"] < prev.get("convos", 0):
+                insights.append(f"Conversations declining ({prev['convos']} → {curr['convos']}).")
+
+            agent_trends.append({
+                "name": name,
+                "current": curr,
+                "previous": prev,
+                "weeks": [w for w in weeks],  # [current, prev, 2wk ago, 3wk ago]
+                "calls_trend": calls_trend,
+                "convos_trend": convos_trend,
+                "calls_change": pct_change(curr["calls"], prev["calls"]),
+                "convos_change": pct_change(curr["convos"], prev["convos"]),
+                "concern": concern,
+                "insights": insights,
+            })
+
+        # Sort by concern (worst first)
+        agent_trends.sort(key=lambda a: a["concern"], reverse=True)
+
+        # Team totals per week
+        team_weeks = []
+        for wd in weeks_data:
+            totals = {"calls": 0, "convos": 0, "appts_set": 0}
+            for ag in wd["agents"].values():
+                totals["calls"] += ag["calls"]
+                totals["convos"] += ag["convos"]
+                totals["appts_set"] += ag["appts_set"]
+            team_weeks.append({"label": wd["label"], "totals": totals})
+
+        # Focus list: bottom third by concern
+        focus_count = max(len(agent_trends) // 3, 1)
+        focus_list = agent_trends[:focus_count]
+
+        return jsonify({
+            "agent_trends": agent_trends,
+            "team_weeks": team_weeks,
+            "focus_list": focus_list,
+            "week_labels": [wd["label"] for wd in weeks_data],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/isa")
+def api_isa():
+    """ISA Performance tab — Fhalen's metrics, funnel, pipeline, dropped balls."""
+    try:
+        client = FUBClient()
+        isa_id = config.ISA_USER_ID
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Current week
+        until_curr = today
+        since_curr = today - timedelta(days=7)
+        # Previous week
+        until_prev = since_curr
+        since_prev = since_curr - timedelta(days=7)
+
+        # Fetch data for both weeks
+        calls_curr = client.get_calls(since=since_curr, until=until_curr)
+        calls_prev = client.get_calls(since=since_prev, until=until_prev)
+        appts_curr = client.get_appointments(since=since_curr, until=until_curr)
+        appts_prev = client.get_appointments(since=since_prev, until=until_prev)
+
+        def isa_calls(all_calls):
+            outbound = 0
+            convos = 0
+            talk_secs = 0
+            for c in all_calls:
+                if c.get("userId") != isa_id:
+                    continue
+                dur = c.get("duration", 0) or 0
+                if not c.get("isIncoming", False):
+                    outbound += 1
+                if dur >= config.CONVERSATION_THRESHOLD_SECONDS:
+                    convos += 1
+                    talk_secs += dur
+            return outbound, convos, talk_secs
+
+        def isa_appts(all_appts):
+            appt_set = 0
+            appt_met = 0
+            no_show = 0
+            pending = 0
+            for a in all_appts:
+                invitees = a.get("invitees", [])
+                isa_involved = any(inv.get("userId") == isa_id for inv in invitees)
+                has_lead = any(inv.get("personId") for inv in invitees)
+                if not isa_involved or not has_lead:
+                    continue
+                appt_set += 1
+                outcome = a.get("outcome")
+                if outcome == "Met with Client":
+                    appt_met += 1
+                elif outcome == "No show":
+                    no_show += 1
+                elif outcome is None:
+                    pending += 1
+            return appt_set, appt_met, no_show, pending
+
+        out_curr, conv_curr, talk_curr = isa_calls(calls_curr)
+        out_prev, conv_prev, talk_prev = isa_calls(calls_prev)
+        appt_set_curr, appt_met_curr, no_show_curr, pending_curr = isa_appts(appts_curr)
+        appt_set_prev, appt_met_prev, no_show_prev, pending_prev = isa_appts(appts_prev)
+
+        show_rate_curr = round(appt_met_curr / appt_set_curr * 100) if appt_set_curr > 0 else 0
+        show_rate_prev = round(appt_met_prev / appt_set_prev * 100) if appt_set_prev > 0 else 0
+        calls_per_appt = round(out_curr / appt_set_curr) if appt_set_curr > 0 else 0
+
+        # 4-week sparkline data
+        sparkline_calls = []
+        sparkline_convos = []
+        sparkline_appts = []
+        for wk in range(4):
+            u = today - timedelta(days=7 * wk)
+            s = u - timedelta(days=7)
+            wk_calls = client.get_calls(since=s, until=u)
+            wk_appts = client.get_appointments(since=s, until=u)
+            o, cv, _ = isa_calls(wk_calls)
+            a_set, _, _, _ = isa_appts(wk_appts)
+            label = f"{s.strftime('%b %d')}"
+            sparkline_calls.append({"label": label, "value": o})
+            sparkline_convos.append({"label": label, "value": cv})
+            sparkline_appts.append({"label": label, "value": a_set})
+
+        # Reverse so oldest is first
+        sparkline_calls.reverse()
+        sparkline_convos.reverse()
+        sparkline_appts.reverse()
+
+        # Pipeline snapshot
+        all_leads = client.get_people(assigned_user_id=isa_id, limit=500)
+        stages = {}
+        sources = {}
+        for p in all_leads:
+            stage = p.get("stage") or "Unknown"
+            stages[stage] = stages.get(stage, 0) + 1
+            source = p.get("source") or "Unknown"
+            sources[source] = sources.get(source, 0) + 1
+
+        # Top sources sorted by count
+        top_sources = sorted(sources.items(), key=lambda x: x[1], reverse=True)[:6]
+
+        # Speed to lead for ISA
+        from kpi_audit import calculate_speed_to_lead
+        stl_avg, stl_count = calculate_speed_to_lead(client, isa_id, since_curr)
+
+        # Dropped balls: appointments Fhalen set where agent hasn't followed up
+        dropped_balls = []
+        all_appts_recent = client.get_appointments(
+            since=today - timedelta(days=30), until=today
+        )
+        for appt in all_appts_recent:
+            invitees = appt.get("invitees", [])
+            isa_involved = any(inv.get("userId") == isa_id for inv in invitees)
+            if not isa_involved:
+                continue
+
+            # Find the lead in this appointment
+            lead_inv = next((inv for inv in invitees if inv.get("personId")), None)
+            if not lead_inv:
+                continue
+
+            # Check if outcome is missing (agent didn't log it)
+            if appt.get("outcome") is not None:
+                continue  # Outcome was logged, not a dropped ball
+
+            person_id = lead_inv["personId"]
+            lead_name = lead_inv.get("name", "Unknown")
+
+            # Find which agent this lead is assigned to
+            try:
+                person = client.get_person(person_id)
+                assigned_to = person.get("assignedTo", "Unassigned")
+                assigned_uid = person.get("assignedUserId")
+                stage = person.get("stage", "Unknown")
+
+                # Skip if assigned to ISA herself
+                if assigned_uid == isa_id:
+                    continue
+
+                dropped_balls.append({
+                    "lead_name": lead_name,
+                    "person_id": person_id,
+                    "agent_name": assigned_to,
+                    "appt_date": appt.get("start", "")[:10],
+                    "appt_title": appt.get("title", ""),
+                    "stage": stage,
+                    "has_tag": config.DROPPED_BALL_TAG.lower() in [
+                        t.lower() for t in (person.get("tags") or [])
+                    ],
+                })
+            except Exception:
+                continue
+
+        return jsonify({
+            "current": {
+                "calls": out_curr, "convos": conv_curr,
+                "talk_secs": talk_curr, "appts_set": appt_set_curr,
+                "appts_met": appt_met_curr, "no_show": no_show_curr,
+                "pending": pending_curr, "show_rate": show_rate_curr,
+                "calls_per_appt": calls_per_appt,
+            },
+            "previous": {
+                "calls": out_prev, "convos": conv_prev,
+                "talk_secs": talk_prev, "appts_set": appt_set_prev,
+                "appts_met": appt_met_prev, "show_rate": show_rate_prev,
+            },
+            "sparkline": {
+                "calls": sparkline_calls,
+                "convos": sparkline_convos,
+                "appts": sparkline_appts,
+            },
+            "pipeline": {
+                "total": len(all_leads),
+                "stages": stages,
+                "top_sources": [{"source": s, "count": c} for s, c in top_sources],
+            },
+            "speed_to_lead": {"avg": stl_avg, "count": stl_count},
+            "dropped_balls": dropped_balls,
+            "period": {
+                "current": f"{since_curr.strftime('%b %d')} - {(until_curr - timedelta(days=1)).strftime('%b %d')}",
+                "previous": f"{since_prev.strftime('%b %d')} - {(until_prev - timedelta(days=1)).strftime('%b %d')}",
+            },
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/isa/tag-pending", methods=["POST"])
+def api_tag_pending():
+    """Add Fhalen_Pending tag to dropped-ball leads."""
+    data = request.json or {}
+    person_ids = data.get("person_ids", [])
+
+    try:
+        client = FUBClient()
+        tagged = 0
+        for pid in person_ids:
+            try:
+                client.add_tag(pid, config.DROPPED_BALL_TAG)
+                tagged += 1
+            except Exception:
+                pass
+        return jsonify({"success": True, "tagged": tagged})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
