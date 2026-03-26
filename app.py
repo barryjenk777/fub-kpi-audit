@@ -728,7 +728,7 @@ def api_send_manager_email():
 
 @app.route("/api/isa")
 def api_isa():
-    """ISA Performance tab — Fhalen's metrics, funnel, pipeline, dropped balls."""
+    """ISA Performance tab — deep coaching analytics for Fhalen."""
     force = request.args.get("force", "false").lower() == "true"
     try:
         if not force:
@@ -741,181 +741,313 @@ def api_isa():
         isa_id = config.ISA_USER_ID
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Current week
         until_curr = today
         since_curr = today - timedelta(days=7)
-        # Previous week
         until_prev = since_curr
         since_prev = since_curr - timedelta(days=7)
 
-        # Fetch data for both weeks
-        calls_curr = client.get_calls(since=since_curr, until=until_curr)
-        calls_prev = client.get_calls(since=since_prev, until=until_prev)
-        appts_curr = client.get_appointments(since=since_curr, until=until_curr)
-        appts_prev = client.get_appointments(since=since_prev, until=until_prev)
+        # Single batch fetch: 4 weeks of calls + appointments
+        full_since = today - timedelta(days=28)
+        all_calls_4w = client.get_calls(since=full_since, until=today)
+        all_appts_4w = client.get_appointments(since=full_since, until=today)
 
+        # Filter to Fhalen's calls
+        def week_slice(items, s, u, date_key="created"):
+            s_str = s.strftime("%Y-%m-%dT%H:%M:%SZ")
+            u_str = u.strftime("%Y-%m-%dT%H:%M:%SZ")
+            return [i for i in items if s_str <= (i.get(date_key) or "") < u_str]
+
+        calls_curr = week_slice(all_calls_4w, since_curr, until_curr)
+        calls_prev = week_slice(all_calls_4w, since_prev, until_prev)
+
+        # ── Call metrics ──
         def isa_calls(all_calls):
-            outbound = 0
-            convos = 0
-            talk_secs = 0
+            outbound = 0; convos = 0; talk_secs = 0; connected = 0
             for c in all_calls:
                 if c.get("userId") != isa_id:
                     continue
                 dur = c.get("duration", 0) or 0
                 if not c.get("isIncoming", False):
                     outbound += 1
+                    if dur > 0:
+                        connected += 1
                 if dur >= config.CONVERSATION_THRESHOLD_SECONDS:
                     convos += 1
                     talk_secs += dur
-            return outbound, convos, talk_secs
+            return outbound, connected, convos, talk_secs
 
-        def isa_appts(all_appts):
-            appt_set = 0
-            appt_met = 0
-            no_show = 0
-            pending = 0
-            for a in all_appts:
-                invitees = a.get("invitees", [])
-                isa_involved = any(inv.get("userId") == isa_id for inv in invitees)
-                has_lead = any(inv.get("personId") for inv in invitees)
-                if not isa_involved or not has_lead:
-                    continue
-                appt_set += 1
-                outcome = a.get("outcome")
-                if outcome == "Met with Client":
-                    appt_met += 1
-                elif outcome == "No show":
-                    no_show += 1
-                elif outcome is None:
-                    pending += 1
-            return appt_set, appt_met, no_show, pending
+        out_curr, conn_curr, conv_curr, talk_curr = isa_calls(calls_curr)
+        out_prev, conn_prev, conv_prev, talk_prev = isa_calls(calls_prev)
 
-        out_curr, conv_curr, talk_curr = isa_calls(calls_curr)
-        out_prev, conv_prev, talk_prev = isa_calls(calls_prev)
-        appt_set_curr, appt_met_curr, no_show_curr, pending_curr = isa_appts(appts_curr)
-        appt_set_prev, appt_met_prev, no_show_prev, pending_prev = isa_appts(appts_prev)
+        # ── Conversion funnel: dialed → connected → conversation ──
+        connect_rate = round(conn_curr / out_curr * 100) if out_curr else 0
+        convo_rate = round(conv_curr / conn_curr * 100) if conn_curr else 0
+        connect_rate_prev = round(conn_prev / out_prev * 100) if out_prev else 0
+        convo_rate_prev = round(conv_prev / conn_prev * 100) if conn_prev else 0
 
-        show_rate_curr = round(appt_met_curr / appt_set_curr * 100) if appt_set_curr > 0 else 0
-        show_rate_prev = round(appt_met_prev / appt_set_prev * 100) if appt_set_prev > 0 else 0
-        calls_per_appt = round(out_curr / appt_set_curr) if appt_set_curr > 0 else 0
+        # ── Call quality: duration buckets ──
+        fhalen_out_curr = [c for c in calls_curr if c.get("userId") == isa_id and not c.get("isIncoming")]
+        durations = [(c.get("duration", 0) or 0) for c in fhalen_out_curr]
+        dur_buckets = {
+            "no_answer": sum(1 for d in durations if d == 0),
+            "under_30s": sum(1 for d in durations if 0 < d < 30),
+            "30s_to_2m": sum(1 for d in durations if 30 <= d < 120),
+            "2m_to_5m": sum(1 for d in durations if 120 <= d < 300),
+            "over_5m": sum(1 for d in durations if d >= 300),
+        }
 
-        # 4-week sparkline data — single batch fetch
-        full_since = today - timedelta(days=28)
-        all_calls_4w = client.get_calls(since=full_since, until=today)
-        all_appts_4w = client.get_appointments(since=full_since, until=today)
+        # ── Call timing analysis: when does she have the best conversations? ──
+        best_hours = {}
+        for c in fhalen_out_curr:
+            dur = c.get("duration", 0) or 0
+            created = c.get("created", "")
+            if dur >= 120 and created:
+                try:
+                    hr = int(created[11:13])
+                    # Convert UTC to EST (approximate)
+                    hr_est = (hr - 4) % 24
+                    slot = f"{hr_est}:00"
+                    best_hours[slot] = best_hours.get(slot, 0) + 1
+                except (ValueError, IndexError):
+                    pass
 
-        sparkline_calls = []
-        sparkline_convos = []
-        sparkline_appts = []
+        # ── Appointments (Fhalen-created calendar events) ──
+        def isa_appts(appts_list):
+            fhalen_appts = [a for a in appts_list if a.get("createdById") == isa_id]
+            met = sum(1 for a in fhalen_appts if a.get("outcome") == "Met with Client")
+            no_show = sum(1 for a in fhalen_appts if a.get("outcome") == "No show")
+            reschedule = sum(1 for a in fhalen_appts if a.get("outcome") == "Reschedule Needed")
+            pending = sum(1 for a in fhalen_appts if a.get("outcome") is None)
+            return len(fhalen_appts), met, no_show, reschedule, pending
+
+        appts_curr_list = week_slice(all_appts_4w, since_curr, until_curr, "start")
+        appts_prev_list = week_slice(all_appts_4w, since_prev, until_prev, "start")
+        appt_set_curr, appt_met_curr, no_show_curr, resched_curr, pending_curr = isa_appts(appts_curr_list)
+        appt_set_prev, appt_met_prev, no_show_prev, resched_prev, pending_prev = isa_appts(appts_prev_list)
+
+        show_rate_curr = round(appt_met_curr / appt_set_curr * 100) if appt_set_curr else 0
+        show_rate_prev = round(appt_met_prev / appt_set_prev * 100) if appt_set_prev else 0
+        calls_per_convo = round(out_curr / conv_curr) if conv_curr else 0
+
+        # ── 4-week sparklines ──
+        sparkline_calls = []; sparkline_convos = []; sparkline_appts = []; sparkline_connected = []
         for wk in range(4):
             u = today - timedelta(days=7 * wk)
             s = u - timedelta(days=7)
-            s_str = s.strftime("%Y-%m-%dT%H:%M:%SZ")
-            u_str = u.strftime("%Y-%m-%dT%H:%M:%SZ")
-            wk_calls = [c for c in all_calls_4w if s_str <= (c.get("created") or "") < u_str]
-            wk_appts = [a for a in all_appts_4w if s_str <= (a.get("start") or a.get("created") or "") < u_str]
-            o, cv, _ = isa_calls(wk_calls)
-            a_set, _, _, _ = isa_appts(wk_appts)
-            label = f"{s.strftime('%b %d')}"
+            wk_calls = week_slice(all_calls_4w, s, u)
+            wk_appts = week_slice(all_appts_4w, s, u, "start")
+            o, cn, cv, _ = isa_calls(wk_calls)
+            a_total, _, _, _, _ = isa_appts(wk_appts)
+            label = s.strftime("%b %d")
             sparkline_calls.append({"label": label, "value": o})
+            sparkline_connected.append({"label": label, "value": cn})
             sparkline_convos.append({"label": label, "value": cv})
-            sparkline_appts.append({"label": label, "value": a_set})
+            sparkline_appts.append({"label": label, "value": a_total})
+        sparkline_calls.reverse(); sparkline_connected.reverse()
+        sparkline_convos.reverse(); sparkline_appts.reverse()
 
-        # Reverse so oldest is first
-        sparkline_calls.reverse()
-        sparkline_convos.reverse()
-        sparkline_appts.reverse()
+        # ── STALE LEADS: Fhalen connected with someone, handed to agent, agent went dark ──
+        # Look at all people Fhalen called (duration > 0) in last 30 days
+        fhalen_connected_30d = set()
+        for c in all_calls_4w:
+            if c.get("userId") == isa_id and (c.get("duration", 0) or 0) > 0:
+                pid = c.get("personId")
+                if pid:
+                    fhalen_connected_30d.add(pid)
 
-        # Pipeline snapshot (limit 200 to save memory)
-        all_leads = client.get_people(assigned_user_id=isa_id, limit=200)
-        stages = {}
-        sources = {}
-        for p in all_leads:
-            stage = p.get("stage") or "Unknown"
-            stages[stage] = stages.get(stage, 0) + 1
-            source = p.get("source") or "Unknown"
-            sources[source] = sources.get(source, 0) + 1
+        stale_leads = []
+        stale_by_agent = {}
+        stale_by_stage = {}
+        total_handoffs = 0
+        active_handoffs = 0
 
-        # Top sources sorted by count
-        top_sources = sorted(sources.items(), key=lambda x: x[1], reverse=True)[:6]
-
-        # Speed to lead for ISA
-        from kpi_audit import calculate_speed_to_lead
-        stl_avg, stl_count = calculate_speed_to_lead(client, isa_id, since_curr)
-
-        # Dropped balls: appointments Fhalen set where agent hasn't followed up
-        dropped_balls = []
-        all_appts_recent = client.get_appointments(
-            since=today - timedelta(days=14), until=today
-        )
-        for appt in all_appts_recent:
-            invitees = appt.get("invitees", [])
-            isa_involved = any(inv.get("userId") == isa_id for inv in invitees)
-            if not isa_involved:
-                continue
-
-            # Find the lead in this appointment
-            lead_inv = next((inv for inv in invitees if inv.get("personId")), None)
-            if not lead_inv:
-                continue
-
-            # Check if outcome is missing (agent didn't log it)
-            if appt.get("outcome") is not None:
-                continue  # Outcome was logged, not a dropped ball
-
-            person_id = lead_inv["personId"]
-            lead_name = lead_inv.get("name", "Unknown")
-
-            # Find which agent this lead is assigned to
+        # Limit to 100 people lookups to keep Railway happy
+        for pid in list(fhalen_connected_30d)[:100]:
             try:
-                person = client.get_person(person_id)
-                assigned_to = person.get("assignedTo", "Unassigned")
+                person = client._request("GET", f"people/{pid}")
+                assigned = person.get("assignedTo", "")
                 assigned_uid = person.get("assignedUserId")
                 stage = person.get("stage", "Unknown")
+                source = person.get("source", "Unknown")
+                tags = [t.lower() for t in (person.get("tags") or [])]
+                name = person.get("name", "Unknown")
+                last_activity = person.get("lastActivity")
 
-                # Skip if assigned to ISA herself
+                # Skip if still assigned to Fhalen
                 if assigned_uid == isa_id:
                     continue
 
-                dropped_balls.append({
-                    "lead_name": lead_name,
-                    "person_id": person_id,
-                    "agent_name": assigned_to,
-                    "appt_date": appt.get("start", "")[:10],
-                    "appt_title": appt.get("title", ""),
-                    "stage": stage,
-                    "has_tag": config.DROPPED_BALL_TAG.lower() in [
-                        t.lower() for t in (person.get("tags") or [])
-                    ],
+                total_handoffs += 1
+
+                # Check staleness
+                days_stale = 999
+                if last_activity:
+                    try:
+                        la_dt = datetime.fromisoformat(last_activity.replace("Z", "+00:00"))
+                        days_stale = (today - la_dt).days
+                    except (ValueError, TypeError):
+                        pass
+
+                if days_stale < config.STALE_LEAD_DAYS:
+                    active_handoffs += 1
+                    continue
+
+                has_followup_tag = config.ISA_FOLLOWUP_TAG.lower() in tags
+
+                stale_leads.append({
+                    "name": name, "person_id": pid, "stage": stage,
+                    "assigned_to": assigned, "days_stale": days_stale,
+                    "source": source, "has_tag": has_followup_tag,
                 })
+
+                # Track by agent
+                stale_by_agent[assigned] = stale_by_agent.get(assigned, 0) + 1
+                stale_by_stage[stage] = stale_by_stage.get(stage, 0) + 1
             except Exception:
                 continue
 
+        # Sort stale leads: most stale first
+        stale_leads.sort(key=lambda x: x["days_stale"], reverse=True)
+
+        handoff_success_rate = round(active_handoffs / total_handoffs * 100) if total_handoffs else 0
+
+        # ── COACHING INSIGHTS ──
+        insights = []
+
+        # Insight 1: Conversation rate
+        if conv_curr == 0:
+            insights.append({
+                "type": "critical", "icon": "🚨",
+                "title": "Zero Conversations This Week",
+                "detail": f"Fhalen made {out_curr} calls but had 0 conversations over 2 minutes. "
+                          f"Are calls being cut short? Is she reaching voicemail? "
+                          f"{dur_buckets['no_answer']} calls got no answer, {dur_buckets['under_30s']} were under 30 seconds.",
+            })
+        elif conv_curr < 5:
+            insights.append({
+                "type": "warning", "icon": "⚠️",
+                "title": f"Low Conversation Volume ({conv_curr} this week)",
+                "detail": f"Out of {conn_curr} connected calls, only {conv_curr} became real conversations. "
+                          f"That's a {convo_rate}% conversion. Target: 10%+. "
+                          f"Coach on keeping leads engaged past the 2-minute mark.",
+            })
+
+        # Insight 2: Stale handoffs
+        if len(stale_leads) > 5:
+            worst_agent = max(stale_by_agent.items(), key=lambda x: x[1]) if stale_by_agent else ("Nobody", 0)
+            insights.append({
+                "type": "critical", "icon": "🔴",
+                "title": f"{len(stale_leads)} Leads Going Cold After Handoff",
+                "detail": f"Fhalen connected with these leads but they've had no activity in {config.STALE_LEAD_DAYS}+ days. "
+                          f"{worst_agent[0]} has {worst_agent[1]} stale leads. "
+                          f"Fhalen should be re-engaging these — they were warm when she found them. "
+                          f"Tag them with ISA_Followup so she knows to circle back.",
+            })
+
+        # Insight 3: Appointment outcomes
+        total_appts_30d = sum(1 for a in all_appts_4w if a.get("createdById") == isa_id)
+        met_30d = sum(1 for a in all_appts_4w if a.get("createdById") == isa_id and a.get("outcome") == "Met with Client")
+        no_show_30d = sum(1 for a in all_appts_4w if a.get("createdById") == isa_id and a.get("outcome") == "No show")
+        pending_30d = sum(1 for a in all_appts_4w if a.get("createdById") == isa_id and a.get("outcome") is None)
+
+        if total_appts_30d > 0 and pending_30d > total_appts_30d * 0.5:
+            insights.append({
+                "type": "warning", "icon": "📋",
+                "title": f"{pending_30d} of {total_appts_30d} Appointments Have No Outcome Logged",
+                "detail": f"Over the past 4 weeks, {round(pending_30d/total_appts_30d*100)}% of Fhalen's appointments "
+                          f"have no outcome recorded. Were they met? No-showed? Rescheduled? "
+                          f"Without this data, we can't measure her true conversion rate.",
+            })
+
+        if no_show_30d > 2:
+            insights.append({
+                "type": "warning", "icon": "👻",
+                "title": f"{no_show_30d} No-Shows in 4 Weeks",
+                "detail": f"Are confirmation texts/calls going out before appointments? "
+                          f"No-shows waste agent time and tank morale. "
+                          f"Implement a same-day confirmation workflow.",
+            })
+
+        # Insight 4: Call volume trend
+        if len(sparkline_calls) >= 2:
+            curr_vol = sparkline_calls[-1]["value"]
+            prev_vol = sparkline_calls[-2]["value"]
+            if prev_vol > 0 and curr_vol < prev_vol * 0.7:
+                insights.append({
+                    "type": "warning", "icon": "📉",
+                    "title": "Call Volume Dropping",
+                    "detail": f"Calls dropped from {prev_vol} to {curr_vol} ({round((1 - curr_vol/prev_vol)*100)}% decline). "
+                              f"Is Fhalen spending too much time on admin? Check if dial time is being protected.",
+                })
+
+        # Insight 5: ROI check
+        if conv_curr <= 2 and out_curr > 200:
+            insights.append({
+                "type": "info", "icon": "💰",
+                "title": "ROI Check: High Activity, Low Output",
+                "detail": f"{out_curr} calls for {conv_curr} conversations = {calls_per_convo} calls per conversation. "
+                          f"Industry benchmark is 50-80 calls per meaningful conversation. "
+                          f"{'This is above benchmark — review call list quality and timing.' if calls_per_convo > 80 else 'Within range but volume needs to increase.'}",
+            })
+
+        # Insight 6: Best call times
+        if best_hours:
+            top_hour = max(best_hours.items(), key=lambda x: x[1])
+            insights.append({
+                "type": "info", "icon": "🕐",
+                "title": f"Best Conversation Time: {top_hour[0]} EST",
+                "detail": f"Most conversations happened around {top_hour[0]} EST ({top_hour[1]} convos). "
+                          f"Protect this time slot for high-priority dials.",
+            })
+
+        # Insight 7: Handoff accountability
+        if total_handoffs > 0 and handoff_success_rate < 50:
+            insights.append({
+                "type": "critical", "icon": "🤝",
+                "title": f"Only {handoff_success_rate}% of Handoffs Are Active",
+                "detail": f"Of {total_handoffs} leads Fhalen connected with and handed to agents, "
+                          f"only {active_handoffs} have recent activity. The rest are going cold. "
+                          f"This is lost ROI — Fhalen did the hard work finding them.",
+            })
+
         result = {
             "current": {
-                "calls": out_curr, "convos": conv_curr,
+                "calls": out_curr, "connected": conn_curr, "convos": conv_curr,
                 "talk_secs": talk_curr, "appts_set": appt_set_curr,
                 "appts_met": appt_met_curr, "no_show": no_show_curr,
-                "pending": pending_curr, "show_rate": show_rate_curr,
-                "calls_per_appt": calls_per_appt,
+                "reschedule": resched_curr, "pending": pending_curr,
+                "show_rate": show_rate_curr, "calls_per_convo": calls_per_convo,
+                "connect_rate": connect_rate, "convo_rate": convo_rate,
             },
             "previous": {
-                "calls": out_prev, "convos": conv_prev,
+                "calls": out_prev, "connected": conn_prev, "convos": conv_prev,
                 "talk_secs": talk_prev, "appts_set": appt_set_prev,
                 "appts_met": appt_met_prev, "show_rate": show_rate_prev,
+                "connect_rate": connect_rate_prev, "convo_rate": convo_rate_prev,
             },
+            "duration_buckets": dur_buckets,
+            "best_hours": [{"hour": h, "count": c} for h, c in sorted(best_hours.items(), key=lambda x: x[1], reverse=True)[:5]],
             "sparkline": {
-                "calls": sparkline_calls,
-                "convos": sparkline_convos,
-                "appts": sparkline_appts,
+                "calls": sparkline_calls, "connected": sparkline_connected,
+                "convos": sparkline_convos, "appts": sparkline_appts,
             },
-            "pipeline": {
-                "total": len(all_leads),
-                "stages": stages,
-                "top_sources": [{"source": s, "count": c} for s, c in top_sources],
+            "funnel": {
+                "dialed": out_curr, "connected": conn_curr,
+                "conversations": conv_curr, "appts_set": appt_set_curr,
+                "appts_met": appt_met_curr,
             },
-            "speed_to_lead": {"avg": stl_avg, "count": stl_count},
-            "dropped_balls": dropped_balls,
+            "handoffs": {
+                "total": total_handoffs, "active": active_handoffs,
+                "stale": len(stale_leads), "success_rate": handoff_success_rate,
+                "by_agent": [{"agent": a, "count": c} for a, c in sorted(stale_by_agent.items(), key=lambda x: x[1], reverse=True)],
+                "by_stage": [{"stage": s, "count": c} for s, c in sorted(stale_by_stage.items(), key=lambda x: x[1], reverse=True)],
+            },
+            "stale_leads": stale_leads[:50],
+            "appt_summary_30d": {
+                "total": total_appts_30d, "met": met_30d,
+                "no_show": no_show_30d, "pending": pending_30d,
+            },
+            "insights": insights,
             "period": {
                 "current": f"{since_curr.strftime('%b %d')} - {(until_curr - timedelta(days=1)).strftime('%b %d')}",
                 "previous": f"{since_prev.strftime('%b %d')} - {(until_prev - timedelta(days=1)).strftime('%b %d')}",
@@ -933,13 +1065,31 @@ def api_tag_pending():
     """Add Fhalen_Pending tag to dropped-ball leads."""
     data = request.json or {}
     person_ids = data.get("person_ids", [])
-
     try:
         client = FUBClient()
         tagged = 0
         for pid in person_ids:
             try:
                 client.add_tag(pid, config.DROPPED_BALL_TAG)
+                tagged += 1
+            except Exception:
+                pass
+        return jsonify({"success": True, "tagged": tagged})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/isa/tag-followup", methods=["POST"])
+def api_tag_followup():
+    """Add ISA_Followup tag to stale handoff leads."""
+    data = request.json or {}
+    person_ids = data.get("person_ids", [])
+    try:
+        client = FUBClient()
+        tagged = 0
+        for pid in person_ids:
+            try:
+                client.add_tag(pid, config.ISA_FOLLOWUP_TAG)
                 tagged += 1
             except Exception:
                 pass

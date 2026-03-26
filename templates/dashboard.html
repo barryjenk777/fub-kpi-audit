@@ -478,79 +478,176 @@ function buildIsa(d) {
   const c=d.current, p=d.previous;
   let h='';
 
-  function isaCard(icon,label,curr,prev,suffix=''){
+  function isaCard(icon,label,curr,prev,suffix='',sub=''){
     const pct=prev>0?Math.round((curr-prev)/prev*100):(curr>0?100:0);
     const dir=pct>10?'up':pct<-10?'down':'flat';
-    return `<div class="stat-card"><div class="icon">${icon}</div><div class="label">${label}</div><div class="value" style="color:var(--brand)">${curr}${suffix}</div><div class="trend">${trendArrow(dir,pct)}</div><div class="sub">Last week: ${prev}${suffix}</div></div>`;
+    return `<div class="stat-card"><div class="icon">${icon}</div><div class="label">${label}</div><div class="value" style="color:var(--brand)">${curr}${suffix}</div><div class="trend">${trendArrow(dir,pct)}</div><div class="sub">${sub||'Last week: '+prev+suffix}</div></div>`;
   }
 
+  // ── COACHING INSIGHTS (top of page) ──
+  if(d.insights && d.insights.length>0){
+    h+=`<div class="section-header"><span class="icon">🧠</span> Coaching Insights</div>`;
+    d.insights.forEach(ins=>{
+      const cls=ins.type==='critical'?'red':ins.type==='warning'?'amber':'brand';
+      h+=`<div class="action-box ${cls}" style="margin-bottom:8px"><div class="title">${ins.icon} ${ins.title}</div><p style="font-size:13px;line-height:1.5;margin:4px 0 0">${ins.detail}</p></div>`;
+    });
+  }
+
+  // ── KPI CARDS ──
   h+='<div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">';
-  h+=isaCard('&#128222;','Calls Made',c.calls,p.calls);
-  h+=isaCard('&#128172;','Conversations',c.convos,p.convos);
-  h+=isaCard('&#128197;','Appts Set',c.appts_set,p.appts_set);
-  h+=isaCard('&#127919;','Show Rate',c.show_rate,p.show_rate,'%');
+  h+=isaCard('📞','Calls Made',c.calls,p.calls);
+  h+=isaCard('🔗','Connected',c.connected,p.connected,'',`${c.connect_rate}% connect rate`);
+  h+=isaCard('💬','Conversations',c.convos,p.convos,'',`${c.convo_rate}% of connected`);
+  h+=isaCard('📅','Appts Set',c.appts_set,p.appts_set);
+  h+='</div>';
+  h+='<div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">';
+  h+=isaCard('✅','Appts Met',c.appts_met,p.appts_met);
+  h+=isaCard('👻','No-Shows',c.no_show,0,'',`${c.reschedule||0} rescheduled`);
+  h+=isaCard('📊','Show Rate',c.show_rate,p.show_rate,'%');
+  h+=isaCard('🔄','Calls / Convo',c.calls_per_convo,0,'',c.calls_per_convo>80?'Above benchmark (80)':'Within benchmark');
   h+='</div>';
 
-  // Funnel
-  const maxF=Math.max(c.calls,1);
-  h+=`<div class="section-header"><span class="icon">&#127919;</span> Conversion Funnel</div>`;
+  // ── CONVERSION FUNNEL ──
+  h+=`<div class="section-header"><span class="icon">🎯</span> Conversion Funnel — This Week</div>`;
+  const funnel=d.funnel;
+  const maxF=Math.max(funnel.dialed,1);
   h+='<div class="funnel">';
-  [{l:'Calls',v:c.calls,c:'var(--brand)',p:''},{l:'Convos',v:c.convos,c:'var(--blue)',p:c.calls>0?Math.round(c.convos/c.calls*100)+'%':''},{l:'Appts Set',v:c.appts_set,c:'var(--green)',p:c.convos>0?Math.round(c.appts_set/c.convos*100)+'%':''},{l:'Appts Met',v:c.appts_met,c:'var(--purple)',p:c.appts_set>0?Math.round(c.appts_met/c.appts_set*100)+'%':''}].forEach(s=>{
+  const steps=[
+    {l:'Dialed',v:funnel.dialed,c:'#4a90d9',p:''},
+    {l:'Connected',v:funnel.connected,c:'#3d8bfd',p:funnel.dialed>0?Math.round(funnel.connected/funnel.dialed*100)+'%':''},
+    {l:'Conversations (2m+)',v:funnel.conversations,c:'#22c55e',p:funnel.connected>0?Math.round(funnel.conversations/funnel.connected*100)+'%':''},
+    {l:'Appts Set',v:funnel.appts_set,c:'#a855f7',p:funnel.conversations>0?Math.round(funnel.appts_set/funnel.conversations*100)+'%':''},
+    {l:'Appts Met',v:funnel.appts_met,c:'#f59e0b',p:funnel.appts_set>0?Math.round(funnel.appts_met/funnel.appts_set*100)+'%':''},
+  ];
+  steps.forEach(s=>{
     const w=Math.max(Math.round(s.v/maxF*100),s.v>0?3:0);
     h+=`<div class="funnel-step"><div class="funnel-label">${s.l}</div><div class="funnel-bar-wrap"><div class="funnel-bar" style="width:${w}%;background:${s.c}">${s.v}</div></div><div class="funnel-pct">${s.p}</div></div>`;
   });
   h+='</div>';
 
-  // Sparklines
-  h+=`<div class="section-header"><span class="icon">&#128200;</span> Monthly Trends</div>`;
-  h+='<div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">';
-  ['calls','convos','appts'].forEach(key=>{
-    const data=d.sparkline[key];const mx=Math.max(...data.map(d=>d.value),1);
-    h+=`<div class="stat-card"><div class="label">${key} / week</div><div style="display:flex;gap:4px;align-items:flex-end;height:40px;margin-top:8px">`;
-    data.forEach((pt,i)=>{const ht=Math.max(4,Math.round(pt.value/mx*40));h+=`<div style="flex:1;height:${ht}px;background:var(--brand);border-radius:3px 3px 0 0;opacity:${0.4+i*0.2}" title="${pt.label}: ${pt.value}"></div>`;});
+  // ── CALL QUALITY BREAKDOWN ──
+  h+='<div class="two-col">';
+  h+='<div>';
+  h+=`<div class="section-header"><span class="icon">📊</span> Call Quality Breakdown</div>`;
+  const bk=d.duration_buckets;
+  const bkTotal=Object.values(bk).reduce((a,b)=>a+b,0)||1;
+  const buckets=[
+    {l:'No Answer (0s)',v:bk.no_answer,c:'#ef4444'},
+    {l:'Quick (<30s)',v:bk.under_30s,c:'#f59e0b'},
+    {l:'Warm (30s–2m)',v:bk['30s_to_2m'],c:'#3b82f6'},
+    {l:'Conversation (2–5m)',v:bk['2m_to_5m'],c:'#22c55e'},
+    {l:'Deep (5m+)',v:bk.over_5m,c:'#a855f7'},
+  ];
+  h+='<div class="action-box brand">';
+  buckets.forEach(b=>{
+    const w=Math.round(b.v/bkTotal*100);
+    h+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span style="width:140px;font-size:12px">${b.l}</span>
+      <div class="bar-track" style="flex:1;height:10px"><div style="width:${w}%;height:100%;background:${b.c};border-radius:4px"></div></div>
+      <span style="font-size:12px;min-width:50px;text-align:right;color:var(--text-muted)">${b.v} (${w}%)</span>
+    </div>`;
+  });
+  h+='</div></div>';
+
+  // ── BEST CALL TIMES ──
+  h+='<div>';
+  h+=`<div class="section-header"><span class="icon">🕐</span> Best Conversation Times (EST)</div>`;
+  h+='<div class="action-box brand">';
+  if(d.best_hours && d.best_hours.length>0){
+    const mxH=d.best_hours[0].count;
+    d.best_hours.forEach(bh=>{
+      const w=Math.round(bh.count/mxH*100);
+      h+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span style="width:60px;font-size:13px;font-weight:600">${bh.hour}</span>
+        <div class="bar-track" style="flex:1;height:10px"><div class="bar-fill fill-brand" style="width:${w}%"></div></div>
+        <span style="font-size:12px;color:var(--text-muted)">${bh.count} convos</span>
+      </div>`;
+    });
+  } else {
+    h+=`<p style="font-size:13px;color:var(--text-muted)">No conversations this week to analyze timing.</p>`;
+  }
+  // Appointment outcomes (30-day)
+  h+=`<div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.1)">`;
+  h+=`<div style="font-size:12px;font-weight:600;margin-bottom:8px">📋 Appointment Outcomes (4 weeks)</div>`;
+  const ap=d.appt_summary_30d;
+  if(ap.total>0){
+    h+=`<div style="font-size:13px">Total: <strong>${ap.total}</strong> · Met: <strong style="color:var(--green)">${ap.met}</strong> · No-show: <strong style="color:#ef4444">${ap.no_show}</strong> · No outcome: <strong style="color:#f59e0b">${ap.pending}</strong></div>`;
+  } else {
+    h+=`<div style="font-size:13px;color:var(--text-muted)">No appointments found</div>`;
+  }
+  h+=`</div>`;
+  h+='</div></div>';
+  h+='</div>';
+
+  // ── 4-WEEK TRENDS ──
+  h+=`<div class="section-header"><span class="icon">📈</span> 4-Week Trends</div>`;
+  h+='<div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">';
+  ['calls','connected','convos','appts'].forEach(key=>{
+    const labels={calls:'Calls',connected:'Connected',convos:'Conversations',appts:'Appts Set'};
+    const data=d.sparkline[key];if(!data)return;
+    const mx=Math.max(...data.map(d=>d.value),1);
+    h+=`<div class="stat-card"><div class="label">${labels[key]} / week</div><div style="display:flex;gap:4px;align-items:flex-end;height:50px;margin-top:8px">`;
+    data.forEach((pt,i)=>{
+      const ht=Math.max(4,Math.round(pt.value/mx*50));
+      const color=i===data.length-1?'var(--brand)':'rgba(74,144,217,0.4)';
+      h+=`<div style="flex:1;height:${ht}px;background:${color};border-radius:3px 3px 0 0;position:relative" title="${pt.label}: ${pt.value}"><span style="position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--text-muted)">${pt.value}</span></div>`;
+    });
     h+='</div><div class="sub" style="display:flex;justify-content:space-between;margin-top:4px">';
     data.forEach(pt=>h+=`<span style="font-size:9px">${pt.label}</span>`);
     h+='</div></div>';
   });
   h+='</div>';
 
-  // Efficiency + Pipeline side by side
-  h+='<div class="two-col">';
-  // Efficiency
-  h+='<div>';
-  h+=`<div class="section-header"><span class="icon">&#9889;</span> Efficiency</div>`;
-  h+=`<div class="action-box brand"><ul style="font-size:13px">`;
-  h+=`<li><strong>Calls per appointment:</strong> ${c.calls_per_appt||'—'}</li>`;
-  h+=`<li><strong>Speed to lead:</strong> ${d.speed_to_lead.avg!==null?d.speed_to_lead.avg.toFixed(1)+' min':'No data'} (${d.speed_to_lead.count} leads)</li>`;
-  h+=`<li><strong>No-shows:</strong> ${c.no_show} &bull; <strong>Pending:</strong> ${c.pending}</li>`;
-  h+=`</ul></div></div>`;
-  // Pipeline
-  h+='<div>';
-  h+=`<div class="section-header"><span class="icon">&#128202;</span> Pipeline (${d.pipeline.total} leads)</div>`;
-  h+='<div class="action-box brand">';
-  const stages=Object.entries(d.pipeline.stages).sort((a,b)=>b[1]-a[1]);
-  stages.forEach(([s,ct])=>{const w=Math.round(ct/d.pipeline.total*100);h+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="width:120px;font-size:12px">${s}</span><div class="bar-track" style="flex:1;height:6px"><div class="bar-fill fill-brand" style="width:${w}%"></div></div><span style="font-size:11px;color:var(--text-muted)">${ct}</span></div>`;});
-  h+='</div></div>';
+  // ── HANDOFF ACCOUNTABILITY ──
+  const ho=d.handoffs;
+  h+=`<div class="section-header"><span class="icon">🤝</span> Handoff Accountability — ${ho.total} Leads Handed to Agents</div>`;
+  h+='<div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">';
+  h+=`<div class="stat-card"><div class="label">Active (being worked)</div><div class="value" style="color:var(--green)">${ho.active}</div><div class="sub">${ho.success_rate}% success rate</div></div>`;
+  h+=`<div class="stat-card"><div class="label">Gone Stale (${d.stale_leads?d.stale_leads[0]?d.stale_leads[0].days_stale+'+ days':5:5}+ days)</div><div class="value" style="color:#ef4444">${ho.stale}</div><div class="sub">Needs ISA re-engagement</div></div>`;
+  h+=`<div class="stat-card"><div class="label">Total Handoffs</div><div class="value" style="color:var(--brand)">${ho.total}</div><div class="sub">Leads Fhalen connected with</div></div>`;
   h+='</div>';
 
-  // Top sources
-  if(d.pipeline.top_sources.length>0){
-    h+=`<div class="section-header"><span class="icon">&#128176;</span> Lead Sources</div>`;
-    h+='<div class="table-wrap"><table><thead><tr><th>Source</th><th>Leads</th><th></th></tr></thead><tbody>';
-    const mxS=d.pipeline.top_sources[0].count;
-    d.pipeline.top_sources.forEach(s=>{h+=`<tr><td class="agent-name">${s.source}</td><td>${s.count}</td><td><div class="bar-track" style="height:8px"><div class="bar-fill fill-brand" style="width:${Math.round(s.count/mxS*100)}%"></div></div></td></tr>`;});
-    h+='</tbody></table></div>';
+  // Stale by agent
+  if(ho.by_agent && ho.by_agent.length>0){
+    h+='<div class="two-col">';
+    h+='<div>';
+    h+=`<div class="section-header" style="font-size:14px"><span class="icon">👤</span> Stale Leads by Agent</div>`;
+    h+='<div class="action-box red">';
+    ho.by_agent.forEach(a=>{
+      h+=`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span>${a.agent}</span><strong>${a.count} leads going cold</strong></div>`;
+    });
+    h+='</div></div>';
+    h+='<div>';
+    h+=`<div class="section-header" style="font-size:14px"><span class="icon">📋</span> Stale Leads by Stage</div>`;
+    h+='<div class="action-box amber">';
+    ho.by_stage.forEach(s=>{
+      h+=`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px"><span>${s.stage}</span><strong>${s.count}</strong></div>`;
+    });
+    h+='</div></div>';
+    h+='</div>';
   }
 
-  // Dropped balls
-  if(d.dropped_balls.length>0){
-    h+=`<div class="section-header"><span class="icon">&#128680;</span> Dropped Balls (${d.dropped_balls.length})</div>`;
-    h+=`<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Appointments Fhalen set where the agent hasn't logged an outcome.</p>`;
-    h+='<div class="table-wrap"><table><thead><tr><th>Lead</th><th>Agent</th><th>Appt Date</th><th>Stage</th><th>Tagged</th></tr></thead><tbody>';
-    d.dropped_balls.forEach(db=>{h+=`<tr><td class="agent-name">${db.lead_name}</td><td>${db.agent_name}</td><td>${db.appt_date}</td><td>${db.stage}</td><td>${db.has_tag?'<span class="tag tag-pass">Yes</span>':'<span class="tag tag-warn">No</span>'}</td></tr>`;});
+  // ── STALE LEADS TABLE ──
+  if(d.stale_leads && d.stale_leads.length>0){
+    h+=`<div class="section-header"><span class="icon">🔴</span> Leads Needing ISA Follow-Up (${d.stale_leads.length})</div>`;
+    h+=`<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Fhalen connected with these leads, handed them to an agent, but there's been no activity in 5+ days. She should re-engage them — they were warm when she found them.</p>`;
+    h+='<div class="table-wrap"><table><thead><tr><th>Lead</th><th>Agent</th><th>Stage</th><th>Days Stale</th><th>Source</th><th>Tagged</th></tr></thead><tbody>';
+    d.stale_leads.forEach(sl=>{
+      const staleColor=sl.days_stale>=10?'#ef4444':sl.days_stale>=7?'#f59e0b':'var(--text-muted)';
+      h+=`<tr>
+        <td class="agent-name">${sl.name}</td>
+        <td>${sl.assigned_to}</td>
+        <td>${sl.stage}</td>
+        <td style="color:${staleColor};font-weight:600">${sl.days_stale}d</td>
+        <td style="font-size:12px">${sl.source}</td>
+        <td>${sl.has_tag?'<span class="tag tag-pass">✓</span>':'<span class="tag tag-warn">No</span>'}</td>
+      </tr>`;
+    });
     h+='</tbody></table></div>';
-    const untagged=d.dropped_balls.filter(db=>!db.has_tag);
-    if(untagged.length>0){h+=`<button class="btn btn-rose btn-sm" onclick="tagPending([${untagged.map(db=>db.person_id).join(',')}])">Tag ${untagged.length} leads as Fhalen_Pending</button>`;}
+    const untagged=d.stale_leads.filter(sl=>!sl.has_tag);
+    if(untagged.length>0){
+      h+=`<button class="btn btn-rose btn-sm" style="margin-top:8px" onclick="tagFollowup([${untagged.map(sl=>sl.person_id).join(',')}])">🏷️ Tag ${untagged.length} leads as ISA_Followup</button>`;
+    }
   }
 
   return h;
@@ -567,6 +664,10 @@ async function loadIsa() {
 async function tagPending(ids) {
   if(!confirm(`Tag ${ids.length} leads with Fhalen_Pending?`)) return;
   try{const r=await fetch('/api/isa/tag-pending',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({person_ids:ids})});const d=await r.json();if(d.success)alert(`Tagged ${d.tagged} leads!`);else alert('Error: '+d.error);}catch(e){alert('Error: '+e.message);}
+}
+async function tagFollowup(ids) {
+  if(!confirm(`Tag ${ids.length} leads with ISA_Followup?\n\nThis tells Fhalen to re-engage these leads that went cold after handoff.`)) return;
+  try{const r=await fetch('/api/isa/tag-followup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({person_ids:ids})});const d=await r.json();if(d.success){alert(`Tagged ${d.tagged} leads with ISA_Followup!`);loadIsa();}else alert('Error: '+d.error);}catch(e){alert('Error: '+e.message);}
 }
 
 async function sendManagerEmail(){const btn=document.getElementById('btnManagerEmail');btn.disabled=true;btn.textContent='Sending...';try{const r=await fetch('/api/send-manager-email',{method:'POST',headers:{'Content-Type':'application/json'}});const d=await r.json();btn.textContent=d.success?'✅ Sent!':'❌ Failed';setTimeout(()=>{btn.textContent='📧 Email Joe\'s Game Plan';btn.disabled=false},3000);}catch(e){btn.textContent='📧 Email Joe\'s Game Plan';btn.disabled=false;}}

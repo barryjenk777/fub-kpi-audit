@@ -58,6 +58,12 @@ ISA_NAME = "Fhalen Tendencia"
 # Tag applied to leads where ISA set an appointment but agent hasn't followed up
 DROPPED_BALL_TAG = "Fhalen_Pending"
 
+# Tag applied to leads Fhalen connected with that went stale (no agent follow-up)
+ISA_FOLLOWUP_TAG = "ISA_Followup"
+
+# Days without activity before a handed-off lead is considered "stale"
+STALE_LEAD_DAYS = 5
+
 # Agents to NEVER remove from the priority group even if they miss KPIs
 # (e.g., team leader who should always receive transfers as fallback)
 PROTECTED_AGENTS = [
