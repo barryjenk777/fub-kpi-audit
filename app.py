@@ -877,14 +877,17 @@ def api_isa():
         sparkline_calls.reverse(); sparkline_connected.reverse()
         sparkline_convos.reverse(); sparkline_appts.reverse()
 
-        # ── STALE LEADS: Fhalen connected with someone, handed to agent, agent went dark ──
-        # Look at all people Fhalen called (duration > 0) in last 30 days
-        fhalen_connected_30d = set()
-        for c in all_calls_4w:
+        # ── STALE LEADS: 90-day sweep of all leads Fhalen connected with ──
+        # Use 90 days to catch leads from when she was doing recruiting
+        lookback_days = getattr(config, "ISA_HANDOFF_LOOKBACK_DAYS", 90)
+        all_calls_sweep = client.get_calls(since=today - timedelta(days=lookback_days))
+
+        fhalen_connected_sweep = {}
+        for c in all_calls_sweep:
             if c.get("userId") == isa_id and (c.get("duration", 0) or 0) > 0:
                 pid = c.get("personId")
-                if pid:
-                    fhalen_connected_30d.add(pid)
+                if pid and pid not in fhalen_connected_sweep:
+                    fhalen_connected_sweep[pid] = c.get("created", "")
 
         stale_leads = []
         stale_by_agent = {}
@@ -892,8 +895,11 @@ def api_isa():
         total_handoffs = 0
         active_handoffs = 0
 
-        # Limit to 100 people lookups to keep Railway happy
-        for pid in list(fhalen_connected_30d)[:100]:
+        # Fhalen's own pipeline (leads still assigned to her)
+        fhalen_own_pipeline = []
+        fhalen_own_stages = {}
+
+        for pid in list(fhalen_connected_sweep.keys()):
             try:
                 person = client._request("GET", f"people/{pid}")
                 assigned = person.get("assignedTo", "")
@@ -903,18 +909,13 @@ def api_isa():
                 tags = [t.lower() for t in (person.get("tags") or [])]
                 name = person.get("name", "Unknown")
                 last_activity = person.get("lastActivity")
+                lead_type = person.get("type", "Unknown")
 
-                # Skip if still assigned to Fhalen
-                if assigned_uid == isa_id:
-                    continue
-
-                # Skip excluded lead sources (Sphere, Courted.io, etc.)
+                # Skip excluded lead sources
                 if source in config.EXCLUDED_LEAD_SOURCES:
                     continue
 
-                total_handoffs += 1
-
-                # Check staleness
+                # Calculate days since activity
                 days_stale = 999
                 if last_activity:
                     try:
@@ -922,6 +923,18 @@ def api_isa():
                         days_stale = (today - la_dt).days
                     except (ValueError, TypeError):
                         pass
+
+                # Track Fhalen's own pipeline separately
+                if assigned_uid == isa_id:
+                    fhalen_own_pipeline.append({
+                        "name": name, "person_id": pid, "stage": stage,
+                        "source": source, "days_stale": days_stale,
+                        "type": lead_type, "first_call": fhalen_connected_sweep.get(pid, "")[:10],
+                    })
+                    fhalen_own_stages[stage] = fhalen_own_stages.get(stage, 0) + 1
+                    continue
+
+                total_handoffs += 1
 
                 if days_stale < config.STALE_LEAD_DAYS:
                     active_handoffs += 1
@@ -933,9 +946,9 @@ def api_isa():
                     "name": name, "person_id": pid, "stage": stage,
                     "assigned_to": assigned, "days_stale": days_stale,
                     "source": source, "has_tag": has_followup_tag,
+                    "type": lead_type,
                 })
 
-                # Track by agent
                 stale_by_agent[assigned] = stale_by_agent.get(assigned, 0) + 1
                 stale_by_stage[stage] = stale_by_stage.get(stage, 0) + 1
             except Exception:
@@ -943,6 +956,11 @@ def api_isa():
 
         # Sort stale leads: most stale first
         stale_leads.sort(key=lambda x: x["days_stale"], reverse=True)
+
+        # Sort Fhalen's own pipeline: most stale first
+        fhalen_own_pipeline.sort(key=lambda x: x["days_stale"], reverse=True)
+        fhalen_stuck_in_lead = sum(1 for p in fhalen_own_pipeline if p["stage"] == "Lead")
+        fhalen_own_stale = [p for p in fhalen_own_pipeline if p["days_stale"] >= 14]
 
         handoff_success_rate = round(active_handoffs / total_handoffs * 100) if total_handoffs else 0
 
@@ -1035,40 +1053,56 @@ def api_isa():
                           f"Protect this time slot for high-priority dials.",
             })
 
-        # Insight 7: Handoff accountability
-        if total_handoffs > 0 and handoff_success_rate < 50:
+        # Insight 7: Fhalen's own pipeline health
+        if fhalen_stuck_in_lead > 10:
             insights.append({
-                "type": "critical", "icon": "🤝",
-                "title": f"Only {handoff_success_rate}% of Handoffs Are Active",
-                "detail": f"Of {total_handoffs} leads Fhalen connected with and handed to agents, "
-                          f"only {active_handoffs} have recent activity. The rest are going cold. "
-                          f"This is lost ROI — Fhalen did the hard work finding them.",
+                "type": "critical", "icon": "🔴",
+                "title": f"{fhalen_stuck_in_lead} of {len(fhalen_own_pipeline)} Leads Still in 'Lead' Stage",
+                "detail": f"Fhalen connected with {len(fhalen_own_pipeline)} people but {fhalen_stuck_in_lead} "
+                          f"haven't progressed past 'Lead' stage. These need to either be qualified and "
+                          f"handed off to an agent, or moved to a nurture sequence. Leads sitting in 'Lead' "
+                          f"stage after a conversation are wasted opportunities.",
             })
 
-        # Insight 8: Text engagement
-        if texts_out_curr > 0:
-            if text_reply_rate < 10:
-                insights.append({
-                    "type": "warning", "icon": "💬",
-                    "title": f"Low Text Reply Rate ({text_reply_rate}%)",
-                    "detail": f"Fhalen sent {texts_out_curr} texts but only got {texts_in_curr} replies ({text_reply_rate}%). "
-                              f"Industry benchmark is 15-25% reply rate. Review message templates — "
-                              f"are texts personalized? Asking a question? Sent at good times?",
-                })
-            elif text_reply_rate > 20:
-                insights.append({
-                    "type": "info", "icon": "💬",
-                    "title": f"Strong Text Engagement ({text_reply_rate}% reply rate)",
-                    "detail": f"{texts_out_curr} texts sent, {texts_in_curr} replies received from {texts_people_curr} people. "
-                              f"Text engagement is above benchmark. Keep leveraging this channel.",
-                })
+        # Insight 8: Low handoff volume
+        if total_handoffs < 5 and len(fhalen_own_pipeline) > 20:
+            insights.append({
+                "type": "warning", "icon": "🚧",
+                "title": f"Only {total_handoffs} Leads Handed Off to Agents (90-day sweep)",
+                "detail": f"Fhalen is sitting on {len(fhalen_own_pipeline)} leads in her own pipeline but "
+                          f"has only passed {total_handoffs} to agents. The funnel is clogged at the ISA level. "
+                          f"She needs to qualify and hand off faster — every day a warm lead sits, it cools down.",
+            })
+
+        # Insight 9: Text engagement effectiveness
+        if texts_out_curr > 0 and text_reply_rate < 5:
+            insights.append({
+                "type": "warning", "icon": "💬",
+                "title": f"Low Text Reply Rate ({text_reply_rate}%)",
+                "detail": f"Fhalen sent {texts_out_curr} texts but only {texts_in_curr} got replies. "
+                          f"Review message templates — are they personalized? Do they ask a question? "
+                          f"Generic blasts get ignored. Best practice: reference the lead's search criteria.",
+            })
         elif texts_out_curr == 0:
             insights.append({
                 "type": "warning", "icon": "📱",
-                "title": "No Texts Sent This Week",
-                "detail": "Texting is a critical ISA channel — leads who don't answer calls often respond to texts. "
-                          "A multi-touch approach (call + text + voicemail drop) increases contact rates by 30-40%.",
+                "title": "Zero Texts Sent This Week",
+                "detail": "Texting is the #1 way to get a response from online leads. "
+                          "Industry data shows text gets 4x the response rate of calls alone. "
+                          "Fhalen should be texting every lead she calls — it doubles the contact rate.",
             })
+
+        # Insight 10: Fhalen's stale owned leads
+        if len(fhalen_own_stale) > 5:
+            insights.append({
+                "type": "warning", "icon": "⏰",
+                "title": f"{len(fhalen_own_stale)} of Fhalen's Own Leads Are 14+ Days Stale",
+                "detail": f"These are leads Fhalen connected with but never moved forward. "
+                          f"After 14 days without activity, the lead has likely gone cold. "
+                          f"Either re-engage with a new approach or move to long-term nurture.",
+            })
+
+        # (duplicate insights removed — already covered above)
 
         result = {
             "current": {
@@ -1107,6 +1141,13 @@ def api_isa():
                 "by_stage": [{"stage": s, "count": c} for s, c in sorted(stale_by_stage.items(), key=lambda x: x[1], reverse=True)],
             },
             "stale_leads": stale_leads[:50],
+            "own_pipeline": {
+                "total": len(fhalen_own_pipeline),
+                "stages": [{"stage": s, "count": c} for s, c in sorted(fhalen_own_stages.items(), key=lambda x: x[1], reverse=True)],
+                "stuck_in_lead": fhalen_stuck_in_lead,
+                "stale_14d": len(fhalen_own_stale),
+                "leads": fhalen_own_pipeline[:30],
+            },
             "appt_summary_30d": {
                 "total": total_appts_30d, "met": met_30d,
                 "no_show": no_show_30d, "pending": pending_30d,

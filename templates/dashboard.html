@@ -659,6 +659,59 @@ function buildIsa(d) {
     }
   }
 
+  // ── FHALEN'S OWN PIPELINE ──
+  if(d.own_pipeline && d.own_pipeline.total > 0){
+    const op=d.own_pipeline;
+    h+=`<div class="section-header"><span class="icon">📂</span> Fhalen's Own Pipeline — ${op.total} Leads She's Holding</div>`;
+    h+=`<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">These are leads still assigned to Fhalen. They need to be qualified and either handed off to an agent or moved to nurture. Leads sitting idle are wasted opportunities.</p>`;
+
+    // Pipeline stage breakdown
+    h+='<div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">';
+    h+=`<div class="stat-card"><div class="label">Total in Pipeline</div><div class="value" style="color:var(--brand)">${op.total}</div></div>`;
+    h+=`<div class="stat-card"><div class="label">Stuck in "Lead" Stage</div><div class="value" style="color:${op.stuck_in_lead > 10 ? '#ef4444' : '#f59e0b'}">${op.stuck_in_lead}</div><div class="sub">${op.total > 0 ? Math.round(op.stuck_in_lead/op.total*100) : 0}% not progressed</div></div>`;
+    h+=`<div class="stat-card"><div class="label">Stale (14+ days)</div><div class="value" style="color:#ef4444">${op.stale_14d}</div><div class="sub">No recent activity</div></div>`;
+    const progressed = op.total - op.stuck_in_lead;
+    h+=`<div class="stat-card"><div class="label">Progressed</div><div class="value" style="color:var(--green)">${progressed}</div><div class="sub">Past Lead stage</div></div>`;
+    h+='</div>';
+
+    // Stage breakdown bar
+    if(op.stages && op.stages.length > 0){
+      h+='<div class="action-box" style="margin-bottom:16px">';
+      h+='<div style="font-size:13px;font-weight:600;margin-bottom:8px">Stage Distribution</div>';
+      op.stages.forEach(s => {
+        const pct = Math.round(s.count / op.total * 100);
+        const barColor = s.stage === 'Lead' ? '#ef4444' : s.stage === 'Contact' ? '#f59e0b' : 'var(--green)';
+        h+=`<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px">
+          <span style="width:120px;color:var(--text-muted)">${s.stage}</span>
+          <div style="flex:1;background:rgba(255,255,255,0.05);border-radius:4px;height:18px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:${barColor};border-radius:4px;display:flex;align-items:center;padding-left:6px;font-size:10px;color:white;font-weight:600">${s.count}</div>
+          </div>
+          <span style="width:35px;text-align:right">${pct}%</span>
+        </div>`;
+      });
+      h+='</div>';
+    }
+
+    // Pipeline leads table (show first 20)
+    if(op.leads && op.leads.length > 0){
+      h+='<div class="table-wrap"><table><thead><tr><th>Lead</th><th>Stage</th><th>Source</th><th>Type</th><th>Days Since Activity</th><th>First Called</th></tr></thead><tbody>';
+      op.leads.slice(0, 20).forEach(l => {
+        const staleColor = l.days_stale >= 14 ? '#ef4444' : l.days_stale >= 7 ? '#f59e0b' : 'var(--text-muted)';
+        const stageColor = l.stage === 'Lead' ? '#ef4444' : l.stage === 'Contact' ? '#f59e0b' : 'var(--green)';
+        h+=`<tr>
+          <td class="agent-name">${l.name}</td>
+          <td style="color:${stageColor}">${l.stage}</td>
+          <td style="font-size:12px">${l.source}</td>
+          <td style="font-size:12px">${l.type || '—'}</td>
+          <td style="color:${staleColor};font-weight:600">${l.days_stale}d</td>
+          <td style="font-size:12px;color:var(--text-muted)">${l.first_call || '—'}</td>
+        </tr>`;
+      });
+      h+='</tbody></table></div>';
+      if(op.leads.length > 20) h+=`<p style="font-size:11px;color:var(--text-muted);margin-top:4px">Showing 20 of ${op.leads.length} leads</p>`;
+    }
+  }
+
   return h;
 }
 

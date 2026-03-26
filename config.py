@@ -64,6 +64,9 @@ ISA_FOLLOWUP_TAG = "ISA_Followup"
 # Days without activity before a handed-off lead is considered "stale"
 STALE_LEAD_DAYS = 5
 
+# How far back to sweep for ISA handoff leads (90d initial, 30d ongoing)
+ISA_HANDOFF_LOOKBACK_DAYS = 90
+
 # Agents to NEVER remove from the priority group even if they miss KPIs
 # (e.g., team leader who should always receive transfers as fallback)
 PROTECTED_AGENTS = [
