@@ -8,6 +8,16 @@ import os
 import sys
 import json
 from datetime import datetime, timedelta, timezone
+
+# Load .env if present
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_env_path):
+    with open(_env_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
 from flask import Flask, render_template, jsonify, request
 
 from fub_client import FUBClient
@@ -26,21 +36,44 @@ app = Flask(__name__)
 
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 
+# In-memory settings (used when filesystem is read-only, e.g., Railway)
+_memory_settings = {}
+
 
 def load_settings():
-    """Load saved KPI thresholds from settings.json."""
+    """Load saved KPI thresholds from file, env vars, or memory."""
+    # Memory takes priority (set via Save Settings button)
+    if _memory_settings:
+        return dict(_memory_settings)
+    # Then try settings.json
     try:
         with open(SETTINGS_FILE) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        pass
+    # Then env vars
+    s = {}
+    if os.environ.get("MIN_CALLS"):
+        s["min_calls"] = int(os.environ["MIN_CALLS"])
+    if os.environ.get("MIN_CONVOS"):
+        s["min_convos"] = int(os.environ["MIN_CONVOS"])
+    if os.environ.get("MAX_OOC"):
+        s["max_ooc"] = int(os.environ["MAX_OOC"])
+    return s
 
 
 def save_settings(min_calls, min_convos, max_ooc):
-    """Persist KPI thresholds to settings.json."""
+    """Persist KPI thresholds. Tries file first, falls back to memory."""
+    global _memory_settings
     data = {"min_calls": min_calls, "min_convos": min_convos, "max_ooc": max_ooc}
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    # Save to memory always (works on Railway)
+    _memory_settings = dict(data)
+    # Try to save to file (works locally)
+    try:
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except OSError:
+        pass  # Read-only filesystem (Railway)
     return data
 
 

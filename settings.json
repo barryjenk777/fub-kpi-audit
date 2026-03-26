@@ -1,5 +1,5 @@
 {
-  "min_calls": 50,
+  "min_calls": 30,
   "min_convos": 5,
   "max_ooc": 100
 }
