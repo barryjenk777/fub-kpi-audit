@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Legacy Home Team — KPI Dashboard</title>
+<style>
+:root {
+  --bg: #05070e;
+  --surface: #111827;
+  --surface2: #1e2536;
+  --surface3: #2a3349;
+  --border: #2e3a52;
+  --text: #edf0f7;
+  --text-muted: #7e89a3;
+  --accent: #3B8AFF;
+  --accent2: #2563eb;
+  --accent-dim: rgba(59,138,255,0.12);
+  --blue: #60a5fa;
+  --blue-dim: rgba(96,165,250,0.1);
+  --purple: #a78bfa;
+  --purple-dim: rgba(167,139,250,0.1);
+  --amber: #fbbf24;
+  --amber-dim: rgba(251,191,36,0.1);
+  --rose: #fb7185;
+  --rose-dim: rgba(251,113,133,0.1);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.3);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.6;
+  background-image: radial-gradient(ellipse at 20% 0%, rgba(52,211,153,0.04) 0%, transparent 50%),
+                    radial-gradient(ellipse at 80% 100%, rgba(96,165,250,0.04) 0%, transparent 50%);
+  min-height: 100vh;
+}
+
+/* Topbar */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 36px; background: rgba(17,24,39,0.85);
+  backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 50;
+}
+.topbar h1 { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+.topbar h1 span { color: #3B8AFF; }
+.topbar h1 .gray { color: #9CA3AF; font-weight: 400; }
+.topbar .period { color: var(--text-muted); font-size: 13px; font-weight: 500; }
+
+.container { max-width: 1320px; margin: 0 auto; padding: 28px 36px 80px; }
+
+/* Controls */
+.controls {
+  display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap;
+  margin-bottom: 28px; padding: 20px 24px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.control-field label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; display: block; margin-bottom: 6px; }
+.control-field input {
+  width: 80px; padding: 10px 14px; border-radius: var(--radius-sm);
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+  font-size: 15px; font-weight: 600; text-align: center;
+  transition: border-color 0.2s;
+}
+.control-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.btn {
+  padding: 10px 22px; border-radius: var(--radius-sm);
+  border: none; cursor: pointer; font-size: 13px; font-weight: 700;
+  transition: all 0.2s; letter-spacing: 0.3px;
+}
+.btn-primary { background: linear-gradient(135deg, #3B8AFF, #2563eb); color: #fff; box-shadow: 0 2px 12px rgba(59,138,255,0.3); }
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(59,138,255,0.4); }
+.btn-info { background: linear-gradient(135deg, var(--blue), #818cf8); color: #fff; box-shadow: 0 2px 12px rgba(96,165,250,0.3); }
+.btn-info:hover { transform: translateY(-1px); }
+.btn-warn { background: linear-gradient(135deg, var(--amber), #f59e0b); color: #05070e; box-shadow: 0 2px 12px rgba(251,191,36,0.3); }
+.btn-warn:hover { transform: translateY(-1px); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none !important; }
+.btn-group { display: flex; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+
+/* Stat Cards */
+.stat-grid {
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 16px; margin-bottom: 32px;
+}
+@media (max-width: 1100px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 600px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 22px 20px;
+  position: relative; overflow: hidden; box-shadow: var(--shadow);
+}
+.stat-card .icon { font-size: 28px; margin-bottom: 12px; }
+.stat-card .label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 600; margin-bottom: 6px; }
+.stat-card .value { font-size: 36px; font-weight: 800; letter-spacing: -1.5px; line-height: 1; }
+.stat-card .sub { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.stat-card::before {
+  content: ''; position: absolute; top: -30px; right: -30px;
+  width: 100px; height: 100px; border-radius: 50%;
+  filter: blur(50px); opacity: 0.2;
+}
+.stat-card.green .value { color: var(--accent); }
+.stat-card.green::before { background: var(--accent); }
+.stat-card.blue .value { color: var(--blue); }
+.stat-card.blue::before { background: var(--blue); }
+.stat-card.purple .value { color: var(--purple); }
+.stat-card.purple::before { background: var(--purple); }
+.stat-card.amber .value { color: var(--amber); }
+.stat-card.amber::before { background: var(--amber); }
+.stat-card.rose .value { color: var(--rose); }
+.stat-card.rose::before { background: var(--rose); }
+
+/* Section Headers */
+.section-header {
+  display: flex; align-items: center; gap: 10px;
+  margin: 36px 0 16px; font-size: 16px; font-weight: 700;
+}
+.section-header .icon { font-size: 20px; }
+
+/* Tables */
+.table-wrap {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; margin-bottom: 24px;
+  box-shadow: var(--shadow);
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+  padding: 14px 16px; text-align: left; font-weight: 700;
+  color: var(--text-muted); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.8px; border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+tbody td { padding: 13px 16px; border-bottom: 1px solid rgba(46,58,82,0.5); }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr { transition: background 0.15s; }
+tbody tr:hover { background: rgba(255,255,255,0.03); }
+.rank-cell { font-weight: 700; color: var(--text-muted); width: 44px; text-align: center; }
+.agent-name { font-weight: 600; white-space: nowrap; }
+
+/* Tags */
+.tag { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.3px; }
+.tag-pass { background: var(--accent-dim); color: var(--accent); }
+.tag-fail { background: var(--rose-dim); color: var(--rose); }
+
+.val-pass { color: var(--accent); }
+.val-fail { color: var(--rose); font-weight: 700; }
+.val-warn { color: var(--amber); }
+.val-muted { color: var(--text-muted); }
+
+/* Bar Charts */
+.bar-wrap { display: flex; align-items: center; gap: 8px; }
+.bar-track { flex: 1; height: 8px; border-radius: 4px; background: var(--surface2); overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.8s ease; min-width: 2px; }
+.bar-label { font-size: 12px; font-weight: 600; min-width: 36px; text-align: right; }
+.fill-green { background: linear-gradient(90deg, #3B8AFF, #2563eb); }
+.fill-blue { background: linear-gradient(90deg, var(--blue), var(--purple)); }
+.fill-amber { background: linear-gradient(90deg, var(--amber), #f59e0b); }
+.fill-rose { background: linear-gradient(90deg, var(--rose), #e11d48); }
+
+/* Action Boxes */
+.action-box {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 22px 26px; margin-bottom: 16px;
+  box-shadow: var(--shadow); border-left: 4px solid var(--amber);
+}
+.action-box.green { border-left-color: var(--accent); }
+.action-box.red { border-left-color: var(--rose); }
+.action-box .title { font-weight: 700; font-size: 15px; margin-bottom: 10px; }
+.action-box ul { list-style: none; padding: 0; }
+.action-box li { padding: 5px 0; font-size: 13px; font-weight: 500; }
+
+/* Grid */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+
+/* Loading */
+.loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 60vh; gap: 20px; }
+.spinner {
+  width: 44px; height: 44px; border: 3px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading p { color: var(--text-muted); font-size: 14px; }
+.loading p:last-child { font-size: 12px; }
+
+.medal { font-size: 20px; }
+.footer-note { text-align: center; color: var(--text-muted); font-size: 11px; margin-top: 40px; padding: 20px; border-top: 1px solid var(--border); }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div class="topbar">
+  <h1>
+    <svg width="32" height="32" viewBox="0 0 100 100" style="vertical-align:middle;margin-right:10px;">
+      <circle cx="50" cy="50" r="45" fill="none" stroke="#3B8AFF" stroke-width="6"/>
+      <path d="M50 20 L25 45 L30 45 L30 70 L45 70 L45 55 L55 55 L55 70 L70 70 L70 45 L75 45 Z" fill="#3B8AFF"/>
+      <rect x="45" y="58" width="10" height="12" rx="2" fill="#05070e"/>
+    </svg>
+    <span>LEGACY</span> <span class="gray">HOME TEAM</span>
+  </h1>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div class="period" id="period">Loading...</div>
+    <div style="font-size:11px;color:var(--text-muted);background:var(--surface2);padding:4px 12px;border-radius:20px;">KPI Dashboard</div>
+  </div>
+</div>
+
+<div class="container">
+  <div class="controls" id="controls" style="display:none;">
+    <div class="control-field"><label>Min Calls</label><input type="number" id="minCalls" value="30"></div>
+    <div class="control-field"><label>Min Convos</label><input type="number" id="minConvos" value="5"></div>
+    <div class="control-field"><label>Max OOC</label><input type="number" id="maxOoc" value="100"></div>
+    <div class="btn-group">
+      <button class="btn" style="background:var(--surface3);color:var(--text);" onclick="saveSettings()">Save Settings</button>
+      <button class="btn btn-primary" onclick="loadAudit()">Run Audit</button>
+      <button class="btn btn-info" id="btnUpdateGroup" style="display:none;" onclick="updateGroup()">Update Priority Group</button>
+      <button class="btn btn-warn" id="btnSendEmail" style="display:none;" onclick="sendEmail()">Send Email Report</button>
+    </div>
+  </div>
+
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <p>Pulling data from Follow Up Boss...</p>
+    <p>This takes about 60 seconds</p>
+  </div>
+
+  <div id="dashboard" style="display:none;"></div>
+</div>
+
+<script>
+const MEDALS = ['&#129351;', '&#129352;', '&#129353;'];
+let lastAuditData = null;
+
+function fmtPct(n) { return n > 0 ? n + '%' : '—'; }
+function maxVal(agents, key) { return Math.max(...agents.map(a => a.metrics[key]), 1); }
+
+function buildDashboard(d) {
+  const t = d.totals;
+  const agents = d.agents;
+  const passed = agents.filter(a => a.evaluation.overall_pass);
+  const failed = agents.filter(a => !a.evaluation.overall_pass);
+  let html = '';
+
+  // ---- Stat Cards ----
+  html += `<div class="stat-grid">
+    <div class="stat-card green"><div class="icon">&#128222;</div><div class="label">Calls Made</div><div class="value">${t.calls}</div><div class="sub">${agents.length} agents tracked</div></div>
+    <div class="stat-card blue"><div class="icon">&#128172;</div><div class="label">Conversations</div><div class="value">${t.convos}</div><div class="sub">&ge; 2 min duration</div></div>
+    <div class="stat-card purple"><div class="icon">&#9201;</div><div class="label">Talk Time</div><div class="value">${t.talk_fmt}</div><div class="sub">Team total</div></div>
+    <div class="stat-card green"><div class="icon">&#128197;</div><div class="label">Appts Set</div><div class="value">${t.appts_set}</div><div class="sub">${t.appts_met} met</div></div>
+    <div class="stat-card ${t.passed > 0 ? 'green' : 'amber'}"><div class="icon">&#127942;</div><div class="label">KPI Pass</div><div class="value">${t.passed}/${t.total}</div><div class="sub">${t.total > 0 ? Math.round(t.passed/t.total*100) : 0}% qualified</div></div>
+    <div class="stat-card ${t.ooc > 0 ? 'rose' : 'green'}"><div class="icon">&#9888;&#65039;</div><div class="label">Out of Compliance</div><div class="value">${t.ooc}</div><div class="sub">Leads needing action</div></div>
+  </div>`;
+
+  // ---- Action Items ----
+  html += '<div class="section-header"><span class="icon">&#9889;</span> Action Items</div>';
+
+  html += `<div class="action-box"><div class="title">@${d.live_calls_admin} — Update Live Calls Inbox</div>`;
+  if (passed.length > 0) {
+    html += '<div style="margin-bottom:8px;font-weight:600;color:var(--accent)">ADD:</div><ul>';
+    passed.forEach(a => html += `<li class="val-pass">&#9989; ${a.name}</li>`);
+    html += '</ul>';
+  }
+  if (failed.length > 0) {
+    if (passed.length > 0) html += '<br>';
+    html += '<div style="margin-bottom:8px;font-weight:600;color:var(--rose)">REMOVE:</div><ul>';
+    failed.forEach(a => {
+      const reasons = (a.failures || []).map(f => `<span class="tag tag-fail" style="margin-left:6px;font-size:10px">${f}</span>`).join('');
+      html += `<li class="val-fail" style="display:flex;align-items:center;flex-wrap:wrap;">&#10060; ${a.name} ${reasons}</li>`;
+    });
+    html += '</ul>';
+  }
+  html += '</div>';
+
+  html += '<div class="two-col">';
+  html += `<div class="action-box ${passed.length > 0 ? 'green' : 'red'}"><div class="title">&#127775; Priority Agents Group</div>`;
+  if (passed.length > 0) { html += '<ul>'; passed.forEach(a => html += `<li class="val-pass">&#9989; ${a.name}</li>`); html += '</ul>'; }
+  else { html += '<p class="val-muted">No agents qualified this week.</p>'; }
+  html += '</div>';
+
+  if (t.ooc > 0) {
+    const worst = agents.reduce((a, b) => a.metrics.compliance_violations > b.metrics.compliance_violations ? a : b);
+    html += `<div class="action-box red"><div class="title">&#128680; Compliance Alert</div>
+      <p style="font-size:13px;margin-bottom:8px">${t.ooc} leads out of compliance across the team.</p>
+      <p style="font-size:13px"><strong>${worst.name}</strong> has the most at <span class="val-fail">${worst.metrics.compliance_violations}</span>.</p></div>`;
+  } else {
+    html += '<div class="action-box green"><div class="title">&#9989; Compliance</div><p class="val-pass">All agents are in compliance!</p></div>';
+  }
+  html += '</div>';
+
+  // ---- Leaderboard with visual bars ----
+  html += '<div class="section-header"><span class="icon">&#127942;</span> Agent Leaderboard</div>';
+  const maxCalls = maxVal(agents, 'outbound_calls');
+  const maxConvos = maxVal(agents, 'conversations');
+
+  html += '<div class="table-wrap"><table><thead><tr><th style="width:44px">#</th><th>Agent</th><th>Calls</th><th style="width:120px"></th><th>Convos</th><th style="width:120px"></th><th>Appt Set</th><th>Appt Met</th><th>Talk</th><th>OOC</th><th>KPI</th></tr></thead><tbody>';
+  agents.forEach((a, i) => {
+    const m = a.metrics, e = a.evaluation;
+    const rank = i < 3 ? `<span class="medal">${MEDALS[i]}</span>` : (i+1);
+    const tag = e.overall_pass ? '<span class="tag tag-pass">PASS</span>' : '<span class="tag tag-fail">FAIL</span>';
+    const callPct = Math.round(m.outbound_calls / maxCalls * 100);
+    const convoPct = Math.round(m.conversations / maxConvos * 100);
+    html += `<tr>
+      <td class="rank-cell">${rank}</td>
+      <td class="agent-name">${a.name}</td>
+      <td class="${e.calls_pass ? '' : 'val-fail'}">${m.outbound_calls}</td>
+      <td><div class="bar-track"><div class="bar-fill fill-green" style="width:${callPct}%"></div></div></td>
+      <td class="${e.convos_pass ? '' : 'val-fail'}">${m.conversations}</td>
+      <td><div class="bar-track"><div class="bar-fill fill-blue" style="width:${convoPct}%"></div></div></td>
+      <td>${m.appts_set}</td><td>${m.appts_met}</td>
+      <td class="val-muted">${a.talk_time_fmt}</td>
+      <td class="${e.compliance_pass ? '' : 'val-fail'}">${m.compliance_violations}</td>
+      <td>${tag}</td></tr>`;
+  });
+  html += '</tbody></table></div>';
+
+  // ---- Conversion Funnel with bars ----
+  html += '<div class="section-header"><span class="icon">&#128200;</span> Conversion Funnel</div>';
+  html += '<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Calls</th><th>&rarr; Convos</th><th>&rarr; Appt Set</th><th>&rarr; Appt Met</th><th>Call&rarr;Convo</th><th>Convo&rarr;Appt</th><th>Set&rarr;Met</th></tr></thead><tbody>';
+  agents.forEach(a => {
+    const m = a.metrics;
+    html += `<tr><td class="agent-name">${a.name}</td>
+      <td>${m.outbound_calls}</td><td>${m.conversations}</td><td>${m.appts_set}</td><td>${m.appts_met}</td>
+      <td><span class="tag tag-pass">${fmtPct(a.call_to_convo)}</span></td>
+      <td><span class="tag" style="background:var(--blue-dim);color:var(--blue)">${fmtPct(a.convo_to_appt)}</span></td>
+      <td><span class="tag" style="background:var(--purple-dim);color:var(--purple)">${fmtPct(a.set_to_met)}</span></td></tr>`;
+  });
+  html += '</tbody></table></div>';
+
+  // ---- OOC Breakdown ----
+  const oocAgents = agents.filter(a => a.metrics.compliance_violations > 0).sort((a,b) => b.metrics.compliance_violations - a.metrics.compliance_violations);
+  if (oocAgents.length > 0) {
+    const maxOoc = oocAgents[0].metrics.compliance_violations || 1;
+    html += '<div class="section-header"><span class="icon">&#128680;</span> Out of Compliance Breakdown</div>';
+    html += '<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Total</th><th>Leads</th><th>Sphere</th><th style="width:200px">Distribution</th></tr></thead><tbody>';
+    oocAgents.forEach(a => {
+      const m = a.metrics;
+      const pctOfMax = Math.round(m.compliance_violations / maxOoc * 100);
+      const pctLeads = m.compliance_violations > 0 ? Math.round(m.ooc_leads / m.compliance_violations * 100) : 0;
+      html += `<tr><td class="agent-name">${a.name}</td><td class="val-fail">${m.compliance_violations}</td>
+        <td>${m.ooc_leads}</td><td>${m.ooc_sphere}</td>
+        <td><div class="bar-wrap"><div class="bar-track" style="height:10px"><div class="bar-fill fill-rose" style="width:${pctOfMax}%"></div></div><span class="bar-label val-muted">${pctLeads}%</span></div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${pctLeads}% leads &bull; ${100-pctLeads}% sphere</div></td></tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // ---- Speed to Lead ----
+  const stlAgents = agents.filter(a => a.metrics.speed_to_lead_avg !== null).sort((a,b) => a.metrics.speed_to_lead_avg - b.metrics.speed_to_lead_avg);
+  if (stlAgents.length > 0) {
+    html += '<div class="section-header"><span class="icon">&#9889;</span> Speed to Lead</div>';
+    html += '<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Avg Response</th><th>Leads</th><th style="width:200px"></th></tr></thead><tbody>';
+    stlAgents.forEach(a => {
+      const stl = a.metrics.speed_to_lead_avg;
+      const cls = stl <= 5 ? 'val-pass' : (stl <= 15 ? 'val-warn' : 'val-fail');
+      const barW = Math.min(stl / 30 * 100, 100);
+      const barCls = stl <= 5 ? 'fill-green' : (stl <= 15 ? 'fill-amber' : 'fill-rose');
+      html += `<tr><td class="agent-name">${a.name}</td><td class="${cls}" style="font-weight:700">${stl.toFixed(1)} min</td><td class="val-muted">${a.metrics.speed_to_lead_count}</td>
+        <td><div class="bar-track" style="height:10px"><div class="bar-fill ${barCls}" style="width:${barW}%"></div></div></td></tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  html += '<div class="footer-note">Legacy Home Team KPI Dashboard &bull; Data from Follow Up Boss API</div>';
+  return html;
+}
+
+async function loadAudit() {
+  const loading = document.getElementById('loading');
+  const dashboard = document.getElementById('dashboard');
+  const controls = document.getElementById('controls');
+  loading.style.display = 'flex'; dashboard.style.display = 'none';
+
+  const minCalls = document.getElementById('minCalls').value;
+  const minConvos = document.getElementById('minConvos').value;
+  const maxOoc = document.getElementById('maxOoc').value;
+
+  try {
+    const res = await fetch(`/api/audit?min_calls=${minCalls}&min_convos=${minConvos}&max_ooc=${maxOoc}`);
+    const data = await res.json();
+    if (data.error) {
+      dashboard.innerHTML = `<div class="action-box red"><div class="title">Error</div><p>${data.error}</p></div>`;
+    } else {
+      lastAuditData = data;
+      document.getElementById('period').textContent = `${data.period.start} — ${data.period.end}`;
+      document.getElementById('minCalls').value = data.thresholds.min_calls;
+      document.getElementById('minConvos').value = data.thresholds.min_convos;
+      document.getElementById('maxOoc').value = data.thresholds.max_ooc;
+      dashboard.innerHTML = buildDashboard(data);
+      document.getElementById('btnUpdateGroup').style.display = '';
+      document.getElementById('btnSendEmail').style.display = '';
+    }
+  } catch(e) {
+    dashboard.innerHTML = `<div class="action-box red"><div class="title">Connection Error</div><p>${e.message}</p></div>`;
+  }
+  loading.style.display = 'none'; dashboard.style.display = 'block'; controls.style.display = 'flex';
+}
+
+async function saveSettings() {
+  const body = {
+    min_calls: parseInt(document.getElementById('minCalls').value),
+    min_convos: parseInt(document.getElementById('minConvos').value),
+    max_ooc: parseInt(document.getElementById('maxOoc').value)
+  };
+  try {
+    const res = await fetch('/api/settings', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (data.success) {
+      const btn = event.target;
+      btn.textContent = 'Saved!'; btn.style.background = 'var(--accent)'; btn.style.color = '#fff';
+      setTimeout(() => { btn.textContent = 'Save Settings'; btn.style.background = 'var(--surface3)'; btn.style.color = 'var(--text)'; }, 2000);
+    }
+  } catch(e) { alert('Error saving: ' + e.message); }
+}
+
+async function updateGroup() {
+  if (!lastAuditData) return;
+  const btn = document.getElementById('btnUpdateGroup');
+  btn.disabled = true; btn.textContent = 'Updating...';
+  const passedIds = lastAuditData.agents.filter(a => a.evaluation.overall_pass).map(a => a.user_id);
+  try {
+    const res = await fetch('/api/update-group', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({user_ids: passedIds}) });
+    const data = await res.json();
+    if (data.success) { btn.textContent = `Updated! (${data.count} agents)`; setTimeout(() => { btn.textContent = 'Update Priority Group'; btn.disabled = false; }, 3000); }
+    else { alert('Error: ' + data.error); btn.textContent = 'Update Priority Group'; btn.disabled = false; }
+  } catch(e) { alert('Error: ' + e.message); btn.textContent = 'Update Priority Group'; btn.disabled = false; }
+}
+
+async function sendEmail() {
+  const btn = document.getElementById('btnSendEmail');
+  btn.disabled = true; btn.textContent = 'Sending...';
+  try {
+    const res = await fetch('/api/send-email', { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ min_calls: parseInt(document.getElementById('minCalls').value), min_convos: parseInt(document.getElementById('minConvos').value), max_ooc: parseInt(document.getElementById('maxOoc').value) }) });
+    const data = await res.json();
+    if (data.success) { btn.textContent = 'Sent!'; setTimeout(() => { btn.textContent = 'Send Email Report'; btn.disabled = false; }, 3000); }
+    else { alert('Error: ' + (data.error || 'Failed')); btn.textContent = 'Send Email Report'; btn.disabled = false; }
+  } catch(e) { alert('Error: ' + e.message); btn.textContent = 'Send Email Report'; btn.disabled = false; }
+}
+
+loadAudit();
+</script>
+</body>
+</html>
