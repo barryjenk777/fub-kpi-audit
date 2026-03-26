@@ -104,7 +104,7 @@ def cache_clear(endpoint=None):
 
 
 def load_settings():
-    """Load saved KPI thresholds from file, env vars, or memory."""
+    """Load saved KPI thresholds. Priority: memory > file > env vars > defaults."""
     # Memory takes priority (set via Save Settings button)
     if _memory_settings:
         return dict(_memory_settings)
@@ -114,7 +114,7 @@ def load_settings():
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         pass
-    # Then env vars
+    # Then env vars (set these in Railway for persistence!)
     s = {}
     if os.environ.get("MIN_CALLS"):
         s["min_calls"] = int(os.environ["MIN_CALLS"])
@@ -126,12 +126,16 @@ def load_settings():
 
 
 def save_settings(min_calls, min_convos, max_ooc):
-    """Persist KPI thresholds. Tries file first, falls back to memory."""
+    """Persist KPI thresholds. Saves to file + memory + env vars."""
     global _memory_settings
     data = {"min_calls": min_calls, "min_convos": min_convos, "max_ooc": max_ooc}
-    # Save to memory always (works on Railway)
+    # Save to memory always (survives within same process)
     _memory_settings = dict(data)
-    # Try to save to file (works locally)
+    # Also set env vars (survives within same process on Railway)
+    os.environ["MIN_CALLS"] = str(min_calls)
+    os.environ["MIN_CONVOS"] = str(min_convos)
+    os.environ["MAX_OOC"] = str(max_ooc)
+    # Try to save to file (works locally, not on Railway)
     try:
         with open(SETTINGS_FILE, "w") as f:
             json.dump(data, f, indent=2)
@@ -388,12 +392,16 @@ def api_send_email():
         from email_report import send_report as _send
         from datetime import datetime, timedelta, timezone
 
-        # Re-run audit with provided thresholds
+        # Always apply saved settings first (picks up UI changes)
+        apply_saved_settings()
+
+        # Re-run audit with provided thresholds (or saved settings as fallback)
+        s = load_settings()
         audit_data = run_audit_data(
             weeks_back=1,
-            min_calls=data.get("min_calls"),
-            min_convos=data.get("min_convos"),
-            max_ooc=data.get("max_ooc"),
+            min_calls=data.get("min_calls") or s.get("min_calls"),
+            min_convos=data.get("min_convos") or s.get("min_convos"),
+            max_ooc=data.get("max_ooc") or s.get("max_ooc"),
         )
 
         now = datetime.now(timezone.utc)
