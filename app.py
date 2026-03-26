@@ -891,7 +891,7 @@ def api_isa():
             except Exception:
                 continue
 
-        return jsonify({
+        result = {
             "current": {
                 "calls": out_curr, "convos": conv_curr,
                 "talk_secs": talk_curr, "appts_set": appt_set_curr,
