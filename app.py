@@ -22,6 +22,7 @@ from flask import Flask, render_template, jsonify, request
 
 from fub_client import FUBClient
 import config
+from flip_tracker import init_flip_tracker
 from kpi_audit import (
     auto_detect_agents,
     count_calls_for_user,
@@ -33,6 +34,9 @@ from kpi_audit import (
 )
 
 app = Flask(__name__)
+
+# Initialize Flip Tracker module
+init_flip_tracker(app)
 
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
