@@ -91,6 +91,7 @@ LIVE_CALLS_INBOX_ID = 4
 
 EXCLUDED_LEAD_SOURCES = [
     "Sphere",
+    "Courted.io",
 ]
 
 

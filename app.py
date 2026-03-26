@@ -908,6 +908,10 @@ def api_isa():
                 if assigned_uid == isa_id:
                     continue
 
+                # Skip excluded lead sources (Sphere, Courted.io, etc.)
+                if source in config.EXCLUDED_LEAD_SOURCES:
+                    continue
+
                 total_handoffs += 1
 
                 # Check staleness
