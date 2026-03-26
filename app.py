@@ -1208,7 +1208,31 @@ def api_tag_followup():
         return jsonify({"error": str(e)}), 500
 
 
+def warmup_cache():
+    """Pre-populate cache on startup so first page load is instant."""
+    import threading
+    def _warmup():
+        try:
+            with app.test_client() as tc:
+                print("[WARMUP] Pre-loading audit data...")
+                tc.get("/api/audit")
+                print("[WARMUP] Audit cached ✓")
+                tc.get("/api/manager")
+                print("[WARMUP] Manager cached ✓")
+                # ISA is heaviest — do it last
+                tc.get("/api/isa")
+                print("[WARMUP] ISA cached ✓")
+        except Exception as e:
+            print(f"[WARMUP] Error: {e}")
+    t = threading.Thread(target=_warmup, daemon=True)
+    t.start()
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    warmup_cache()
     app.run(debug=debug, port=port, host="0.0.0.0")
+else:
+    # Running under gunicorn
+    warmup_cache()
