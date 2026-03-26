@@ -880,7 +880,11 @@ def api_isa():
         # ── STALE LEADS: 90-day sweep of all leads Fhalen connected with ──
         # Use 90 days to catch leads from when she was doing recruiting
         lookback_days = getattr(config, "ISA_HANDOFF_LOOKBACK_DAYS", 90)
-        all_calls_sweep = client.get_calls(since=today - timedelta(days=lookback_days))
+        # Reuse the 4-week calls if lookback <= 28 days, else fetch more
+        if lookback_days <= 28:
+            all_calls_sweep = all_calls_4w
+        else:
+            all_calls_sweep = client.get_calls(since=today - timedelta(days=lookback_days))
 
         fhalen_connected_sweep = {}
         for c in all_calls_sweep:
@@ -899,7 +903,8 @@ def api_isa():
         fhalen_own_pipeline = []
         fhalen_own_stages = {}
 
-        for pid in list(fhalen_connected_sweep.keys()):
+        # Cap at 80 people lookups to prevent Railway timeout/crash
+        for pid in list(fhalen_connected_sweep.keys())[:80]:
             try:
                 person = client._request("GET", f"people/{pid}")
                 assigned = person.get("assignedTo", "")
