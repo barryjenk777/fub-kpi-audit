@@ -468,8 +468,8 @@ function buildManager(d) {
 async function loadManager() {
   const ld=document.getElementById('loading-manager'),db=document.getElementById('dashboard-manager');
   ld.style.display='flex';db.style.display='none';
-  try{const r=await fetch('/api/manager');const d=await r.json();if(d.error)db.innerHTML=`<div class="action-box red"><div class="title">Error</div><p>${d.error}</p></div>`;else{managerData=d;db.innerHTML=buildManager(d);}}
-  catch(e){db.innerHTML=`<div class="action-box red"><div class="title">Error</div><p>${e.message}</p></div>`;}
+  try{const r=await fetch('/api/manager',{signal:AbortSignal.timeout(240000)});const txt=await r.text();try{const d=JSON.parse(txt);if(d.error)db.innerHTML=`<div class="action-box red"><div class="title">Error</div><p>${d.error}</p></div>`;else{managerData=d;db.innerHTML=buildManager(d);if(d.from_cache)document.getElementById('loading-manager').querySelector('.loading-text')&&(()=>{})();}}catch(pe){db.innerHTML=`<div class="action-box red"><div class="title">Server Loading</div><p>The manager tab is still warming up. This happens on first load — please wait 30 seconds and try again.</p><button class="btn" onclick="loadManager()" style="margin-top:12px">↻ Retry</button></div>`;}}
+  catch(e){db.innerHTML=`<div class="action-box red"><div class="title">Loading Timeout</div><p>The data is still being fetched from FUB. Please wait a moment and try again.</p><button class="btn" onclick="loadManager()" style="margin-top:12px">↻ Retry</button></div>`;}
   ld.style.display='none';db.style.display='block';
 }
 
@@ -559,8 +559,8 @@ function buildIsa(d) {
 async function loadIsa() {
   const ld=document.getElementById('loading-isa'),db=document.getElementById('dashboard-isa');
   ld.style.display='flex';db.style.display='none';
-  try{const r=await fetch('/api/isa');const d=await r.json();if(d.error)db.innerHTML=`<div class="action-box red"><div class="title">Error</div><p>${d.error}</p></div>`;else{isaData=d;db.innerHTML=buildIsa(d);}}
-  catch(e){db.innerHTML=`<div class="action-box red"><div class="title">Error</div><p>${e.message}</p></div>`;}
+  try{const r=await fetch('/api/isa',{signal:AbortSignal.timeout(240000)});const txt=await r.text();try{const d=JSON.parse(txt);if(d.error)db.innerHTML=`<div class="action-box red"><div class="title">Error</div><p>${d.error}</p></div>`;else{isaData=d;db.innerHTML=buildIsa(d);}}catch(pe){db.innerHTML=`<div class="action-box red"><div class="title">Server Loading</div><p>The ISA tab is still warming up. Please wait 30 seconds and try again.</p><button class="btn" onclick="loadIsa()" style="margin-top:12px">↻ Retry</button></div>`;}}
+  catch(e){db.innerHTML=`<div class="action-box red"><div class="title">Loading Timeout</div><p>Data is still being fetched. Please wait and try again.</p><button class="btn" onclick="loadIsa()" style="margin-top:12px">↻ Retry</button></div>`;}
   ld.style.display='none';db.style.display='block';
 }
 
