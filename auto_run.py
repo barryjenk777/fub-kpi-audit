@@ -12,6 +12,16 @@ import json
 # Ensure we're in the right directory
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+# Load .env if present
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_env_path):
+    with open(_env_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
+
 from fub_client import FUBClient
 import config
 from kpi_audit import (

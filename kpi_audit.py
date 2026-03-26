@@ -352,7 +352,8 @@ def run_audit(client, weeks_back=1):
 
     print("=" * 72)
     print("LEGACY HOME TEAM — WEEKLY KPI AUDIT")
-    print(f"Period: {since.strftime('%b %d')} — {until.strftime('%b %d, %Y')}")
+    last_day = until - timedelta(days=1)
+    print(f"Period: {since.strftime('%b %d')} — {last_day.strftime('%b %d, %Y')}")
     print(f"Thresholds: Calls ≥{config.MIN_OUTBOUND_CALLS}  "
           f"Convos ≥{config.MIN_CONVERSATIONS}  "
           f"OOC ≤{config.MAX_OUT_OF_COMPLIANCE}")

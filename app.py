@@ -178,7 +178,7 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
         "totals": totals,
         "period": {
             "start": since.strftime("%b %d"),
-            "end": until.strftime("%b %d, %Y"),
+            "end": (until - timedelta(days=1)).strftime("%b %d, %Y"),
         },
         "thresholds": {
             "min_calls": config.MIN_OUTBOUND_CALLS,
