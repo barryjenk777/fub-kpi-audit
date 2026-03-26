@@ -7,9 +7,47 @@ Requires: pip install sendgrid
 """
 
 import os
+import random
 from datetime import datetime
 
 import config
+
+
+def _catchy_subject(email_type, data=None):
+    """Generate unique, catchy subject lines so Gmail won't thread them together."""
+    week_of = datetime.now().strftime("%b %d")
+
+    if email_type == "audit":
+        passed = data.get("passed", 0) if data else 0
+        total = data.get("total", 0) if data else 0
+        subjects = [
+            f"🏆 Legacy Scoreboard — {passed}/{total} Agents Earned Their Spot — Week of {week_of}",
+            f"📊 Who's Earning Leads This Week? {passed}/{total} Made the Cut — {week_of}",
+            f"⚡ Weekly KPI Drop: {passed}/{total} Agents Qualify for Priority — {week_of}",
+            f"🎯 The Leaderboard Is In — {passed}/{total} Agents Hit KPIs — {week_of}",
+        ]
+    elif email_type == "manager":
+        meeting = data.get("meeting", 0) if data else 0
+        total = data.get("total", 0) if data else 0
+        subjects = [
+            f"🎯 Joe's Sunday Playbook — {meeting}/{total} at KPI — Here's Your Game Plan for {week_of}",
+            f"🏈 Coaching Blueprint: Who Needs You Most This Week — {week_of}",
+            f"📋 Your Pre-Game Scouting Report — {meeting}/{total} Hitting KPIs — {week_of}",
+            f"💪 Time to Level Up the Team — {meeting}/{total} at Standard — {week_of}",
+        ]
+    elif email_type == "isa":
+        calls = data.get("calls", 0) if data else 0
+        convos = data.get("convos", 0) if data else 0
+        subjects = [
+            f"📞 ISA Performance Pulse — {calls} Calls, {convos} Conversations — Week of {week_of}",
+            f"🔍 Fhalen's Weekly Breakdown: Calls to Closings — {week_of}",
+            f"📈 ISA ROI Check — Are We Getting Appointments? — {week_of}",
+            f"⚡ Inside Sales Scorecard: Conversion Funnel for {week_of}",
+        ]
+    else:
+        subjects = [f"Legacy Home Team Update — {week_of}"]
+
+    return random.choice(subjects)
 
 
 def _rank_agents(results):
@@ -485,7 +523,7 @@ def send_manager_email(manager_data, period_label):
     meeting = cs["meeting_kpi"]
     total = cs["total_agents"]
 
-    subject = f"🎯 Your Monday Game Plan — {meeting}/{total} agents at KPI — {period_label}"
+    subject = _catchy_subject("manager", {"meeting": meeting, "total": total})
 
     # Joe + Barry (CC)
     recipients = [
@@ -542,7 +580,7 @@ def send_report(results, period_start, period_end):
 
     passed = sum(1 for d in results.values() if d["evaluation"]["overall_pass"])
     total = len(results)
-    subject = f"Weekly Team Update — {period} — {passed}/{total} passed KPIs"
+    subject = _catchy_subject("audit", {"passed": passed, "total": total})
 
     # Add Fhalen (Live Calls admin) to recipients if not already included
     all_recipients = list(config.EMAIL_RECIPIENTS)
@@ -569,4 +607,179 @@ def send_report(results, period_start, period_end):
         return True
     except Exception as e:
         print(f"\n❌ Failed to send email: {e}")
+        return False
+
+
+def build_isa_email(isa_data):
+    """Build Fhalen's Monday morning ISA performance email."""
+    c = isa_data.get("current", {})
+    p = isa_data.get("previous", {})
+    funnel = isa_data.get("funnel", {})
+    handoffs = isa_data.get("handoffs", {})
+    stale = isa_data.get("stale_leads", [])
+    insights = isa_data.get("insights", [])
+    own = isa_data.get("own_pipeline", {})
+    period = isa_data.get("period", {}).get("current", "This Week")
+
+    calls = c.get("calls", 0)
+    convos = c.get("convos", 0)
+    appts_set = c.get("appts_set", 0)
+    appts_met = c.get("appts_met", 0)
+    texts_out = c.get("texts_out", 0)
+    connect_rate = c.get("connect_rate", 0)
+    show_rate = c.get("show_rate", 0)
+
+    # Motivational opener
+    if convos >= 10 and appts_set >= 3:
+        opener = f"Strong week — {convos} conversations and {appts_set} appointments. Keep pushing toward consistency."
+        emoji = "🔥"
+    elif convos >= 5:
+        opener = f"Good volume with {calls} calls and {convos} conversations. Now let's focus on converting those conversations into appointments."
+        emoji = "💪"
+    elif calls > 100:
+        opener = f"You put in the effort with {calls} calls, but only {convos} became conversations. Let's figure out what's blocking the connections."
+        emoji = "📈"
+    else:
+        opener = f"We need to see more activity. {calls} calls and {convos} conversations isn't enough to build a healthy pipeline. Let's create a plan."
+        emoji = "🎯"
+
+    html = f"""
+    <html>
+    <head><style>
+        body {{ font-family: -apple-system, 'Segoe UI', Arial, sans-serif; color: #333; max-width: 680px; margin: 0 auto; padding: 20px; line-height: 1.6; }}
+        h1 {{ color: #1a1a2e; font-size: 20px; margin-bottom: 4px; }}
+        h2 {{ color: #0f3460; font-size: 16px; margin-top: 28px; margin-bottom: 8px; border-bottom: 2px solid #e8e8e8; padding-bottom: 4px; }}
+        .opener {{ background: linear-gradient(135deg, #0f3460, #16213e); color: white; padding: 20px 24px; border-radius: 10px; margin: 16px 0; font-size: 15px; line-height: 1.7; }}
+        .stat-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }}
+        .stat-box {{ background: #f0f4f8; border-radius: 8px; padding: 14px 16px; flex: 1; min-width: 90px; text-align: center; }}
+        .stat-box .num {{ font-size: 26px; font-weight: 700; color: #0f3460; }}
+        .stat-box .lbl {{ font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 13px; }}
+        th {{ background: #0f3460; color: white; padding: 8px 10px; text-align: left; font-size: 12px; }}
+        td {{ padding: 7px 10px; border-bottom: 1px solid #e8e8e8; }}
+        tr:nth-child(even) {{ background: #f8f9fb; }}
+        .pass {{ color: #28a745; font-weight: 600; }}
+        .fail {{ color: #dc3545; font-weight: 600; }}
+        .muted {{ color: #999; }}
+        .action {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 14px 18px; margin: 10px 0; border-radius: 6px; font-size: 13px; }}
+        .action.red {{ background: #f8d7da; border-left-color: #dc3545; }}
+        .action.green {{ background: #d4edda; border-left-color: #28a745; }}
+        .funnel {{ display: flex; align-items: center; gap: 4px; margin: 12px 0; font-size: 14px; }}
+        .funnel .step {{ text-align: center; padding: 10px; border-radius: 8px; flex: 1; }}
+        .funnel .arrow {{ color: #ccc; font-size: 20px; }}
+        .footer {{ color: #888; font-size: 11px; margin-top: 30px; border-top: 1px solid #eee; padding-top: 10px; }}
+    </style></head>
+    <body>
+
+    <h1>{emoji} ISA Weekly Performance — {period}</h1>
+
+    <div class="opener">
+        <strong>Fhalen,</strong><br><br>
+        {opener}
+    </div>
+    """
+
+    # ── Conversion Funnel ──
+    html += '<h2>📞 Your Conversion Funnel</h2>'
+    html += '<div class="funnel">'
+    html += f'<div class="step" style="background:#e8f0fe"><div style="font-size:24px;font-weight:700">{funnel.get("dialed",0)}</div><div style="font-size:10px;color:#666">DIALED</div></div>'
+    html += '<div class="arrow">→</div>'
+    html += f'<div class="step" style="background:#e8f0fe"><div style="font-size:24px;font-weight:700">{funnel.get("connected",0)}</div><div style="font-size:10px;color:#666">CONNECTED</div></div>'
+    html += '<div class="arrow">→</div>'
+    html += f'<div class="step" style="background:#d4edda"><div style="font-size:24px;font-weight:700">{convos}</div><div style="font-size:10px;color:#666">CONVERSATIONS</div></div>'
+    html += '<div class="arrow">→</div>'
+    html += f'<div class="step" style="background:#fff3cd"><div style="font-size:24px;font-weight:700">{appts_set}</div><div style="font-size:10px;color:#666">APPTS SET</div></div>'
+    html += '<div class="arrow">→</div>'
+    html += f'<div class="step" style="background:{"#d4edda" if appts_met > 0 else "#f8d7da"}"><div style="font-size:24px;font-weight:700">{appts_met}</div><div style="font-size:10px;color:#666">APPTS MET</div></div>'
+    html += '</div>'
+
+    # ── Key Numbers ──
+    html += '<h2>📊 Key Numbers</h2><div class="stat-row">'
+    html += f'<div class="stat-box"><div class="num">{calls}</div><div class="lbl">Calls</div></div>'
+    html += f'<div class="stat-box"><div class="num">{texts_out}</div><div class="lbl">Texts Sent</div></div>'
+    html += f'<div class="stat-box"><div class="num">{connect_rate}%</div><div class="lbl">Connect Rate</div></div>'
+    html += f'<div class="stat-box"><div class="num">{show_rate}%</div><div class="lbl">Show Rate</div></div>'
+    html += '</div>'
+
+    # ── Insights ──
+    if insights:
+        html += '<h2>💡 Coaching Insights</h2>'
+        for ins in insights:
+            box_cls = "red" if ins["type"] == "critical" else ("" if ins["type"] == "warning" else "green")
+            html += f'<div class="action {box_cls}"><strong>{ins["icon"]} {ins["title"]}</strong><br>{ins["detail"]}</div>'
+
+    # ── Pipeline Health ──
+    if own and own.get("total", 0) > 0:
+        html += f'<h2>📂 Your Pipeline — {own["total"]} Leads</h2>'
+        stuck = own.get("stuck_in_lead", 0)
+        stale_14d = own.get("stale_14d", 0)
+        if stuck > 0:
+            html += f'<div class="action red"><strong>{stuck} leads are stuck in "Lead" stage.</strong> These need to be qualified and either handed off to an agent or moved to nurture. Every day they sit idle, they cool off.</div>'
+        if stale_14d > 0:
+            html += f'<div class="action red"><strong>{stale_14d} leads have had no activity in 14+ days.</strong> Re-engage or move to long-term drip.</div>'
+
+    # ── Stale Handoffs ──
+    if stale:
+        html += f'<h2>🔴 {len(stale)} Leads Need Your Follow-Up</h2>'
+        html += '<p style="font-size:13px;color:#666">You connected with these leads and handed them off, but they\'ve gone cold. Circle back — they were warm when you found them.</p>'
+        html += '<table><tr><th>Lead</th><th>Agent</th><th>Stage</th><th>Days Stale</th></tr>'
+        for sl in stale[:15]:
+            html += f'<tr><td>{sl["name"]}</td><td>{sl["assigned_to"]}</td><td>{sl["stage"]}</td><td class="fail">{sl["days_stale"]}d</td></tr>'
+        html += '</table>'
+        if len(stale) > 15:
+            html += f'<p class="muted">+ {len(stale) - 15} more — see dashboard for full list</p>'
+
+    # ── Footer ──
+    html += f"""
+    <p class="footer">
+        Legacy Home Team ISA Report — Generated {datetime.now().strftime('%A, %B %d at %I:%M %p')}<br>
+        View the full dashboard: <a href="https://web-production-3363cc.up.railway.app/">KPI Dashboard</a>
+    </p>
+    </body></html>
+    """
+    return html
+
+
+def send_isa_email(isa_data):
+    """Send Fhalen's Monday morning ISA performance email."""
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    if not api_key:
+        return False
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail, To
+    except ImportError:
+        return False
+
+    html_body = build_isa_email(isa_data)
+    c = isa_data.get("current", {})
+    subject = _catchy_subject("isa", {"calls": c.get("calls", 0), "convos": c.get("convos", 0)})
+
+    recipients = list(config.EMAIL_RECIPIENTS)
+    admin_email = getattr(config, "LIVE_CALLS_ADMIN_EMAIL", None)
+    if admin_email and admin_email not in recipients:
+        recipients.append(admin_email)
+
+    seen = set()
+    unique = []
+    for e in recipients:
+        if e not in seen:
+            seen.add(e)
+            unique.append(e)
+
+    message = Mail(
+        from_email=config.EMAIL_FROM,
+        to_emails=[To(e) for e in unique],
+        subject=subject,
+        html_content=html_body,
+    )
+
+    try:
+        sg = SendGridAPIClient(api_key)
+        sg.send(message)
+        print(f"\n✅ ISA email sent to {len(unique)} recipients")
+        return True
+    except Exception as e:
+        print(f"\n❌ Failed to send ISA email: {e}")
         return False

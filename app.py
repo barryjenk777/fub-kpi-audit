@@ -742,6 +742,26 @@ def api_send_manager_email():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/send-isa-email", methods=["POST"])
+def api_send_isa_email():
+    """Send Fhalen's ISA performance email."""
+    try:
+        from email_report import send_isa_email
+        import json as _json
+        with app.test_client() as tc:
+            resp = tc.get("/api/isa")
+            isa_data = _json.loads(resp.data)
+        if "error" in isa_data:
+            return jsonify({"error": isa_data["error"]}), 500
+        success = send_isa_email(isa_data)
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"error": "Send failed. Check SENDGRID_API_KEY."}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/isa")
 def api_isa():
     """ISA Performance tab — deep coaching analytics for Fhalen."""
