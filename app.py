@@ -428,22 +428,30 @@ def api_manager():
             "max_ooc": config.MAX_OUT_OF_COMPLIANCE,
         }
 
-        # ---- Fetch 4 weeks of data ----
+        # ---- Fetch ALL 4 weeks in ONE batch to save memory/API calls ----
         weeks_data = []
         agent_map = auto_detect_agents(client)
 
+        # Single fetch covering full 4-week range
+        full_since = today - timedelta(days=28)
+        all_calls_4w = client.get_calls(since=full_since, until=today)
+        all_appts_4w = client.get_appointments(since=full_since, until=today)
+
+        # Split into weekly buckets
         for week_num in range(4):
             until = today - timedelta(days=7 * week_num)
             since = until - timedelta(days=7)
+            since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+            until_str = until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-            all_calls = client.get_calls(since=since, until=until)
-            all_appointments = client.get_appointments(since=since, until=until)
+            week_calls = [c for c in all_calls_4w if since_str <= (c.get("created") or "") < until_str]
+            week_appts = [a for a in all_appts_4w if since_str <= (a.get("start") or a.get("created") or "") < until_str]
 
             week_agents = {}
             for name, user in agent_map.items():
                 uid = user["id"]
-                outbound, convos, talk_secs = count_calls_for_user(all_calls, uid)
-                appts_set, appts_met = count_appointments_for_user(all_appointments, uid)
+                outbound, convos, talk_secs = count_calls_for_user(week_calls, uid)
+                appts_set, appts_met = count_appointments_for_user(week_appts, uid)
 
                 # Text messages for current week only (expensive call)
                 texts_out = 0
@@ -791,15 +799,21 @@ def api_isa():
         show_rate_prev = round(appt_met_prev / appt_set_prev * 100) if appt_set_prev > 0 else 0
         calls_per_appt = round(out_curr / appt_set_curr) if appt_set_curr > 0 else 0
 
-        # 4-week sparkline data
+        # 4-week sparkline data — single batch fetch
+        full_since = today - timedelta(days=28)
+        all_calls_4w = client.get_calls(since=full_since, until=today)
+        all_appts_4w = client.get_appointments(since=full_since, until=today)
+
         sparkline_calls = []
         sparkline_convos = []
         sparkline_appts = []
         for wk in range(4):
             u = today - timedelta(days=7 * wk)
             s = u - timedelta(days=7)
-            wk_calls = client.get_calls(since=s, until=u)
-            wk_appts = client.get_appointments(since=s, until=u)
+            s_str = s.strftime("%Y-%m-%dT%H:%M:%SZ")
+            u_str = u.strftime("%Y-%m-%dT%H:%M:%SZ")
+            wk_calls = [c for c in all_calls_4w if s_str <= (c.get("created") or "") < u_str]
+            wk_appts = [a for a in all_appts_4w if s_str <= (a.get("start") or a.get("created") or "") < u_str]
             o, cv, _ = isa_calls(wk_calls)
             a_set, _, _, _ = isa_appts(wk_appts)
             label = f"{s.strftime('%b %d')}"
@@ -812,8 +826,8 @@ def api_isa():
         sparkline_convos.reverse()
         sparkline_appts.reverse()
 
-        # Pipeline snapshot
-        all_leads = client.get_people(assigned_user_id=isa_id, limit=500)
+        # Pipeline snapshot (limit 200 to save memory)
+        all_leads = client.get_people(assigned_user_id=isa_id, limit=200)
         stages = {}
         sources = {}
         for p in all_leads:
@@ -832,7 +846,7 @@ def api_isa():
         # Dropped balls: appointments Fhalen set where agent hasn't followed up
         dropped_balls = []
         all_appts_recent = client.get_appointments(
-            since=today - timedelta(days=30), until=today
+            since=today - timedelta(days=14), until=today
         )
         for appt in all_appts_recent:
             invitees = appt.get("invitees", [])
