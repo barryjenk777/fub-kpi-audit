@@ -35,9 +35,72 @@ from kpi_audit import (
 app = Flask(__name__)
 
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
+CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 
 # In-memory settings (used when filesystem is read-only, e.g., Railway)
 _memory_settings = {}
+
+# ---- Daily cache: fetch once, serve all day ----
+_cache = {}  # In-memory cache: {"audit:2026-03-26": {...}, "manager:2026-03-26": {...}}
+
+
+def _cache_key(endpoint):
+    """Generate a cache key like 'audit:2026-03-26'."""
+    return f"{endpoint}:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+
+
+def cache_get(endpoint):
+    """Get cached data for today. Checks memory first, then disk."""
+    key = _cache_key(endpoint)
+    # Memory cache
+    if key in _cache:
+        return _cache[key]
+    # Disk cache (works locally, not on Railway)
+    try:
+        path = os.path.join(CACHE_DIR, f"{key.replace(':', '_')}.json")
+        if os.path.exists(path):
+            with open(path) as f:
+                data = json.load(f)
+                _cache[key] = data  # Promote to memory
+                return data
+    except Exception:
+        pass
+    return None
+
+
+def cache_set(endpoint, data):
+    """Store data in today's cache. Memory always, disk when possible."""
+    key = _cache_key(endpoint)
+    _cache[key] = data
+    # Try disk
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        path = os.path.join(CACHE_DIR, f"{key.replace(':', '_')}.json")
+        with open(path, "w") as f:
+            json.dump(data, f)
+    except OSError:
+        pass  # Read-only on Railway
+
+
+def cache_clear(endpoint=None):
+    """Clear cache. If endpoint given, clear just that; otherwise clear all."""
+    global _cache
+    if endpoint:
+        key = _cache_key(endpoint)
+        _cache.pop(key, None)
+        try:
+            path = os.path.join(CACHE_DIR, f"{key.replace(':', '_')}.json")
+            os.remove(path)
+        except OSError:
+            pass
+    else:
+        _cache.clear()
+        try:
+            import shutil
+            if os.path.exists(CACHE_DIR):
+                shutil.rmtree(CACHE_DIR)
+        except OSError:
+            pass
 
 
 def load_settings():
@@ -234,12 +297,33 @@ def api_audit():
     min_convos = request.args.get("min_convos", type=int)
     max_ooc = request.args.get("max_ooc", type=int)
     weeks_back = request.args.get("weeks_back", 1, type=int)
+    force = request.args.get("force", "false").lower() == "true"
 
     try:
+        # Check cache (only for default params — custom overrides skip cache)
+        if not force and not min_calls and not min_convos and not max_ooc and weeks_back == 1:
+            cached = cache_get("audit")
+            if cached:
+                cached["from_cache"] = True
+                return jsonify(cached)
+
         data = run_audit_data(weeks_back, min_calls, min_convos, max_ooc)
+        data["from_cache"] = False
+
+        # Cache default runs only
+        if not min_calls and not min_convos and not max_ooc and weeks_back == 1:
+            cache_set("audit", data)
+
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/cache/clear", methods=["POST"])
+def api_cache_clear():
+    """Force-clear all caches so next load fetches fresh data."""
+    cache_clear()
+    return jsonify({"success": True, "message": "Cache cleared — next load will fetch fresh data."})
 
 
 @app.route("/api/settings", methods=["GET"])
@@ -257,6 +341,7 @@ def api_save_settings():
     max_ooc = data.get("max_ooc", config.MAX_OUT_OF_COMPLIANCE)
     saved = save_settings(min_calls, min_convos, max_ooc)
     apply_saved_settings()
+    cache_clear()  # KPIs changed — clear stale cache
     return jsonify({"success": True, "settings": saved})
 
 
@@ -324,7 +409,14 @@ def api_send_email():
 @app.route("/api/manager")
 def api_manager():
     """Sales Manager tab — deep coaching intelligence for Joe."""
+    force = request.args.get("force", "false").lower() == "true"
     try:
+        if not force:
+            cached = cache_get("manager")
+            if cached:
+                cached["from_cache"] = True
+                return jsonify(cached)
+
         client = FUBClient()
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -585,13 +677,16 @@ def api_manager():
             "team_call_to_convo": team_c2c,
         }
 
-        return jsonify({
+        result = {
             "agent_trends": agent_trends,
             "team_weeks": team_weeks,
             "coaching_summary": coaching_summary,
             "kpi": kpi,
             "week_labels": [wd["label"] for wd in weeks_data],
-        })
+            "from_cache": False,
+        }
+        cache_set("manager", result)
+        return jsonify(result)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -626,7 +721,14 @@ def api_send_manager_email():
 @app.route("/api/isa")
 def api_isa():
     """ISA Performance tab — Fhalen's metrics, funnel, pipeline, dropped balls."""
+    force = request.args.get("force", "false").lower() == "true"
     try:
+        if not force:
+            cached = cache_get("isa")
+            if cached:
+                cached["from_cache"] = True
+                return jsonify(cached)
+
         client = FUBClient()
         isa_id = config.ISA_USER_ID
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -804,7 +906,10 @@ def api_isa():
                 "current": f"{since_curr.strftime('%b %d')} - {(until_curr - timedelta(days=1)).strftime('%b %d')}",
                 "previous": f"{since_prev.strftime('%b %d')} - {(until_prev - timedelta(days=1)).strftime('%b %d')}",
             },
-        })
+            "from_cache": False,
+        }
+        cache_set("isa", result)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
