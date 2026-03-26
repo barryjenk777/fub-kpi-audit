@@ -261,9 +261,9 @@ function buildAgents(d) {
   // Leaderboard
   const mxC=maxOf(agents,'outbound_calls'),mxV=maxOf(agents,'conversations');
   h+=`<div class="section-header"><span class="icon">&#127942;</span> Leaderboard</div>`;
-  h+='<div class="table-wrap"><table><thead><tr><th>#</th><th>Agent</th><th>Calls</th><th style="width:100px"></th><th>Convos</th><th style="width:100px"></th><th>Appt</th><th>Met</th><th>Talk</th><th>OOC</th><th>KPI</th></tr></thead><tbody>';
+  h+='<div class="table-wrap"><table><thead><tr><th>#</th><th>Agent</th><th>Calls</th><th style="width:80px"></th><th>Convos</th><th style="width:80px"></th><th>Texts</th><th>Replies</th><th>Appt</th><th>Met</th><th>Talk</th><th>OOC</th><th>KPI</th></tr></thead><tbody>';
   agents.forEach((a,i)=>{const m=a.metrics,e=a.evaluation,rk=i<3?`<span class="medal">${MEDALS[i]}</span>`:(i+1),tg=e.overall_pass?'<span class="tag tag-pass">PASS</span>':'<span class="tag tag-fail">FAIL</span>';
-    h+=`<tr><td style="text-align:center">${rk}</td><td class="agent-name">${a.name}</td><td class="${e.calls_pass?'':'val-fail'}">${m.outbound_calls}</td><td><div class="bar-track"><div class="bar-fill fill-brand" style="width:${Math.round(m.outbound_calls/mxC*100)}%"></div></div></td><td class="${e.convos_pass?'':'val-fail'}">${m.conversations}</td><td><div class="bar-track"><div class="bar-fill fill-blue" style="width:${Math.round(m.conversations/mxV*100)}%"></div></div></td><td>${m.appts_set}</td><td>${m.appts_met}</td><td class="val-muted">${a.talk_time_fmt}</td><td class="${e.compliance_pass?'':'val-fail'}">${m.compliance_violations}</td><td>${tg}</td></tr>`;});
+    h+=`<tr><td style="text-align:center">${rk}</td><td class="agent-name">${a.name}</td><td class="${e.calls_pass?'':'val-fail'}">${m.outbound_calls}</td><td><div class="bar-track"><div class="bar-fill fill-brand" style="width:${Math.round(m.outbound_calls/mxC*100)}%"></div></div></td><td class="${e.convos_pass?'':'val-fail'}">${m.conversations}</td><td><div class="bar-track"><div class="bar-fill fill-blue" style="width:${Math.round(m.conversations/mxV*100)}%"></div></div></td><td>${m.texts_out||0}</td><td>${m.texts_in||0} <span style="font-size:10px;color:var(--text-muted)">${m.text_reply_rate||0}%</span></td><td>${m.appts_set}</td><td>${m.appts_met}</td><td class="val-muted">${a.talk_time_fmt}</td><td class="${e.compliance_pass?'':'val-fail'}">${m.compliance_violations}</td><td>${tg}</td></tr>`;});
   h+='</tbody></table></div>';
 
   // Funnel
@@ -505,6 +505,15 @@ function buildIsa(d) {
   h+=isaCard('👻','No-Shows',c.no_show,0,'',`${c.reschedule||0} rescheduled`);
   h+=isaCard('📊','Show Rate',c.show_rate,p.show_rate,'%');
   h+=isaCard('🔄','Calls / Convo',c.calls_per_convo,0,'',c.calls_per_convo>80?'Above benchmark (80)':'Within benchmark');
+  h+='</div>';
+
+  // ── TEXT ENGAGEMENT ──
+  h+='<div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">';
+  h+=isaCard('📤','Texts Sent',c.texts_out||0,p.texts_out||0);
+  h+=isaCard('📥','Replies Received',c.texts_in||0,p.texts_in||0);
+  h+=isaCard('📱','Text Reply Rate',(c.text_reply_rate||0),(p.text_reply_rate||0),'%',
+    (c.text_reply_rate||0)>=20?'Above benchmark (15-20%)':(c.text_reply_rate||0)>=15?'At benchmark':'Below benchmark (15-20%)');
+  h+=isaCard('👥','People Texted',c.texts_people||0,0,'','Unique leads reached');
   h+='</div>';
 
   // ── CONVERSION FUNNEL ──

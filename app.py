@@ -194,6 +194,14 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
         )
         appts_set, appts_met = count_appointments_for_user(all_appointments, user_id)
 
+        # Text engagement
+        try:
+            txt_out, txt_in, txt_ppl = client.count_texts_for_user(
+                user_id, since=since, until=until, calls=all_calls
+            )
+        except Exception:
+            txt_out = txt_in = txt_ppl = 0
+
         metrics = {
             "outbound_calls": outbound,
             "conversations": convos,
@@ -205,6 +213,9 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
             "ooc_sphere": ooc_sphere,
             "appts_set": appts_set,
             "appts_met": appts_met,
+            "texts_out": txt_out,
+            "texts_in": txt_in,
+            "text_reply_rate": round(txt_in / txt_out * 100) if txt_out else 0,
         }
 
         evaluation = evaluate_agent(metrics)
@@ -455,11 +466,14 @@ def api_manager():
 
                 # Text messages for current week only (expensive call)
                 texts_out = 0
+                texts_in = 0
                 if week_num == 0:
                     try:
-                        texts_out, _ = client.count_texts_for_user(uid, since=since, until=until)
+                        texts_out, texts_in, _ = client.count_texts_for_user(
+                            uid, since=since, until=until, calls=all_calls_4w
+                        )
                     except Exception:
-                        texts_out = 0
+                        texts_out = texts_in = 0
 
                 # OOC count (current week only)
                 ooc_total = 0
@@ -478,6 +492,8 @@ def api_manager():
                     "appts_met": appts_met,
                     "talk_secs": talk_secs,
                     "texts": texts_out,
+                    "texts_in": texts_in,
+                    "text_reply_rate": round(texts_in / texts_out * 100) if texts_out else 0,
                     "ooc": ooc_total,
                 }
 
@@ -796,6 +812,21 @@ def api_isa():
             "over_5m": sum(1 for d in durations if d >= 300),
         }
 
+        # ── Text message engagement ──
+        try:
+            texts_out_curr, texts_in_curr, texts_people_curr = client.count_texts_for_user(
+                isa_id, since=since_curr, until=until_curr, calls=all_calls_4w
+            )
+            texts_out_prev, texts_in_prev, texts_people_prev = client.count_texts_for_user(
+                isa_id, since=since_prev, until=until_prev, calls=all_calls_4w
+            )
+        except Exception:
+            texts_out_curr = texts_in_curr = texts_people_curr = 0
+            texts_out_prev = texts_in_prev = texts_people_prev = 0
+
+        text_reply_rate = round(texts_in_curr / texts_out_curr * 100) if texts_out_curr else 0
+        text_reply_rate_prev = round(texts_in_prev / texts_out_prev * 100) if texts_out_prev else 0
+
         # ── Call timing analysis: when does she have the best conversations? ──
         best_hours = {}
         for c in fhalen_out_curr:
@@ -1010,6 +1041,31 @@ def api_isa():
                           f"This is lost ROI — Fhalen did the hard work finding them.",
             })
 
+        # Insight 8: Text engagement
+        if texts_out_curr > 0:
+            if text_reply_rate < 10:
+                insights.append({
+                    "type": "warning", "icon": "💬",
+                    "title": f"Low Text Reply Rate ({text_reply_rate}%)",
+                    "detail": f"Fhalen sent {texts_out_curr} texts but only got {texts_in_curr} replies ({text_reply_rate}%). "
+                              f"Industry benchmark is 15-25% reply rate. Review message templates — "
+                              f"are texts personalized? Asking a question? Sent at good times?",
+                })
+            elif text_reply_rate > 20:
+                insights.append({
+                    "type": "info", "icon": "💬",
+                    "title": f"Strong Text Engagement ({text_reply_rate}% reply rate)",
+                    "detail": f"{texts_out_curr} texts sent, {texts_in_curr} replies received from {texts_people_curr} people. "
+                              f"Text engagement is above benchmark. Keep leveraging this channel.",
+                })
+        elif texts_out_curr == 0:
+            insights.append({
+                "type": "warning", "icon": "📱",
+                "title": "No Texts Sent This Week",
+                "detail": "Texting is a critical ISA channel — leads who don't answer calls often respond to texts. "
+                          "A multi-touch approach (call + text + voicemail drop) increases contact rates by 30-40%.",
+            })
+
         result = {
             "current": {
                 "calls": out_curr, "connected": conn_curr, "convos": conv_curr,
@@ -1018,12 +1074,16 @@ def api_isa():
                 "reschedule": resched_curr, "pending": pending_curr,
                 "show_rate": show_rate_curr, "calls_per_convo": calls_per_convo,
                 "connect_rate": connect_rate, "convo_rate": convo_rate,
+                "texts_out": texts_out_curr, "texts_in": texts_in_curr,
+                "texts_people": texts_people_curr, "text_reply_rate": text_reply_rate,
             },
             "previous": {
                 "calls": out_prev, "connected": conn_prev, "convos": conv_prev,
                 "talk_secs": talk_prev, "appts_set": appt_set_prev,
                 "appts_met": appt_met_prev, "show_rate": show_rate_prev,
                 "connect_rate": connect_rate_prev, "convo_rate": convo_rate_prev,
+                "texts_out": texts_out_prev, "texts_in": texts_in_prev,
+                "text_reply_rate": text_reply_rate_prev,
             },
             "duration_buckets": dur_buckets,
             "best_hours": [{"hour": h, "count": c} for h, c in sorted(best_hours.items(), key=lambda x: x[1], reverse=True)[:5]],

@@ -257,49 +257,62 @@ class FUBClient:
             params["dateFrom"] = since.strftime("%Y-%m-%d")
         return self._get_paginated("textMessages", params)
 
-    def count_texts_for_user(self, user_id, since=None, until=None):
+    def count_texts_for_user(self, user_id, since=None, until=None, calls=None):
         """Count outbound texts for a user by scanning calls for their phone,
-        then querying textMessages by fromNumber. Returns (outbound, total)."""
-        # Get user's phone number from their recent calls
-        calls = self.get_calls(since=since, until=until)
+        then querying textMessages by fromNumber. Returns (outbound, inbound, unique_people)."""
+        # Get user's phone number from provided calls or fetch
         phone = None
-        for c in calls:
-            if c.get("userId") == user_id and c.get("fromNumber"):
-                phone = c["fromNumber"]
-                break
+        if calls:
+            for c in calls:
+                if c.get("userId") == user_id and c.get("fromNumber"):
+                    phone = c["fromNumber"]
+                    break
+        if not phone:
+            recent_calls = self.get_calls(since=since, until=until)
+            for c in recent_calls:
+                if c.get("userId") == user_id and c.get("fromNumber"):
+                    phone = c["fromNumber"]
+                    break
 
         if not phone:
-            return 0, 0
+            return 0, 0, 0
 
-        # Fetch texts by this phone number
         since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None
-        limit = 100
-        offset = 0
+        until_str = until.strftime("%Y-%m-%dT%H:%M:%SZ") if until else None
+
+        # Fetch outbound texts
         outbound = 0
-        total = 0
+        inbound = 0
+        people = set()
+        for direction_key, is_out in [("fromNumber", True), ("toNumber", False)]:
+            offset = 0
+            while offset < 2000:
+                params = {"limit": 100, "offset": offset, direction_key: phone}
+                data = self._request("GET", "textMessages", params=params)
+                items = data.get("textMessages", data.get("textmessages", []))
+                if not items:
+                    break
+                for msg in items:
+                    created = msg.get("created", "")
+                    if since_str and created < since_str:
+                        break
+                    if until_str and created >= until_str:
+                        continue
+                    if is_out:
+                        outbound += 1
+                    else:
+                        inbound += 1
+                    pid = msg.get("personId")
+                    if pid:
+                        people.add(pid)
+                else:
+                    if len(items) < 100:
+                        break
+                    offset += 100
+                    continue
+                break  # inner for-loop broke (date cutoff)
 
-        while offset < 2000:
-            params = {"limit": limit, "offset": offset, "fromNumber": phone}
-            data = self._request("GET", "textMessages", params=params)
-            items = data.get("textMessages", data.get("textmessages", []))
-
-            if not items:
-                break
-
-            for msg in items:
-                created = msg.get("created", "")
-                if since_str and created < since_str:
-                    return outbound, total
-                total += 1
-                direction = (msg.get("direction") or "").lower()
-                if direction == "outbound" or not msg.get("isIncoming", True):
-                    outbound += 1
-
-            if len(items) < limit:
-                break
-            offset += limit
-
-        return outbound, total
+        return outbound, inbound, len(people)
 
     # ---- Tasks ----
 
