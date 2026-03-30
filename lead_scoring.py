@@ -418,10 +418,16 @@ class LeadScorer:
     # Tag management
     # ------------------------------------------------------------------
 
-    # Use /tmp on Railway (ephemeral but always writable), local .cache otherwise
+    # Cache directory priority:
+    # 1. LEADSTREAM_CACHE_DIR env var (set this to /data/.cache when using Railway Volume)
+    # 2. /tmp/.cache on Railway (ephemeral — wiped on restart, but always writable)
+    # 3. .cache/ next to this file (local dev)
     _app_dir = os.path.dirname(os.path.abspath(__file__))
     _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
-    _cache_dir = "/tmp/.cache" if _is_railway else os.path.join(_app_dir, ".cache")
+    _cache_dir = (
+        os.environ.get("LEADSTREAM_CACHE_DIR")
+        or ("/tmp/.cache" if _is_railway else os.path.join(_app_dir, ".cache"))
+    )
     MANIFEST_FILE = os.path.join(_cache_dir, "leadstream_manifest.json")
 
     def _load_manifest(self):

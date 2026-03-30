@@ -1273,7 +1273,10 @@ def api_leadstream_dashboard():
 
     # ── Load manifest (primary source of truth) ───────────────────────
     _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
-    _cache_base = "/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache")
+    _cache_base = (
+        os.environ.get("LEADSTREAM_CACHE_DIR")
+        or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
+    )
     MANIFEST_FILE = os.path.join(_cache_base, "leadstream_manifest.json")
     try:
         with open(MANIFEST_FILE) as f:
@@ -1571,7 +1574,10 @@ def api_health():
     import json as _json
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
-    _cache_base = "/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache")
+    _cache_base = (
+        os.environ.get("LEADSTREAM_CACHE_DIR")
+        or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
+    )
     MANIFEST_FILE = os.path.join(_cache_base, "leadstream_manifest.json")
 
     now = _dt.now(_tz.utc)
