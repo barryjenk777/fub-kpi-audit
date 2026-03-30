@@ -498,7 +498,7 @@ def build_manager_email(manager_data, period_label):
     html += f"""
     <p class="footer">
         Legacy Home Team KPI Audit — Generated {datetime.now().strftime('%A, %B %d at %I:%M %p')}<br>
-        View the full dashboard: <a href="https://web-production-3363cc.up.railway.app/">KPI Dashboard</a>
+        View the full dashboard: <a href="https://web-production-80a1e.up.railway.app/">KPI Dashboard</a>
     </p>
     </body></html>
     """
@@ -733,7 +733,7 @@ def build_isa_email(isa_data):
     html += f"""
     <p class="footer">
         Legacy Home Team ISA Report — Generated {datetime.now().strftime('%A, %B %d at %I:%M %p')}<br>
-        View the full dashboard: <a href="https://web-production-3363cc.up.railway.app/">KPI Dashboard</a>
+        View the full dashboard: <a href="https://web-production-80a1e.up.railway.app/">KPI Dashboard</a>
     </p>
     </body></html>
     """

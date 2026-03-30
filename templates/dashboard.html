@@ -281,15 +281,19 @@ function buildAgents(d) {
   return h;
 }
 
-async function loadAgents() {
+async function loadAgents(force) {
   const ld=document.getElementById('loading-agents'),db=document.getElementById('dashboard-agents'),ct=document.getElementById('controls');
   ld.style.display='flex';db.style.display='none';
   try{
-    const r=await fetch(`/api/audit?min_calls=${document.getElementById('minCalls').value}&min_convos=${document.getElementById('minConvos').value}&max_ooc=${document.getElementById('maxOoc').value}`);
+    // Default load: no params → hits pre-warmed cache (instant).
+    // Only pass custom params when user clicks "Apply" with force=true.
+    let url='/api/audit';
+    if(force){url+=`?min_calls=${document.getElementById('minCalls').value}&min_convos=${document.getElementById('minConvos').value}&max_ooc=${document.getElementById('maxOoc').value}&force=true`;}
+    const r=await fetch(url,{signal:AbortSignal.timeout(240000)});
     const d=await r.json();
     if(d.error){db.innerHTML=`<div class="action-box red"><div class="title">Error</div><p>${d.error}</p></div>`;}
-    else{agentData=d;document.getElementById('minCalls').value=d.thresholds.min_calls;document.getElementById('minConvos').value=d.thresholds.min_convos;document.getElementById('maxOoc').value=d.thresholds.max_ooc;db.innerHTML=buildAgents(d);document.getElementById('btnUpdateGroup').style.display='';document.getElementById('btnSendEmail').style.display='';}
-  }catch(e){db.innerHTML=`<div class="action-box red"><div class="title">Error</div><p>${e.message}</p></div>`;}
+    else{agentData=d;document.getElementById('minCalls').value=d.thresholds.min_calls;document.getElementById('minConvos').value=d.thresholds.min_convos;document.getElementById('maxOoc').value=d.thresholds.max_ooc;db.innerHTML=buildAgents(d);document.getElementById('btnUpdateGroup').style.display='';document.getElementById('btnSendEmail').style.display='';if(d.from_cache){db.insertAdjacentHTML('afterbegin',`<div style="background:var(--surface2);border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:12px;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between"><span>&#9889; Loaded from cache${d.cache_age?' ('+d.cache_age+')':''}</span><button class="btn" style="font-size:11px;padding:4px 10px" onclick="loadAgents(true)">&#8635; Refresh Live</button></div>`)}}
+  }catch(e){db.innerHTML=`<div class="action-box red"><div class="title">Loading Timeout</div><p>Data is still being fetched from FUB. Please wait and try again.</p><button class="btn" onclick="loadAgents()" style="margin-top:12px">↻ Retry</button></div>`;}
   ld.style.display='none';db.style.display='block';ct.style.display='flex';
 }
 
@@ -736,7 +740,7 @@ async function tagFollowup(ids) {
 async function sendManagerEmail(){const btn=document.getElementById('btnManagerEmail');btn.disabled=true;btn.textContent='Sending...';try{const r=await fetch('/api/send-manager-email',{method:'POST',headers:{'Content-Type':'application/json'}});const d=await r.json();btn.textContent=d.success?'✅ Sent!':'❌ Failed';setTimeout(()=>{btn.textContent='📧 Email Joe\'s Game Plan';btn.disabled=false},3000);}catch(e){btn.textContent='📧 Email Joe\'s Game Plan';btn.disabled=false;}}
 
 // Shared actions
-async function saveSettings(){try{await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_calls:+document.getElementById('minCalls').value,min_convos:+document.getElementById('minConvos').value,max_ooc:+document.getElementById('maxOoc').value})});}catch(e){}}
+async function saveSettings(){const btn=document.querySelector('[onclick="saveSettings()"]');const orig=btn.textContent;btn.disabled=true;btn.textContent='Saving...';try{const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_calls:+document.getElementById('minCalls').value,min_convos:+document.getElementById('minConvos').value,max_ooc:+document.getElementById('maxOoc').value})});const d=await r.json();if(d.success){btn.textContent='✅ Saved!';btn.style.background='#22c55e';btn.style.color='#fff';}else{btn.textContent='❌ Failed';btn.style.background='#ef4444';btn.style.color='#fff';}setTimeout(()=>{btn.textContent=orig;btn.style.background='';btn.style.color='';btn.disabled=false;},2500);}catch(e){btn.textContent='❌ Error';setTimeout(()=>{btn.textContent=orig;btn.style.background='';btn.style.color='';btn.disabled=false;},2500);}}
 async function updateGroup(){if(!agentData)return;const btn=document.getElementById('btnUpdateGroup');btn.disabled=true;btn.textContent='...';const ids=agentData.agents.filter(a=>a.evaluation.overall_pass).map(a=>a.user_id);try{const r=await fetch('/api/update-group',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_ids:ids})});const d=await r.json();btn.textContent=d.success?`Done (${d.count})`:'Failed';setTimeout(()=>{btn.textContent='Update Group';btn.disabled=false},2000);}catch(e){btn.textContent='Update Group';btn.disabled=false;}}
 async function sendEmail(){const btn=document.getElementById('btnSendEmail');btn.disabled=true;btn.textContent='...';try{const r=await fetch('/api/send-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_calls:+document.getElementById('minCalls').value,min_convos:+document.getElementById('minConvos').value,max_ooc:+document.getElementById('maxOoc').value})});const d=await r.json();btn.textContent=d.success?'Sent!':'Failed';setTimeout(()=>{btn.textContent='Email Report';btn.disabled=false},2000);}catch(e){btn.textContent='Email Report';btn.disabled=false;}}
 

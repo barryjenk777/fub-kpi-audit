@@ -328,10 +328,22 @@ def api_audit():
             cached = cache_get("audit")
             if cached:
                 cached["from_cache"] = True
+                # Add human-readable cache age
+                cached_at = cached.get("cached_at")
+                if cached_at:
+                    try:
+                        age_mins = int((datetime.now(timezone.utc) - datetime.fromisoformat(cached_at)).total_seconds() / 60)
+                        if age_mins < 60:
+                            cached["cache_age"] = f"{age_mins}m ago"
+                        else:
+                            cached["cache_age"] = f"{age_mins // 60}h {age_mins % 60}m ago"
+                    except Exception:
+                        pass
                 return jsonify(cached)
 
         data = run_audit_data(weeks_back, min_calls, min_convos, max_ooc)
         data["from_cache"] = False
+        data["cached_at"] = datetime.now(timezone.utc).isoformat()
 
         # Cache default runs only
         if not min_calls and not min_convos and not max_ooc and weeks_back == 1:
@@ -442,6 +454,13 @@ def api_manager():
             cached = cache_get("manager")
             if cached:
                 cached["from_cache"] = True
+                cached_at = cached.get("cached_at")
+                if cached_at:
+                    try:
+                        age_mins = int((datetime.now(timezone.utc) - datetime.fromisoformat(cached_at)).total_seconds() / 60)
+                        cached["cache_age"] = f"{age_mins // 60}h {age_mins % 60}m ago" if age_mins >= 60 else f"{age_mins}m ago"
+                    except Exception:
+                        pass
                 return jsonify(cached)
 
         client = FUBClient()
@@ -724,6 +743,7 @@ def api_manager():
             "kpi": kpi,
             "week_labels": [wd["label"] for wd in weeks_data],
             "from_cache": False,
+            "cached_at": datetime.now(timezone.utc).isoformat(),
         }
         cache_set("manager", result)
         return jsonify(result)
@@ -787,6 +807,13 @@ def api_isa():
             cached = cache_get("isa")
             if cached:
                 cached["from_cache"] = True
+                cached_at = cached.get("cached_at")
+                if cached_at:
+                    try:
+                        age_mins = int((datetime.now(timezone.utc) - datetime.fromisoformat(cached_at)).total_seconds() / 60)
+                        cached["cache_age"] = f"{age_mins // 60}h {age_mins % 60}m ago" if age_mins >= 60 else f"{age_mins}m ago"
+                    except Exception:
+                        pass
                 return jsonify(cached)
 
         client = FUBClient()
@@ -1199,6 +1226,7 @@ def api_isa():
                 "previous": f"{since_prev.strftime('%b %d')} - {(until_prev - timedelta(days=1)).strftime('%b %d')}",
             },
             "from_cache": False,
+            "cached_at": datetime.now(timezone.utc).isoformat(),
         }
         cache_set("isa", result)
         return jsonify(result)
@@ -1637,6 +1665,31 @@ def api_health():
         # Scoring runs every 4h — allow up to 5h before flagging stale
         status = "ok" if age_hours <= 5 else "stale"
 
+    # Scheduler status
+    scheduler_info = {"running": _scheduler_started}
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        # Get next run times from the scheduler if available
+        for var_name, var_val in globals().items():
+            if isinstance(var_val, BackgroundScheduler):
+                scheduler_info["jobs"] = [
+                    {"name": j.name, "next_run": str(j.next_run_time)}
+                    for j in var_val.get_jobs()
+                ]
+                break
+    except Exception:
+        pass
+
+    # Cache status
+    cache_status = {}
+    for endpoint in ["audit", "manager", "isa"]:
+        cached = cache_get(endpoint)
+        if cached:
+            cached_at = cached.get("cached_at")
+            cache_status[endpoint] = {"cached": True, "cached_at": cached_at}
+        else:
+            cache_status[endpoint] = {"cached": False}
+
     return jsonify({
         "status": status,
         "last_run": last_run_str,
@@ -1647,6 +1700,8 @@ def api_health():
             for i in leads
         ]) if last_run else 0,
         "pond_leads_tagged": len(manifest.get("pond", [])) if last_run else 0,
+        "scheduler": scheduler_info,
+        "dashboard_cache": cache_status,
     })
 
 
@@ -1684,8 +1739,12 @@ def api_leadstream_status():
         return jsonify({"error": str(e)}), 500
 
 
+# ---- Scheduler: cache warming + email delivery ----
+_scheduler_started = False
+
+
 def warmup_cache():
-    """Pre-populate cache on startup so first page load is instant."""
+    """Pre-populate all 3 tab caches so page loads are instant."""
     import threading
     def _warmup():
         try:
@@ -1695,7 +1754,6 @@ def warmup_cache():
                 print("[WARMUP] Audit cached ✓")
                 tc.get("/api/manager")
                 print("[WARMUP] Manager cached ✓")
-                # ISA is heaviest — do it last
                 tc.get("/api/isa")
                 print("[WARMUP] ISA cached ✓")
         except Exception as e:
@@ -1704,11 +1762,100 @@ def warmup_cache():
     t.start()
 
 
+def scheduled_cache_warm():
+    """Called by APScheduler 3x/day to keep cache fresh."""
+    print(f"[SCHEDULER] Cache warm started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    cache_clear()  # Clear stale data first
+    try:
+        with app.test_client() as tc:
+            tc.get("/api/audit")
+            print("[SCHEDULER] Audit cache warmed ✓")
+            tc.get("/api/manager")
+            print("[SCHEDULER] Manager cache warmed ✓")
+            tc.get("/api/isa")
+            print("[SCHEDULER] ISA cache warmed ✓")
+    except Exception as e:
+        print(f"[SCHEDULER] Cache warm error: {e}")
+
+
+def scheduled_send_audit_email():
+    """Monday 8:30am ET — send KPI audit report."""
+    print(f"[SCHEDULER] Sending audit email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        with app.test_client() as tc:
+            resp = tc.post("/api/send-email", json={})
+            print(f"[SCHEDULER] Audit email: {resp.data.decode()}")
+    except Exception as e:
+        print(f"[SCHEDULER] Audit email error: {e}")
+
+
+def scheduled_send_manager_email():
+    """Sunday 3pm ET — send Joe's coaching email."""
+    print(f"[SCHEDULER] Sending manager email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        with app.test_client() as tc:
+            resp = tc.post("/api/send-manager-email")
+            print(f"[SCHEDULER] Manager email: {resp.data.decode()}")
+    except Exception as e:
+        print(f"[SCHEDULER] Manager email error: {e}")
+
+
+def scheduled_send_isa_email():
+    """Monday 10am ET — send Fhalen's ISA email."""
+    print(f"[SCHEDULER] Sending ISA email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        with app.test_client() as tc:
+            resp = tc.post("/api/send-isa-email")
+            print(f"[SCHEDULER] ISA email: {resp.data.decode()}")
+    except Exception as e:
+        print(f"[SCHEDULER] ISA email error: {e}")
+
+
+def start_scheduler():
+    """Start APScheduler with cache warming (3x/day) + email schedules."""
+    global _scheduler_started
+    if _scheduler_started:
+        return
+    _scheduler_started = True
+
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        print("[SCHEDULER] APScheduler not installed — skipping scheduled jobs")
+        return
+
+    scheduler = BackgroundScheduler(timezone="US/Eastern")
+
+    # Cache warming: 3x/day at 6am, 12pm, 6pm ET
+    scheduler.add_job(scheduled_cache_warm, CronTrigger(hour="6,12,18", minute=0),
+                      id="cache_warm", name="Cache warm (3x/day)")
+
+    # Joe's coaching email: Sunday 3pm ET
+    scheduler.add_job(scheduled_send_manager_email, CronTrigger(day_of_week="sun", hour=15, minute=0),
+                      id="manager_email", name="Joe's Sunday coaching email")
+
+    # KPI Audit email: Monday 8:30am ET
+    scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30),
+                      id="audit_email", name="Monday KPI audit email")
+
+    # Fhalen ISA email: Monday 10am ET
+    scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0),
+                      id="isa_email", name="Monday ISA email")
+
+    scheduler.start()
+    print("[SCHEDULER] APScheduler started with 4 jobs:")
+    for job in scheduler.get_jobs():
+        print(f"  → {job.name} | next: {job.next_run_time}")
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
     warmup_cache()
+    start_scheduler()
     app.run(debug=debug, port=port, host="0.0.0.0")
 else:
     # Running under gunicorn
     warmup_cache()
+    start_scheduler()

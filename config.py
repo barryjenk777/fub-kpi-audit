@@ -27,7 +27,7 @@ ENABLE_SPEED_TO_LEAD = False
 
 # Maximum number of leads with MAV_NUDGE_OUTSTANDING tag
 # Set high initially while team clears backlog, then tighten over time
-MAX_OUT_OF_COMPLIANCE = 100
+MAX_OUT_OF_COMPLIANCE = 30
 
 
 # =============================================================================
