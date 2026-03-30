@@ -403,7 +403,9 @@ class LeadScorer:
     # Tag management
     # ------------------------------------------------------------------
 
-    MANIFEST_FILE = os.path.join(os.path.dirname(__file__), ".cache", "leadstream_manifest.json")
+    # Use /tmp on Railway (app dir is read-only), local .cache otherwise
+    _cache_dir = "/tmp/.cache" if os.path.exists("/tmp") and not os.access(os.path.dirname(__file__), os.W_OK) else os.path.join(os.path.dirname(__file__), ".cache")
+    MANIFEST_FILE = os.path.join(_cache_dir, "leadstream_manifest.json")
 
     def _load_manifest(self):
         """Load the manifest of previously tagged lead IDs."""

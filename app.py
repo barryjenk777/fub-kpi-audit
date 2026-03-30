@@ -1257,7 +1257,8 @@ def api_leadstream_dashboard():
     if cached["data"] and cached["time"] and (now - cached["time"]).seconds < 180:
         return jsonify(cached["data"])
 
-    MANIFEST_FILE = os.path.join(os.path.dirname(__file__), ".cache", "leadstream_manifest.json")
+    _cache_base = "/tmp/.cache" if os.path.exists("/tmp") and not os.access(os.path.dirname(__file__), os.W_OK) else os.path.join(os.path.dirname(__file__), ".cache")
+    MANIFEST_FILE = os.path.join(_cache_base, "leadstream_manifest.json")
     try:
         with open(MANIFEST_FILE) as f:
             manifest = _json.load(f)
@@ -1452,6 +1453,10 @@ def api_leadstream_run():
         client = _get_leadstream_client()
         scorer = LeadScorer(client)
         results = scorer.run(dry_run=dry_run, agent_name=agent_name, pond_only=pond_only)
+
+        # Bust dashboard cache so next load reflects the new run
+        _ls_dashboard_cache["data"] = None
+        _ls_dashboard_cache["time"] = None
 
         return jsonify({
             "success": True,
