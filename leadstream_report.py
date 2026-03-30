@@ -127,21 +127,25 @@ def build_report(client, preview=False):
     }
 
     # ── Agent Leads ─────────────────────────────────────────────────
-    for agent_name, lead_ids in manifest.get("agent", {}).items():
+    for agent_name, lead_items in manifest.get("agent", {}).items():
         agent_result = {
-            "tagged": len(lead_ids),
+            "tagged": len(lead_items),
             "actioned": 0,
             "not_actioned": [],
             "actioned_leads": [],
         }
 
-        for pid in lead_ids:
-            # Look up lead name
-            try:
-                person = client.get_person(pid)
-                lead_name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
-            except Exception:
-                lead_name = f"ID:{pid}"
+        for item in lead_items:
+            pid = item["id"] if isinstance(item, dict) else item
+            # Use stored name if available, else look up
+            if isinstance(item, dict) and item.get("name"):
+                lead_name = item["name"]
+            else:
+                try:
+                    person = client.get_person(pid)
+                    lead_name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
+                except Exception:
+                    lead_name = f"ID:{pid}"
 
             if pid in contacted:
                 agent_result["actioned"] += 1
@@ -159,15 +163,19 @@ def build_report(client, preview=False):
         report_data["agents"][agent_name] = agent_result
 
     # ── Pond Leads ──────────────────────────────────────────────────
-    pond_ids = manifest.get("pond", [])
-    report_data["pond"]["tagged"] = len(pond_ids)
+    pond_items = manifest.get("pond", [])
+    report_data["pond"]["tagged"] = len(pond_items)
 
-    for pid in pond_ids:
-        try:
-            person = client.get_person(pid)
-            lead_name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
-        except Exception:
-            lead_name = f"ID:{pid}"
+    for item in pond_items:
+        pid = item["id"] if isinstance(item, dict) else item
+        if isinstance(item, dict) and item.get("name"):
+            lead_name = item["name"]
+        else:
+            try:
+                person = client.get_person(pid)
+                lead_name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
+            except Exception:
+                lead_name = f"ID:{pid}"
 
         if pid in contacted:
             report_data["pond"]["actioned"] += 1

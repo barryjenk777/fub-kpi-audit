@@ -429,8 +429,9 @@ class LeadScorer:
         removed = 0
 
         # Clean agent leads
-        for agent_name, lead_ids in manifest.get("agent", {}).items():
-            for pid in lead_ids:
+        for agent_name, lead_items in manifest.get("agent", {}).items():
+            for item in lead_items:
+                pid = item["id"] if isinstance(item, dict) else item
                 if dry_run:
                     print(f"  [DRY RUN] Would remove '{LEADSTREAM_TAG}' from ID: {pid} ({agent_name})")
                 else:
@@ -443,7 +444,8 @@ class LeadScorer:
                 removed += 1
 
         # Clean pond leads
-        for pid in manifest.get("pond", []):
+        for item in manifest.get("pond", []):
+            pid = item["id"] if isinstance(item, dict) else item
             if dry_run:
                 print(f"  [DRY RUN] Would remove '{LEADSTREAM_POND_TAG}' from ID: {pid} (pond)")
             else:
@@ -532,7 +534,16 @@ class LeadScorer:
 
                 tagged, tagged_ids = self.apply_tags(scored, LEADSTREAM_TAG, dry_run=dry_run)
                 print(f"  Tagged {tagged} leads for {name}")
-                new_manifest["agent"][name] = tagged_ids
+                new_manifest["agent"][name] = [
+                    {
+                        "id": p.get("id"),
+                        "name": f"{p.get('firstName', '')} {p.get('lastName', '')}".strip(),
+                        "score": s,
+                        "tier": t,
+                        "stage": p.get("stage", ""),
+                    }
+                    for p, s, t, _ in scored
+                ]
 
                 results["agents"][name] = {
                     "count": len(scored),
@@ -563,7 +574,16 @@ class LeadScorer:
 
             tagged, pond_ids = self.apply_tags(pond_scored, LEADSTREAM_POND_TAG, dry_run=dry_run)
             print(f"  Tagged {tagged} pond leads")
-            new_manifest["pond"] = pond_ids
+            new_manifest["pond"] = [
+                {
+                    "id": p.get("id"),
+                    "name": f"{p.get('firstName', '')} {p.get('lastName', '')}".strip(),
+                    "score": s,
+                    "tier": t,
+                    "stage": p.get("stage", ""),
+                }
+                for p, s, t, _ in pond_scored
+            ]
 
             results["pond"] = [
                 {
@@ -575,6 +595,21 @@ class LeadScorer:
                 }
                 for p, s, t, b in pond_scored
             ]
+
+        # Add run metadata
+        new_manifest["last_run"] = self.now.isoformat()
+        new_manifest["last_run_mode"] = "pond_only" if pond_only else "full"
+        history = existing_manifest.get("run_history", [])
+        agent_lead_count = sum(len(v) for v in new_manifest["agent"].values())
+        pond_lead_count = len(new_manifest["pond"])
+        history.append({
+            "time": self.now.isoformat(),
+            "mode": "pond_only" if pond_only else "full",
+            "agent_leads": agent_lead_count,
+            "pond_leads": pond_lead_count,
+            "total": agent_lead_count + pond_lead_count,
+        })
+        new_manifest["run_history"] = history[-14:]
 
         # Save manifest for next cleanup cycle
         if not dry_run:

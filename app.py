@@ -1236,6 +1236,139 @@ def api_tag_followup():
         return jsonify({"error": str(e)}), 500
 
 
+# ---- LeadStream: Dashboard ----
+
+_ls_dashboard_cache = {"data": None, "time": None}
+
+@app.route("/leadstream")
+def leadstream_dashboard():
+    return render_template("leadstream.html")
+
+
+@app.route("/api/leadstream/dashboard")
+def api_leadstream_dashboard():
+    """Return LeadStream status, current tagged leads, and activity since last run."""
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+    # 3-minute cache to avoid hammering FUB API on every page refresh
+    now = _dt.now(_tz.utc)
+    cached = _ls_dashboard_cache
+    if cached["data"] and cached["time"] and (now - cached["time"]).seconds < 180:
+        return jsonify(cached["data"])
+
+    MANIFEST_FILE = os.path.join(os.path.dirname(__file__), ".cache", "leadstream_manifest.json")
+    try:
+        with open(MANIFEST_FILE) as f:
+            manifest = _json.load(f)
+    except Exception:
+        manifest = {"agent": {}, "pond": []}
+
+    last_run_str = manifest.get("last_run")
+    last_run = None
+    if last_run_str:
+        try:
+            last_run = _dt.fromisoformat(last_run_str)
+            if last_run.tzinfo is None:
+                last_run = last_run.replace(tzinfo=_tz.utc)
+        except Exception:
+            pass
+
+    # Fetch activity since last run (3 bulk API calls)
+    calls_by_person = {}
+    texts_by_person = {}
+    updated_person_ids = set()
+
+    if last_run:
+        try:
+            _client = FUBClient()
+            since = last_run - _td(minutes=10)
+
+            try:
+                for call in _client.get_calls(since=since):
+                    if not call.get("isIncoming"):
+                        pid = call.get("personId")
+                        if pid:
+                            calls_by_person[pid] = calls_by_person.get(pid, 0) + 1
+            except Exception:
+                pass
+
+            try:
+                for text in _client.get_text_messages(since=since):
+                    if text.get("isOutbound"):
+                        pid = text.get("personId")
+                        if pid:
+                            texts_by_person[pid] = texts_by_person.get(pid, 0) + 1
+            except Exception:
+                pass
+
+            try:
+                for person in _client.get_people(updated_since=since):
+                    pid = person.get("id")
+                    if pid:
+                        updated_person_ids.add(pid)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _enrich(item):
+        pid = item["id"] if isinstance(item, dict) else item
+        called = calls_by_person.get(pid, 0) > 0
+        texted = texts_by_person.get(pid, 0) > 0
+        updated = pid in updated_person_ids
+        return {
+            "id": pid,
+            "name": item.get("name", f"ID:{pid}") if isinstance(item, dict) else f"ID:{pid}",
+            "score": item.get("score", 0) if isinstance(item, dict) else 0,
+            "tier": item.get("tier", "") if isinstance(item, dict) else "",
+            "stage": item.get("stage", "") if isinstance(item, dict) else "",
+            "called": called,
+            "texted": texted,
+            "updated": updated,
+            "actioned": called or texted,
+        }
+
+    agents_out = {}
+    for agent_name, lead_items in manifest.get("agent", {}).items():
+        enriched = [_enrich(item) for item in lead_items]
+        actioned = sum(1 for l in enriched if l["actioned"])
+        agents_out[agent_name] = {
+            "leads": enriched,
+            "tagged": len(enriched),
+            "actioned": actioned,
+        }
+
+    pond_enriched = [_enrich(item) for item in manifest.get("pond", [])]
+    pond_actioned = sum(1 for l in pond_enriched if l["actioned"])
+
+    total_agent = sum(a["tagged"] for a in agents_out.values())
+    total_actioned = sum(a["actioned"] for a in agents_out.values()) + pond_actioned
+
+    result = {
+        "last_run": last_run_str,
+        "last_run_mode": manifest.get("last_run_mode", "full"),
+        "run_history": manifest.get("run_history", []),
+        "agents": agents_out,
+        "pond": {
+            "leads": pond_enriched,
+            "tagged": len(pond_enriched),
+            "actioned": pond_actioned,
+        },
+        "totals": {
+            "agent_leads": total_agent,
+            "pond_leads": len(pond_enriched),
+            "total": total_agent + len(pond_enriched),
+            "actioned": total_actioned,
+            "action_rate": round(total_actioned / (total_agent + len(pond_enriched)) * 100, 1) if (total_agent + len(pond_enriched)) > 0 else 0,
+        },
+    }
+
+    _ls_dashboard_cache["data"] = result
+    _ls_dashboard_cache["time"] = now
+    return jsonify(result)
+
+
 # ---- LeadStream: FUB Webhook (real-time tag removal) ----
 
 @app.route("/webhook/fub", methods=["POST"])
