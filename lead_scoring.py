@@ -14,9 +14,19 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
+
+# Structured logging — visible in Railway logs
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] leadstream: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("leadstream")
 
 from config import (
     EXCLUDED_USERS,
@@ -196,21 +206,22 @@ class LeadScorer:
     def _build_visit_map(self):
         """Fetch recent IDX events and build a map of personId → latest visit time.
 
-        Queries the Events API for 'Viewed Page' and 'Viewed Property' events
-        from the last 7 days, then keeps only the most recent per person.
+        Queries the Events API for 'Viewed Page', 'Viewed Property', and
+        'Property Saved' events. Fetches 7 days to cover all LEADSTREAM_VISIT_RECENCY
+        tiers (max tier is 168 hours = 7 days).
         """
         if self._visit_map is not None:
             return  # already built
 
         self._visit_map = {}
-        # Only look back 3 days for site visits — enough for the scoring tiers
-        # and keeps API calls manageable (max 5 pages × 3 event types = 15 requests)
-        since = self.now - timedelta(days=3)
+        # 7-day lookback matches the longest LEADSTREAM_VISIT_RECENCY tier (168h)
+        since = self.now - timedelta(days=7)
+        events_loaded = 0
 
         for event_type in ["Viewed Page", "Viewed Property", "Property Saved"]:
             try:
                 events = self.client.get_events(
-                    since=since, event_type=event_type, max_pages=5
+                    since=since, event_type=event_type, max_pages=10
                 )
                 for event in events:
                     pid = event.get("personId")
@@ -219,9 +230,12 @@ class LeadScorer:
                     dt = parse_dt(event.get("created") or event.get("occurred"))
                     if dt and (pid not in self._visit_map or dt > self._visit_map[pid]):
                         self._visit_map[pid] = dt
-            except Exception:
-                # Events API may not be available; continue without it
-                pass
+                events_loaded += len(events)
+            except Exception as e:
+                logger.warning("Events API failed for type '%s': %s", event_type, e)
+
+        logger.info("Visit map built: %d unique visitors from %d events (7-day window)",
+                    len(self._visit_map), events_loaded)
 
     def _get_last_visit(self, person_id):
         """Get the most recent site visit datetime for a person."""
@@ -303,8 +317,8 @@ class LeadScorer:
         """Fetch recent text messages for an agent. Returns list of text dicts."""
         try:
             return self.client.get_text_messages(user_id=agent_id, since=since)
-        except Exception:
-            # Text message API can be flaky; don't block scoring
+        except Exception as e:
+            logger.warning("Could not fetch texts for agent %s: %s — contact history may be incomplete", agent_id, e)
             return []
 
     # ------------------------------------------------------------------
@@ -383,8 +397,8 @@ class LeadScorer:
                     pid = call.get("personId")
                     if pid:
                         contacted.add(pid)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not fetch recent calls for pond suppression: %s", e)
 
         # Check recent outbound texts (all agents)
         try:
@@ -394,9 +408,10 @@ class LeadScorer:
                     pid = text.get("personId")
                     if pid:
                         contacted.add(pid)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Could not fetch recent texts for pond suppression: %s", e)
 
+        logger.info("Pond suppression: %d leads contacted in last 2h", len(contacted))
         return contacted
 
     # ------------------------------------------------------------------
@@ -413,19 +428,42 @@ class LeadScorer:
         """Load the manifest of previously tagged lead IDs."""
         try:
             with open(self.MANIFEST_FILE) as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+                data = json.load(f)
+                logger.info("Manifest loaded: %d agents, %d pond leads",
+                            len(data.get("agent", {})), len(data.get("pond", [])))
+                return data
+        except FileNotFoundError:
+            logger.info("No manifest found at %s — starting fresh", self.MANIFEST_FILE)
+            return {"agent": {}, "pond": []}
+        except json.JSONDecodeError as e:
+            logger.error("Manifest corrupted (JSON error: %s) — starting fresh", e)
+            return {"agent": {}, "pond": []}
+        except Exception as e:
+            logger.error("Could not load manifest: %s — starting fresh", e)
             return {"agent": {}, "pond": []}
 
     def _save_manifest(self, manifest):
-        """Save the manifest of tagged lead IDs."""
-        os.makedirs(os.path.dirname(self.MANIFEST_FILE), exist_ok=True)
+        """Save the manifest atomically to prevent corruption on crash/restart."""
+        cache_dir = os.path.dirname(self.MANIFEST_FILE)
         try:
-            with open(self.MANIFEST_FILE, "w") as f:
-                json.dump(manifest, f, indent=2)
-        except OSError:
-            # Read-only filesystem (e.g., Railway) — skip
-            pass
+            os.makedirs(cache_dir, exist_ok=True)
+            # Write to a temp file first, then atomically rename
+            # This ensures the manifest is never half-written
+            fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(manifest, f, indent=2)
+                os.replace(tmp_path, self.MANIFEST_FILE)  # atomic on POSIX
+                logger.info("Manifest saved: %d agents, %d pond leads",
+                            len(manifest.get("agent", {})), len(manifest.get("pond", [])))
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except OSError as e:
+            logger.warning("Could not save manifest (filesystem issue: %s)", e)
 
     def cleanup_tags(self, dry_run=True):
         """Remove LeadStream tags from all currently tagged leads.
@@ -435,11 +473,14 @@ class LeadScorer:
         ~(pages + N) — e.g., 220 leads goes from 440 calls to ~222 calls.
         """
         removed = 0
+        failed = 0
 
         for tag in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG):
             try:
                 tagged_people = self.client.get_people_by_tag(tag)
-            except Exception:
+                logger.info("Cleanup: found %d leads with tag '%s'", len(tagged_people), tag)
+            except Exception as e:
+                logger.error("Cleanup: could not fetch leads with tag '%s': %s", tag, e)
                 tagged_people = []
 
             for person in tagged_people:
@@ -448,14 +489,20 @@ class LeadScorer:
                     continue
                 if dry_run:
                     print(f"  [DRY RUN] Would remove '{tag}' from ID: {pid}")
+                    removed += 1
                 else:
                     try:
                         existing = person.get("tags") or []
                         self.client.remove_tag_fast(pid, tag, existing)
-                    except Exception:
-                        pass
-                removed += 1
+                        removed += 1
+                    except Exception as e:
+                        logger.warning("Cleanup: failed to remove '%s' from person %s: %s", tag, pid, e)
+                        failed += 1
 
+        if failed:
+            logger.warning("Cleanup completed with %d failures (removed %d successfully)", failed, removed)
+        else:
+            logger.info("Cleanup complete: removed %d tag(s)", removed)
         return removed
 
     def apply_tags(self, scored_leads, tag, dry_run=True):
@@ -622,6 +669,16 @@ class LeadScorer:
         print(f"  API requests: {self.client.request_count}")
         print(f"{'='*60}\n")
 
+        logger.info("Run complete: %d total leads tagged (%d agents, %d pond), %d API requests",
+                    total_tagged, len(results["agents"]), len(results["pond"]),
+                    self.client.request_count)
+
+        # Alert if a full run tagged zero leads — something is wrong
+        if not dry_run and not pond_only and total_tagged == 0:
+            logger.error("ALERT: Full scoring run completed with 0 leads tagged. "
+                         "Check FUB API connectivity and agent assignments.")
+            _send_zero_leads_alert()
+
         return results
 
     def _get_active_agents(self, agent_name=None):
@@ -638,6 +695,44 @@ class LeadScorer:
                 continue
             agents.append(user)
         return agents
+
+
+# ======================================================================
+# Alerting
+# ======================================================================
+
+def _send_zero_leads_alert():
+    """Email admin when a full scoring run produces 0 tagged leads."""
+    sg_key = os.environ.get("SENDGRID_API_KEY")
+    if not sg_key:
+        logger.warning("No SENDGRID_API_KEY — cannot send zero-leads alert")
+        return
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+        from config import EMAIL_FROM, EMAIL_RECIPIENTS
+        msg = Mail(
+            from_email=EMAIL_FROM,
+            to_emails=EMAIL_RECIPIENTS,
+            subject="⚠️ LeadStream Alert — 0 Leads Tagged",
+            html_content=(
+                "<p><strong>LeadStream scored 0 leads on a full run.</strong></p>"
+                "<p>This usually means:</p>"
+                "<ul>"
+                "<li>The FUB API key has expired or been rate-limited</li>"
+                "<li>No active agents were found in FUB</li>"
+                "<li>All leads are being suppressed or excluded</li>"
+                "</ul>"
+                "<p>Check the Railway logs and the "
+                "<a href='https://web-production-80a1e.up.railway.app/leadstream'>LeadStream dashboard</a> "
+                "immediately.</p>"
+            ),
+        )
+        sg = SendGridAPIClient(sg_key)
+        sg.send(msg)
+        logger.info("Zero-leads alert email sent")
+    except Exception as e:
+        logger.error("Could not send zero-leads alert email: %s", e)
 
 
 # ======================================================================

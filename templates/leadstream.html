@@ -267,13 +267,32 @@ function renderStatus(data) {
   const lastRun = data.last_run;
   const minAgo = lastRun ? Math.floor((Date.now() - new Date(lastRun)) / 60000) : null;
   const stale = minAgo === null || minAgo > 270; // >4.5h = missed a cycle
+  const warnings = data.api_warnings || [];
 
-  document.getElementById('status-dot').className = `status-dot ${stale ? 'dot-amber' : 'dot-green'}`;
-  document.getElementById('status-text').textContent = stale ? 'Scoring may be stale' : 'System Healthy';
+  let dotClass = stale ? 'dot-amber' : 'dot-green';
+  let statusText = stale ? 'Scoring may be stale' : 'System Healthy';
+  if (warnings.length > 0) { dotClass = 'dot-amber'; statusText = 'Partial data — some API calls failed'; }
+
+  document.getElementById('status-dot').className = `status-dot ${dotClass}`;
+  document.getElementById('status-text').textContent = statusText;
   document.getElementById('status-meta').textContent = lastRun
     ? `Last run ${timeAgo(lastRun)} \u00b7 ${fmtTime(lastRun)} \u00b7 ${data.last_run_mode === 'pond_only' ? 'Pond only' : 'Full scoring'}`
     : 'No runs recorded yet';
   document.getElementById('next-run').textContent = nextRunStr();
+
+  // Show API warning banner if activity data is incomplete
+  let warnEl = document.getElementById('api-warning-banner');
+  if (warnings.length > 0) {
+    if (!warnEl) {
+      warnEl = document.createElement('div');
+      warnEl.id = 'api-warning-banner';
+      warnEl.style.cssText = 'background:#422006;border:1px solid #92400e;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:13px;color:#fbbf24;';
+      document.querySelector('.container').insertBefore(warnEl, document.getElementById('stats-row').parentElement);
+    }
+    warnEl.innerHTML = '⚠️ <strong>Activity data may be incomplete:</strong> ' + warnings.map(w => `<span>${w}</span>`).join(' &middot; ');
+  } else if (warnEl) {
+    warnEl.remove();
+  }
 }
 
 function renderStats(data) {

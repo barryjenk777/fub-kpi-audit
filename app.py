@@ -4,10 +4,18 @@ Legacy Home Team — KPI Audit Dashboard
 Flask web app for visualizing agent KPI performance.
 """
 
+import logging
 import os
 import sys
 import json
 from datetime import datetime, timedelta, timezone
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("app")
 
 # Load .env if present
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -1321,35 +1329,37 @@ def api_leadstream_dashboard():
 
     try:
         pond_tagged_people = _client.get_people_by_tag(config.LEADSTREAM_POND_TAG)
-    except Exception:
+    except Exception as e:
+        logger.error("Dashboard: failed to fetch pond-tagged people: %s", e)
         pond_tagged_people = []
 
     # ── Fetch activity since last run ─────────────────────────────────
     calls_by_person = {}
     texts_by_person = {}
-    updated_person_ids = set()
+    api_warnings = []
 
     activity_since = last_run - _td(minutes=10) if last_run else now - _td(hours=4)
     try:
-        try:
-            for call in _client.get_calls(since=activity_since):
-                if not call.get("isIncoming"):
-                    pid = call.get("personId")
-                    if pid:
-                        calls_by_person[pid] = calls_by_person.get(pid, 0) + 1
-        except Exception:
-            pass
+        for call in _client.get_calls(since=activity_since):
+            if not call.get("isIncoming"):
+                pid = call.get("personId")
+                if pid:
+                    calls_by_person[pid] = calls_by_person.get(pid, 0) + 1
+    except Exception as e:
+        msg = f"Could not fetch recent calls: {e}"
+        logger.warning("Dashboard: %s", msg)
+        api_warnings.append(msg)
 
-        try:
-            for text in _client.get_text_messages(since=activity_since):
-                if text.get("isOutbound"):
-                    pid = text.get("personId")
-                    if pid:
-                        texts_by_person[pid] = texts_by_person.get(pid, 0) + 1
-        except Exception:
-            pass
-    except Exception:
-        pass
+    try:
+        for text in _client.get_text_messages(since=activity_since):
+            if text.get("isOutbound"):
+                pid = text.get("personId")
+                if pid:
+                    texts_by_person[pid] = texts_by_person.get(pid, 0) + 1
+    except Exception as e:
+        msg = f"Could not fetch recent texts: {e}"
+        logger.warning("Dashboard: %s", msg)
+        api_warnings.append(msg)
 
     # ── Build agent groupings from FUB data ───────────────────────────
     def _person_to_lead(person):
@@ -1409,6 +1419,7 @@ def api_leadstream_dashboard():
             "actioned": total_actioned,
             "action_rate": round(total_actioned / grand_total * 100, 1) if grand_total > 0 else 0,
         },
+        "api_warnings": api_warnings,  # surfaced in dashboard if activity data is incomplete
     }
 
     _ls_dashboard_cache["data"] = result
@@ -1539,9 +1550,14 @@ def api_leadstream_run():
 
         except Exception as e:
             import traceback
+            tb = traceback.format_exc()
+            logger.error("LeadStream run %s failed: %s\n%s", job_id, e, tb)
             _run_jobs[job_id]["status"] = "error"
             _run_jobs[job_id]["error"] = str(e)
-            _run_jobs[job_id]["traceback"] = traceback.format_exc()
+            _run_jobs[job_id]["traceback"] = tb
+            # Bust cache even on error so next dashboard load is fresh
+            _ls_dashboard_cache["data"] = None
+            _ls_dashboard_cache["time"] = None
 
     thread = threading.Thread(target=_bg_run, daemon=True)
     thread.start()
@@ -1589,6 +1605,53 @@ def api_leadstream_debug():
         result["fub_connection"] = f"FAILED: {e}"
         result["errors"].append(_tb.format_exc())
     return jsonify(result)
+
+
+@app.route("/api/health")
+def api_health():
+    """Health check endpoint — verifies scoring is running on schedule.
+
+    Returns HTTP 200 with status 'ok' if last run was within expected window,
+    HTTP 200 with status 'stale' if scoring is overdue (>5 hours since last run),
+    HTTP 200 with status 'unknown' if manifest is missing (first run).
+    """
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+    _cache_base = "/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache")
+    MANIFEST_FILE = os.path.join(_cache_base, "leadstream_manifest.json")
+
+    now = _dt.now(_tz.utc)
+    try:
+        with open(MANIFEST_FILE) as f:
+            manifest = _json.load(f)
+        last_run_str = manifest.get("last_run")
+        last_run = _dt.fromisoformat(last_run_str) if last_run_str else None
+        if last_run and last_run.tzinfo is None:
+            last_run = last_run.replace(tzinfo=_tz.utc)
+    except Exception:
+        last_run = None
+        last_run_str = None
+
+    if last_run is None:
+        status = "unknown"
+        age_hours = None
+    else:
+        age_hours = (now - last_run).total_seconds() / 3600
+        # Scoring runs every 4h — allow up to 5h before flagging stale
+        status = "ok" if age_hours <= 5 else "stale"
+
+    return jsonify({
+        "status": status,
+        "last_run": last_run_str,
+        "age_hours": round(age_hours, 1) if age_hours is not None else None,
+        "next_run_expected": "every 4 hours at :07 past 6am/10am/2pm/6pm UTC",
+        "agent_leads_tagged": len([
+            i for leads in manifest.get("agent", {}).values()
+            for i in leads
+        ]) if last_run else 0,
+        "pond_leads_tagged": len(manifest.get("pond", [])) if last_run else 0,
+    })
 
 
 @app.route("/api/leadstream/status")
