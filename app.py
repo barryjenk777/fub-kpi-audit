@@ -1406,8 +1406,11 @@ def api_leadstream_dashboard():
         "api_warnings": api_warnings,  # surfaced in dashboard if activity data is incomplete
     }
 
-    _ls_dashboard_cache["data"] = result
-    _ls_dashboard_cache["time"] = now
+    # Only cache when we have real data — avoids caching an empty result
+    # that could occur briefly after a Railway restart before the Volume mounts.
+    if grand_total > 0:
+        _ls_dashboard_cache["data"] = result
+        _ls_dashboard_cache["time"] = now
     return jsonify(result)
 
 
