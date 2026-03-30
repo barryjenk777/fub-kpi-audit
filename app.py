@@ -1530,6 +1530,43 @@ def api_leadstream_run_status(job_id):
     return jsonify(job)
 
 
+@app.route("/api/leadstream/deep-cleanup", methods=["POST"])
+def api_leadstream_deep_cleanup():
+    """Run a full deep cleanup of ALL LeadStream tags in FUB — for nightly use only.
+    Runs in background thread. Returns job_id for polling via /run/status/<job_id>.
+    """
+    import threading, uuid
+    job_id = str(uuid.uuid4())[:8]
+    _run_jobs[job_id] = {
+        "status": "running",
+        "started": datetime.now(timezone.utc).isoformat(),
+        "type": "deep_cleanup",
+    }
+
+    def _bg_cleanup():
+        try:
+            from lead_scoring import LeadScorer, _get_leadstream_client
+            client = _get_leadstream_client()
+            scorer = LeadScorer(client)
+            removed = scorer.deep_cleanup(dry_run=False)
+            _run_jobs[job_id]["status"] = "complete"
+            _run_jobs[job_id]["removed"] = removed
+            _run_jobs[job_id]["summary"] = f"Removed {removed} stale LeadStream tags"
+            logger.info("Deep cleanup complete: %d tags removed", removed)
+            # Bust dashboard cache
+            _ls_dashboard_cache["data"] = None
+            _ls_dashboard_cache["time"] = None
+        except Exception as e:
+            import traceback
+            logger.error("Deep cleanup failed: %s", e)
+            _run_jobs[job_id]["status"] = "error"
+            _run_jobs[job_id]["error"] = str(e)
+            _run_jobs[job_id]["traceback"] = traceback.format_exc()
+
+    threading.Thread(target=_bg_cleanup, daemon=True).start()
+    return jsonify({"success": True, "job_id": job_id, "status": "running"})
+
+
 @app.route("/api/leadstream/debug")
 def api_leadstream_debug():
     """Quick health check — tests imports, API key, and FUB connectivity."""

@@ -547,6 +547,57 @@ class LeadScorer:
             logger.info("Cleanup complete: removed %d tag(s)", removed)
         return removed
 
+    def deep_cleanup(self, dry_run=True):
+        """Remove ALL LeadStream tags from FUB — intended for nightly runs only.
+
+        Queries FUB for every lead with each LeadStream tag and removes them all,
+        regardless of the manifest. This clears stale tags accumulated from old
+        broken cleanup runs. Safe to run at 2am when agents aren't active.
+        Returns total count of tags removed.
+        """
+        removed = 0
+        failed = 0
+
+        for tag in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG):
+            page = 0
+            while True:
+                try:
+                    tagged_people = self.client.get_people_by_tag(tag)
+                except Exception as e:
+                    logger.error("Deep cleanup: could not fetch '%s': %s", tag, e)
+                    break
+
+                if not tagged_people:
+                    break
+
+                logger.info("Deep cleanup: removing '%s' from %d leads (pass %d)",
+                            tag, len(tagged_people), page + 1)
+
+                for person in tagged_people:
+                    pid = person.get("id")
+                    if not pid:
+                        continue
+                    if dry_run:
+                        print(f"  [DRY RUN] Would remove '{tag}' from ID: {pid}")
+                        removed += 1
+                    else:
+                        try:
+                            existing = person.get("tags") or []
+                            self.client.remove_tag_fast(pid, tag, existing)
+                            removed += 1
+                        except Exception as e:
+                            logger.warning("Deep cleanup: failed to remove '%s' from %s: %s",
+                                           tag, pid, e)
+                            failed += 1
+
+                # If FUB returned fewer than 100, we've processed everything
+                if len(tagged_people) < 100:
+                    break
+                page += 1
+
+        logger.info("Deep cleanup complete: removed %d, failed %d", removed, failed)
+        return removed
+
     def apply_tags(self, scored_leads, tag, dry_run=True):
         """Apply a tag to the scored leads. Returns (count, list of tagged IDs)."""
         tagged = 0
