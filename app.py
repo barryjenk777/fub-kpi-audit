@@ -1538,8 +1538,10 @@ def api_leadstream_run():
             _ls_dashboard_cache["time"] = None
 
         except Exception as e:
+            import traceback
             _run_jobs[job_id]["status"] = "error"
             _run_jobs[job_id]["error"] = str(e)
+            _run_jobs[job_id]["traceback"] = traceback.format_exc()
 
     thread = threading.Thread(target=_bg_run, daemon=True)
     thread.start()
@@ -1554,6 +1556,39 @@ def api_leadstream_run_status(job_id):
     if not job:
         return jsonify({"error": "job not found"}), 404
     return jsonify(job)
+
+
+@app.route("/api/leadstream/debug")
+def api_leadstream_debug():
+    """Quick health check — tests imports, API key, and FUB connectivity."""
+    import traceback as _tb
+    result = {
+        "env": {
+            "FUB_API_KEY": "set" if os.environ.get("FUB_API_KEY") else "MISSING",
+            "FUB_LEADSTREAM_API_KEY": "set" if os.environ.get("FUB_LEADSTREAM_API_KEY") else "not set (ok, will use FUB_API_KEY)",
+            "RAILWAY_ENVIRONMENT": os.environ.get("RAILWAY_ENVIRONMENT", "not set"),
+        },
+        "import_lead_scoring": "pending",
+        "fub_connection": "pending",
+        "agent_count": None,
+        "errors": [],
+    }
+    try:
+        from lead_scoring import LeadScorer, _get_leadstream_client
+        result["import_lead_scoring"] = "ok"
+    except Exception as e:
+        result["import_lead_scoring"] = f"FAILED: {e}"
+        result["errors"].append(_tb.format_exc())
+        return jsonify(result)
+    try:
+        client = _get_leadstream_client()
+        users = client.get_users()
+        result["fub_connection"] = "ok"
+        result["agent_count"] = len(users)
+    except Exception as e:
+        result["fub_connection"] = f"FAILED: {e}"
+        result["errors"].append(_tb.format_exc())
+    return jsonify(result)
 
 
 @app.route("/api/leadstream/status")
