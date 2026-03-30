@@ -428,38 +428,33 @@ class LeadScorer:
             pass
 
     def cleanup_tags(self, dry_run=True):
-        """Remove LeadStream tags from previously tagged leads using the manifest."""
-        manifest = self._load_manifest()
+        """Remove LeadStream tags from all currently tagged leads.
+
+        Queries FUB directly for people with each tag (bulk fetch) rather than
+        fetching each person individually. This reduces API calls from 2N to
+        ~(pages + N) — e.g., 220 leads goes from 440 calls to ~222 calls.
+        """
         removed = 0
 
-        # Clean agent leads
-        for agent_name, lead_items in manifest.get("agent", {}).items():
-            for item in lead_items:
-                pid = item["id"] if isinstance(item, dict) else item
+        for tag in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG):
+            try:
+                tagged_people = self.client.get_people_by_tag(tag)
+            except Exception:
+                tagged_people = []
+
+            for person in tagged_people:
+                pid = person.get("id")
+                if not pid:
+                    continue
                 if dry_run:
-                    print(f"  [DRY RUN] Would remove '{LEADSTREAM_TAG}' from ID: {pid} ({agent_name})")
+                    print(f"  [DRY RUN] Would remove '{tag}' from ID: {pid}")
                 else:
                     try:
-                        person = self.client.get_person(pid)
-                        tags = person.get("tags") or []
-                        self.client.remove_tag_fast(pid, LEADSTREAM_TAG, tags)
+                        existing = person.get("tags") or []
+                        self.client.remove_tag_fast(pid, tag, existing)
                     except Exception:
                         pass
                 removed += 1
-
-        # Clean pond leads
-        for item in manifest.get("pond", []):
-            pid = item["id"] if isinstance(item, dict) else item
-            if dry_run:
-                print(f"  [DRY RUN] Would remove '{LEADSTREAM_POND_TAG}' from ID: {pid} (pond)")
-            else:
-                try:
-                    person = self.client.get_person(pid)
-                    tags = person.get("tags") or []
-                    self.client.remove_tag_fast(pid, LEADSTREAM_POND_TAG, tags)
-                except Exception:
-                    pass
-            removed += 1
 
         return removed
 

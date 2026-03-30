@@ -452,9 +452,9 @@ async function runNow(pondOnly) {
     if (data.error) throw new Error(data.error);
 
     const jobId = data.job_id;
-    // Poll until complete
+    // Poll until complete — up to 10 min (200 attempts × 3s)
     let attempts = 0;
-    const maxAttempts = 80; // ~4 min
+    const maxAttempts = 200;
     const poll = setInterval(async () => {
       attempts++;
       try {
@@ -462,8 +462,7 @@ async function runNow(pondOnly) {
         const status = await sr.json();
         if (status.status === 'complete') {
           clearInterval(poll);
-          const total = (status.pond?.length || 0) + Object.values(status.agents || {}).reduce((s,a) => s + (a.count||0), 0);
-          showToast(`✅ Done — ${status.summary || total + ' leads tagged'}`);
+          showToast(`✅ Done — ${status.summary || 'leads tagged'}`);
           await loadDashboard();
           btn.disabled = false;
           btn.textContent = pondOnly ? '🦈 Pond Only' : '⚡ Run Now';
@@ -474,13 +473,22 @@ async function runNow(pondOnly) {
           btn.textContent = pondOnly ? '🦈 Pond Only' : '⚡ Run Now';
         } else if (attempts >= maxAttempts) {
           clearInterval(poll);
-          showToast('⚠️ Run is taking longer than expected — check back in a few minutes', true);
+          showToast('⚠️ Scoring still running in background — page will auto-refresh', true);
           btn.disabled = false;
           btn.textContent = pondOnly ? '🦈 Pond Only' : '⚡ Run Now';
+          // Keep auto-refreshing dashboard until data appears
+          let refreshCount = 0;
+          const autoRefresh = setInterval(async () => {
+            refreshCount++;
+            await loadDashboard();
+            if (refreshCount >= 10) clearInterval(autoRefresh);
+          }, 30000);
         } else {
-          // Still running — update button text with elapsed time
+          // Still running — show elapsed time and estimated progress
           const elapsed = Math.round(attempts * 3);
-          btn.textContent = `⏳ ${elapsed}s…`;
+          const mins = Math.floor(elapsed / 60);
+          const secs = elapsed % 60;
+          btn.textContent = mins > 0 ? `⏳ ${mins}m ${secs}s…` : `⏳ ${secs}s…`;
         }
       } catch(e) {
         // Ignore poll errors, keep trying
