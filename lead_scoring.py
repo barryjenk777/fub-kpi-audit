@@ -499,7 +499,13 @@ class LeadScorer:
         print(f"  Removed tags from {removed} leads\n")
 
         results = {"removed": removed, "agents": {}, "pond": []}
-        new_manifest = {"agent": {}, "pond": []}
+
+        # Seed manifest from existing so pond-only runs don't wipe agent section
+        existing_manifest = self._load_manifest()
+        new_manifest = {
+            "agent": existing_manifest.get("agent", {}),
+            "pond": existing_manifest.get("pond", []),
+        }
 
         # Step 2: Score assigned leads (skip if pond-only)
         if not pond_only:
@@ -607,6 +613,17 @@ class LeadScorer:
 def _get_leadstream_client():
     """Create a FUBClient using the LeadStream API key if available, else default."""
     import os
+
+    # Auto-load .env if present so the CLI works without manually sourcing it
+    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, val = line.split("=", 1)
+                    os.environ.setdefault(key.strip(), val.strip())
+
     api_key = os.environ.get(LEADSTREAM_API_KEY_ENV)
     if api_key:
         print(f"  Using separate API key ({LEADSTREAM_API_KEY_ENV})")
