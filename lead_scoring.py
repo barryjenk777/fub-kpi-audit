@@ -472,22 +472,58 @@ class LeadScorer:
             logger.warning("Could not save manifest (filesystem issue: %s)", e)
 
     def cleanup_tags(self, dry_run=True):
-        """Remove LeadStream tags from all currently tagged leads.
+        """Remove LeadStream tags from previously tagged leads.
 
-        Queries FUB directly for people with each tag (bulk fetch) rather than
-        fetching each person individually. This reduces API calls from 2N to
-        ~(pages + N) — e.g., 220 leads goes from 440 calls to ~222 calls.
+        Uses the manifest as the primary source (fast, accurate). If the manifest
+        is empty, falls back to a FUB tag query capped at MAX_CLEANUP_PER_TAG
+        to prevent hours-long cleanup runs from stale tags left by old broken runs.
+        Stale tags beyond the cap are cleaned gradually over future run cycles.
         """
+        MAX_CLEANUP_PER_TAG = 300  # cap per tag to keep cleanup under ~2 min
         removed = 0
         failed = 0
 
+        manifest = self._load_manifest()
+        manifest_ids = {
+            LEADSTREAM_TAG: set(),
+            LEADSTREAM_POND_TAG: set(),
+        }
+        for lead_items in manifest.get("agent", {}).values():
+            for item in lead_items:
+                pid = item["id"] if isinstance(item, dict) else item
+                if pid:
+                    manifest_ids[LEADSTREAM_TAG].add(pid)
+        for item in manifest.get("pond", []):
+            pid = item["id"] if isinstance(item, dict) else item
+            if pid:
+                manifest_ids[LEADSTREAM_POND_TAG].add(pid)
+
         for tag in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG):
-            try:
-                tagged_people = self.client.get_people_by_tag(tag)
-                logger.info("Cleanup: found %d leads with tag '%s'", len(tagged_people), tag)
-            except Exception as e:
-                logger.error("Cleanup: could not fetch leads with tag '%s': %s", tag, e)
+            known_ids = manifest_ids[tag]
+
+            if known_ids:
+                # Fast path: manifest has the exact leads we tagged — clean only those
+                logger.info("Cleanup: removing '%s' from %d manifest leads", tag, len(known_ids))
                 tagged_people = []
+                for pid in known_ids:
+                    try:
+                        person = self.client.get_person(pid)
+                        tagged_people.append(person)
+                    except Exception as e:
+                        logger.warning("Cleanup: could not fetch person %s: %s", pid, e)
+            else:
+                # Fallback: no manifest — query FUB but cap at MAX_CLEANUP_PER_TAG
+                try:
+                    all_tagged = self.client.get_people_by_tag(tag)
+                    tagged_people = all_tagged[:MAX_CLEANUP_PER_TAG]
+                    if len(all_tagged) > MAX_CLEANUP_PER_TAG:
+                        logger.warning("Cleanup: found %d stale '%s' tags, removing first %d this run",
+                                       len(all_tagged), tag, MAX_CLEANUP_PER_TAG)
+                    else:
+                        logger.info("Cleanup: found %d leads with tag '%s'", len(tagged_people), tag)
+                except Exception as e:
+                    logger.error("Cleanup: could not fetch leads with tag '%s': %s", tag, e)
+                    tagged_people = []
 
             for person in tagged_people:
                 pid = person.get("id")
