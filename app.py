@@ -1248,7 +1248,12 @@ def leadstream_dashboard():
 
 @app.route("/api/leadstream/dashboard")
 def api_leadstream_dashboard():
-    """Return LeadStream status, current tagged leads, and activity since last run."""
+    """Return LeadStream status, current tagged leads, and activity since last run.
+
+    Uses FUB tag queries as the source of truth so the dashboard works even
+    after a Railway restart wipes /tmp. The manifest (if present) provides
+    enrichment data (scores, tiers, last_run timestamp).
+    """
     import json as _json
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
 
@@ -1258,6 +1263,7 @@ def api_leadstream_dashboard():
     if cached["data"] and cached["time"] and (now - cached["time"]).seconds < 180:
         return jsonify(cached["data"])
 
+    # ── Load manifest for enrichment (scores/tiers/last_run) ──────────
     _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
     _cache_base = "/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache")
     MANIFEST_FILE = os.path.join(_cache_base, "leadstream_manifest.json")
@@ -1266,6 +1272,30 @@ def api_leadstream_dashboard():
             manifest = _json.load(f)
     except Exception:
         manifest = {"agent": {}, "pond": []}
+
+    # Build a pid → enrichment map from the manifest
+    manifest_meta = {}  # pid -> {score, tier, stage, agent}
+    for agent_name, lead_items in manifest.get("agent", {}).items():
+        for item in lead_items:
+            if isinstance(item, dict):
+                pid = item.get("id")
+                if pid:
+                    manifest_meta[pid] = {
+                        "score": item.get("score", 0),
+                        "tier": item.get("tier", ""),
+                        "stage": item.get("stage", ""),
+                        "agent": agent_name,
+                    }
+    for item in manifest.get("pond", []):
+        if isinstance(item, dict):
+            pid = item.get("id")
+            if pid:
+                manifest_meta[pid] = {
+                    "score": item.get("score", 0),
+                    "tier": item.get("tier", ""),
+                    "stage": item.get("stage", ""),
+                    "agent": None,
+                }
 
     last_run_str = manifest.get("last_run")
     last_run = None
@@ -1277,76 +1307,90 @@ def api_leadstream_dashboard():
         except Exception:
             pass
 
-    # Fetch activity since last run (3 bulk API calls)
+    # ── Query FUB directly for currently tagged leads ─────────────────
+    # This is the source of truth — works even after /tmp is wiped
+    try:
+        _client = FUBClient()
+    except Exception:
+        return jsonify({"error": "FUB API key not configured", "totals": {"total": 0, "agent_leads": 0, "pond_leads": 0, "actioned": 0, "action_rate": 0}, "agents": {}, "pond": {"leads": [], "tagged": 0, "actioned": 0}, "last_run": last_run_str, "run_history": manifest.get("run_history", []), "last_run_mode": manifest.get("last_run_mode", "full")})
+
+    try:
+        agent_tagged_people = _client.get_people_by_tag(config.LEADSTREAM_TAG)
+    except Exception:
+        agent_tagged_people = []
+
+    try:
+        pond_tagged_people = _client.get_people_by_tag(config.LEADSTREAM_POND_TAG)
+    except Exception:
+        pond_tagged_people = []
+
+    # ── Fetch activity since last run ─────────────────────────────────
     calls_by_person = {}
     texts_by_person = {}
     updated_person_ids = set()
 
-    if last_run:
+    activity_since = last_run - _td(minutes=10) if last_run else now - _td(hours=4)
+    try:
         try:
-            _client = FUBClient()
-            since = last_run - _td(minutes=10)
-
-            try:
-                for call in _client.get_calls(since=since):
-                    if not call.get("isIncoming"):
-                        pid = call.get("personId")
-                        if pid:
-                            calls_by_person[pid] = calls_by_person.get(pid, 0) + 1
-            except Exception:
-                pass
-
-            try:
-                for text in _client.get_text_messages(since=since):
-                    if text.get("isOutbound"):
-                        pid = text.get("personId")
-                        if pid:
-                            texts_by_person[pid] = texts_by_person.get(pid, 0) + 1
-            except Exception:
-                pass
-
-            try:
-                for person in _client.get_people(updated_since=since):
-                    pid = person.get("id")
+            for call in _client.get_calls(since=activity_since):
+                if not call.get("isIncoming"):
+                    pid = call.get("personId")
                     if pid:
-                        updated_person_ids.add(pid)
-            except Exception:
-                pass
+                        calls_by_person[pid] = calls_by_person.get(pid, 0) + 1
         except Exception:
             pass
 
-    def _enrich(item):
-        pid = item["id"] if isinstance(item, dict) else item
-        called = calls_by_person.get(pid, 0) > 0
-        texted = texts_by_person.get(pid, 0) > 0
-        updated = pid in updated_person_ids
+        try:
+            for text in _client.get_text_messages(since=activity_since):
+                if text.get("isOutbound"):
+                    pid = text.get("personId")
+                    if pid:
+                        texts_by_person[pid] = texts_by_person.get(pid, 0) + 1
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    # ── Build agent groupings from FUB data ───────────────────────────
+    def _person_to_lead(person):
+        pid = person.get("id")
+        meta = manifest_meta.get(pid, {})
+        assigned = person.get("assignedTo") or {}
+        name_parts = [person.get("firstName", ""), person.get("lastName", "")]
+        name = " ".join(p for p in name_parts if p).strip() or f"ID:{pid}"
         return {
             "id": pid,
-            "name": item.get("name", f"ID:{pid}") if isinstance(item, dict) else f"ID:{pid}",
-            "score": item.get("score", 0) if isinstance(item, dict) else 0,
-            "tier": item.get("tier", "") if isinstance(item, dict) else "",
-            "stage": item.get("stage", "") if isinstance(item, dict) else "",
-            "called": called,
-            "texted": texted,
-            "updated": updated,
-            "actioned": called or texted,
+            "name": name,
+            "score": meta.get("score", 0),
+            "tier": meta.get("tier", ""),
+            "stage": meta.get("stage", person.get("stage", "")),
+            "called": calls_by_person.get(pid, 0) > 0,
+            "texted": texts_by_person.get(pid, 0) > 0,
+            "updated": pid in updated_person_ids,
+            "actioned": calls_by_person.get(pid, 0) > 0 or texts_by_person.get(pid, 0) > 0,
         }
 
     agents_out = {}
-    for agent_name, lead_items in manifest.get("agent", {}).items():
-        enriched = [_enrich(item) for item in lead_items]
-        actioned = sum(1 for l in enriched if l["actioned"])
-        agents_out[agent_name] = {
-            "leads": enriched,
-            "tagged": len(enriched),
-            "actioned": actioned,
-        }
+    for person in agent_tagged_people:
+        assigned = person.get("assignedTo") or {}
+        agent_name = f"{assigned.get('firstName', '')} {assigned.get('lastName', '')}".strip() or "Unassigned"
+        if agent_name not in agents_out:
+            agents_out[agent_name] = {"leads": [], "tagged": 0, "actioned": 0}
+        lead = _person_to_lead(person)
+        agents_out[agent_name]["leads"].append(lead)
 
-    pond_enriched = [_enrich(item) for item in manifest.get("pond", [])]
-    pond_actioned = sum(1 for l in pond_enriched if l["actioned"])
+    for agent_name, data in agents_out.items():
+        data["leads"].sort(key=lambda l: l["score"], reverse=True)
+        data["tagged"] = len(data["leads"])
+        data["actioned"] = sum(1 for l in data["leads"] if l["actioned"])
+
+    pond_leads = [_person_to_lead(p) for p in pond_tagged_people]
+    pond_leads.sort(key=lambda l: l["score"], reverse=True)
+    pond_actioned = sum(1 for l in pond_leads if l["actioned"])
 
     total_agent = sum(a["tagged"] for a in agents_out.values())
     total_actioned = sum(a["actioned"] for a in agents_out.values()) + pond_actioned
+    grand_total = total_agent + len(pond_leads)
 
     result = {
         "last_run": last_run_str,
@@ -1354,16 +1398,16 @@ def api_leadstream_dashboard():
         "run_history": manifest.get("run_history", []),
         "agents": agents_out,
         "pond": {
-            "leads": pond_enriched,
-            "tagged": len(pond_enriched),
+            "leads": pond_leads,
+            "tagged": len(pond_leads),
             "actioned": pond_actioned,
         },
         "totals": {
             "agent_leads": total_agent,
-            "pond_leads": len(pond_enriched),
-            "total": total_agent + len(pond_enriched),
+            "pond_leads": len(pond_leads),
+            "total": grand_total,
             "actioned": total_actioned,
-            "action_rate": round(total_actioned / (total_agent + len(pond_enriched)) * 100, 1) if (total_agent + len(pond_enriched)) > 0 else 0,
+            "action_rate": round(total_actioned / grand_total * 100, 1) if grand_total > 0 else 0,
         },
     }
 
