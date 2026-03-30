@@ -1239,6 +1239,7 @@ def api_tag_followup():
 # ---- LeadStream: Dashboard ----
 
 _ls_dashboard_cache = {"data": None, "time": None}
+_run_jobs = {}  # job_id -> {status, results, error, started}
 
 @app.route("/leadstream")
 def leadstream_dashboard():
@@ -1257,7 +1258,8 @@ def api_leadstream_dashboard():
     if cached["data"] and cached["time"] and (now - cached["time"]).seconds < 180:
         return jsonify(cached["data"])
 
-    _cache_base = "/tmp/.cache" if os.path.exists("/tmp") and not os.access(os.path.dirname(__file__), os.W_OK) else os.path.join(os.path.dirname(__file__), ".cache")
+    _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+    _cache_base = "/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache")
     MANIFEST_FILE = os.path.join(_cache_base, "leadstream_manifest.json")
     try:
         with open(MANIFEST_FILE) as f:
@@ -1442,26 +1444,34 @@ def webhook_fub():
 
 @app.route("/api/leadstream/run", methods=["POST"])
 def api_leadstream_run():
-    """Run LeadStream scoring and tag leads."""
+    """Run LeadStream scoring in background — returns job_id immediately."""
+    import threading, uuid
     data = request.json or {}
     dry_run = data.get("dry_run", False)
     agent_name = data.get("agent", None)
     pond_only = data.get("pond_only", False)
 
-    try:
-        from lead_scoring import LeadScorer, _get_leadstream_client
-        client = _get_leadstream_client()
-        scorer = LeadScorer(client)
-        results = scorer.run(dry_run=dry_run, agent_name=agent_name, pond_only=pond_only)
+    job_id = str(uuid.uuid4())[:8]
+    _run_jobs[job_id] = {
+        "status": "running",
+        "started": datetime.now(timezone.utc).isoformat(),
+        "dry_run": dry_run,
+        "pond_only": pond_only,
+    }
 
-        # Bust dashboard cache so next load reflects the new run
-        _ls_dashboard_cache["data"] = None
-        _ls_dashboard_cache["time"] = None
+    def _bg_run():
+        try:
+            from lead_scoring import LeadScorer, _get_leadstream_client
+            client = _get_leadstream_client()
+            scorer = LeadScorer(client)
+            results = scorer.run(dry_run=dry_run, agent_name=agent_name, pond_only=pond_only)
 
-        return jsonify({
-            "success": True,
-            "dry_run": dry_run,
-            "agents": {
+            agent_count = len(results.get("agents", {}))
+            total_agent_leads = sum(r["count"] for r in results["agents"].values())
+            pond_count = len(results.get("pond", []))
+
+            _run_jobs[job_id]["status"] = "complete"
+            _run_jobs[job_id]["agents"] = {
                 name: {
                     "count": info["count"],
                     "leads": [
@@ -1470,16 +1480,36 @@ def api_leadstream_run():
                     ],
                 }
                 for name, info in results.get("agents", {}).items()
-            },
-            "pond": [
+            }
+            _run_jobs[job_id]["pond"] = [
                 {"name": l["name"], "score": l["score"], "tier": l["tier"]}
                 for l in results.get("pond", [])
-            ],
-            "tags_removed": results.get("removed", 0),
-            "api_requests": client.request_count,
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            ]
+            _run_jobs[job_id]["tags_removed"] = results.get("removed", 0)
+            _run_jobs[job_id]["api_requests"] = client.request_count
+            _run_jobs[job_id]["summary"] = f"{total_agent_leads} agent leads + {pond_count} pond leads across {agent_count} agents"
+
+            # Bust dashboard cache
+            _ls_dashboard_cache["data"] = None
+            _ls_dashboard_cache["time"] = None
+
+        except Exception as e:
+            _run_jobs[job_id]["status"] = "error"
+            _run_jobs[job_id]["error"] = str(e)
+
+    thread = threading.Thread(target=_bg_run, daemon=True)
+    thread.start()
+
+    return jsonify({"success": True, "job_id": job_id, "status": "running"})
+
+
+@app.route("/api/leadstream/run/status/<job_id>")
+def api_leadstream_run_status(job_id):
+    """Poll status of a background LeadStream run."""
+    job = _run_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "job not found"}), 404
+    return jsonify(job)
 
 
 @app.route("/api/leadstream/status")

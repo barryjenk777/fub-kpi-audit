@@ -439,26 +439,58 @@ async function loadDashboard() {
 async function runNow(pondOnly) {
   const btn = document.getElementById(pondOnly ? 'btn-pond' : 'btn-full');
   btn.disabled = true;
-  btn.textContent = pondOnly ? '\u23f3 Running\u2026' : '\u23f3 Scoring\u2026';
-  showToast(pondOnly ? 'Pond refresh started\u2026' : 'Full scoring run started\u2026');
+  btn.textContent = pondOnly ? '⏳ Running…' : '⏳ Scoring…';
+  showToast(pondOnly ? 'Pond refresh started…' : 'Full scoring started — takes ~3 min…');
+
   try {
     const res = await fetch('/api/leadstream/run', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({dry_run: false, pond_only: pondOnly})
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    // Bust the dashboard cache
-    _cacheTs = 0;
-    await loadDashboard();
-    const total = (data.pond?.length || 0) + Object.values(data.agents || {}).reduce((s,a)=>s+(a.count||0),0);
-    showToast(`\u2705 Done \u2014 ${total} leads tagged`);
+
+    const jobId = data.job_id;
+    // Poll until complete
+    let attempts = 0;
+    const maxAttempts = 80; // ~4 min
+    const poll = setInterval(async () => {
+      attempts++;
+      try {
+        const sr = await fetch(`/api/leadstream/run/status/${jobId}`);
+        const status = await sr.json();
+        if (status.status === 'complete') {
+          clearInterval(poll);
+          const total = (status.pond?.length || 0) + Object.values(status.agents || {}).reduce((s,a) => s + (a.count||0), 0);
+          showToast(`✅ Done — ${status.summary || total + ' leads tagged'}`);
+          await loadDashboard();
+          btn.disabled = false;
+          btn.textContent = pondOnly ? '🦈 Pond Only' : '⚡ Run Now';
+        } else if (status.status === 'error') {
+          clearInterval(poll);
+          showToast(`❌ Run failed: ${status.error}`, true);
+          btn.disabled = false;
+          btn.textContent = pondOnly ? '🦈 Pond Only' : '⚡ Run Now';
+        } else if (attempts >= maxAttempts) {
+          clearInterval(poll);
+          showToast('⚠️ Run is taking longer than expected — check back in a few minutes', true);
+          btn.disabled = false;
+          btn.textContent = pondOnly ? '🦈 Pond Only' : '⚡ Run Now';
+        } else {
+          // Still running — update button text with elapsed time
+          const elapsed = Math.round(attempts * 3);
+          btn.textContent = `⏳ ${elapsed}s…`;
+        }
+      } catch(e) {
+        // Ignore poll errors, keep trying
+      }
+    }, 3000);
+
   } catch(e) {
-    showToast(`\u274c Run failed: ${e.message}`, true);
-  } finally {
+    showToast(`❌ ${e.message}`, true);
     btn.disabled = false;
-    btn.textContent = pondOnly ? '\u{1F988} Pond Only' : '\u26a1 Run Now';
+    btn.textContent = pondOnly ? '🦈 Pond Only' : '⚡ Run Now';
   }
 }
 

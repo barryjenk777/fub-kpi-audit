@@ -403,8 +403,10 @@ class LeadScorer:
     # Tag management
     # ------------------------------------------------------------------
 
-    # Use /tmp on Railway (app dir is read-only), local .cache otherwise
-    _cache_dir = "/tmp/.cache" if os.path.exists("/tmp") and not os.access(os.path.dirname(__file__), os.W_OK) else os.path.join(os.path.dirname(__file__), ".cache")
+    # Use /tmp on Railway (ephemeral but always writable), local .cache otherwise
+    _app_dir = os.path.dirname(os.path.abspath(__file__))
+    _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+    _cache_dir = "/tmp/.cache" if _is_railway else os.path.join(_app_dir, ".cache")
     MANIFEST_FILE = os.path.join(_cache_dir, "leadstream_manifest.json")
 
     def _load_manifest(self):
