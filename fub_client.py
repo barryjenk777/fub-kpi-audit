@@ -249,12 +249,16 @@ class FUBClient:
     # ---- Text Messages ----
 
     def get_text_messages(self, user_id=None, since=None):
-        """Get text messages, optionally filtered."""
+        """Get text messages, optionally filtered.
+
+        Note: FUB's textMessages API rejects dateFrom without a userId.
+        The date filter is only applied when a userId is also provided.
+        """
         params = {}
         if user_id:
             params["userId"] = user_id
-        if since:
-            params["dateFrom"] = since.strftime("%Y-%m-%d")
+            if since:
+                params["dateFrom"] = since.strftime("%Y-%m-%d")
         return self._get_paginated("textMessages", params)
 
     def count_texts_for_user(self, user_id, since=None, until=None, calls=None):
