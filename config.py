@@ -171,7 +171,7 @@ LEADSTREAM_POND_TAG = "LeadStream_Pond"
 
 # How many leads to tag per agent / for the pond
 LEADSTREAM_LIMIT = 20
-LEADSTREAM_POND_LIMIT = 20
+LEADSTREAM_POND_LIMIT = 80
 
 # Ylopo signal tags and their base point values (highest tier first)
 LEADSTREAM_SIGNAL_TAGS = {
