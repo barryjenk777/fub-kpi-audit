@@ -340,6 +340,49 @@ class FUBClient:
             return self._request("PUT", f"people/{person_id}", json_data={"tags": tags})
         return person
 
+    def remove_tag(self, person_id, tag):
+        """Remove a tag from a person."""
+        person = self.get_person(person_id)
+        tags = person.get("tags", []) or []
+        if tag in tags:
+            tags.remove(tag)
+            return self._request("PUT", f"people/{person_id}", json_data={"tags": tags})
+        return person
+
+    def add_tag_fast(self, person_id, tag, existing_tags):
+        """Add a tag without fetching the person first (caller provides current tags)."""
+        if tag not in existing_tags:
+            tags = list(existing_tags) + [tag]
+            return self._request("PUT", f"people/{person_id}", json_data={"tags": tags})
+        return None
+
+    def remove_tag_fast(self, person_id, tag, existing_tags):
+        """Remove a tag without fetching the person first (caller provides current tags)."""
+        if tag in existing_tags:
+            tags = [t for t in existing_tags if t != tag]
+            return self._request("PUT", f"people/{person_id}", json_data={"tags": tags})
+        return None
+
+    def get_people_by_tag(self, tag):
+        """Fetch all leads that have a specific tag."""
+        return self._get_paginated("people", {"tag": tag, "limit": 100})
+
+    def get_events(self, since=None, event_type=None, limit=100, max_pages=5):
+        """Get events (site visits, property views, etc.) with optional filters.
+
+        Event types include: 'Viewed Page', 'Viewed Property', 'Property Saved',
+        'Registration', 'Searched Properties', etc.
+
+        max_pages defaults to 5 (500 events) to avoid rate limiting on
+        high-volume event types.
+        """
+        params = {"limit": limit, "sort": "-created"}
+        if event_type:
+            params["type"] = event_type
+        if since:
+            params["since"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return self._get_paginated("events", params, max_pages=max_pages)
+
     @property
     def request_count(self):
         return self._request_count

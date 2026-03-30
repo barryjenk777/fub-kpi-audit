@@ -1236,6 +1236,80 @@ def api_tag_followup():
         return jsonify({"error": str(e)}), 500
 
 
+# ---- LeadStream: Lead Priority Scoring API ----
+
+@app.route("/api/leadstream/run", methods=["POST"])
+def api_leadstream_run():
+    """Run LeadStream scoring and tag leads."""
+    data = request.json or {}
+    dry_run = data.get("dry_run", False)
+    agent_name = data.get("agent", None)
+    pond_only = data.get("pond_only", False)
+
+    try:
+        from lead_scoring import LeadScorer, _get_leadstream_client
+        client = _get_leadstream_client()
+        scorer = LeadScorer(client)
+        results = scorer.run(dry_run=dry_run, agent_name=agent_name, pond_only=pond_only)
+
+        return jsonify({
+            "success": True,
+            "dry_run": dry_run,
+            "agents": {
+                name: {
+                    "count": info["count"],
+                    "leads": [
+                        {"name": l["name"], "score": l["score"], "tier": l["tier"]}
+                        for l in info["leads"]
+                    ],
+                }
+                for name, info in results.get("agents", {}).items()
+            },
+            "pond": [
+                {"name": l["name"], "score": l["score"], "tier": l["tier"]}
+                for l in results.get("pond", [])
+            ],
+            "tags_removed": results.get("removed", 0),
+            "api_requests": client.request_count,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/leadstream/status")
+def api_leadstream_status():
+    """Check current LeadStream tagged leads."""
+    try:
+        from lead_scoring import LEADSTREAM_TAG, LEADSTREAM_POND_TAG
+        client = FUBClient()
+        agent_leads = client.get_people_by_tag(LEADSTREAM_TAG)
+        pond_leads = client.get_people_by_tag(LEADSTREAM_POND_TAG)
+
+        return jsonify({
+            "agent_leads": [
+                {
+                    "id": p.get("id"),
+                    "name": f"{p.get('firstName', '')} {p.get('lastName', '')}".strip(),
+                    "assignedTo": p.get("assignedUserId"),
+                    "tags": p.get("tags", []),
+                }
+                for p in agent_leads
+            ],
+            "pond_leads": [
+                {
+                    "id": p.get("id"),
+                    "name": f"{p.get('firstName', '')} {p.get('lastName', '')}".strip(),
+                    "tags": p.get("tags", []),
+                }
+                for p in pond_leads
+            ],
+            "agent_lead_count": len(agent_leads),
+            "pond_lead_count": len(pond_leads),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def warmup_cache():
     """Pre-populate cache on startup so first page load is instant."""
     import threading

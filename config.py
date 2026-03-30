@@ -150,3 +150,70 @@ LIVE_CALLS_ADMIN_EMAIL = "fhalen@yourfriendlyagent.net"  # Update with Fhalen's 
 
 # Sales Manager email (Joe's Monday morning coaching email)
 MANAGER_EMAIL = "thejoefu@gmail.com"
+
+
+# =============================================================================
+# LEADSTREAM — Daily Lead Priority Scoring
+# Scores leads every few hours and tags the top ones so agents can use a
+# FUB smart list filtered by the LeadStream tag as their daily call list.
+# =============================================================================
+
+# Optional: use a separate FUB API key for LeadStream to isolate API usage.
+# Set FUB_LEADSTREAM_API_KEY in .env or environment. Falls back to FUB_API_KEY.
+LEADSTREAM_API_KEY_ENV = "FUB_LEADSTREAM_API_KEY"
+
+# Tags applied to priority leads (agents filter smart lists by these)
+LEADSTREAM_TAG = "LeadStream"
+LEADSTREAM_POND_TAG = "LeadStream_Pond"
+
+# How many leads to tag per agent / for the pond
+LEADSTREAM_LIMIT = 20
+LEADSTREAM_POND_LIMIT = 20
+
+# Ylopo signal tags and their base point values (highest tier first)
+LEADSTREAM_SIGNAL_TAGS = {
+    "AI_NEEDS_FOLLOW_UP": 100,       # rAIya text converted — call NOW
+    "AI_VOICE_NEEDS_FOLLOW_UP": 95,  # AI voice converted
+    "HANDRAISER": 80,                # Lead asking for help
+    "YPRIORITY": 50,                 # Property saves/shares
+}
+
+# IDX site visit recency scoring (hours_threshold: points)
+# A lead browsing the site RIGHT NOW outranks stale tagged leads
+LEADSTREAM_VISIT_RECENCY = [
+    (1, 50),    # Within 1 hour — actively browsing
+    (6, 35),    # Within 6 hours — very recent
+    (24, 25),   # Within 24 hours — visited today
+    (72, 15),   # Within 3 days — recent activity
+    (168, 5),   # Within 7 days — some interest
+]
+
+# Bonus points for other signals
+LEADSTREAM_NEW_LEAD_24H_BONUS = 15     # Created in last 24 hours
+LEADSTREAM_NEW_LEAD_72H_BONUS = 10     # Created in last 72 hours
+LEADSTREAM_SELLER_BONUS = 10           # Seller tag present
+LEADSTREAM_MULTI_SIGNAL_BONUS = 10     # Multiple Ylopo signals
+
+# Tags that identify seller leads (for seller bonus)
+SELLER_TAGS = ["Seller", "Home Valuation", "seller", "Listing"]
+
+# Stale/aging/re-engage tier points
+LEADSTREAM_STALE_HOT_POINTS = 40       # Had signal + no contact in 3+ days
+LEADSTREAM_AGING_NEW_POINTS = 30       # New (< 7 days), never contacted
+LEADSTREAM_REENGAGE_POINTS = 20        # Last contact 7-14 days ago
+LEADSTREAM_COLD_LEAD_POINTS = 10       # Older lead, no contact in lookback window
+
+# Suppression: after an attempt without conversation, suppress for this many hours
+LEADSTREAM_SUPPRESS_HOURS = 48
+
+# Lead sources to EXCLUDE from LeadStream scoring entirely
+LEADSTREAM_EXCLUDED_SOURCES = [
+    "Courted.io",
+]
+
+# Stale hot threshold: days since last agent contact to qualify
+LEADSTREAM_STALE_DAYS = 3
+
+# Re-engage window: contact was 7-14 days ago
+LEADSTREAM_REENGAGE_MIN_DAYS = 7
+LEADSTREAM_REENGAGE_MAX_DAYS = 14
