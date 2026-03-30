@@ -1236,6 +1236,74 @@ def api_tag_followup():
         return jsonify({"error": str(e)}), 500
 
 
+# ---- LeadStream: FUB Webhook (real-time tag removal) ----
+
+@app.route("/webhook/fub", methods=["POST"])
+def webhook_fub():
+    """
+    Receives FUB webhook events and immediately removes the LeadStream tag
+    from any lead that gets an outbound call or text — no waiting for the
+    next 4-hour scoring run.
+
+    Configure in FUB: Admin → Integrations → Webhooks
+      URL: https://<your-app>/webhook/fub
+      Events: Call Log Created, Text Message Created
+    """
+    # Optional secret verification
+    webhook_secret = os.environ.get("FUB_WEBHOOK_SECRET")
+    if webhook_secret:
+        provided = (
+            request.headers.get("X-FUB-Signature")
+            or request.headers.get("Authorization", "").replace("Bearer ", "")
+        )
+        if provided != webhook_secret:
+            return jsonify({"error": "unauthorized"}), 401
+
+    payload = request.json or {}
+
+    # FUB wraps events as {"event": "...", "data": {...}}
+    event = payload.get("event") or payload.get("type", "")
+    event_data = payload.get("data") or payload
+
+    person_id = event_data.get("personId")
+    if not person_id:
+        return jsonify({"ok": True, "action": "ignored_no_person"})
+
+    # Determine if this is an outbound contact
+    is_outbound = False
+    if "call" in event.lower():
+        is_outbound = not event_data.get("isIncoming", True)
+    elif "text" in event.lower():
+        is_outbound = event_data.get("isOutbound", False)
+
+    if not is_outbound:
+        return jsonify({"ok": True, "action": "ignored_inbound"})
+
+    # Remove LeadStream tags immediately
+    try:
+        from config import LEADSTREAM_TAG, LEADSTREAM_POND_TAG
+        client = FUBClient()
+        person = client.get_person(person_id)
+        tags = person.get("tags") or []
+
+        tags_to_remove = {LEADSTREAM_TAG, LEADSTREAM_POND_TAG}
+        removed = [t for t in tags if t in tags_to_remove]
+
+        if removed:
+            new_tags = [t for t in tags if t not in tags_to_remove]
+            client._request("PUT", f"people/{person_id}", json_data={"tags": new_tags})
+
+        return jsonify({
+            "ok": True,
+            "personId": person_id,
+            "action": "tags_removed" if removed else "no_leadstream_tag",
+            "removed": removed,
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ---- LeadStream: Lead Priority Scoring API ----
 
 @app.route("/api/leadstream/run", methods=["POST"])

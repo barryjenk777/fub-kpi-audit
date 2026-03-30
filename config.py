@@ -158,6 +158,9 @@ MANAGER_EMAIL = "thejoefu@gmail.com"
 # FUB smart list filtered by the LeadStream tag as their daily call list.
 # =============================================================================
 
+# Optional: set FUB_WEBHOOK_SECRET in .env to verify webhook requests from FUB
+# (set the same value in FUB under Admin → Integrations → Webhooks → Secret)
+
 # Optional: use a separate FUB API key for LeadStream to isolate API usage.
 # Set FUB_LEADSTREAM_API_KEY in .env or environment. Falls back to FUB_API_KEY.
 LEADSTREAM_API_KEY_ENV = "FUB_LEADSTREAM_API_KEY"
