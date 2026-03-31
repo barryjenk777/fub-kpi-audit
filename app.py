@@ -1285,9 +1285,11 @@ def build_appointment_data():
 
     all_appts = client.get_appointments(since=since)
 
-    # Resolve agent names
-    agents = auto_detect_agents(client)
-    agent_map = {a["id"]: a["name"] for a in agents}
+    # Resolve agent names — auto_detect_agents returns {name: user_dict}
+    agents_dict = auto_detect_agents(client)
+    agent_map = {}
+    for name, user in agents_dict.items():
+        agent_map[user.get("id")] = name
     agent_map[config.ISA_USER_ID] = config.ISA_NAME
     agent_map[config.MANAGER_USER_ID] = config.MANAGER_NAME
     agent_map[1] = "Barry Jenkins"
