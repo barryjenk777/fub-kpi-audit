@@ -110,6 +110,13 @@ body{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;background:var(--bg
 .act-badge{font-size:13px;line-height:1}
 .act-none{font-size:11px;color:var(--surface3)}
 
+/* Pond collapsible */
+.pond-toggle{display:flex;align-items:center;gap:16px;margin-bottom:0;cursor:pointer;user-select:none;padding:14px 18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+.pond-toggle:hover{background:var(--surface2)}
+.pond-toggle-arrow{font-size:11px;color:var(--text-muted);margin-left:auto;transition:transform 0.2s}
+.pond-body{overflow:hidden;max-height:0;transition:max-height 0.35s ease,margin-top 0.2s ease;margin-top:0}
+.pond-body.open{max-height:2000px;margin-top:10px}
+
 /* Pond table */
 .table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px;box-shadow:var(--shadow)}
 table{width:100%;border-collapse:collapse;font-size:13px}
@@ -421,23 +428,38 @@ function renderPond(pond) {
     </tr>
   `).join('');
 
+  const barCls = rate>=50?'fill-green':rate>=25?'fill-amber':'fill-brand';
   wrap.innerHTML = `
-    <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
-      <span style="font-size:13px;color:var(--text-muted)">${actioned} of ${tagged} pond leads actioned &nbsp;&middot;&nbsp; ${rate}%</span>
-      <div class="bar-track" style="flex:1;margin:0"><div class="bar-fill ${rate>=50?'fill-green':rate>=25?'fill-amber':'fill-brand'}" style="width:${rate}%"></div></div>
+    <div class="pond-toggle" onclick="togglePond(this)">
+      <span style="font-size:13px;color:var(--text-muted)">${actioned} of ${tagged} pond leads actioned</span>
+      <div class="bar-track" style="flex:1;margin:0"><div class="bar-fill ${barCls}" style="width:${rate}%"></div></div>
+      <span style="font-size:13px;font-weight:700;color:var(--text)">${rate}%</span>
+      <span class="pond-toggle-arrow">&#9660; Show ${tagged} leads</span>
     </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th>Lead</th>
-          <th>Tier</th>
-          <th>Score</th>
-          <th>Activity</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+    <div class="pond-body" id="pond-body">
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Lead</th>
+            <th>Tier</th>
+            <th>Score</th>
+            <th>Activity</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
     </div>
   `;
+}
+
+function togglePond(btn) {
+  const body = document.getElementById('pond-body');
+  const arrow = btn.querySelector('.pond-toggle-arrow');
+  const isOpen = body.classList.toggle('open');
+  const tagged = body.querySelector('tbody').children.length;
+  arrow.innerHTML = isOpen
+    ? `&#9650; Hide leads`
+    : `&#9660; Show ${tagged} leads`;
 }
 
 function renderHistory(history) {
