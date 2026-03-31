@@ -1272,6 +1272,315 @@ def api_tag_followup():
         return jsonify({"error": str(e)}), 500
 
 
+# ---- Appointment Accountability ----
+
+
+def build_appointment_data():
+    """Build appointment accountability data for the last 30 days."""
+    client = FUBClient()
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    lookback = getattr(config, "APT_LOOKBACK_DAYS", 30)
+    since = today - timedelta(days=lookback)
+    ahead = today + timedelta(days=14)
+
+    all_appts = client.get_appointments(since=since)
+
+    # Resolve agent names
+    agents = auto_detect_agents(client)
+    agent_map = {a["id"]: a["name"] for a in agents}
+    agent_map[config.ISA_USER_ID] = config.ISA_NAME
+    agent_map[config.MANAGER_USER_ID] = config.MANAGER_NAME
+    agent_map[1] = "Barry Jenkins"
+
+    # Process each appointment
+    person_cache = {}
+    appointments = []
+    now = datetime.now(timezone.utc)
+
+    for appt in all_appts:
+        appt_id = appt.get("id")
+        start_str = appt.get("start", "")
+        outcome = appt.get("outcome")
+        outcome_id = appt.get("outcomeId")
+        created_by = appt.get("createdById")
+        title = appt.get("title", "")
+        invitees = appt.get("invitees", [])
+
+        # Parse start time
+        try:
+            start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+
+        # Extract lead personId from invitees
+        person_id = None
+        lead_name = "Unknown"
+        assigned_user_id = None
+        assigned_agent = "Unknown"
+
+        for inv in invitees:
+            if inv.get("personId"):
+                person_id = inv["personId"]
+                lead_name = inv.get("name", "Unknown")
+            if inv.get("userId") and inv["userId"] != created_by:
+                assigned_user_id = inv["userId"]
+                assigned_agent = inv.get("name", agent_map.get(inv["userId"], "Unknown"))
+
+        # If no assigned agent found from invitees, try first userId that isn't ISA
+        if not assigned_user_id:
+            for inv in invitees:
+                uid = inv.get("userId")
+                if uid and uid != config.ISA_USER_ID:
+                    assigned_user_id = uid
+                    assigned_agent = inv.get("name", agent_map.get(uid, "Unknown"))
+                    break
+
+        # Fetch person details (cached)
+        person_data = {}
+        tags = []
+        if person_id:
+            if person_id not in person_cache:
+                try:
+                    person_cache[person_id] = client.get_person(person_id)
+                except Exception:
+                    person_cache[person_id] = {}
+            person_data = person_cache[person_id]
+            lead_name = person_data.get("name", lead_name)
+            tags = person_data.get("tags", []) or []
+
+        # Calculate hours since appointment
+        hours_since = (now - start_dt).total_seconds() / 3600
+        is_past = hours_since > 0
+        is_future = not is_past
+
+        # Determine tier
+        tier = None
+        if is_past and not outcome:
+            if hours_since >= config.APT_TIER3_HOURS:
+                tier = "stale"
+            elif hours_since >= config.APT_TIER2_HOURS:
+                tier = "overdue"
+            elif hours_since >= config.APT_TIER1_HOURS:
+                tier = "pending"
+            else:
+                tier = "recent"
+
+        appointments.append({
+            "id": appt_id,
+            "title": title,
+            "start": start_str,
+            "start_date": start_str[:10],
+            "outcome": outcome,
+            "outcome_id": outcome_id,
+            "created_by": agent_map.get(created_by, f"User {created_by}"),
+            "created_by_id": created_by,
+            "assigned_agent": assigned_agent,
+            "assigned_user_id": assigned_user_id,
+            "lead_name": lead_name,
+            "person_id": person_id,
+            "stage": person_data.get("stage", "Unknown"),
+            "source": person_data.get("source", "Unknown"),
+            "tags": tags,
+            "hours_since": round(hours_since, 1),
+            "days_since": round(hours_since / 24, 1),
+            "is_past": is_past,
+            "is_future": is_future,
+            "tier": tier,
+            "has_apt_set": config.APT_SET_TAG in tags,
+            "has_outcome_needed": config.APT_OUTCOME_NEEDED_TAG in tags,
+            "has_stale": config.APT_STALE_TAG in tags,
+        })
+
+    # Sort: past no-outcome first (worst), then by date
+    appointments.sort(key=lambda a: (
+        0 if a["tier"] == "stale" else 1 if a["tier"] == "overdue" else 2 if a["tier"] == "pending" else 3 if a["tier"] == "recent" else 4,
+        -a["hours_since"],
+    ))
+
+    # Per-agent summary
+    agent_summary = {}
+    for a in appointments:
+        if a["is_future"]:
+            continue
+        agent = a["assigned_agent"]
+        if agent not in agent_summary:
+            agent_summary[agent] = {
+                "name": agent, "total": 0, "met": 0, "no_show": 0,
+                "reschedule": 0, "no_outcome": 0, "stale": 0, "overdue": 0,
+            }
+        s = agent_summary[agent]
+        s["total"] += 1
+        if a["outcome"] == "Met with Client":
+            s["met"] += 1
+        elif a["outcome"] == "No show":
+            s["no_show"] += 1
+        elif a["outcome"] == "Reschedule Needed":
+            s["reschedule"] += 1
+        else:
+            s["no_outcome"] += 1
+            if a["tier"] == "stale":
+                s["stale"] += 1
+            elif a["tier"] == "overdue":
+                s["overdue"] += 1
+
+    for s in agent_summary.values():
+        s["completion_rate"] = round((s["total"] - s["no_outcome"]) / s["total"] * 100) if s["total"] else 0
+
+    # Sort agents worst-first
+    agent_list = sorted(agent_summary.values(), key=lambda x: x["completion_rate"])
+
+    # Totals
+    past = [a for a in appointments if a["is_past"]]
+    future = [a for a in appointments if a["is_future"]]
+    total_met = sum(1 for a in past if a["outcome"] == "Met with Client")
+    total_no_show = sum(1 for a in past if a["outcome"] == "No show")
+    total_resched = sum(1 for a in past if a["outcome"] == "Reschedule Needed")
+    total_no_outcome = sum(1 for a in past if not a["outcome"])
+    total_stale = sum(1 for a in past if a["tier"] == "stale")
+    completion_rate = round((len(past) - total_no_outcome) / len(past) * 100) if past else 0
+
+    return {
+        "appointments": appointments,
+        "agents": agent_list,
+        "totals": {
+            "total_30d": len(past),
+            "upcoming": len(future),
+            "met": total_met,
+            "no_show": total_no_show,
+            "reschedule": total_resched,
+            "no_outcome": total_no_outcome,
+            "stale_7d": total_stale,
+            "completion_rate": completion_rate,
+        },
+        "period": f"{since.strftime('%b %d')} - {(today - timedelta(days=1)).strftime('%b %d')}",
+        "cached_at": datetime.now(timezone.utc).isoformat(),
+        "from_cache": False,
+    }
+
+
+@app.route("/api/appointments")
+def api_appointments():
+    """Appointment accountability tab."""
+    force = request.args.get("force", "false").lower() == "true"
+    try:
+        if not force:
+            cached = cache_get("appointments")
+            if cached:
+                cached["from_cache"] = True
+                cached_at = cached.get("cached_at")
+                if cached_at:
+                    try:
+                        age_mins = int((datetime.now(timezone.utc) - datetime.fromisoformat(cached_at)).total_seconds() / 60)
+                        cached["cache_age"] = f"{age_mins // 60}h {age_mins % 60}m ago" if age_mins >= 60 else f"{age_mins}m ago"
+                    except Exception:
+                        pass
+                return jsonify(cached)
+
+        data = build_appointment_data()
+        cache_set("appointments", data)
+        return jsonify(data)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/appointments/sync-tags", methods=["POST"])
+def api_sync_appointment_tags():
+    """Run the tag lifecycle: APT_SET → APT_OUTCOME_NEEDED → APT_STALE → removed."""
+    try:
+        # Get fresh appointment data
+        data = build_appointment_data()
+        client = FUBClient()
+
+        actions = {"tagged_set": 0, "tagged_needed": 0, "tagged_stale": 0,
+                   "tags_removed": 0, "tasks_created": 0, "skipped": 0}
+
+        apt_tags = {config.APT_SET_TAG, config.APT_OUTCOME_NEEDED_TAG, config.APT_STALE_TAG}
+
+        for appt in data["appointments"]:
+            pid = appt.get("person_id")
+            if not pid:
+                actions["skipped"] += 1
+                continue
+
+            tags = list(appt.get("tags", []))
+            has_any_apt_tag = bool(apt_tags & set(tags))
+            outcome = appt.get("outcome")
+            tier = appt.get("tier")
+
+            # Outcome logged → remove all apt tags
+            if outcome:
+                if has_any_apt_tag:
+                    for t in apt_tags:
+                        if t in tags:
+                            tags = [x for x in tags if x != t]
+                    client._request("PUT", f"people/{pid}", json_data={"tags": tags})
+                    actions["tags_removed"] += 1
+                continue
+
+            if not tier:
+                continue
+
+            # Stale (7d+)
+            if tier == "stale":
+                if config.APT_STALE_TAG not in tags:
+                    tags = [t for t in tags if t not in apt_tags]
+                    tags.append(config.APT_STALE_TAG)
+                    client._request("PUT", f"people/{pid}", json_data={"tags": tags})
+                    actions["tagged_stale"] += 1
+
+            # Overdue (48h+)
+            elif tier == "overdue":
+                if config.APT_OUTCOME_NEEDED_TAG not in tags:
+                    tags = [t for t in tags if t not in apt_tags]
+                    tags.append(config.APT_OUTCOME_NEEDED_TAG)
+                    client._request("PUT", f"people/{pid}", json_data={"tags": tags})
+                    actions["tagged_needed"] += 1
+                    # Create task for the agent
+                    if appt.get("assigned_user_id"):
+                        try:
+                            due = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+                            client.create_task(
+                                pid, appt["assigned_user_id"],
+                                config.APT_TASK_TEMPLATE.format(lead_name=appt["lead_name"]),
+                                due_date=due,
+                            )
+                            actions["tasks_created"] += 1
+                        except Exception:
+                            pass
+
+            # Pending/Recent (<48h)
+            elif tier in ("pending", "recent"):
+                if config.APT_SET_TAG not in tags:
+                    tags = [t for t in tags if t not in apt_tags]
+                    tags.append(config.APT_SET_TAG)
+                    client._request("PUT", f"people/{pid}", json_data={"tags": tags})
+                    actions["tagged_set"] += 1
+
+        # Clear cache so dashboard refreshes
+        cache_clear("appointments")
+
+        return jsonify({"success": True, "actions": actions})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/send-appointment-email", methods=["POST"])
+def api_send_appointment_email():
+    """Send appointment accountability email."""
+    try:
+        from email_report import send_appointment_email
+        data = build_appointment_data()
+        success = send_appointment_email(data)
+        if success:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"error": "Send failed. Check SENDGRID_API_KEY."}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ---- LeadStream: Dashboard ----
 
 _ls_dashboard_cache = {"data": None, "time": None}
@@ -1858,6 +2167,8 @@ def warmup_cache():
                 print("[WARMUP] Manager cached ✓")
                 tc.get("/api/isa")
                 print("[WARMUP] ISA cached ✓")
+                tc.get("/api/appointments")
+                print("[WARMUP] Appointments cached ✓")
         except Exception as e:
             print(f"[WARMUP] Error: {e}")
     t = threading.Thread(target=_warmup, daemon=True)
@@ -1876,6 +2187,8 @@ def scheduled_cache_warm():
             print("[SCHEDULER] Manager cache warmed ✓")
             tc.get("/api/isa")
             print("[SCHEDULER] ISA cache warmed ✓")
+            tc.get("/api/appointments")
+            print("[SCHEDULER] Appointments cache warmed ✓")
     except Exception as e:
         print(f"[SCHEDULER] Cache warm error: {e}")
 
@@ -1900,6 +2213,28 @@ def scheduled_send_manager_email():
             print(f"[SCHEDULER] Manager email: {resp.data.decode()}")
     except Exception as e:
         print(f"[SCHEDULER] Manager email error: {e}")
+
+
+def scheduled_sync_appointment_tags():
+    """Runs 3x/day — sync APT_SET/APT_OUTCOME_NEEDED/APT_STALE tags."""
+    print(f"[SCHEDULER] Syncing appointment tags at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        with app.test_client() as tc:
+            resp = tc.post("/api/appointments/sync-tags")
+            print(f"[SCHEDULER] Appointment tag sync: {resp.data.decode()}")
+    except Exception as e:
+        print(f"[SCHEDULER] Appointment tag sync error: {e}")
+
+
+def scheduled_send_appointment_email():
+    """Tuesday 9am ET — send appointment accountability email."""
+    print(f"[SCHEDULER] Sending appointment email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        with app.test_client() as tc:
+            resp = tc.post("/api/send-appointment-email")
+            print(f"[SCHEDULER] Appointment email: {resp.data.decode()}")
+    except Exception as e:
+        print(f"[SCHEDULER] Appointment email error: {e}")
 
 
 def scheduled_send_isa_email():
@@ -1944,6 +2279,14 @@ def start_scheduler():
     # Fhalen ISA email: Monday 10am ET
     scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0),
                       id="isa_email", name="Monday ISA email")
+
+    # Appointment tag sync: 3x/day at 7am, 1pm, 7pm ET
+    scheduler.add_job(scheduled_sync_appointment_tags, CronTrigger(hour="7,13,19", minute=0),
+                      id="appt_tag_sync", name="Appointment tag sync (3x/day)")
+
+    # Appointment accountability email: Tuesday 9am ET
+    scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0),
+                      id="appt_email", name="Tuesday appointment email")
 
     scheduler.start()
     print("[SCHEDULER] APScheduler started with 4 jobs:")

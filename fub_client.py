@@ -329,6 +329,19 @@ class FUBClient:
             params["status"] = status
         return self._get_paginated("tasks", params)
 
+    def create_task(self, person_id, assigned_user_id, name, due_date=None, description=None):
+        """Create a task on a lead, assigned to a specific user."""
+        payload = {
+            "personId": person_id,
+            "assignedUserId": assigned_user_id,
+            "name": name,
+        }
+        if due_date:
+            payload["dueDate"] = due_date
+        if description:
+            payload["description"] = description
+        return self._request("POST", "tasks", json_data=payload)
+
     # ---- People (individual) ----
 
     def get_person(self, person_id):

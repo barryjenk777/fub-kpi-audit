@@ -67,6 +67,30 @@ STALE_LEAD_DAYS = 5
 # How far back to sweep for ISA handoff leads (90d initial, 30d ongoing)
 ISA_HANDOFF_LOOKBACK_DAYS = 90
 
+# =============================================================================
+# APPOINTMENT ACCOUNTABILITY
+# =============================================================================
+
+# Tag lifecycle: APT_SET → APT_OUTCOME_NEEDED → APT_STALE → removed on outcome
+APT_SET_TAG = "APT_SET"
+APT_OUTCOME_NEEDED_TAG = "APT_OUTCOME_NEEDED"
+APT_STALE_TAG = "APT_STALE"
+
+# Escalation thresholds (hours since appointment start time)
+APT_TIER1_HOURS = 24    # Grace period — APT_SET applied
+APT_TIER2_HOURS = 48    # Escalate — APT_OUTCOME_NEEDED + FUB task created
+APT_TIER3_HOURS = 168   # 7 days — APT_STALE, red flag for Barry
+
+# How far back to look for appointments
+APT_LOOKBACK_DAYS = 30
+
+# FUB outcome IDs (from API)
+APT_OUTCOME_IDS = {1: "No show", 4: "Reschedule Needed", 5: "Met with Client"}
+
+# Task template when escalating to Tier 2
+APT_TASK_TEMPLATE = "Update appointment outcome: {lead_name}"
+
+
 # Agents to NEVER remove from the priority group even if they miss KPIs
 # (e.g., team leader who should always receive transfers as fallback)
 PROTECTED_AGENTS = [

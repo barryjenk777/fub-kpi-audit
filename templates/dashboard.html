@@ -169,6 +169,7 @@ tbody tr:hover{background:rgba(255,255,255,0.03)}
     <div class="tab active" onclick="switchTab('agents')">Agent KPIs</div>
     <div class="tab" onclick="switchTab('manager')">Sales Manager</div>
     <div class="tab" onclick="switchTab('isa')">ISA Performance</div>
+    <div class="tab" onclick="switchTab('appointments')">Appointments</div>
     <div class="tab" onclick="window.location='/leadstream'">LeadStream</div>
   </div>
 </div>
@@ -205,11 +206,21 @@ tbody tr:hover{background:rgba(255,255,255,0.03)}
     <div class="loading" id="loading-isa" style="display:none"><div class="spinner"></div><p>Loading ISA performance data...</p></div>
     <div id="dashboard-isa"></div>
   </div>
+
+  <!-- Tab: Appointments -->
+  <div class="page" id="page-appointments">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;gap:8px">
+      <button class="btn btn-warn btn-sm" onclick="syncApptTags()" id="btnSyncTags">🏷️ Sync Tags Now</button>
+      <button class="btn btn-info btn-sm" onclick="sendApptEmail()" id="btnApptEmail">📧 Email Report</button>
+    </div>
+    <div class="loading" id="loading-appointments" style="display:none"><div class="spinner"></div><p>Loading appointment accountability data...</p></div>
+    <div id="dashboard-appointments"></div>
+  </div>
 </div>
 
 <script>
 const MEDALS = ['&#129351;','&#129352;','&#129353;'];
-let agentData=null, managerData=null, isaData=null;
+let agentData=null, managerData=null, isaData=null, appointmentData=null;
 
 function switchTab(tab) {
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -218,6 +229,7 @@ function switchTab(tab) {
   document.getElementById('page-'+tab).classList.add('active');
   if(tab==='manager' && !managerData) loadManager();
   if(tab==='isa' && !isaData) loadIsa();
+  if(tab==='appointments' && !appointmentData) loadAppointments();
 }
 
 function trendArrow(dir,pct) {
@@ -735,6 +747,167 @@ async function tagPending(ids) {
 async function tagFollowup(ids) {
   if(!confirm(`Tag ${ids.length} leads with ISA_Followup?\n\nThis tells Fhalen to re-engage these leads that went cold after handoff.`)) return;
   try{const r=await fetch('/api/isa/tag-followup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({person_ids:ids})});const d=await r.json();if(d.success){alert(`Tagged ${d.tagged} leads with ISA_Followup!`);loadIsa();}else alert('Error: '+d.error);}catch(e){alert('Error: '+e.message);}
+}
+
+// ======== TAB 4: APPOINTMENTS ========
+function buildAppointments(d) {
+  const t=d.totals;
+  let h='';
+
+  // Cache indicator
+  if(d.from_cache){h+=`<div style="background:var(--surface2);border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:12px;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between"><span>&#9889; Loaded from cache${d.cache_age?' ('+d.cache_age+')':''}</span><button class="btn" style="font-size:11px;padding:4px 10px" onclick="loadAppointments(true)">&#8635; Refresh Live</button></div>`;}
+
+  // Stat cards
+  h+='<div class="stat-grid" style="grid-template-columns:repeat(6,1fr)">';
+  h+=`<div class="stat-card"><div class="label">Total (30d)</div><div class="value" style="color:var(--brand)">${t.total_30d}</div></div>`;
+  h+=`<div class="stat-card"><div class="label">Completion Rate</div><div class="value" style="color:${t.completion_rate>=70?'var(--green)':t.completion_rate>=40?'var(--amber)':'#ef4444'}">${t.completion_rate}%</div></div>`;
+  h+=`<div class="stat-card"><div class="label">No Outcome</div><div class="value" style="color:#ef4444">${t.no_outcome}</div><div class="sub">${t.total_30d?Math.round(t.no_outcome/t.total_30d*100):0}% missing</div></div>`;
+  h+=`<div class="stat-card"><div class="label">Stale (7d+)</div><div class="value" style="color:#ef4444">${t.stale_7d}</div><div class="sub">Needs escalation</div></div>`;
+  h+=`<div class="stat-card"><div class="label">Met</div><div class="value" style="color:var(--green)">${t.met}</div></div>`;
+  h+=`<div class="stat-card"><div class="label">Upcoming</div><div class="value" style="color:var(--blue)">${t.upcoming}</div></div>`;
+  h+='</div>';
+
+  // Agent accountability section
+  if(d.agents && d.agents.length > 0){
+    h+=`<div class="section-header"><span class="icon">&#128680;</span> Agent Accountability — Sorted Worst First</div>`;
+    h+='<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Total</th><th>Met</th><th>No-Show</th><th>Resched</th><th style="color:#ef4444">No Outcome</th><th>Stale 7d+</th><th>Completion</th><th style="width:120px"></th></tr></thead><tbody>';
+    const mxT=Math.max(...d.agents.map(a=>a.total),1);
+    d.agents.forEach(a=>{
+      const pct=a.completion_rate;
+      const pctColor=pct>=70?'var(--green)':pct>=40?'var(--amber)':'#ef4444';
+      const tag=pct>=70?'<span class="tag tag-pass">GOOD</span>':pct>=40?'<span class="tag tag-warn">NEEDS WORK</span>':'<span class="tag tag-fail">FAILING</span>';
+      h+=`<tr>
+        <td class="agent-name">${a.name}</td>
+        <td>${a.total}</td>
+        <td style="color:var(--green)">${a.met}</td>
+        <td>${a.no_show}</td>
+        <td>${a.reschedule}</td>
+        <td style="color:#ef4444;font-weight:600">${a.no_outcome}</td>
+        <td style="color:${a.stale>0?'#ef4444':'var(--text-muted)'}">${a.stale}</td>
+        <td style="color:${pctColor};font-weight:600">${pct}%</td>
+        <td><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${pctColor}"></div></div></td>
+      </tr>`;
+    });
+    h+='</tbody></table></div>';
+  }
+
+  // Overdue appointments grouped by agent
+  const overdue=d.appointments.filter(a=>a.tier && !a.outcome);
+  if(overdue.length > 0){
+    h+=`<div class="section-header"><span class="icon">&#128308;</span> ${overdue.length} Appointments Missing Outcomes</div>`;
+    h+=`<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">These past appointments have no outcome logged. The tag lifecycle will auto-escalate: APT_SET (24h) → APT_OUTCOME_NEEDED (48h + task created) → APT_STALE (7d).</p>`;
+
+    // Group by agent
+    const byAgent={};
+    overdue.forEach(a=>{
+      const key=a.assigned_agent||'Unassigned';
+      if(!byAgent[key]) byAgent[key]=[];
+      byAgent[key].push(a);
+    });
+
+    Object.keys(byAgent).sort((a,b)=>byAgent[b].length-byAgent[a].length).forEach(agent=>{
+      const appts=byAgent[agent];
+      h+=`<div class="action-box red" style="margin-bottom:8px">`;
+      h+=`<div class="title">${agent} — ${appts.length} missing outcomes</div>`;
+      appts.forEach(a=>{
+        const tierTag=a.tier==='stale'?'<span class="tag tag-fail">STALE 7d+</span>':a.tier==='overdue'?'<span class="tag tag-warn">48h+ OVERDUE</span>':a.tier==='pending'?'<span class="tag tag-brand">PENDING</span>':'<span style="font-size:10px;color:var(--text-muted)">< 24h</span>';
+        const tagStatus=a.has_stale?'🔴':a.has_outcome_needed?'🟡':a.has_apt_set?'🟢':'⚪';
+        h+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:13px">
+          <span><strong>${a.lead_name}</strong> <span style="color:var(--text-muted);font-size:11px">• ${a.source} • ${a.stage}</span></span>
+          <span style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:11px;color:var(--text-muted)">${a.start_date}</span>
+            <span style="font-size:11px">${Math.round(a.days_since)}d ago</span>
+            ${tierTag}
+            <span title="Tag status: ${a.has_stale?'APT_STALE':a.has_outcome_needed?'APT_OUTCOME_NEEDED':a.has_apt_set?'APT_SET':'No tag'}">${tagStatus}</span>
+          </span>
+        </div>`;
+      });
+      h+='</div>';
+    });
+
+    // Tag sync button
+    const untagged=overdue.filter(a=>!a.has_apt_set && !a.has_outcome_needed && !a.has_stale);
+    if(untagged.length>0){
+      h+=`<div style="margin:8px 0;font-size:12px;color:var(--text-muted)">⚪ = No tag yet. Click "Sync Tags Now" above to apply the tag lifecycle to ${untagged.length} untagged appointments.</div>`;
+    }
+  }
+
+  // Full appointment timeline
+  h+=`<div class="section-header"><span class="icon">&#128197;</span> Full Timeline — ${d.appointments.length} Appointments</div>`;
+  h+='<div class="table-wrap"><table><thead><tr><th>Date</th><th>Lead</th><th>Agent</th><th>Set By</th><th>Outcome</th><th>Stage</th><th>Status</th></tr></thead><tbody>';
+  d.appointments.slice(0, 60).forEach(a=>{
+    let statusTag='';
+    if(a.is_future) statusTag='<span class="tag tag-brand">UPCOMING</span>';
+    else if(a.outcome==='Met with Client') statusTag='<span class="tag tag-pass">MET</span>';
+    else if(a.outcome==='No show') statusTag='<span class="tag tag-warn">NO SHOW</span>';
+    else if(a.outcome==='Reschedule Needed') statusTag='<span class="tag tag-warn">RESCHED</span>';
+    else if(a.tier==='stale') statusTag='<span class="tag tag-fail">STALE 7d+</span>';
+    else if(a.tier==='overdue') statusTag='<span class="tag tag-fail">OVERDUE</span>';
+    else if(a.tier==='pending') statusTag='<span class="tag tag-warn">PENDING</span>';
+    else if(a.tier==='recent') statusTag='<span class="tag tag-brand">&lt;24h</span>';
+
+    h+=`<tr>
+      <td style="font-size:12px;white-space:nowrap">${a.start_date}</td>
+      <td class="agent-name">${a.lead_name}</td>
+      <td style="font-size:12px">${a.assigned_agent}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${a.created_by}</td>
+      <td style="font-size:12px">${a.outcome||'—'}</td>
+      <td style="font-size:12px">${a.stage}</td>
+      <td>${statusTag}</td>
+    </tr>`;
+  });
+  h+='</tbody></table></div>';
+
+  return h;
+}
+
+async function loadAppointments(force) {
+  const ld=document.getElementById('loading-appointments'),db=document.getElementById('dashboard-appointments');
+  ld.style.display='flex';db.style.display='none';
+  try{
+    let url='/api/appointments';
+    if(force) url+='?force=true';
+    const r=await fetch(url,{signal:AbortSignal.timeout(240000)});
+    const txt=await r.text();
+    try{
+      const d=JSON.parse(txt);
+      if(d.error) db.innerHTML=`<div class="action-box red"><div class="title">Error</div><p>${d.error}</p></div>`;
+      else{appointmentData=d;db.innerHTML=buildAppointments(d);}
+    }catch(pe){
+      db.innerHTML=`<div class="action-box red"><div class="title">Server Loading</div><p>The Appointments tab is still warming up. Please wait and try again.</p><button class="btn" onclick="loadAppointments()" style="margin-top:12px">↻ Retry</button></div>`;
+    }
+  }catch(e){
+    db.innerHTML=`<div class="action-box red"><div class="title">Loading Timeout</div><p>Data is still being fetched. Please wait and try again.</p><button class="btn" onclick="loadAppointments()" style="margin-top:12px">↻ Retry</button></div>`;
+  }
+  ld.style.display='none';db.style.display='block';
+}
+
+async function syncApptTags(){
+  const btn=document.getElementById('btnSyncTags');
+  if(!confirm('Sync appointment tags now?\n\nThis will:\n• Add APT_SET to recent appointments with no outcome\n• Escalate to APT_OUTCOME_NEEDED at 48h+ (creates FUB task)\n• Escalate to APT_STALE at 7d+\n• Remove tags from appointments with outcomes')) return;
+  btn.disabled=true;btn.textContent='Syncing...';
+  try{
+    const r=await fetch('/api/appointments/sync-tags',{method:'POST',headers:{'Content-Type':'application/json'}});
+    const d=await r.json();
+    if(d.success){
+      const a=d.actions;
+      btn.textContent='✅ Done!';
+      alert(`Tag sync complete!\n\n• APT_SET applied: ${a.tagged_set}\n• APT_OUTCOME_NEEDED (48h+): ${a.tagged_needed}\n• APT_STALE (7d+): ${a.tagged_stale}\n• Tags removed (outcome logged): ${a.tags_removed}\n• FUB tasks created: ${a.tasks_created}\n• Skipped (no lead): ${a.skipped}`);
+      loadAppointments(true);
+    }else{btn.textContent='❌ Failed';alert('Error: '+d.error);}
+  }catch(e){btn.textContent='❌ Error';alert('Error: '+e.message);}
+  setTimeout(()=>{btn.textContent='🏷️ Sync Tags Now';btn.disabled=false;},2500);
+}
+
+async function sendApptEmail(){
+  const btn=document.getElementById('btnApptEmail');
+  btn.disabled=true;btn.textContent='Sending...';
+  try{
+    const r=await fetch('/api/send-appointment-email',{method:'POST',headers:{'Content-Type':'application/json'}});
+    const d=await r.json();
+    btn.textContent=d.success?'✅ Sent!':'❌ Failed';
+  }catch(e){btn.textContent='❌ Error';}
+  setTimeout(()=>{btn.textContent='📧 Email Report';btn.disabled=false;},2500);
 }
 
 async function sendManagerEmail(){const btn=document.getElementById('btnManagerEmail');btn.disabled=true;btn.textContent='Sending...';try{const r=await fetch('/api/send-manager-email',{method:'POST',headers:{'Content-Type':'application/json'}});const d=await r.json();btn.textContent=d.success?'✅ Sent!':'❌ Failed';setTimeout(()=>{btn.textContent='📧 Email Joe\'s Game Plan';btn.disabled=false},3000);}catch(e){btn.textContent='📧 Email Joe\'s Game Plan';btn.disabled=false;}}
