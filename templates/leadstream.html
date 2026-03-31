@@ -131,6 +131,29 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
 .mode-full{background:var(--brand-dim);color:var(--brand)}
 .mode-pond{background:rgba(167,139,250,0.12);color:var(--purple)}
 
+/* Weekly tracker */
+.weekly-scroll{overflow-x:auto;margin-bottom:20px}
+.weekly-table{border-collapse:collapse;font-size:12px;min-width:100%}
+.weekly-table th,.weekly-table td{padding:8px 12px;text-align:center;white-space:pre-line}
+.weekly-table thead tr{background:var(--surface2)}
+.weekly-table thead th{color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;border-bottom:1px solid var(--border)}
+.weekly-table th.col-agent,.weekly-table td.col-agent{text-align:left;font-weight:600;color:var(--text);position:sticky;left:0;background:var(--surface);z-index:2;min-width:150px;padding-left:16px}
+.weekly-table thead th.col-agent{background:var(--surface2)}
+.weekly-table tbody tr{border-bottom:1px solid rgba(46,58,82,0.4)}
+.weekly-table tbody tr:hover td{background:rgba(255,255,255,0.02)}
+.weekly-table tbody tr:hover td.col-agent{background:var(--surface2)}
+.wk-cell{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:60px}
+.wk-rate{font-size:13px;font-weight:700}
+.wk-sub{font-size:10px;color:var(--text-muted)}
+.wk-bar{width:40px;height:3px;border-radius:2px;background:var(--surface3)}
+.wk-bar-fill{height:100%;border-radius:2px}
+.wk-green{color:var(--green)}.wk-amber{color:var(--amber)}.wk-brand{color:var(--brand)}.wk-muted{color:var(--text-muted)}
+.wk-cell-green .wk-bar-fill{background:var(--green)}.wk-cell-amber .wk-bar-fill{background:var(--amber)}.wk-cell-brand .wk-bar-fill{background:var(--brand)}.wk-cell-muted .wk-bar-fill{background:var(--surface3)}
+.wk-total-row td{background:rgba(59,138,255,0.04)!important;font-weight:700;border-top:1px solid var(--border)}
+.wk-empty{color:var(--text-muted);font-size:13px;padding:20px}
+.mode-dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-bottom:2px}
+.mode-dot-full{background:var(--brand)}.mode-dot-pond{background:var(--purple)}
+
 /* Toast */
 #toast{position:fixed;bottom:24px;right:24px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 20px;font-size:13px;font-weight:600;z-index:1000;box-shadow:var(--shadow);transition:opacity 0.3s;opacity:0;pointer-events:none}
 #toast.show{opacity:1}
@@ -198,6 +221,10 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
   <!-- History -->
   <div class="section-header"><span class="icon">&#128203;</span> Run History</div>
   <div class="history-grid" id="history-wrap"></div>
+
+  <!-- Weekly Engagement Tracker -->
+  <div class="section-header"><span class="icon">&#128197;</span> Weekly Engagement Tracker</div>
+  <div id="weekly-wrap"><div class="skeleton" style="height:180px;border-radius:16px"></div></div>
 
 </div>
 
@@ -521,9 +548,133 @@ async function runNow(pondOnly) {
   }
 }
 
+function wkCellClass(rate) {
+  if (rate >= 50) return 'wk-cell-green';
+  if (rate >= 25) return 'wk-cell-amber';
+  if (rate > 0)   return 'wk-cell-brand';
+  return 'wk-cell-muted';
+}
+function wkRateClass(rate) {
+  if (rate >= 50) return 'wk-green';
+  if (rate >= 25) return 'wk-amber';
+  if (rate > 0)   return 'wk-brand';
+  return 'wk-muted';
+}
+
+async function loadWeekly() {
+  try {
+    const res = await fetch('/api/leadstream/weekly');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderWeekly(data);
+  } catch(e) {
+    document.getElementById('weekly-wrap').innerHTML =
+      '<div class="wk-empty">Could not load weekly data.</div>';
+  }
+}
+
+function renderWeekly(data) {
+  const wrap = document.getElementById('weekly-wrap');
+  const { runs, agents } = data;
+  if (!runs || runs.length === 0) {
+    wrap.innerHTML = '<div class="wk-empty">No weekly data yet — will populate after the next scoring run.</div>';
+    return;
+  }
+
+  // Build 7-day totals per agent
+  const totals = {};
+  for (const agent of agents) {
+    totals[agent] = {tagged: 0, actioned: 0};
+    for (const run of runs) {
+      const a = run.agents[agent] || {tagged:0, actioned:0};
+      totals[agent].tagged   += a.tagged;
+      totals[agent].actioned += a.actioned;
+    }
+    totals[agent].rate = totals[agent].tagged > 0
+      ? Math.round(totals[agent].actioned / totals[agent].tagged * 100) : 0;
+  }
+
+  // Header row
+  const runHeaders = runs.map(r => {
+    const modeDot = r.mode === 'pond_only'
+      ? '<span class="mode-dot mode-dot-pond"></span>'
+      : '<span class="mode-dot mode-dot-full"></span>';
+    return `<th>${modeDot}<br>${r.label}</th>`;
+  }).join('');
+
+  // Agent rows
+  const agentRows = agents.map(agent => {
+    const cells = runs.map(run => {
+      const a = run.agents[agent] || {tagged:0, actioned:0, rate:0};
+      if (a.tagged === 0) return '<td><span class="wk-muted" style="font-size:11px">—</span></td>';
+      const cls = wkCellClass(a.rate);
+      const rateCls = wkRateClass(a.rate);
+      return `<td>
+        <div class="wk-cell ${cls}">
+          <span class="wk-rate ${rateCls}">${a.rate}%</span>
+          <span class="wk-sub">${a.actioned}/${a.tagged}</span>
+          <div class="wk-bar"><div class="wk-bar-fill" style="width:${Math.min(a.rate,100)}%"></div></div>
+        </div></td>`;
+    }).join('');
+    const t = totals[agent];
+    const totCls = wkRateClass(t.rate);
+    const totCell = t.tagged > 0
+      ? `<td><div class="wk-cell ${wkCellClass(t.rate)}">
+           <span class="wk-rate ${totCls}">${t.rate}%</span>
+           <span class="wk-sub">${t.actioned}/${t.tagged}</span>
+           <div class="wk-bar"><div class="wk-bar-fill" style="width:${Math.min(t.rate,100)}%"></div></div>
+         </div></td>`
+      : '<td><span class="wk-muted">—</span></td>';
+    return `<tr><td class="col-agent">${agent}</td>${cells}${totCell}</tr>`;
+  }).join('');
+
+  // Grand total row
+  const grandCells = runs.map(run => {
+    const t = run.total;
+    if (!t || t.tagged === 0) return '<td>—</td>';
+    return `<td><div class="wk-cell ${wkCellClass(t.rate)}">
+      <span class="wk-rate ${wkRateClass(t.rate)}">${t.rate}%</span>
+      <span class="wk-sub">${t.actioned}/${t.tagged}</span>
+    </div></td>`;
+  }).join('');
+  const grandTotal = agents.reduce((acc, ag) => {
+    acc.tagged += totals[ag].tagged; acc.actioned += totals[ag].actioned; return acc;
+  }, {tagged:0, actioned:0});
+  grandTotal.rate = grandTotal.tagged > 0 ? Math.round(grandTotal.actioned / grandTotal.tagged * 100) : 0;
+  const grandTotCell = `<td><div class="wk-cell ${wkCellClass(grandTotal.rate)}">
+    <span class="wk-rate ${wkRateClass(grandTotal.rate)}">${grandTotal.rate}%</span>
+    <span class="wk-sub">${grandTotal.actioned}/${grandTotal.tagged}</span>
+  </div></td>`;
+
+  wrap.innerHTML = `
+    <div class="weekly-scroll">
+      <table class="weekly-table">
+        <thead><tr>
+          <th class="col-agent">Agent</th>
+          ${runHeaders}
+          <th style="color:var(--text);font-weight:800">7-Day Total</th>
+        </tr></thead>
+        <tbody>
+          ${agentRows}
+          <tr class="wk-total-row">
+            <td class="col-agent">All Agents</td>
+            ${grandCells}
+            ${grandTotCell}
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:8px">
+      &#9679; Full run &nbsp;&#9679; <span style="color:var(--purple)">&#9679;</span> Pond only &nbsp;&nbsp;
+      Updates automatically as agents engage leads &mdash; no page reload needed.
+    </div>`;
+}
+
 let _cacheTs = 0;
 loadDashboard();
+loadWeekly();
 setInterval(loadDashboard, 3 * 60 * 1000);
+setInterval(loadWeekly, 5 * 60 * 1000);
 </script>
 </body>
 </html>

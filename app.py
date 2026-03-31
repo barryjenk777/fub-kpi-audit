@@ -1411,7 +1411,106 @@ def api_leadstream_dashboard():
     if grand_total > 0:
         _ls_dashboard_cache["data"] = result
         _ls_dashboard_cache["time"] = now
+
+        # ── Persist engagement snapshot for weekly tracker ────────────────
+        # Keyed by last_run timestamp so each scoring run has one record.
+        # Always overwrites so actioned counts improve as agents engage leads.
+        if last_run_str:
+            try:
+                import tempfile as _tempfile
+                eng_log_path = os.path.join(_cache_base, "engagement_log.json")
+                try:
+                    with open(eng_log_path) as f:
+                        eng_log = _json.load(f)
+                except Exception:
+                    eng_log = {}
+                eng_log[last_run_str] = {
+                    "captured": now.isoformat(),
+                    "mode": manifest.get("last_run_mode", "full"),
+                    "agents": {
+                        name: {"tagged": a["tagged"], "actioned": a["actioned"]}
+                        for name, a in agents_out.items()
+                    },
+                    "pond": {"tagged": len(pond_leads), "actioned": pond_actioned},
+                    "total": grand_total,
+                }
+                # Prune records older than 30 days
+                cutoff = (now - _td(days=30)).isoformat()
+                eng_log = {k: v for k, v in eng_log.items() if k >= cutoff}
+                fd, tmp = _tempfile.mkstemp(dir=_cache_base, suffix=".tmp")
+                with os.fdopen(fd, "w") as f:
+                    _json.dump(eng_log, f)
+                os.replace(tmp, eng_log_path)
+            except Exception as e:
+                logger.warning("Could not save engagement log: %s", e)
+
     return jsonify(result)
+
+
+# ---- LeadStream: Weekly Engagement Tracker ----
+
+@app.route("/api/leadstream/weekly")
+def api_leadstream_weekly():
+    """Return 7-day per-agent engagement history. Reads from disk only — no FUB API calls."""
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+    _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+    _cache_base = (
+        os.environ.get("LEADSTREAM_CACHE_DIR")
+        or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
+    )
+    eng_log_path = os.path.join(_cache_base, "engagement_log.json")
+    try:
+        with open(eng_log_path) as f:
+            eng_log = _json.load(f)
+    except Exception:
+        return jsonify({"runs": [], "agents": []})
+
+    now = _dt.now(_tz.utc)
+    cutoff = (now - _td(days=7)).isoformat()
+    recent = {k: v for k, v in eng_log.items() if k >= cutoff}
+    sorted_runs = sorted(recent.items(), key=lambda x: x[0])
+
+    all_agents = set()
+    for _, rec in sorted_runs:
+        all_agents.update(rec.get("agents", {}).keys())
+    all_agents = sorted(all_agents)
+
+    runs_out = []
+    for run_time, rec in sorted_runs:
+        try:
+            dt = _dt.fromisoformat(run_time.replace("Z", "+00:00"))
+            label = dt.strftime("%-I:%M %p") + "\n" + dt.strftime("%a %-m/%-d")
+        except Exception:
+            label = run_time[:16]
+
+        agents_data = {}
+        for agent in all_agents:
+            a = rec.get("agents", {}).get(agent, {"tagged": 0, "actioned": 0})
+            t = a.get("tagged", 0)
+            ac = a.get("actioned", 0)
+            agents_data[agent] = {
+                "tagged": t,
+                "actioned": ac,
+                "rate": round(ac / t * 100) if t > 0 else 0,
+            }
+
+        total = rec.get("total", 0)
+        total_actioned = sum(a["actioned"] for a in agents_data.values())
+        runs_out.append({
+            "run_time": run_time,
+            "label": label,
+            "mode": rec.get("mode", "full"),
+            "agents": agents_data,
+            "total": {
+                "tagged": total,
+                "actioned": total_actioned,
+                "rate": round(total_actioned / total * 100) if total > 0 else 0,
+            },
+        })
+
+    return jsonify({"runs": runs_out, "agents": all_agents})
 
 
 # ---- LeadStream: FUB Webhook (real-time tag removal) ----
