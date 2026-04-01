@@ -798,117 +798,142 @@ def send_isa_email(isa_data):
 # ---- Appointment Accountability Email ----
 
 
+FUB_PERSON_URL = "https://app.followupboss.com/2/people/{person_id}"
+
+
 def build_appointment_email(appt_data):
-    """Build the appointment accountability email."""
+    """Build the appointment accountability email.
+
+    Layout:
+    - Manager-only summary bar (stat chips) at top
+    - One card per agent that has open appointments, with compact lead chips
+      each linking directly to the FUB contact — safe to forward to that agent
+    """
     t = appt_data.get("totals", {})
     agents = appt_data.get("agents", [])
     appts = appt_data.get("appointments", [])
     period = appt_data.get("period", "")
 
-    overdue = [a for a in appts if a.get("tier") and not a.get("outcome")]
-    stale = [a for a in appts if a.get("tier") == "stale"]
-
-    # Opener based on completion rate
     pct = t.get("completion_rate", 0)
-    if pct >= 80:
-        opener_bg = "linear-gradient(135deg, #22c55e, #16a34a)"
-        opener_msg = f"Strong week — {pct}% of appointments have outcomes logged. Keep the momentum going."
-    elif pct >= 50:
-        opener_bg = "linear-gradient(135deg, #f59e0b, #d97706)"
-        opener_msg = f"{pct}% completion rate. We're leaving money on the table — {t.get('no_outcome', 0)} appointments still need outcomes."
-    else:
-        opener_bg = "linear-gradient(135deg, #ef4444, #dc2626)"
-        opener_msg = f"Only {pct}% of appointments have outcomes. {t.get('no_outcome', 0)} leads are in limbo. This is our most valuable pipeline — we can't afford to lose track."
+    pct_color = "#22c55e" if pct >= 70 else "#f59e0b" if pct >= 40 else "#ef4444"
 
-    html = f"""<html><head><style>
-body {{ font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; max-width: 680px; margin: 0 auto; background: #f8f9fa; }}
-.opener {{ background: {opener_bg}; color: white; padding: 24px; border-radius: 12px 12px 0 0; }}
-.opener h1 {{ margin: 0; font-size: 20px; }}
-.opener p {{ margin: 8px 0 0; opacity: 0.9; font-size: 14px; }}
-.content {{ background: white; padding: 24px; border-radius: 0 0 12px 12px; }}
-.stat-row {{ display: flex; gap: 12px; margin-bottom: 20px; }}
-.stat-box {{ flex: 1; background: #f1f5f9; border-radius: 8px; padding: 12px; text-align: center; }}
-.stat-box .num {{ font-size: 28px; font-weight: 700; }}
-.stat-box .label {{ font-size: 11px; color: #64748b; text-transform: uppercase; }}
-table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-th {{ background: #f1f5f9; padding: 8px; text-align: left; font-size: 11px; text-transform: uppercase; color: #64748b; }}
-td {{ padding: 8px; border-bottom: 1px solid #e2e8f0; }}
-.tag {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }}
-.tag-red {{ background: #fef2f2; color: #dc2626; }}
-.tag-amber {{ background: #fffbeb; color: #d97706; }}
-.tag-green {{ background: #f0fdf4; color: #16a34a; }}
-.action {{ background: #fef2f2; border-left: 4px solid #ef4444; padding: 16px; border-radius: 8px; margin: 16px 0; }}
-.action-green {{ background: #f0fdf4; border-left: 4px solid #22c55e; }}
-.footer {{ text-align: center; padding: 16px; font-size: 11px; color: #94a3b8; }}
+    # Group open (no-outcome) past appointments by agent
+    from collections import defaultdict
+    agent_open = defaultdict(list)
+    for a in appts:
+        if a.get("is_past") and not a.get("outcome") and a.get("tier"):
+            agent_open[a.get("assigned_agent", "Unknown")].append(a)
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+body{{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;color:#1e293b;max-width:640px;margin:0 auto;background:#f1f5f9;padding:16px}}
+.header{{background:#0f172a;color:white;padding:20px 24px;border-radius:10px;margin-bottom:12px}}
+.header h1{{margin:0;font-size:18px;font-weight:700}}
+.header p{{margin:4px 0 0;font-size:13px;opacity:.7}}
+.summary-row{{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}}
+.chip{{background:white;border-radius:8px;padding:10px 14px;text-align:center;min-width:80px;flex:1;box-shadow:0 1px 3px rgba(0,0,0,.08)}}
+.chip .n{{font-size:22px;font-weight:700}}
+.chip .l{{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px}}
+.agent-card{{background:white;border-radius:10px;padding:20px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}}
+.agent-card h2{{margin:0 0 4px;font-size:15px;font-weight:700}}
+.agent-card .sub{{font-size:12px;color:#64748b;margin-bottom:14px}}
+.lead-grid{{display:flex;flex-wrap:wrap;gap:6px}}
+.lead-chip{{display:inline-block;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;white-space:nowrap;border:1px solid transparent}}
+.lc-stale{{background:#fef2f2;color:#b91c1c;border-color:#fecaca}}
+.lc-overdue{{background:#fffbeb;color:#b45309;border-color:#fde68a}}
+.lc-pending{{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}}
+.legend{{font-size:11px;color:#94a3b8;margin-top:10px}}
+.legend span{{margin-right:12px}}
+.legend .dot{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px}}
+.footer{{text-align:center;font-size:11px;color:#94a3b8;margin-top:20px;padding:12px}}
+.btn{{display:inline-block;background:#3b82f6;color:white;padding:9px 20px;border-radius:7px;text-decoration:none;font-size:13px;font-weight:600}}
+@media(max-width:480px){{.summary-row{{gap:6px}}.chip{{min-width:60px;padding:8px 10px}}.chip .n{{font-size:18px}}}}
 </style></head><body>
-<div class="opener">
-<h1>📅 Appointment Accountability — {period}</h1>
-<p>{opener_msg}</p>
+
+<div class="header">
+  <h1>📅 Appointment Accountability — {period}</h1>
+  <p>Weekly outcome review · Legacy Home Team</p>
 </div>
-<div class="content">
+
+<!-- Manager summary strip -->
+<div class="summary-row">
+  <div class="chip"><div class="n" style="color:#3b82f6">{t.get("total_30d",0)}</div><div class="l">Total</div></div>
+  <div class="chip"><div class="n" style="color:{pct_color}">{pct}%</div><div class="l">Complete</div></div>
+  <div class="chip"><div class="n" style="color:#22c55e">{t.get("met",0)}</div><div class="l">Met</div></div>
+  <div class="chip"><div class="n" style="color:#f59e0b">{t.get("no_show",0)}</div><div class="l">No Show</div></div>
+  <div class="chip"><div class="n" style="color:#ef4444">{t.get("no_outcome",0)}</div><div class="l">Open</div></div>
+  <div class="chip"><div class="n" style="color:#ef4444">{t.get("stale_7d",0)}</div><div class="l">7d+ Stale</div></div>
+</div>
 """
 
-    # Stat cards
-    html += '<div class="stat-row">'
-    html += f'<div class="stat-box"><div class="num" style="color:#3b82f6">{t.get("total_30d", 0)}</div><div class="label">Total Appts</div></div>'
-    pct_color = "#22c55e" if pct >= 70 else "#f59e0b" if pct >= 40 else "#ef4444"
-    html += f'<div class="stat-box"><div class="num" style="color:{pct_color}">{pct}%</div><div class="label">Completion</div></div>'
-    html += f'<div class="stat-box"><div class="num" style="color:#ef4444">{t.get("no_outcome", 0)}</div><div class="label">No Outcome</div></div>'
-    html += f'<div class="stat-box"><div class="num" style="color:#22c55e">{t.get("met", 0)}</div><div class="label">Met</div></div>'
-    html += f'<div class="stat-box"><div class="num" style="color:#f59e0b">{t.get("no_show", 0)}</div><div class="label">No Show</div></div>'
-    html += f'<div class="stat-box"><div class="num" style="color:#ef4444">{len(stale)}</div><div class="label">Stale 7d+</div></div>'
-    html += '</div>'
+    # Agent cards — sorted worst first (most open appointments)
+    sorted_agents = sorted(agents, key=lambda a: a.get("no_outcome", 0), reverse=True)
 
-    # Agent scoreboard
-    html += '<h2 style="font-size:16px;margin:20px 0 10px">Agent Scoreboard</h2>'
-    html += '<table><thead><tr><th>Agent</th><th>Total</th><th>Met</th><th>No-Show</th><th>No Outcome</th><th>Completion</th></tr></thead><tbody>'
-    for a in agents:
-        rate = a.get("completion_rate", 0)
-        rate_color = "#22c55e" if rate >= 70 else "#f59e0b" if rate >= 40 else "#ef4444"
-        tag_cls = "tag-green" if rate >= 70 else "tag-amber" if rate >= 40 else "tag-red"
-        tag_txt = "GOOD" if rate >= 70 else "NEEDS WORK" if rate >= 40 else "FAILING"
-        html += f'<tr><td><strong>{a["name"]}</strong></td><td>{a["total"]}</td>'
-        html += f'<td style="color:#22c55e">{a["met"]}</td><td>{a["no_show"]}</td>'
-        html += f'<td style="color:#ef4444;font-weight:600">{a["no_outcome"]}</td>'
-        html += f'<td><span class="tag {tag_cls}">{rate}% — {tag_txt}</span></td></tr>'
-    html += '</tbody></table>'
+    for ag in sorted_agents:
+        name = ag.get("name", "Unknown")
+        open_list = agent_open.get(name, [])
+        if not open_list:
+            continue  # skip agents with nothing open
 
-    # Overdue list
-    if overdue:
-        html += f'<div class="action"><strong>🔴 {len(overdue)} Appointments Missing Outcomes</strong>'
-        html += '<p style="font-size:13px;margin:6px 0">These leads had appointments but no one logged what happened. Every one is a potential closing slipping away.</p>'
-        html += '<table style="margin-top:8px"><thead><tr><th>Lead</th><th>Agent</th><th>Date</th><th>Days Ago</th><th>Status</th></tr></thead><tbody>'
-        for a in overdue[:20]:
-            tier = a.get("tier", "")
-            tag_cls = "tag-red" if tier == "stale" else "tag-amber" if tier == "overdue" else "tag-amber"
-            tag_txt = "STALE 7d+" if tier == "stale" else "48h+ OVERDUE" if tier == "overdue" else "PENDING"
-            html += f'<tr><td><strong>{a["lead_name"]}</strong><br><span style="font-size:11px;color:#94a3b8">{a["source"]} • {a["stage"]}</span></td>'
-            html += f'<td>{a["assigned_agent"]}</td><td>{a["start_date"]}</td>'
-            html += f'<td style="color:#ef4444">{round(a["days_since"])}d</td>'
-            html += f'<td><span class="tag {tag_cls}">{tag_txt}</span></td></tr>'
-        html += '</tbody></table>'
-        if len(overdue) > 20:
-            html += f'<p style="font-size:12px;color:#94a3b8">+ {len(overdue) - 20} more</p>'
-        html += '</div>'
+        total = ag.get("total", 0)
+        no_outcome = ag.get("no_outcome", 0)
+        stale_ct = ag.get("stale", 0)
+        met = ag.get("met", 0)
 
-    # Action items
-    failing = [a for a in agents if a.get("completion_rate", 0) < 50]
-    if failing:
-        html += '<div class="action"><strong>📋 Action Items for This Week</strong><ul style="margin:8px 0;padding-left:18px;font-size:13px">'
-        for a in failing:
-            html += f'<li><strong>{a["name"]}</strong> — {a["no_outcome"]} appointments with no outcome ({a["completion_rate"]}% completion). Schedule a direct conversation about appointment follow-through.</li>'
-        html += '</ul></div>'
-    else:
-        html += '<div class="action action-green"><strong>✅ All agents above 50% completion.</strong> Keep pushing for 100% — every outcome logged helps us forecast and coach better.</div>'
+        # Build plain-language summary line
+        parts = []
+        if no_outcome == 1:
+            parts.append("1 appointment needs an outcome")
+        elif no_outcome > 1:
+            parts.append(f"{no_outcome} appointments need outcomes")
+        if stale_ct > 0:
+            parts.append(f"{stale_ct} {'has' if stale_ct==1 else 'have'} gone stale (7+ days with no update)")
+        summary_line = " — ".join(parts) if parts else "All caught up."
+
+        html += f"""
+<div class="agent-card">
+  <h2>{name}</h2>
+  <div class="sub">{summary_line} &nbsp;·&nbsp; {met} met this period</div>
+  <div class="lead-grid">
+"""
+        # Sort open leads: stale → overdue → pending/recent
+        tier_order = {"stale": 0, "overdue": 1, "pending": 2, "recent": 3}
+        open_sorted = sorted(open_list, key=lambda x: tier_order.get(x.get("tier",""), 9))
+
+        for lead in open_sorted:
+            pid = lead.get("person_id")
+            lead_name = lead.get("lead_name", "Unknown")
+            tier = lead.get("tier", "pending")
+            days = round(lead.get("days_since", 0))
+            days_str = f"{days}d" if days > 0 else "today"
+            css = "lc-stale" if tier == "stale" else "lc-overdue" if tier == "overdue" else "lc-pending"
+
+            if pid:
+                fub_url = FUB_PERSON_URL.format(person_id=pid)
+                html += f'    <a href="{fub_url}" class="lead-chip {css}" title="{days_str} ago">{lead_name}</a>\n'
+            else:
+                html += f'    <span class="lead-chip {css}" title="{days_str} ago">{lead_name}</span>\n'
+
+        html += """  </div>
+  <div class="legend">
+    <span><span class="dot" style="background:#fca5a5"></span>7d+ stale</span>
+    <span><span class="dot" style="background:#fcd34d"></span>48h+ overdue</span>
+    <span><span class="dot" style="background:#93c5fd"></span>pending</span>
+    <span style="color:#cbd5e1">· click any name to open in Follow Up Boss</span>
+  </div>
+</div>
+"""
+
+    if not any(agent_open.values()):
+        html += '<div class="agent-card" style="text-align:center;color:#22c55e;font-weight:600">✅ All appointments are up to date!</div>\n'
 
     html += f"""
-<p style="text-align:center;margin-top:20px">
-<a href="https://web-production-80a1e.up.railway.app/" style="background:#3b82f6;color:white;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:600">View Full Dashboard</a>
+<p style="text-align:center;margin:20px 0 8px">
+  <a href="https://web-production-80a1e.up.railway.app/" class="btn">Open Dashboard</a>
 </p>
-</div>
 <div class="footer">
-Legacy Home Team KPI Dashboard — Appointment Accountability Report<br>
-Generated {datetime.now().strftime('%A, %B %d at %I:%M %p')}
+  Legacy Home Team · Appointment Accountability · {datetime.now().strftime('%A, %B %d at %I:%M %p')}
 </div>
 </body></html>"""
 
