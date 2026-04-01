@@ -800,15 +800,34 @@ def send_isa_email(isa_data):
 
 FUB_PERSON_URL = "https://app.followupboss.com/2/people/{person_id}"
 
+# Inline style constants — using inline styles on every element so formatting
+# survives forwarding (email clients strip <style> blocks on forward).
+_S = {
+    "body":        "font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:#1e293b;max-width:640px;margin:0 auto;background:#f1f5f9;padding:16px",
+    "header":      "background:#0f172a;color:white;padding:20px 24px;border-radius:10px;margin-bottom:12px",
+    "header_h1":   "margin:0;font-size:18px;font-weight:700;color:white",
+    "header_p":    "margin:4px 0 0;font-size:13px;color:rgba(255,255,255,0.65)",
+    "sum_table":   "width:100%;border-collapse:collapse;margin-bottom:16px",
+    "sum_td":      "background:white;border-radius:8px;padding:10px 14px;text-align:center;border:1px solid #e2e8f0",
+    "sum_label":   "font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;display:block;margin-top:2px",
+    "card":        "background:white;border-radius:10px;padding:20px;margin-bottom:12px;border:1px solid #e2e8f0",
+    "card_h2":     "margin:0 0 4px;font-size:15px;font-weight:700;color:#0f172a",
+    "card_sub":    "font-size:12px;color:#64748b;margin:0 0 14px",
+    "chip_stale":  "display:inline-block;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;margin:3px",
+    "chip_over":   "display:inline-block;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;background:#fffbeb;color:#b45309;border:1px solid #fde68a;margin:3px",
+    "chip_pend":   "display:inline-block;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;margin:3px",
+    "legend":      "font-size:11px;color:#94a3b8;margin-top:10px",
+    "dot_red":     "display:inline-block;width:8px;height:8px;border-radius:50%;background:#fca5a5;margin-right:3px;vertical-align:middle",
+    "dot_amber":   "display:inline-block;width:8px;height:8px;border-radius:50%;background:#fcd34d;margin-right:3px;vertical-align:middle",
+    "dot_blue":    "display:inline-block;width:8px;height:8px;border-radius:50%;background:#93c5fd;margin-right:3px;vertical-align:middle",
+    "btn":         "display:inline-block;background:#3b82f6;color:white;padding:10px 22px;border-radius:7px;text-decoration:none;font-size:13px;font-weight:600",
+    "footer":      "text-align:center;font-size:11px;color:#94a3b8;margin-top:20px;padding:12px",
+}
+
 
 def build_appointment_email(appt_data):
-    """Build the appointment accountability email.
-
-    Layout:
-    - Manager-only summary bar (stat chips) at top
-    - One card per agent that has open appointments, with compact lead chips
-      each linking directly to the FUB contact — safe to forward to that agent
-    """
+    """Build the appointment accountability email — all styles inlined so
+    formatting survives email client forwarding."""
     t = appt_data.get("totals", {})
     agents = appt_data.get("agents", [])
     appts = appt_data.get("appointments", [])
@@ -817,124 +836,103 @@ def build_appointment_email(appt_data):
     pct = t.get("completion_rate", 0)
     pct_color = "#22c55e" if pct >= 70 else "#f59e0b" if pct >= 40 else "#ef4444"
 
-    # Group open (no-outcome) past appointments by agent
     from collections import defaultdict
     agent_open = defaultdict(list)
     for a in appts:
         if a.get("is_past") and not a.get("outcome") and a.get("tier"):
             agent_open[a.get("assigned_agent", "Unknown")].append(a)
 
+    # ── Header ──────────────────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<style>
-body{{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;color:#1e293b;max-width:640px;margin:0 auto;background:#f1f5f9;padding:16px}}
-.header{{background:#0f172a;color:white;padding:20px 24px;border-radius:10px;margin-bottom:12px}}
-.header h1{{margin:0;font-size:18px;font-weight:700}}
-.header p{{margin:4px 0 0;font-size:13px;opacity:.7}}
-.summary-row{{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}}
-.chip{{background:white;border-radius:8px;padding:10px 14px;text-align:center;min-width:80px;flex:1;box-shadow:0 1px 3px rgba(0,0,0,.08)}}
-.chip .n{{font-size:22px;font-weight:700}}
-.chip .l{{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px}}
-.agent-card{{background:white;border-radius:10px;padding:20px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}}
-.agent-card h2{{margin:0 0 4px;font-size:15px;font-weight:700}}
-.agent-card .sub{{font-size:12px;color:#64748b;margin-bottom:14px}}
-.lead-grid{{display:flex;flex-wrap:wrap;gap:6px}}
-.lead-chip{{display:inline-block;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:500;text-decoration:none;white-space:nowrap;border:1px solid transparent}}
-.lc-stale{{background:#fef2f2;color:#b91c1c;border-color:#fecaca}}
-.lc-overdue{{background:#fffbeb;color:#b45309;border-color:#fde68a}}
-.lc-pending{{background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe}}
-.legend{{font-size:11px;color:#94a3b8;margin-top:10px}}
-.legend span{{margin-right:12px}}
-.legend .dot{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px}}
-.footer{{text-align:center;font-size:11px;color:#94a3b8;margin-top:20px;padding:12px}}
-.btn{{display:inline-block;background:#3b82f6;color:white;padding:9px 20px;border-radius:7px;text-decoration:none;font-size:13px;font-weight:600}}
-@media(max-width:480px){{.summary-row{{gap:6px}}.chip{{min-width:60px;padding:8px 10px}}.chip .n{{font-size:18px}}}}
-</style></head><body>
+<html><head><meta charset="UTF-8"></head>
+<body style="{_S['body']}">
 
-<div class="header">
-  <h1>📅 Appointment Accountability — {period}</h1>
-  <p>Weekly outcome review · Legacy Home Team</p>
-</div>
-
-<!-- Manager summary strip -->
-<div class="summary-row">
-  <div class="chip"><div class="n" style="color:#3b82f6">{t.get("total_30d",0)}</div><div class="l">Total</div></div>
-  <div class="chip"><div class="n" style="color:{pct_color}">{pct}%</div><div class="l">Complete</div></div>
-  <div class="chip"><div class="n" style="color:#22c55e">{t.get("met",0)}</div><div class="l">Met</div></div>
-  <div class="chip"><div class="n" style="color:#f59e0b">{t.get("no_show",0)}</div><div class="l">No Show</div></div>
-  <div class="chip"><div class="n" style="color:#ef4444">{t.get("no_outcome",0)}</div><div class="l">Open</div></div>
-  <div class="chip"><div class="n" style="color:#ef4444">{t.get("stale_7d",0)}</div><div class="l">7d+ Stale</div></div>
+<div style="{_S['header']}">
+  <h1 style="{_S['header_h1']}">&#128197; Appointment Accountability &mdash; {period}</h1>
+  <p style="{_S['header_p']}">Weekly outcome review &middot; Legacy Home Team</p>
 </div>
 """
 
-    # Agent cards — sorted worst first (most open appointments)
+    # ── Manager summary strip (table for email client compat) ───────────────
+    stat_cells = [
+        (str(t.get("total_30d", 0)), "#3b82f6", "Total"),
+        (f"{pct}%",                   pct_color,  "Complete"),
+        (str(t.get("met", 0)),        "#22c55e",  "Met"),
+        (str(t.get("no_show", 0)),    "#f59e0b",  "No Show"),
+        (str(t.get("no_outcome", 0)), "#ef4444",  "Open"),
+        (str(t.get("stale_7d", 0)),   "#ef4444",  "7d+ Stale"),
+    ]
+    html += f'<table style="{_S["sum_table"]}"><tr>'
+    for val, color, label in stat_cells:
+        html += (f'<td style="{_S["sum_td"]}">'
+                 f'<span style="font-size:22px;font-weight:700;color:{color}">{val}</span>'
+                 f'<span style="{_S["sum_label"]}">{label}</span></td>')
+    html += "</tr></table>\n"
+
+    # ── Per-agent cards ──────────────────────────────────────────────────────
     sorted_agents = sorted(agents, key=lambda a: a.get("no_outcome", 0), reverse=True)
+    tier_order = {"stale": 0, "overdue": 1, "pending": 2, "recent": 3}
 
     for ag in sorted_agents:
         name = ag.get("name", "Unknown")
         open_list = agent_open.get(name, [])
         if not open_list:
-            continue  # skip agents with nothing open
+            continue
 
-        total = ag.get("total", 0)
         no_outcome = ag.get("no_outcome", 0)
-        stale_ct = ag.get("stale", 0)
-        met = ag.get("met", 0)
+        stale_ct   = ag.get("stale", 0)
+        met        = ag.get("met", 0)
 
-        # Build plain-language summary line
         parts = []
         if no_outcome == 1:
             parts.append("1 appointment needs an outcome")
         elif no_outcome > 1:
             parts.append(f"{no_outcome} appointments need outcomes")
-        if stale_ct > 0:
-            parts.append(f"{stale_ct} {'has' if stale_ct==1 else 'have'} gone stale (7+ days with no update)")
-        summary_line = " — ".join(parts) if parts else "All caught up."
+        if stale_ct == 1:
+            parts.append("1 has gone stale (7+ days with no update)")
+        elif stale_ct > 1:
+            parts.append(f"{stale_ct} have gone stale (7+ days with no update)")
+        summary_line = " &mdash; ".join(parts) if parts else "All caught up."
 
-        html += f"""
-<div class="agent-card">
-  <h2>{name}</h2>
-  <div class="sub">{summary_line} &nbsp;·&nbsp; {met} met this period</div>
-  <div class="lead-grid">
-"""
-        # Sort open leads: stale → overdue → pending/recent
-        tier_order = {"stale": 0, "overdue": 1, "pending": 2, "recent": 3}
-        open_sorted = sorted(open_list, key=lambda x: tier_order.get(x.get("tier",""), 9))
+        html += f'<div style="{_S["card"]}">\n'
+        html += f'  <h2 style="{_S["card_h2"]}">{name}</h2>\n'
+        html += f'  <p style="{_S["card_sub"]}">{summary_line} &nbsp;&middot;&nbsp; {met} met this period</p>\n'
+        html += '  <div style="line-height:2">\n'
 
+        open_sorted = sorted(open_list, key=lambda x: tier_order.get(x.get("tier", ""), 9))
         for lead in open_sorted:
-            pid = lead.get("person_id")
+            pid       = lead.get("person_id")
             lead_name = lead.get("lead_name", "Unknown")
-            tier = lead.get("tier", "pending")
-            days = round(lead.get("days_since", 0))
-            days_str = f"{days}d" if days > 0 else "today"
-            css = "lc-stale" if tier == "stale" else "lc-overdue" if tier == "overdue" else "lc-pending"
+            tier      = lead.get("tier", "pending")
+            days      = round(lead.get("days_since", 0))
+            days_str  = f"{days}d ago" if days > 0 else "today"
+            chip_style = _S["chip_stale"] if tier == "stale" else _S["chip_over"] if tier == "overdue" else _S["chip_pend"]
 
             if pid:
                 fub_url = FUB_PERSON_URL.format(person_id=pid)
-                html += f'    <a href="{fub_url}" class="lead-chip {css}" title="{days_str} ago">{lead_name}</a>\n'
+                html += f'    <a href="{fub_url}" style="{chip_style}" title="{days_str}">{lead_name}</a>\n'
             else:
-                html += f'    <span class="lead-chip {css}" title="{days_str} ago">{lead_name}</span>\n'
+                html += f'    <span style="{chip_style}" title="{days_str}">{lead_name}</span>\n'
 
-        html += """  </div>
-  <div class="legend">
-    <span><span class="dot" style="background:#fca5a5"></span>7d+ stale</span>
-    <span><span class="dot" style="background:#fcd34d"></span>48h+ overdue</span>
-    <span><span class="dot" style="background:#93c5fd"></span>pending</span>
-    <span style="color:#cbd5e1">· click any name to open in Follow Up Boss</span>
-  </div>
-</div>
-"""
+        html += '  </div>\n'
+        html += (f'  <p style="{_S["legend"]}">'
+                 f'<span style="{_S["dot_red"]}"></span>7d+ stale&nbsp;&nbsp;'
+                 f'<span style="{_S["dot_amber"]}"></span>48h+ overdue&nbsp;&nbsp;'
+                 f'<span style="{_S["dot_blue"]}"></span>pending&nbsp;&nbsp;'
+                 f'&middot; click any name to open in Follow Up Boss</p>\n')
+        html += '</div>\n'
 
     if not any(agent_open.values()):
-        html += '<div class="agent-card" style="text-align:center;color:#22c55e;font-weight:600">✅ All appointments are up to date!</div>\n'
+        html += f'<div style="{_S["card"]};text-align:center;color:#22c55e;font-weight:600">&#10003; All appointments are up to date!</div>\n'
 
+    # ── Footer ───────────────────────────────────────────────────────────────
     html += f"""
 <p style="text-align:center;margin:20px 0 8px">
-  <a href="https://web-production-80a1e.up.railway.app/" class="btn">Open Dashboard</a>
+  <a href="https://web-production-80a1e.up.railway.app/" style="{_S['btn']}">Open Dashboard</a>
 </p>
-<div class="footer">
-  Legacy Home Team · Appointment Accountability · {datetime.now().strftime('%A, %B %d at %I:%M %p')}
-</div>
+<p style="{_S['footer']}">
+  Legacy Home Team &middot; Appointment Accountability &middot; {datetime.now().strftime('%A, %B %d at %I:%M %p')}
+</p>
 </body></html>"""
 
     return html
