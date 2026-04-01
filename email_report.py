@@ -798,7 +798,7 @@ def send_isa_email(isa_data):
 # ---- Appointment Accountability Email ----
 
 
-FUB_PERSON_URL = "https://app.followupboss.com/2/people/{person_id}"
+FUB_PERSON_URL = "https://app.followupboss.com/2/people/{person_id}/view"
 
 # Inline style constants — using inline styles on every element so formatting
 # survives forwarding (email clients strip <style> blocks on forward).
