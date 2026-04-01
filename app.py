@@ -1583,8 +1583,10 @@ def api_send_appointment_email():
     """Send appointment accountability email."""
     try:
         from email_report import send_appointment_email
+        body = request.get_json(silent=True) or {}
+        subject_override = body.get("subject_override")
         data = build_appointment_data()
-        success = send_appointment_email(data)
+        success = send_appointment_email(data, subject_override=subject_override)
         if success:
             return jsonify({"success": True})
         else:

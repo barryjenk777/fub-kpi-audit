@@ -1010,12 +1010,13 @@ def build_agent_appointment_email(appt_data, agent_name, agent_open):
     return html
 
 
-def send_appointment_email(appt_data):
+def send_appointment_email(appt_data, subject_override=None):
     """Send per-agent appointment accountability emails via SendGrid.
 
     Each agent with open appointments gets their own email (only their leads).
     Barry, Joe, and Fhalen are CC'd on every agent email.
     A manager summary email goes to the CC list as well.
+    subject_override replaces both the agent and manager subject lines when set.
     """
     api_key = os.environ.get("SENDGRID_API_KEY")
     if not api_key:
@@ -1067,7 +1068,10 @@ def send_appointment_email(appt_data):
 
         html_body = build_agent_appointment_email(appt_data, agent_name, open_list)
         no_out = len(open_list)
-        subject = f"Action Needed: {no_out} Appointment{'s' if no_out != 1 else ''} {'Need' if no_out != 1 else 'Needs'} an Outcome"
+        if subject_override:
+            subject = subject_override
+        else:
+            subject = f"Action Needed: {no_out} Appointment{'s' if no_out != 1 else ''} {'Need' if no_out != 1 else 'Needs'} an Outcome"
 
         message = Mail(
             from_email=config.EMAIL_FROM,
@@ -1090,7 +1094,7 @@ def send_appointment_email(appt_data):
     # ── Manager summary email ────────────────────────────────────────────────
     t = appt_data.get("totals", {})
     summary_html = build_appointment_email(appt_data)
-    summary_subject = _catchy_subject("appointments", {
+    summary_subject = subject_override or _catchy_subject("appointments", {
         "no_outcome": t.get("no_outcome", 0),
         "total": t.get("total_30d", 0),
         "completion_rate": t.get("completion_rate", 0),
