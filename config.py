@@ -170,7 +170,14 @@ EMAIL_RECIPIENTS = [
 # Person responsible for updating the Live Calls inbox in FUB
 # (API cannot manage shared inboxes, so this person is tasked manually)
 LIVE_CALLS_ADMIN = "Fhalen Tendencia"
-LIVE_CALLS_ADMIN_EMAIL = "fhalen@yourfriendlyagent.net"  # Update with Fhalen's real email
+LIVE_CALLS_ADMIN_EMAIL = "tendenciafhalen11@gmail.com"
+
+# CC list for per-agent appointment accountability emails
+APT_EMAIL_CC = [
+    "barry@yourfriendlyagent.net",
+    "thejoefu@gmail.com",
+    "tendenciafhalen11@gmail.com",
+]
 
 # Sales Manager email (Joe's Monday morning coaching email)
 MANAGER_EMAIL = "thejoefu@gmail.com"

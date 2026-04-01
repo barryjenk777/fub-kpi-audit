@@ -938,8 +938,85 @@ def build_appointment_email(appt_data):
     return html
 
 
+def build_agent_appointment_email(appt_data, agent_name, agent_open):
+    """Build an appointment email for a single agent — only their open leads,
+    no other agents visible, no dashboard link."""
+    t    = appt_data.get("totals", {})
+    period = appt_data.get("period", "")
+    pct  = t.get("completion_rate", 0)
+    pct_color = "#22c55e" if pct >= 70 else "#f59e0b" if pct >= 40 else "#ef4444"
+
+    # Find this agent's summary row
+    ag = next((a for a in appt_data.get("agents", []) if a.get("name") == agent_name), {})
+    no_outcome = ag.get("no_outcome", 0)
+    stale_ct   = ag.get("stale", 0)
+    met        = ag.get("met", 0)
+
+    parts = []
+    if no_outcome == 1:
+        parts.append("1 appointment needs an outcome")
+    elif no_outcome > 1:
+        parts.append(f"{no_outcome} appointments need outcomes")
+    if stale_ct == 1:
+        parts.append("1 has gone stale (7+ days with no update)")
+    elif stale_ct > 1:
+        parts.append(f"{stale_ct} have gone stale (7+ days with no update)")
+    summary_line = " &mdash; ".join(parts) if parts else "All caught up."
+
+    tier_order = {"stale": 0, "overdue": 1, "pending": 2, "recent": 3}
+    open_sorted = sorted(agent_open, key=lambda x: tier_order.get(x.get("tier", ""), 9))
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="{_S['body']}">
+
+<div style="{_S['header']}">
+  <h1 style="{_S['header_h1']}">&#128197; Appointment Outcomes Needed &mdash; {period}</h1>
+  <p style="{_S['header_p']}">Legacy Home Team &middot; Please update your appointments in Follow Up Boss</p>
+</div>
+
+<div style="{_S['card']}">
+  <h2 style="{_S['card_h2']}">Hi {agent_name.split()[0]},</h2>
+  <p style="{_S['card_sub']}">{summary_line} &nbsp;&middot;&nbsp; {met} met this period</p>
+  <div style="line-height:2">
+"""
+    for lead in open_sorted:
+        pid       = lead.get("person_id")
+        lead_name = lead.get("lead_name", "Unknown")
+        tier      = lead.get("tier", "pending")
+        days      = round(lead.get("days_since", 0))
+        days_str  = f"{days}d ago" if days > 0 else "today"
+        chip_style = _S["chip_stale"] if tier == "stale" else _S["chip_over"] if tier == "overdue" else _S["chip_pend"]
+        if pid:
+            fub_url = FUB_PERSON_URL.format(person_id=pid)
+            html += f'    <a href="{fub_url}" style="{chip_style}" title="{days_str}">{lead_name}</a>\n'
+        else:
+            html += f'    <span style="{chip_style}" title="{days_str}">{lead_name}</span>\n'
+
+    html += f"""  </div>
+  <p style="{_S['legend']}">
+    <span style="{_S['dot_red']}"></span>7d+ stale&nbsp;&nbsp;
+    <span style="{_S['dot_amber']}"></span>48h+ overdue&nbsp;&nbsp;
+    <span style="{_S['dot_blue']}"></span>pending&nbsp;&nbsp;
+    &middot; click any name to open directly in Follow Up Boss
+  </p>
+</div>
+
+<p style="{_S['footer']}">
+  Legacy Home Team &middot; {datetime.now().strftime('%A, %B %d at %I:%M %p')}
+</p>
+</body></html>"""
+
+    return html
+
+
 def send_appointment_email(appt_data):
-    """Send the appointment accountability email via SendGrid."""
+    """Send per-agent appointment accountability emails via SendGrid.
+
+    Each agent with open appointments gets their own email (only their leads).
+    Barry, Joe, and Fhalen are CC'd on every agent email.
+    A manager summary email goes to the CC list as well.
+    """
     api_key = os.environ.get("SENDGRID_API_KEY")
     if not api_key:
         print("\n⚠  SENDGRID_API_KEY not set. Skipping email.")
@@ -947,34 +1024,89 @@ def send_appointment_email(appt_data):
 
     try:
         from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, To
+        from sendgrid.helpers.mail import Mail, To, Cc
     except ImportError:
         print("\n⚠  sendgrid package not installed.")
         return False
 
+    # Pull agent emails from FUB
+    try:
+        from fub_client import FUBClient
+        client = FUBClient()
+        users = client.get_users()
+        agent_email_map = {u.get("name"): u.get("email") for u in users if u.get("email")}
+    except Exception as e:
+        print(f"\n⚠  Could not fetch agent emails from FUB: {e}")
+        agent_email_map = {}
+
+    # Group open appointments by agent
+    from collections import defaultdict
+    agent_open = defaultdict(list)
+    for a in appt_data.get("appointments", []):
+        if a.get("is_past") and not a.get("outcome") and a.get("tier"):
+            agent_open[a.get("assigned_agent", "Unknown")].append(a)
+
+    sg = SendGridAPIClient(api_key)
+    cc_list = [Cc(e) for e in config.APT_EMAIL_CC]
+    sent = 0
+    skipped = 0
+
+    # ── Per-agent emails ─────────────────────────────────────────────────────
+    for agent_name, open_list in agent_open.items():
+        if not open_list:
+            continue
+        email = agent_email_map.get(agent_name)
+        if not email:
+            print(f"  ⚠  No email found for {agent_name}, skipping")
+            skipped += 1
+            continue
+
+        # Don't email the managers/ISA as agents
+        if agent_name in ("Barry Jenkins", "Joseph Fuscaldo", "Fhalen Tendencia"):
+            continue
+
+        html_body = build_agent_appointment_email(appt_data, agent_name, open_list)
+        no_out = len(open_list)
+        subject = f"Action Needed: {no_out} Appointment{'s' if no_out != 1 else ''} {'Need' if no_out != 1 else 'Needs'} an Outcome"
+
+        message = Mail(
+            from_email=config.EMAIL_FROM,
+            to_emails=[To(email)],
+            subject=subject,
+            html_content=html_body,
+        )
+        # Add CC — skip if agent is already in the CC list
+        for cc in cc_list:
+            if cc.email != email:
+                message.add_cc(cc)
+
+        try:
+            sg.send(message)
+            print(f"  ✅ Sent to {agent_name} <{email}> ({no_out} open)")
+            sent += 1
+        except Exception as e:
+            print(f"  ❌ Failed for {agent_name}: {e}")
+
+    # ── Manager summary email ────────────────────────────────────────────────
     t = appt_data.get("totals", {})
-    html_body = build_appointment_email(appt_data)
-    subject = _catchy_subject("appointments", {
+    summary_html = build_appointment_email(appt_data)
+    summary_subject = _catchy_subject("appointments", {
         "no_outcome": t.get("no_outcome", 0),
         "total": t.get("total_30d", 0),
         "completion_rate": t.get("completion_rate", 0),
     })
-
-    recipients = list(config.EMAIL_RECIPIENTS)
-    unique = list(dict.fromkeys(recipients))
-
-    message = Mail(
+    mgr_recipients = list(dict.fromkeys(config.APT_EMAIL_CC))
+    mgr_message = Mail(
         from_email=config.EMAIL_FROM,
-        to_emails=[To(e) for e in unique],
-        subject=subject,
-        html_content=html_body,
+        to_emails=[To(e) for e in mgr_recipients],
+        subject=f"[Team Summary] {summary_subject}",
+        html_content=summary_html,
     )
-
     try:
-        sg = SendGridAPIClient(api_key)
-        sg.send(message)
-        print(f"\n✅ Appointment email sent to {len(unique)} recipients")
-        return True
+        sg.send(mgr_message)
+        print(f"\n✅ Manager summary sent to {mgr_recipients}")
     except Exception as e:
-        print(f"\n❌ Failed to send appointment email: {e}")
-        return False
+        print(f"\n❌ Manager summary failed: {e}")
+
+    print(f"\n✅ Appointment emails: {sent} agents notified, {skipped} skipped (no email)")
+    return sent > 0 or skipped == 0
