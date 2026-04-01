@@ -1340,6 +1340,7 @@ def build_appointment_data():
         # Fetch person details (cached)
         person_data = {}
         tags = []
+        source = "Unknown"
         if person_id:
             if person_id not in person_cache:
                 try:
@@ -1349,6 +1350,12 @@ def build_appointment_data():
             person_data = person_cache[person_id]
             lead_name = person_data.get("name", lead_name)
             tags = person_data.get("tags", []) or []
+            source = person_data.get("source", "Unknown") or "Unknown"
+
+        # Skip excluded lead sources (e.g. Courted.io recruits)
+        excluded_sources = getattr(config, "EXCLUDED_LEAD_SOURCES", [])
+        if source in excluded_sources:
+            continue
 
         # Calculate hours since appointment
         hours_since = (now - start_dt).total_seconds() / 3600
@@ -1381,7 +1388,7 @@ def build_appointment_data():
             "lead_name": lead_name,
             "person_id": person_id,
             "stage": person_data.get("stage", "Unknown"),
-            "source": person_data.get("source", "Unknown"),
+            "source": source,
             "tags": tags,
             "hours_since": round(hours_since, 1),
             "days_since": round(hours_since / 24, 1),
@@ -1496,7 +1503,7 @@ def api_sync_appointment_tags():
         client = FUBClient()
 
         actions = {"tagged_set": 0, "tagged_needed": 0, "tagged_stale": 0,
-                   "tags_removed": 0, "tasks_created": 0, "skipped": 0}
+                   "tags_removed": 0, "tasks_created": 0, "skipped": 0, "errors": 0}
 
         apt_tags = {config.APT_SET_TAG, config.APT_OUTCOME_NEEDED_TAG, config.APT_STALE_TAG}
 
@@ -1506,59 +1513,62 @@ def api_sync_appointment_tags():
                 actions["skipped"] += 1
                 continue
 
-            tags = list(appt.get("tags", []))
-            has_any_apt_tag = bool(apt_tags & set(tags))
-            outcome = appt.get("outcome")
-            tier = appt.get("tier")
+            try:
+                tags = list(appt.get("tags", []))
+                has_any_apt_tag = bool(apt_tags & set(tags))
+                outcome = appt.get("outcome")
+                tier = appt.get("tier")
 
-            # Outcome logged → remove all apt tags
-            if outcome:
-                if has_any_apt_tag:
-                    for t in apt_tags:
-                        if t in tags:
-                            tags = [x for x in tags if x != t]
-                    client._request("PUT", f"people/{pid}", json_data={"tags": tags})
-                    actions["tags_removed"] += 1
+                # Outcome logged → remove all apt tags
+                if outcome:
+                    if has_any_apt_tag:
+                        tags = [x for x in tags if x not in apt_tags]
+                        client._request("PUT", f"people/{pid}", json_data={"tags": tags})
+                        actions["tags_removed"] += 1
+                    continue
+
+                if not tier:
+                    continue
+
+                # Stale (7d+)
+                if tier == "stale":
+                    if config.APT_STALE_TAG not in tags:
+                        tags = [t for t in tags if t not in apt_tags]
+                        tags.append(config.APT_STALE_TAG)
+                        client._request("PUT", f"people/{pid}", json_data={"tags": tags})
+                        actions["tagged_stale"] += 1
+
+                # Overdue (48h+)
+                elif tier == "overdue":
+                    if config.APT_OUTCOME_NEEDED_TAG not in tags:
+                        tags = [t for t in tags if t not in apt_tags]
+                        tags.append(config.APT_OUTCOME_NEEDED_TAG)
+                        client._request("PUT", f"people/{pid}", json_data={"tags": tags})
+                        actions["tagged_needed"] += 1
+                        # Create task for the agent
+                        if appt.get("assigned_user_id"):
+                            try:
+                                due = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+                                client.create_task(
+                                    pid, appt["assigned_user_id"],
+                                    config.APT_TASK_TEMPLATE.format(lead_name=appt["lead_name"]),
+                                    due_date=due,
+                                )
+                                actions["tasks_created"] += 1
+                            except Exception:
+                                pass
+
+                # Pending/Recent (<48h)
+                elif tier in ("pending", "recent"):
+                    if config.APT_SET_TAG not in tags:
+                        tags = [t for t in tags if t not in apt_tags]
+                        tags.append(config.APT_SET_TAG)
+                        client._request("PUT", f"people/{pid}", json_data={"tags": tags})
+                        actions["tagged_set"] += 1
+
+            except Exception:
+                actions["errors"] += 1
                 continue
-
-            if not tier:
-                continue
-
-            # Stale (7d+)
-            if tier == "stale":
-                if config.APT_STALE_TAG not in tags:
-                    tags = [t for t in tags if t not in apt_tags]
-                    tags.append(config.APT_STALE_TAG)
-                    client._request("PUT", f"people/{pid}", json_data={"tags": tags})
-                    actions["tagged_stale"] += 1
-
-            # Overdue (48h+)
-            elif tier == "overdue":
-                if config.APT_OUTCOME_NEEDED_TAG not in tags:
-                    tags = [t for t in tags if t not in apt_tags]
-                    tags.append(config.APT_OUTCOME_NEEDED_TAG)
-                    client._request("PUT", f"people/{pid}", json_data={"tags": tags})
-                    actions["tagged_needed"] += 1
-                    # Create task for the agent
-                    if appt.get("assigned_user_id"):
-                        try:
-                            due = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
-                            client.create_task(
-                                pid, appt["assigned_user_id"],
-                                config.APT_TASK_TEMPLATE.format(lead_name=appt["lead_name"]),
-                                due_date=due,
-                            )
-                            actions["tasks_created"] += 1
-                        except Exception:
-                            pass
-
-            # Pending/Recent (<48h)
-            elif tier in ("pending", "recent"):
-                if config.APT_SET_TAG not in tags:
-                    tags = [t for t in tags if t not in apt_tags]
-                    tags.append(config.APT_SET_TAG)
-                    client._request("PUT", f"people/{pid}", json_data={"tags": tags})
-                    actions["tagged_set"] += 1
 
         # Clear cache so dashboard refreshes
         cache_clear("appointments")
