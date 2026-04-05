@@ -2308,6 +2308,10 @@ def start_scheduler():
     _scheduler.add_job(scheduled_cache_warm, CronTrigger(hour="6,12,18", minute=0),
                        id="cache_warm", name="Cache warm (3x/day)")
 
+    # LeadStream scoring: 4x/day at 8am, 12pm, 4pm, 8pm ET
+    _scheduler.add_job(scheduled_run_leadstream, CronTrigger(hour="8,12,16,20", minute=7),
+                       id="leadstream", name="LeadStream scoring (4x/day)")
+
     # Appointment tag sync: 3x/day at 7am, 1pm, 7pm ET
     _scheduler.add_job(scheduled_sync_appointment_tags, CronTrigger(hour="7,13,19", minute=0),
                        id="appt_tag_sync", name="Appointment tag sync (3x/day)")
