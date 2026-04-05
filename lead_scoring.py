@@ -535,7 +535,13 @@ class LeadScorer:
                 else:
                     try:
                         existing = person.get("tags") or []
-                        self.client.remove_tag_fast(pid, tag, existing)
+                        # Clear score only when removing the last LeadStream tag
+                        remaining_ls_tags = [
+                            t for t in existing
+                            if t in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG) and t != tag
+                        ]
+                        extra = {"customLeadStreamScore": None} if not remaining_ls_tags else None
+                        self.client.remove_tag_fast(pid, tag, existing, extra_fields=extra)
                         removed += 1
                     except Exception as e:
                         logger.warning("Cleanup: failed to remove '%s' from person %s: %s", tag, pid, e)
@@ -583,7 +589,12 @@ class LeadScorer:
                     else:
                         try:
                             existing = person.get("tags") or []
-                            self.client.remove_tag_fast(pid, tag, existing)
+                            remaining_ls_tags = [
+                                t for t in existing
+                                if t in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG) and t != tag
+                            ]
+                            extra = {"customLeadStreamScore": None} if not remaining_ls_tags else None
+                            self.client.remove_tag_fast(pid, tag, existing, extra_fields=extra)
                             removed += 1
                         except Exception as e:
                             logger.warning("Deep cleanup: failed to remove '%s' from %s: %s",
@@ -599,7 +610,8 @@ class LeadScorer:
         return removed
 
     def apply_tags(self, scored_leads, tag, dry_run=True):
-        """Apply a tag to the scored leads. Returns (count, list of tagged IDs)."""
+        """Apply a tag to the scored leads and write score to customLeadStreamScore.
+        Returns (count, list of tagged IDs)."""
         tagged = 0
         tagged_ids = []
         for person, score, tier, breakdown in scored_leads:
@@ -611,7 +623,10 @@ class LeadScorer:
                 print(f"  [DRY RUN] Would tag {name} (ID: {pid}) with '{tag}' "
                       f"[score={score}, tier={tier}]")
             else:
-                self.client.add_tag_fast(pid, tag, existing_tags)
+                self.client.add_tag_fast(
+                    pid, tag, existing_tags,
+                    extra_fields={"customLeadStreamScore": str(score)},
+                )
             tagged += 1
             tagged_ids.append(pid)
 

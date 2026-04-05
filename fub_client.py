@@ -342,7 +342,30 @@ class FUBClient:
             payload["description"] = description
         return self._request("POST", "tasks", json_data=payload)
 
-    # ---- People (individual) ----
+    # ---- People (create / individual) ----
+
+    def create_person(self, deduplicate=True, **fields):
+        """Create a new person in FUB. Uses dedup by default to avoid duplicates.
+
+        Example:
+            client.create_person(
+                firstName="John", lastName="Doe",
+                emails=[{"type": "home", "value": "j@example.com"}],
+                phones=[{"type": "mobile", "value": "5551234567"}],
+                tags=["BatchLeads", "Pre-Foreclosure"],
+                source="BatchLeads",
+            )
+        """
+        fields["deduplicate"] = deduplicate
+        return self._request("POST", "people", json_data=fields)
+
+    def search_people_by_email(self, email):
+        """Search for people by email address."""
+        return self._get_paginated("people", {"email": email, "limit": 10})
+
+    def search_people_by_phone(self, phone):
+        """Search for people by phone number."""
+        return self._get_paginated("people", {"phone": phone, "limit": 10})
 
     def get_person(self, person_id):
         """Get a single person by ID."""
@@ -366,18 +389,31 @@ class FUBClient:
             return self._request("PUT", f"people/{person_id}", json_data={"tags": tags})
         return person
 
-    def add_tag_fast(self, person_id, tag, existing_tags):
-        """Add a tag without fetching the person first (caller provides current tags)."""
+    def add_tag_fast(self, person_id, tag, existing_tags, extra_fields=None):
+        """Add a tag without fetching the person first (caller provides current tags).
+        extra_fields: optional dict merged into the PUT payload (e.g. custom fields)."""
         if tag not in existing_tags:
             tags = list(existing_tags) + [tag]
-            return self._request("PUT", f"people/{person_id}", json_data={"tags": tags})
+            payload = {"tags": tags}
+            if extra_fields:
+                payload.update(extra_fields)
+            return self._request("PUT", f"people/{person_id}", json_data=payload)
+        elif extra_fields:
+            # Tag already present but still need to update extra fields
+            return self._request("PUT", f"people/{person_id}", json_data=extra_fields)
         return None
 
-    def remove_tag_fast(self, person_id, tag, existing_tags):
-        """Remove a tag without fetching the person first (caller provides current tags)."""
+    def remove_tag_fast(self, person_id, tag, existing_tags, extra_fields=None):
+        """Remove a tag without fetching the person first (caller provides current tags).
+        extra_fields: optional dict merged into the PUT payload (e.g. custom fields)."""
         if tag in existing_tags:
             tags = [t for t in existing_tags if t != tag]
-            return self._request("PUT", f"people/{person_id}", json_data={"tags": tags})
+            payload = {"tags": tags}
+            if extra_fields:
+                payload.update(extra_fields)
+            return self._request("PUT", f"people/{person_id}", json_data=payload)
+        elif extra_fields:
+            return self._request("PUT", f"people/{person_id}", json_data=extra_fields)
         return None
 
     def get_people_by_tag(self, tag):
