@@ -2214,7 +2214,7 @@ def scheduled_cache_warm():
 
 
 def scheduled_run_leadstream():
-    """Runs every 4 hours — score leads and apply LEADSTREAM_HOT tags."""
+    """Runs every 4 hours — full score (agents + pond) and apply tags."""
     print(f"[SCHEDULER] LeadStream scoring started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
@@ -2226,6 +2226,32 @@ def scheduled_run_leadstream():
         _record_fired("leadstream")
     except Exception as e:
         print(f"[SCHEDULER] LeadStream error: {e}")
+
+
+def scheduled_run_leadstream_pond():
+    """Runs hourly — pond-only refresh so contacted leads drop off quickly."""
+    print(f"[SCHEDULER] LeadStream pond refresh at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        with app.test_client() as tc:
+            resp = tc.post("/api/leadstream/run", json={"apply": True, "pond_only": True})
+            result = resp.get_json() or {}
+            print(f"[SCHEDULER] Pond refresh: {result.get('pond_leads_tagged',0)} pond leads tagged")
+        _record_fired("leadstream_pond")
+    except Exception as e:
+        print(f"[SCHEDULER] LeadStream pond error: {e}")
+
+
+def scheduled_leadstream_nightly_cleanup():
+    """Runs at 2am ET — deep cleanup of all stale LeadStream tags in FUB."""
+    print(f"[SCHEDULER] LeadStream nightly cleanup at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        with app.test_client() as tc:
+            resp = tc.post("/api/leadstream/deep-cleanup")
+            result = resp.get_json() or {}
+            print(f"[SCHEDULER] Nightly cleanup: {result.get('removed',0)} tags removed")
+        _record_fired("leadstream_cleanup")
+    except Exception as e:
+        print(f"[SCHEDULER] LeadStream cleanup error: {e}")
 
 
 def scheduled_send_audit_email():
@@ -2308,9 +2334,17 @@ def start_scheduler():
     _scheduler.add_job(scheduled_cache_warm, CronTrigger(hour="6,12,18", minute=0),
                        id="cache_warm", name="Cache warm (3x/day)")
 
-    # LeadStream scoring: 4x/day at 8am, 12pm, 4pm, 8pm ET
+    # LeadStream full scoring: 4x/day at 8am, 12pm, 4pm, 8pm ET
     _scheduler.add_job(scheduled_run_leadstream, CronTrigger(hour="8,12,16,20", minute=7),
                        id="leadstream", name="LeadStream scoring (4x/day)")
+
+    # LeadStream pond refresh: hourly at :37
+    _scheduler.add_job(scheduled_run_leadstream_pond, CronTrigger(minute=37),
+                       id="leadstream_pond", name="LeadStream pond refresh (hourly)")
+
+    # LeadStream nightly cleanup: 2am ET
+    _scheduler.add_job(scheduled_leadstream_nightly_cleanup, CronTrigger(hour=2, minute=0),
+                       id="leadstream_cleanup", name="LeadStream nightly cleanup (2am)")
 
     # Appointment tag sync: 3x/day at 7am, 1pm, 7pm ET
     _scheduler.add_job(scheduled_sync_appointment_tags, CronTrigger(hour="7,13,19", minute=0),
