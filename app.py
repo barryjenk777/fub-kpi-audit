@@ -2090,36 +2090,35 @@ def api_health():
         # Scoring runs every 4h — allow up to 5h before flagging stale
         status = "ok" if age_hours <= 5 else "stale"
 
-    # Scheduler status
-    scheduler_info = {"running": _scheduler_started}
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        # Get next run times from the scheduler if available
-        for var_name, var_val in globals().items():
-            if isinstance(var_val, BackgroundScheduler):
-                scheduler_info["jobs"] = [
-                    {"name": j.name, "next_run": str(j.next_run_time)}
-                    for j in var_val.get_jobs()
-                ]
-                break
-    except Exception:
-        pass
+    # Scheduler status — use global _scheduler for accurate job details
+    scheduler_info = {"running": _scheduler_started, "jobs": []}
+    if _scheduler is not None:
+        try:
+            scheduler_info["jobs"] = [
+                {
+                    "id": j.id,
+                    "name": j.name,
+                    "next_run": str(j.next_run_time),
+                    "last_fired": _job_last_fired.get(j.id, "never"),
+                }
+                for j in _scheduler.get_jobs()
+            ]
+        except Exception:
+            pass
 
     # Cache status
     cache_status = {}
-    for endpoint in ["audit", "manager", "isa"]:
+    for endpoint in ["audit", "manager", "isa", "appointments"]:
         cached = cache_get(endpoint)
         if cached:
-            cached_at = cached.get("cached_at")
-            cache_status[endpoint] = {"cached": True, "cached_at": cached_at}
+            cache_status[endpoint] = {"cached": True, "cached_at": cached.get("cached_at")}
         else:
             cache_status[endpoint] = {"cached": False}
 
     return jsonify({
         "status": status,
-        "last_run": last_run_str,
-        "age_hours": round(age_hours, 1) if age_hours is not None else None,
-        "next_run_expected": "every 4 hours at :07 past 6am/10am/2pm/6pm UTC",
+        "last_leadstream_run": last_run_str,
+        "leadstream_age_hours": round(age_hours, 1) if age_hours is not None else None,
         "agent_leads_tagged": len([
             i for leads in manifest.get("agent", {}).values()
             for i in leads
@@ -2166,6 +2165,8 @@ def api_leadstream_status():
 
 # ---- Scheduler: cache warming + email delivery ----
 _scheduler_started = False
+_scheduler = None          # global ref so health endpoint can inspect jobs
+_job_last_fired = {}       # job_id -> ISO timestamp of last successful fire
 
 
 def warmup_cache():
@@ -2189,10 +2190,14 @@ def warmup_cache():
     t.start()
 
 
+def _record_fired(job_id):
+    _job_last_fired[job_id] = datetime.now(timezone.utc).isoformat()
+
+
 def scheduled_cache_warm():
     """Called by APScheduler 3x/day to keep cache fresh."""
     print(f"[SCHEDULER] Cache warm started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
-    cache_clear()  # Clear stale data first
+    cache_clear()
     try:
         with app.test_client() as tc:
             tc.get("/api/audit")
@@ -2203,8 +2208,24 @@ def scheduled_cache_warm():
             print("[SCHEDULER] ISA cache warmed ✓")
             tc.get("/api/appointments")
             print("[SCHEDULER] Appointments cache warmed ✓")
+        _record_fired("cache_warm")
     except Exception as e:
         print(f"[SCHEDULER] Cache warm error: {e}")
+
+
+def scheduled_run_leadstream():
+    """Runs every 4 hours — score leads and apply LEADSTREAM_HOT tags."""
+    print(f"[SCHEDULER] LeadStream scoring started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        with app.test_client() as tc:
+            resp = tc.post("/api/leadstream/run", json={"apply": True})
+            result = resp.get_json() or {}
+            print(f"[SCHEDULER] LeadStream: {result.get('status','done')} — "
+                  f"{result.get('agent_leads_tagged',0)} agent leads, "
+                  f"{result.get('pond_leads_tagged',0)} pond leads tagged")
+        _record_fired("leadstream")
+    except Exception as e:
+        print(f"[SCHEDULER] LeadStream error: {e}")
 
 
 def scheduled_send_audit_email():
@@ -2214,6 +2235,7 @@ def scheduled_send_audit_email():
         with app.test_client() as tc:
             resp = tc.post("/api/send-email", json={})
             print(f"[SCHEDULER] Audit email: {resp.data.decode()}")
+        _record_fired("audit_email")
     except Exception as e:
         print(f"[SCHEDULER] Audit email error: {e}")
 
@@ -2225,6 +2247,7 @@ def scheduled_send_manager_email():
         with app.test_client() as tc:
             resp = tc.post("/api/send-manager-email")
             print(f"[SCHEDULER] Manager email: {resp.data.decode()}")
+        _record_fired("manager_email")
     except Exception as e:
         print(f"[SCHEDULER] Manager email error: {e}")
 
@@ -2236,6 +2259,7 @@ def scheduled_sync_appointment_tags():
         with app.test_client() as tc:
             resp = tc.post("/api/appointments/sync-tags")
             print(f"[SCHEDULER] Appointment tag sync: {resp.data.decode()}")
+        _record_fired("appt_tag_sync")
     except Exception as e:
         print(f"[SCHEDULER] Appointment tag sync error: {e}")
 
@@ -2247,6 +2271,7 @@ def scheduled_send_appointment_email():
         with app.test_client() as tc:
             resp = tc.post("/api/send-appointment-email")
             print(f"[SCHEDULER] Appointment email: {resp.data.decode()}")
+        _record_fired("appt_email")
     except Exception as e:
         print(f"[SCHEDULER] Appointment email error: {e}")
 
@@ -2258,13 +2283,14 @@ def scheduled_send_isa_email():
         with app.test_client() as tc:
             resp = tc.post("/api/send-isa-email")
             print(f"[SCHEDULER] ISA email: {resp.data.decode()}")
+        _record_fired("isa_email")
     except Exception as e:
         print(f"[SCHEDULER] ISA email error: {e}")
 
 
 def start_scheduler():
-    """Start APScheduler with cache warming (3x/day) + email schedules."""
-    global _scheduler_started
+    """Start APScheduler with all scheduled jobs."""
+    global _scheduler_started, _scheduler
     if _scheduler_started:
         return
     _scheduler_started = True
@@ -2276,35 +2302,35 @@ def start_scheduler():
         print("[SCHEDULER] APScheduler not installed — skipping scheduled jobs")
         return
 
-    scheduler = BackgroundScheduler(timezone="US/Eastern")
+    _scheduler = BackgroundScheduler(timezone="US/Eastern")
 
     # Cache warming: 3x/day at 6am, 12pm, 6pm ET
-    scheduler.add_job(scheduled_cache_warm, CronTrigger(hour="6,12,18", minute=0),
-                      id="cache_warm", name="Cache warm (3x/day)")
-
-    # Joe's coaching email: Sunday 3pm ET
-    scheduler.add_job(scheduled_send_manager_email, CronTrigger(day_of_week="sun", hour=15, minute=0),
-                      id="manager_email", name="Joe's Sunday coaching email")
-
-    # KPI Audit email: Monday 8:30am ET
-    scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30),
-                      id="audit_email", name="Monday KPI audit email")
-
-    # Fhalen ISA email: Monday 10am ET
-    scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0),
-                      id="isa_email", name="Monday ISA email")
+    _scheduler.add_job(scheduled_cache_warm, CronTrigger(hour="6,12,18", minute=0),
+                       id="cache_warm", name="Cache warm (3x/day)")
 
     # Appointment tag sync: 3x/day at 7am, 1pm, 7pm ET
-    scheduler.add_job(scheduled_sync_appointment_tags, CronTrigger(hour="7,13,19", minute=0),
-                      id="appt_tag_sync", name="Appointment tag sync (3x/day)")
+    _scheduler.add_job(scheduled_sync_appointment_tags, CronTrigger(hour="7,13,19", minute=0),
+                       id="appt_tag_sync", name="Appointment tag sync (3x/day)")
+
+    # Joe's coaching email: Sunday 3pm ET
+    _scheduler.add_job(scheduled_send_manager_email, CronTrigger(day_of_week="sun", hour=15, minute=0),
+                       id="manager_email", name="Joe's Sunday coaching email")
+
+    # KPI Audit email: Monday 8:30am ET
+    _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30),
+                       id="audit_email", name="Monday KPI audit email")
+
+    # Fhalen ISA email: Monday 10am ET
+    _scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0),
+                       id="isa_email", name="Monday ISA email")
 
     # Appointment accountability email: Tuesday 9am ET
-    scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0),
-                      id="appt_email", name="Tuesday appointment email")
+    _scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0),
+                       id="appt_email", name="Tuesday appointment email")
 
-    scheduler.start()
-    print("[SCHEDULER] APScheduler started with 4 jobs:")
-    for job in scheduler.get_jobs():
+    _scheduler.start()
+    print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
+    for job in _scheduler.get_jobs():
         print(f"  → {job.name} | next: {job.next_run_time}")
 
 
