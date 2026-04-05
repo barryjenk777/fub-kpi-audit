@@ -417,8 +417,18 @@ class FUBClient:
         return None
 
     def get_people_by_tag(self, tag):
-        """Fetch all leads that have a specific tag."""
-        return self._get_paginated("people", {"tag": tag, "limit": 100})
+        """Fetch leads and client-side filter by tag.
+
+        NOTE: FUB's tag= filter on the people endpoint does NOT reliably filter
+        by tag — it appears to return all leads. We fetch all leads and filter
+        client-side to find those that actually have the tag.
+        """
+        all_people = self.get_all_people()
+        return [p for p in all_people if tag in (p.get("tags") or [])]
+
+    def get_all_people(self):
+        """Fetch all leads in FUB (no filter). Used for client-side tag filtering."""
+        return self._get_paginated("people", {"limit": 100})
 
     def get_events(self, since=None, event_type=None, limit=100, max_pages=5):
         """Get events (site visits, property views, etc.) with optional filters.

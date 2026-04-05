@@ -512,7 +512,8 @@ class LeadScorer:
                     except Exception as e:
                         logger.warning("Cleanup: could not fetch person %s: %s", pid, e)
             else:
-                # Fallback: no manifest — query FUB but cap at MAX_CLEANUP_PER_TAG
+                # Fallback: no manifest — fetch all leads and filter client-side
+                # (FUB's tag= filter does not reliably filter; must filter client-side)
                 try:
                     all_tagged = self.client.get_people_by_tag(tag)
                     tagged_people = all_tagged[:MAX_CLEANUP_PER_TAG]
@@ -556,55 +557,49 @@ class LeadScorer:
     def deep_cleanup(self, dry_run=True):
         """Remove ALL LeadStream tags from FUB — intended for nightly runs only.
 
-        Queries FUB for every lead with each LeadStream tag and removes them all,
-        regardless of the manifest. This clears stale tags accumulated from old
-        broken cleanup runs. Safe to run at 2am when agents aren't active.
+        NOTE: FUB's tag= filter on the people endpoint does NOT filter by tag —
+        it returns all leads. So we fetch all leads in one _get_paginated pass,
+        then client-side filter for those that actually have the tag and remove them.
+        A single pass is sufficient since _get_paginated fetches all pages.
         Returns total count of tags removed.
         """
         removed = 0
         failed = 0
 
+        logger.info("Deep cleanup: fetching all leads to find stale LeadStream tags...")
+        try:
+            all_people = self.client.get_all_people()
+        except Exception as e:
+            logger.error("Deep cleanup: could not fetch all leads: %s", e)
+            return 0
+
+        logger.info("Deep cleanup: scanning %d leads for LeadStream tags", len(all_people))
+
         for tag in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG):
-            page = 0
-            while True:
-                try:
-                    tagged_people = self.client.get_people_by_tag(tag)
-                except Exception as e:
-                    logger.error("Deep cleanup: could not fetch '%s': %s", tag, e)
-                    break
+            tagged = [p for p in all_people if tag in (p.get("tags") or [])]
+            logger.info("Deep cleanup: found %d leads with '%s'", len(tagged), tag)
 
-                if not tagged_people:
-                    break
-
-                logger.info("Deep cleanup: removing '%s' from %d leads (pass %d)",
-                            tag, len(tagged_people), page + 1)
-
-                for person in tagged_people:
-                    pid = person.get("id")
-                    if not pid:
-                        continue
-                    if dry_run:
-                        print(f"  [DRY RUN] Would remove '{tag}' from ID: {pid}")
+            for person in tagged:
+                pid = person.get("id")
+                if not pid:
+                    continue
+                if dry_run:
+                    print(f"  [DRY RUN] Would remove '{tag}' from ID: {pid}")
+                    removed += 1
+                else:
+                    try:
+                        existing = person.get("tags") or []
+                        remaining_ls_tags = [
+                            t for t in existing
+                            if t in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG) and t != tag
+                        ]
+                        extra = {"customLeadStreamScore": None} if not remaining_ls_tags else None
+                        self.client.remove_tag_fast(pid, tag, existing, extra_fields=extra)
                         removed += 1
-                    else:
-                        try:
-                            existing = person.get("tags") or []
-                            remaining_ls_tags = [
-                                t for t in existing
-                                if t in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG) and t != tag
-                            ]
-                            extra = {"customLeadStreamScore": None} if not remaining_ls_tags else None
-                            self.client.remove_tag_fast(pid, tag, existing, extra_fields=extra)
-                            removed += 1
-                        except Exception as e:
-                            logger.warning("Deep cleanup: failed to remove '%s' from %s: %s",
-                                           tag, pid, e)
-                            failed += 1
-
-                # If FUB returned fewer than 100, we've processed everything
-                if len(tagged_people) < 100:
-                    break
-                page += 1
+                    except Exception as e:
+                        logger.warning("Deep cleanup: failed to remove '%s' from %s: %s",
+                                       tag, pid, e)
+                        failed += 1
 
         logger.info("Deep cleanup complete: removed %d, failed %d", removed, failed)
         return removed
