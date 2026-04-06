@@ -2637,25 +2637,27 @@ def start_scheduler():
                        id="appt_tag_sync", name="Appointment tag sync (3x/day)")
 
     # Joe's coaching email: Sunday 3pm ET
-    # coalesce=True: if missed (e.g. restart), fire once not multiple times
+    # No misfire_grace_time: if server is down at send time, skip it — never retry.
+    # Retrying after restart is what caused duplicate emails (fired once at scheduled
+    # time, then fired again as a misfire catch-up after Railway restarted).
     _scheduler.add_job(scheduled_send_manager_email, CronTrigger(day_of_week="sun", hour=15, minute=0),
                        id="manager_email", name="Joe's Sunday coaching email",
-                       max_instances=1, coalesce=True, misfire_grace_time=1800)
+                       max_instances=1, coalesce=True)
 
     # KPI Audit email: Monday 8:30am ET
     _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30),
                        id="audit_email", name="Monday KPI audit email",
-                       max_instances=1, coalesce=True, misfire_grace_time=1800)
+                       max_instances=1, coalesce=True)
 
     # Fhalen ISA email: Monday 10am ET
     _scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0),
                        id="isa_email", name="Monday ISA email",
-                       max_instances=1, coalesce=True, misfire_grace_time=1800)
+                       max_instances=1, coalesce=True)
 
     # Appointment accountability email: Tuesday 9am ET
     _scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0),
                        id="appt_email", name="Tuesday appointment email",
-                       max_instances=1, coalesce=True, misfire_grace_time=1800)
+                       max_instances=1, coalesce=True)
 
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
