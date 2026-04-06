@@ -2427,6 +2427,18 @@ def _record_fired(job_id):
     _job_last_fired[job_id] = datetime.now(timezone.utc).isoformat()
 
 
+def _already_fired_recently(job_id, within_hours=4):
+    """Return True if job fired within the last N hours (duplicate guard for emails)."""
+    last = _job_last_fired.get(job_id)
+    if not last:
+        return False
+    try:
+        last_dt = datetime.fromisoformat(last)
+        return (datetime.now(timezone.utc) - last_dt).total_seconds() < within_hours * 3600
+    except Exception:
+        return False
+
+
 def scheduled_cache_warm():
     """Called by APScheduler 3x/day to keep cache fresh."""
     print(f"[SCHEDULER] Cache warm started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
@@ -2489,6 +2501,9 @@ def scheduled_leadstream_nightly_cleanup():
 
 def scheduled_send_audit_email():
     """Monday 8:30am ET — send KPI audit report."""
+    if _already_fired_recently("audit_email", within_hours=20):
+        print("[SCHEDULER] Audit email: skipped — already sent within 20h")
+        return
     print(f"[SCHEDULER] Sending audit email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
@@ -2501,6 +2516,9 @@ def scheduled_send_audit_email():
 
 def scheduled_send_manager_email():
     """Sunday 3pm ET — send Joe's coaching email."""
+    if _already_fired_recently("manager_email", within_hours=20):
+        print("[SCHEDULER] Manager email: skipped — already sent within 20h")
+        return
     print(f"[SCHEDULER] Sending manager email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
@@ -2525,6 +2543,9 @@ def scheduled_sync_appointment_tags():
 
 def scheduled_send_appointment_email():
     """Tuesday 9am ET — send appointment accountability email."""
+    if _already_fired_recently("appt_email", within_hours=20):
+        print("[SCHEDULER] Appointment email: skipped — already sent within 20h")
+        return
     print(f"[SCHEDULER] Sending appointment email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
@@ -2537,6 +2558,9 @@ def scheduled_send_appointment_email():
 
 def scheduled_send_isa_email():
     """Monday 10am ET — send Fhalen's ISA email."""
+    if _already_fired_recently("isa_email", within_hours=20):
+        print("[SCHEDULER] ISA email: skipped — already sent within 20h")
+        return
     print(f"[SCHEDULER] Sending ISA email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
@@ -2589,20 +2613,25 @@ def start_scheduler():
                        id="appt_tag_sync", name="Appointment tag sync (3x/day)")
 
     # Joe's coaching email: Sunday 3pm ET
+    # coalesce=True: if missed (e.g. restart), fire once not multiple times
     _scheduler.add_job(scheduled_send_manager_email, CronTrigger(day_of_week="sun", hour=15, minute=0),
-                       id="manager_email", name="Joe's Sunday coaching email")
+                       id="manager_email", name="Joe's Sunday coaching email",
+                       max_instances=1, coalesce=True, misfire_grace_time=1800)
 
     # KPI Audit email: Monday 8:30am ET
     _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30),
-                       id="audit_email", name="Monday KPI audit email")
+                       id="audit_email", name="Monday KPI audit email",
+                       max_instances=1, coalesce=True, misfire_grace_time=1800)
 
     # Fhalen ISA email: Monday 10am ET
     _scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0),
-                       id="isa_email", name="Monday ISA email")
+                       id="isa_email", name="Monday ISA email",
+                       max_instances=1, coalesce=True, misfire_grace_time=1800)
 
     # Appointment accountability email: Tuesday 9am ET
     _scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0),
-                       id="appt_email", name="Tuesday appointment email")
+                       id="appt_email", name="Tuesday appointment email",
+                       max_instances=1, coalesce=True, misfire_grace_time=1800)
 
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
