@@ -471,8 +471,11 @@ class LeadScorer:
         except OSError as e:
             logger.warning("Could not save manifest (filesystem issue: %s)", e)
 
-    def cleanup_tags(self, dry_run=True):
+    def cleanup_tags(self, dry_run=True, pond_only=False):
         """Remove LeadStream tags from previously tagged leads.
+
+        pond_only: if True, only cleans LEADSTREAM_POND_TAG (not agent tags).
+                   Used by the hourly pond refresh so agent tags are not stripped.
 
         Uses the manifest as the primary source (fast, accurate). If the manifest
         is empty, falls back to a FUB tag query capped at MAX_CLEANUP_PER_TAG
@@ -498,7 +501,8 @@ class LeadScorer:
             if pid:
                 manifest_ids[LEADSTREAM_POND_TAG].add(pid)
 
-        for tag in (LEADSTREAM_TAG, LEADSTREAM_POND_TAG):
+        tags_to_clean = (LEADSTREAM_POND_TAG,) if pond_only else (LEADSTREAM_TAG, LEADSTREAM_POND_TAG)
+        for tag in tags_to_clean:
             known_ids = manifest_ids[tag]
 
             if known_ids:
@@ -646,7 +650,7 @@ class LeadScorer:
 
         # Step 1: Cleanup
         print("Step 1: Cleaning up old LeadStream tags...")
-        removed = self.cleanup_tags(dry_run=dry_run)
+        removed = self.cleanup_tags(dry_run=dry_run, pond_only=pond_only)
         print(f"  Removed tags from {removed} leads\n")
 
         results = {"removed": removed, "agents": {}, "pond": []}
