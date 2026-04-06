@@ -2400,6 +2400,25 @@ def api_leadstream_status():
 _scheduler_started = False
 _scheduler = None          # global ref so health endpoint can inspect jobs
 _job_last_fired = {}       # job_id -> ISO timestamp of last successful fire
+_COOLDOWN_FILE = "/tmp/fub_email_fired.json"  # persists across process restarts
+
+
+def _load_cooldown_state():
+    """Load persisted email cooldown state from disk.
+
+    /tmp survives gunicorn worker restarts and Railway process crashes.
+    It is only cleared on new deploys — which is acceptable because a fresh
+    deploy means intentionally new code, not an accidental double-send.
+    """
+    global _job_last_fired
+    try:
+        if os.path.exists(_COOLDOWN_FILE):
+            with open(_COOLDOWN_FILE) as f:
+                loaded = json.load(f)
+            _job_last_fired.update(loaded)
+            print(f"[SCHEDULER] Loaded cooldown state: {loaded}")
+    except Exception as e:
+        print(f"[SCHEDULER] Could not load cooldown state: {e}")
 
 
 def warmup_cache():
@@ -2425,6 +2444,11 @@ def warmup_cache():
 
 def _record_fired(job_id):
     _job_last_fired[job_id] = datetime.now(timezone.utc).isoformat()
+    try:
+        with open(_COOLDOWN_FILE, "w") as f:
+            json.dump(_job_last_fired, f)
+    except Exception as e:
+        print(f"[SCHEDULER] Could not persist cooldown state: {e}")
 
 
 def _already_fired_recently(job_id, within_hours=4):
@@ -2642,10 +2666,12 @@ def start_scheduler():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
+    _load_cooldown_state()
     warmup_cache()
     start_scheduler()
     app.run(debug=debug, port=port, host="0.0.0.0")
 else:
     # Running under gunicorn
+    _load_cooldown_state()
     warmup_cache()
     start_scheduler()
