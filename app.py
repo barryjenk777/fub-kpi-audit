@@ -2610,52 +2610,50 @@ def start_scheduler():
         return
 
     _scheduler = BackgroundScheduler(timezone="US/Eastern")
+    ET = "US/Eastern"  # passed explicitly to every CronTrigger so Railway (UTC) honors ET
 
     # Cache warming: 3x/day at 6am, 12pm, 6pm ET
-    _scheduler.add_job(scheduled_cache_warm, CronTrigger(hour="6,12,18", minute=0),
+    _scheduler.add_job(scheduled_cache_warm, CronTrigger(hour="6,12,18", minute=0, timezone=ET),
                        id="cache_warm", name="Cache warm (3x/day)")
 
     # LeadStream full scoring: 4x/day at 8am, 12pm, 4pm, 8pm ET
-    # max_instances=1 prevents a slow run from overlapping with the next scheduled fire
-    _scheduler.add_job(scheduled_run_leadstream, CronTrigger(hour="8,12,16,20", minute=7),
+    _scheduler.add_job(scheduled_run_leadstream, CronTrigger(hour="8,12,16,20", minute=7, timezone=ET),
                        id="leadstream", name="LeadStream scoring (4x/day)",
                        max_instances=1, misfire_grace_time=300)
 
     # LeadStream pond refresh: hourly at :37
-    # max_instances=1 prevents stacking if pond refresh is slow
-    _scheduler.add_job(scheduled_run_leadstream_pond, CronTrigger(minute=37),
+    _scheduler.add_job(scheduled_run_leadstream_pond, CronTrigger(minute=37, timezone=ET),
                        id="leadstream_pond", name="LeadStream pond refresh (hourly)",
                        max_instances=1, misfire_grace_time=120)
 
-    # LeadStream nightly cleanup: 3am ET (moved from 2am to avoid 2:37 pond refresh overlap)
-    _scheduler.add_job(scheduled_leadstream_nightly_cleanup, CronTrigger(hour=3, minute=0),
+    # LeadStream nightly cleanup: 3am ET
+    _scheduler.add_job(scheduled_leadstream_nightly_cleanup, CronTrigger(hour=3, minute=0, timezone=ET),
                        id="leadstream_cleanup", name="LeadStream nightly cleanup (3am)",
                        max_instances=1, misfire_grace_time=600)
 
     # Appointment tag sync: 3x/day at 7am, 1pm, 7pm ET
-    _scheduler.add_job(scheduled_sync_appointment_tags, CronTrigger(hour="7,13,19", minute=0),
+    _scheduler.add_job(scheduled_sync_appointment_tags, CronTrigger(hour="7,13,19", minute=0, timezone=ET),
                        id="appt_tag_sync", name="Appointment tag sync (3x/day)")
 
     # Joe's coaching email: Sunday 3pm ET
     # No misfire_grace_time: if server is down at send time, skip it — never retry.
-    # Retrying after restart is what caused duplicate emails (fired once at scheduled
-    # time, then fired again as a misfire catch-up after Railway restarted).
-    _scheduler.add_job(scheduled_send_manager_email, CronTrigger(day_of_week="sun", hour=15, minute=0),
+    # Retrying after restart is what caused duplicate emails.
+    _scheduler.add_job(scheduled_send_manager_email, CronTrigger(day_of_week="sun", hour=15, minute=0, timezone=ET),
                        id="manager_email", name="Joe's Sunday coaching email",
                        max_instances=1, coalesce=True)
 
     # KPI Audit email: Monday 8:30am ET
-    _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30),
+    _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET),
                        id="audit_email", name="Monday KPI audit email",
                        max_instances=1, coalesce=True)
 
     # Fhalen ISA email: Monday 10am ET
-    _scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0),
+    _scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0, timezone=ET),
                        id="isa_email", name="Monday ISA email",
                        max_instances=1, coalesce=True)
 
     # Appointment accountability email: Tuesday 9am ET
-    _scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0),
+    _scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0, timezone=ET),
                        id="appt_email", name="Tuesday appointment email",
                        max_instances=1, coalesce=True)
 
