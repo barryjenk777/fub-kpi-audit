@@ -1904,6 +1904,239 @@ def webhook_fub():
         return jsonify({"error": str(e)}), 500
 
 
+# ---- BatchLeads → FUB Webhook (via Zapier) ----
+
+@app.route("/webhook/batchleads", methods=["POST"])
+def webhook_batchleads():
+    """
+    Receives property/lead data from BatchLeads via Zapier and creates
+    a contact in Follow Up Boss with deduplication.
+
+    Zapier setup:
+      Trigger: BatchLeads → New Property Added / Property Skip Traced
+      Action:  Webhooks by Zapier → POST to https://<your-app>/webhook/batchleads
+
+    Accepts flexible field names to handle various Zapier mappings.
+    """
+    # Optional secret verification
+    webhook_secret = os.environ.get("BATCHLEADS_WEBHOOK_SECRET")
+    if webhook_secret:
+        provided = (
+            request.headers.get("X-Webhook-Secret")
+            or request.headers.get("Authorization", "").replace("Bearer ", "")
+        )
+        if provided != webhook_secret:
+            return jsonify({"error": "unauthorized"}), 401
+
+    payload = request.json or {}
+
+    if not payload:
+        return jsonify({"error": "empty payload"}), 400
+
+    # Handle both single lead and batch (array) payloads
+    leads = payload if isinstance(payload, list) else [payload]
+    results = []
+
+    client = FUBClient()
+
+    for lead in leads:
+        try:
+            result = _process_batchleads_lead(client, lead)
+            results.append(result)
+        except Exception as e:
+            results.append({"error": str(e), "lead": lead.get("address", "unknown")})
+
+    return jsonify({
+        "ok": True,
+        "processed": len(results),
+        "results": results,
+    })
+
+
+def _process_batchleads_lead(client, lead):
+    """Map BatchLeads/Zapier fields to FUB and create person."""
+
+    # Extract owner name — BatchLeads uses various field names
+    first_name = (
+        lead.get("owner_first_name")
+        or lead.get("first_name")
+        or lead.get("firstName")
+        or ""
+    ).strip()
+    last_name = (
+        lead.get("owner_last_name")
+        or lead.get("last_name")
+        or lead.get("lastName")
+        or ""
+    ).strip()
+
+    # If only a full name is provided, split it
+    if not first_name and not last_name:
+        full_name = (
+            lead.get("owner_name")
+            or lead.get("owner")
+            or lead.get("name")
+            or ""
+        ).strip()
+        if full_name:
+            parts = full_name.split(" ", 1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ""
+
+    if not first_name and not last_name:
+        first_name = "Property Owner"
+
+    # Extract phones
+    phones = []
+    for key in ["phone", "phone1", "phone_1", "owner_phone", "mobile", "cell"]:
+        val = lead.get(key, "")
+        if val and str(val).strip():
+            phones.append({"type": "mobile", "value": str(val).strip()})
+    for key in ["phone2", "phone_2", "phone3", "phone_3", "landline"]:
+        val = lead.get(key, "")
+        if val and str(val).strip():
+            phones.append({"type": "home", "value": str(val).strip()})
+
+    # Extract emails
+    emails = []
+    for key in ["email", "email1", "email_1", "owner_email"]:
+        val = lead.get(key, "")
+        if val and str(val).strip():
+            emails.append({"type": "home", "value": str(val).strip()})
+    for key in ["email2", "email_2", "email3"]:
+        val = lead.get(key, "")
+        if val and str(val).strip():
+            emails.append({"type": "other", "value": str(val).strip()})
+
+    # Build property address for notes
+    address_parts = []
+    for key in ["address", "property_address", "street", "street_address"]:
+        val = lead.get(key, "")
+        if val:
+            address_parts.append(str(val).strip())
+            break
+    for key in ["city", "property_city"]:
+        val = lead.get(key, "")
+        if val:
+            address_parts.append(str(val).strip())
+            break
+    for key in ["state", "property_state"]:
+        val = lead.get(key, "")
+        if val:
+            address_parts.append(str(val).strip())
+            break
+    for key in ["zip", "zip_code", "postal_code", "property_zip"]:
+        val = lead.get(key, "")
+        if val:
+            address_parts.append(str(val).strip())
+            break
+
+    property_address = ", ".join(address_parts) if address_parts else ""
+
+    # Build tags from lead data
+    tags = ["BatchLeads"]
+    status = lead.get("status", "") or lead.get("lead_status", "")
+    if status:
+        tags.append(status)
+    tag = lead.get("tag", "") or lead.get("tag_name", "")
+    if tag:
+        tags.append(tag)
+    prop_type = lead.get("property_type", "")
+    if prop_type:
+        tags.append(prop_type)
+
+    # Add equity/foreclosure tags if present
+    if lead.get("in_foreclosure") or lead.get("is_foreclosure") or lead.get("pre_foreclosure"):
+        tags.append("Pre-Foreclosure")
+    equity = lead.get("equity_percent") or lead.get("equity_percentage")
+    if equity:
+        try:
+            eq_val = float(str(equity).replace("%", ""))
+            if eq_val >= 50:
+                tags.append("High Equity")
+        except (ValueError, TypeError):
+            pass
+
+    # Build background notes with property details
+    notes_lines = []
+    if property_address:
+        notes_lines.append(f"Property: {property_address}")
+    for label, keys in [
+        ("Estimated Value", ["estimated_value", "market_value", "avm"]),
+        ("Equity", ["equity_percent", "equity_percentage", "equity"]),
+        ("Beds/Baths", ["bedrooms", "beds"]),
+        ("Sq Ft", ["square_feet", "sqft", "living_area"]),
+        ("Year Built", ["year_built"]),
+        ("Last Sale", ["last_sale_date", "sale_date"]),
+        ("Last Sale Price", ["last_sale_price", "sale_price"]),
+        ("List", ["list_name", "list"]),
+    ]:
+        for key in keys:
+            val = lead.get(key)
+            if val:
+                if label == "Beds/Baths":
+                    baths = lead.get("bathrooms") or lead.get("baths") or ""
+                    notes_lines.append(f"Beds/Baths: {val}/{baths}")
+                else:
+                    notes_lines.append(f"{label}: {val}")
+                break
+
+    background = "\n".join(notes_lines) if notes_lines else ""
+
+    # Build FUB address
+    fub_addresses = []
+    if property_address:
+        addr_obj = {"type": "other"}
+        for key in ["address", "property_address", "street", "street_address"]:
+            val = lead.get(key, "")
+            if val:
+                addr_obj["street"] = str(val).strip()
+                break
+        for key in ["city", "property_city"]:
+            val = lead.get(key, "")
+            if val:
+                addr_obj["city"] = str(val).strip()
+                break
+        for key in ["state", "property_state"]:
+            val = lead.get(key, "")
+            if val:
+                addr_obj["state"] = str(val).strip()
+                break
+        for key in ["zip", "zip_code", "postal_code", "property_zip"]:
+            val = lead.get(key, "")
+            if val:
+                addr_obj["code"] = str(val).strip()
+                break
+        fub_addresses.append(addr_obj)
+
+    # Create person in FUB with deduplication
+    fub_payload = {
+        "firstName": first_name,
+        "lastName": last_name,
+        "source": "BatchLeads",
+        "tags": tags,
+    }
+    if phones:
+        fub_payload["phones"] = phones
+    if emails:
+        fub_payload["emails"] = emails
+    if fub_addresses:
+        fub_payload["addresses"] = fub_addresses
+    if background:
+        fub_payload["background"] = background
+
+    response = client.create_person(deduplicate=True, **fub_payload)
+
+    person_id = response.get("id")
+    return {
+        "ok": True,
+        "personId": person_id,
+        "name": f"{first_name} {last_name}".strip(),
+        "tags": tags,
+        "address": property_address,
+    }
+
+
 # ---- LeadStream: Lead Priority Scoring API ----
 
 @app.route("/api/leadstream/run", methods=["POST"])
@@ -2335,16 +2568,21 @@ def start_scheduler():
                        id="cache_warm", name="Cache warm (3x/day)")
 
     # LeadStream full scoring: 4x/day at 8am, 12pm, 4pm, 8pm ET
+    # max_instances=1 prevents a slow run from overlapping with the next scheduled fire
     _scheduler.add_job(scheduled_run_leadstream, CronTrigger(hour="8,12,16,20", minute=7),
-                       id="leadstream", name="LeadStream scoring (4x/day)")
+                       id="leadstream", name="LeadStream scoring (4x/day)",
+                       max_instances=1, misfire_grace_time=300)
 
     # LeadStream pond refresh: hourly at :37
+    # max_instances=1 prevents stacking if pond refresh is slow
     _scheduler.add_job(scheduled_run_leadstream_pond, CronTrigger(minute=37),
-                       id="leadstream_pond", name="LeadStream pond refresh (hourly)")
+                       id="leadstream_pond", name="LeadStream pond refresh (hourly)",
+                       max_instances=1, misfire_grace_time=120)
 
-    # LeadStream nightly cleanup: 2am ET
-    _scheduler.add_job(scheduled_leadstream_nightly_cleanup, CronTrigger(hour=2, minute=0),
-                       id="leadstream_cleanup", name="LeadStream nightly cleanup (2am)")
+    # LeadStream nightly cleanup: 3am ET (moved from 2am to avoid 2:37 pond refresh overlap)
+    _scheduler.add_job(scheduled_leadstream_nightly_cleanup, CronTrigger(hour=3, minute=0),
+                       id="leadstream_cleanup", name="LeadStream nightly cleanup (3am)",
+                       max_instances=1, misfire_grace_time=600)
 
     # Appointment tag sync: 3x/day at 7am, 1pm, 7pm ET
     _scheduler.add_job(scheduled_sync_appointment_tags, CronTrigger(hour="7,13,19", minute=0),

@@ -622,9 +622,11 @@ class LeadScorer:
                 print(f"  [DRY RUN] Would tag {name} (ID: {pid}) with '{tag}' "
                       f"[score={score}, tier={tier}]")
             else:
+                # Zero-pad to 3 digits so FUB's string sort matches numeric order
+                # e.g. 020 < 105 < 145 sorts correctly; without padding 9 > 145
                 self.client.add_tag_fast(
                     pid, tag, existing_tags,
-                    extra_fields={"customLeadStreamScore": str(score)},
+                    extra_fields={"customLeadStreamScore": f"{score:03d}"},
                 )
             tagged += 1
             tagged_ids.append(pid)
