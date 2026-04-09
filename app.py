@@ -1782,7 +1782,12 @@ def api_leadstream_backfill_tracker():
     """
     import json as _json, tempfile as _tmp
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    import pytz
+
+    # ET offset: EDT = UTC-4, EST = UTC-5. Use fixed -4 (spring/summer) or detect.
+    # Simple approach: use UTC-4 (EDT, Apr-Oct) vs UTC-5 (EST, Nov-Mar)
+    _now_utc = _dt.now(_tz.utc)
+    _et_offset = -4 if 3 <= _now_utc.month <= 10 else -5
+    ET = _tz(offset=_td(hours=_et_offset))
 
     days_back = (request.json or {}).get("days", 4)
 
@@ -1809,22 +1814,10 @@ def api_leadstream_backfill_tracker():
     except Exception:
         eng_log = {}
 
-    # Build set of all person IDs in manifest (agent + pond)
-    all_person_ids = set()
     agents_manifest = manifest.get("agent", {})
     pond_manifest   = manifest.get("pond", [])
-    for lead_items in agents_manifest.values():
-        for item in lead_items:
-            pid = item.get("id") if isinstance(item, dict) else item
-            if pid:
-                all_person_ids.add(pid)
-    for item in pond_manifest:
-        pid = item.get("id") if isinstance(item, dict) else item
-        if pid:
-            all_person_ids.add(pid)
 
     # Scheduled run hours (ET)
-    ET = pytz.timezone("US/Eastern")
     run_hours = [8, 12, 16, 20]
     now_utc = _dt.now(_tz.utc)
 
@@ -1833,7 +1826,7 @@ def api_leadstream_backfill_tracker():
     entries_skipped = 0
 
     for day_offset in range(days_back, 0, -1):
-        # Day window in ET
+        # Day window in ET (using fixed UTC offset)
         day_et_start = (_dt.now(ET) - _td(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
         day_et_end   = day_et_start + _td(days=1)
         day_utc_start = day_et_start.astimezone(_tz.utc)
