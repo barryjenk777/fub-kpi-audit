@@ -1770,6 +1770,149 @@ def api_leadstream_dashboard():
     return jsonify(result)
 
 
+# ---- LeadStream: Weekly Engagement Tracker Backfill ----
+
+@app.route("/api/leadstream/backfill-tracker", methods=["POST"])
+def api_leadstream_backfill_tracker():
+    """
+    Backfill the engagement log for the past N days using the current manifest
+    + real FUB call/text activity per day. Creates one entry per scheduled
+    scoring run window (8am, 12pm, 4pm, 8pm ET) for each day.
+    Only fills gaps — won't overwrite existing entries.
+    """
+    import json as _json, tempfile as _tmp
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    import pytz
+
+    days_back = (request.json or {}).get("days", 4)
+
+    _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+    _cache_base = (
+        os.environ.get("LEADSTREAM_CACHE_DIR")
+        or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
+    )
+    os.makedirs(_cache_base, exist_ok=True)
+    manifest_path = os.path.join(_cache_base, "leadstream_manifest.json")
+    eng_log_path  = os.path.join(_cache_base, "engagement_log.json")
+
+    # Load manifest
+    try:
+        with open(manifest_path) as f:
+            manifest = _json.load(f)
+    except Exception:
+        return jsonify({"error": "No manifest found — run scoring first"}), 404
+
+    # Load existing engagement log
+    try:
+        with open(eng_log_path) as f:
+            eng_log = _json.load(f)
+    except Exception:
+        eng_log = {}
+
+    # Build set of all person IDs in manifest (agent + pond)
+    all_person_ids = set()
+    agents_manifest = manifest.get("agent", {})
+    pond_manifest   = manifest.get("pond", [])
+    for lead_items in agents_manifest.values():
+        for item in lead_items:
+            pid = item.get("id") if isinstance(item, dict) else item
+            if pid:
+                all_person_ids.add(pid)
+    for item in pond_manifest:
+        pid = item.get("id") if isinstance(item, dict) else item
+        if pid:
+            all_person_ids.add(pid)
+
+    # Scheduled run hours (ET)
+    ET = pytz.timezone("US/Eastern")
+    run_hours = [8, 12, 16, 20]
+    now_utc = _dt.now(_tz.utc)
+
+    # For each day from (days_back) ago up to yesterday, create entries
+    entries_written = 0
+    entries_skipped = 0
+
+    for day_offset in range(days_back, 0, -1):
+        # Day window in ET
+        day_et_start = (_dt.now(ET) - _td(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_et_end   = day_et_start + _td(days=1)
+        day_utc_start = day_et_start.astimezone(_tz.utc)
+        day_utc_end   = day_et_end.astimezone(_tz.utc)
+
+        # Fetch all outbound calls for this day
+        try:
+            from lead_scoring import _get_leadstream_client
+            _client = _get_leadstream_client()
+            day_calls = _client.get_calls(since=day_utc_start, until=day_utc_end)
+            calls_by_person = {}
+            for call in day_calls:
+                if not call.get("isIncoming"):
+                    pid = call.get("personId")
+                    if pid:
+                        calls_by_person[pid] = calls_by_person.get(pid, 0) + 1
+        except Exception as e:
+            calls_by_person = {}
+            logger.warning("Backfill: could not fetch calls for %s: %s", day_et_start.date(), e)
+
+        # For each scheduled run window that day
+        for hour in run_hours:
+            run_et = day_et_start.replace(hour=hour, minute=7, second=0, microsecond=0)
+            run_utc = run_et.astimezone(_tz.utc)
+
+            # Don't write future entries
+            if run_utc > now_utc:
+                continue
+
+            run_key = run_utc.isoformat()
+
+            # Skip if already in log
+            if run_key in eng_log:
+                entries_skipped += 1
+                continue
+
+            # Build per-agent actioned counts (calls against their current manifest leads)
+            agents_entry = {}
+            for agent_name, lead_items in agents_manifest.items():
+                tagged = len(lead_items)
+                actioned = 0
+                for item in lead_items:
+                    pid = item.get("id") if isinstance(item, dict) else item
+                    if pid and calls_by_person.get(pid, 0) > 0:
+                        actioned += 1
+                agents_entry[agent_name] = {"tagged": tagged, "actioned": actioned}
+
+            pond_tagged   = len(pond_manifest)
+            pond_actioned = sum(
+                1 for item in pond_manifest
+                if calls_by_person.get(item.get("id") if isinstance(item, dict) else item, 0) > 0
+            )
+
+            eng_log[run_key] = {
+                "captured":  now_utc.isoformat(),
+                "mode":      "backfill",
+                "agents":    agents_entry,
+                "pond":      {"tagged": pond_tagged, "actioned": pond_actioned},
+                "total":     sum(a["tagged"] for a in agents_entry.values()) + pond_tagged,
+            }
+            entries_written += 1
+
+    # Prune > 30 days and save
+    cutoff = (now_utc - _td(days=30)).isoformat()
+    eng_log = {k: v for k, v in eng_log.items() if k >= cutoff}
+    fd, tmp = _tmp.mkstemp(dir=_cache_base, suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        _json.dump(eng_log, f)
+    os.replace(tmp, eng_log_path)
+
+    return jsonify({
+        "success": True,
+        "entries_written": entries_written,
+        "entries_skipped": entries_skipped,
+        "days_back": days_back,
+        "total_log_entries": len(eng_log),
+    })
+
+
 # ---- LeadStream: Weekly Engagement Tracker ----
 
 @app.route("/api/leadstream/weekly")

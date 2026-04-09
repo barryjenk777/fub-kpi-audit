@@ -230,7 +230,10 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
   <div class="history-grid" id="history-wrap"></div>
 
   <!-- Weekly Engagement Tracker -->
-  <div class="section-header"><span class="icon">&#128197;</span> Weekly Engagement Tracker</div>
+  <div class="section-header" style="display:flex;align-items:center;justify-content:space-between;">
+    <span><span class="icon">&#128197;</span> Weekly Engagement Tracker</span>
+    <button id="backfill-btn" onclick="backfillTracker()" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border,#334);background:transparent;color:var(--text-secondary,#aaa);cursor:pointer;">↺ Backfill missing days</button>
+  </div>
   <div id="weekly-wrap"><div class="skeleton" style="height:180px;border-radius:16px"></div></div>
 
 </div>
@@ -593,6 +596,29 @@ async function loadWeekly() {
     document.getElementById('weekly-wrap').innerHTML =
       '<div class="wk-empty">Could not load weekly data.</div>';
   }
+}
+
+async function backfillTracker() {
+  const btn = document.getElementById('backfill-btn');
+  btn.textContent = '↺ Backfilling…';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/leadstream/backfill-tracker', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ days: 5 }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      btn.textContent = `✓ ${data.entries_written} entries added`;
+      await loadWeekly();
+    } else {
+      btn.textContent = '✗ ' + (data.error || 'Failed');
+    }
+  } catch(e) {
+    btn.textContent = '✗ Error';
+  }
+  setTimeout(() => { btn.textContent = '↺ Backfill missing days'; btn.disabled = false; }, 4000);
 }
 
 function renderWeekly(data) {
