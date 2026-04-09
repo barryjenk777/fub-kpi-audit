@@ -1800,12 +1800,17 @@ def api_leadstream_backfill_tracker():
     manifest_path = os.path.join(_cache_base, "leadstream_manifest.json")
     eng_log_path  = os.path.join(_cache_base, "engagement_log.json")
 
-    # Load manifest
-    try:
-        with open(manifest_path) as f:
-            manifest = _json.load(f)
-    except Exception:
-        return jsonify({"error": "No manifest found — run scoring first"}), 404
+    # Load manifest — also check /tmp/.cache as fallback if volume path has no manifest yet
+    manifest = None
+    for mp in [manifest_path, "/tmp/.cache/leadstream_manifest.json"]:
+        try:
+            with open(mp) as f:
+                manifest = _json.load(f)
+            break
+        except Exception:
+            continue
+    if manifest is None:
+        return jsonify({"error": "No manifest found — click Run Now first, then try backfill again"}), 404
 
     # Load existing engagement log
     try:
@@ -1936,11 +1941,16 @@ def api_leadstream_weekly():
         all_agents.update(rec.get("agents", {}).keys())
     all_agents = sorted(all_agents)
 
+    # ET offset for label display (EDT Apr-Oct = -4, EST Nov-Mar = -5)
+    _et_h = -4 if 3 <= now.month <= 10 else -5
+    _ET = _td(hours=_et_h)
+
     runs_out = []
     for run_time, rec in sorted_runs:
         try:
-            dt = _dt.fromisoformat(run_time.replace("Z", "+00:00"))
-            label = dt.strftime("%-I:%M %p") + "\n" + dt.strftime("%a %-m/%-d")
+            dt_utc = _dt.fromisoformat(run_time.replace("Z", "+00:00"))
+            dt_et = dt_utc + _ET   # convert UTC → ET for display
+            label = dt_et.strftime("%-I:%M %p") + "\n" + dt_et.strftime("%a %-m/%-d")
         except Exception:
             label = run_time[:16]
 
