@@ -1742,11 +1742,15 @@ def api_leadstream_dashboard():
             try:
                 import tempfile as _tempfile
                 eng_log_path = os.path.join(_cache_base, "engagement_log.json")
-                try:
-                    with open(eng_log_path) as f:
-                        eng_log = _json.load(f)
-                except Exception:
-                    eng_log = {}
+                # Read — try primary path first, then /tmp/.cache fallback
+                eng_log = {}
+                for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
+                    try:
+                        with open(_rp) as f:
+                            eng_log = _json.load(f)
+                        break
+                    except Exception:
+                        continue
                 eng_log[last_run_str] = {
                     "captured": now.isoformat(),
                     "mode": manifest.get("last_run_mode", "full"),
@@ -1764,6 +1768,16 @@ def api_leadstream_dashboard():
                 with os.fdopen(fd, "w") as f:
                     _json.dump(eng_log, f)
                 os.replace(tmp, eng_log_path)
+                # Mirror to /tmp/.cache so data survives within same container
+                if _cache_base != "/tmp/.cache":
+                    try:
+                        os.makedirs("/tmp/.cache", exist_ok=True)
+                        _fb, _ft = _tempfile.mkstemp(dir="/tmp/.cache", suffix=".tmp")
+                        with os.fdopen(_fb, "w") as f:
+                            _json.dump(eng_log, f)
+                        os.replace(_ft, "/tmp/.cache/engagement_log.json")
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning("Could not save engagement log: %s", e)
 
@@ -1812,12 +1826,15 @@ def api_leadstream_backfill_tracker():
     if manifest is None:
         return jsonify({"error": "No manifest found — click Run Now first, then try backfill again"}), 404
 
-    # Load existing engagement log
-    try:
-        with open(eng_log_path) as f:
-            eng_log = _json.load(f)
-    except Exception:
-        eng_log = {}
+    # Load existing engagement log — try primary path then /tmp/.cache fallback
+    eng_log = {}
+    for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
+        try:
+            with open(_rp) as f:
+                eng_log = _json.load(f)
+            break
+        except Exception:
+            continue
 
     agents_manifest = manifest.get("agent", {})
     pond_manifest   = manifest.get("pond", [])
@@ -1901,6 +1918,16 @@ def api_leadstream_backfill_tracker():
     with os.fdopen(fd, "w") as f:
         _json.dump(eng_log, f)
     os.replace(tmp, eng_log_path)
+    # Mirror to /tmp/.cache so data survives within same container instance
+    if _cache_base != "/tmp/.cache":
+        try:
+            os.makedirs("/tmp/.cache", exist_ok=True)
+            _fb, _ft = _tmp.mkstemp(dir="/tmp/.cache", suffix=".tmp")
+            with os.fdopen(_fb, "w") as f:
+                _json.dump(eng_log, f)
+            os.replace(_ft, "/tmp/.cache/engagement_log.json")
+        except Exception:
+            pass
 
     return jsonify({
         "success": True,
@@ -1908,7 +1935,56 @@ def api_leadstream_backfill_tracker():
         "entries_skipped": entries_skipped,
         "days_back": days_back,
         "total_log_entries": len(eng_log),
+        "storage_path": eng_log_path,
     })
+
+
+# ---- LeadStream: Storage Debug ----
+
+@app.route("/api/debug/storage")
+def api_debug_storage():
+    """Verify which storage path is active and whether it's writable/persistent."""
+    import json as _json, time as _time, tempfile as _tmp2
+    _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+    _cache_base = (
+        os.environ.get("LEADSTREAM_CACHE_DIR")
+        or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
+    )
+    results = {
+        "cache_base": _cache_base,
+        "env_LEADSTREAM_CACHE_DIR": os.environ.get("LEADSTREAM_CACHE_DIR"),
+        "is_railway": _is_railway,
+        "paths": {}
+    }
+
+    for label, path in [("primary", _cache_base), ("fallback", "/tmp/.cache")]:
+        info = {"path": path, "exists": os.path.isdir(path), "writable": False,
+                "engagement_log": None, "engagement_log_entries": None,
+                "write_test": None}
+        try:
+            os.makedirs(path, exist_ok=True)
+            test_file = os.path.join(path, f"_write_test_{int(_time.time())}.tmp")
+            with open(test_file, "w") as f:
+                f.write("ok")
+            os.remove(test_file)
+            info["writable"] = True
+        except Exception as e:
+            info["write_test"] = str(e)
+
+        eng_path = os.path.join(path, "engagement_log.json")
+        if os.path.exists(eng_path):
+            info["engagement_log"] = eng_path
+            try:
+                with open(eng_path) as f:
+                    data = _json.load(f)
+                info["engagement_log_entries"] = len(data)
+                info["engagement_log_latest"] = max(data.keys()) if data else None
+                info["engagement_log_oldest"] = min(data.keys()) if data else None
+            except Exception as e:
+                info["engagement_log_entries"] = f"error: {e}"
+        results["paths"][label] = info
+
+    return jsonify(results)
 
 
 # ---- LeadStream: Weekly Engagement Tracker ----
@@ -1925,11 +2001,16 @@ def api_leadstream_weekly():
         or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
     )
     eng_log_path = os.path.join(_cache_base, "engagement_log.json")
-    try:
-        with open(eng_log_path) as f:
-            eng_log = _json.load(f)
-    except Exception:
-        return jsonify({"runs": [], "agents": []})
+    eng_log = None
+    for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
+        try:
+            with open(_rp) as f:
+                eng_log = _json.load(f)
+            break
+        except Exception:
+            continue
+    if eng_log is None:
+        return jsonify({"runs": [], "agents": [], "storage_path": eng_log_path})
 
     now = _dt.now(_tz.utc)
     cutoff = (now - _td(days=7)).isoformat()
@@ -2370,11 +2451,15 @@ def api_leadstream_run():
                 )
                 os.makedirs(_cache_base, exist_ok=True)
                 eng_log_path = os.path.join(_cache_base, "engagement_log.json")
-                try:
-                    with open(eng_log_path) as _f:
-                        eng_log = _ejson.load(_f)
-                except Exception:
-                    eng_log = {}
+                # Read — try primary path, then /tmp/.cache fallback
+                eng_log = {}
+                for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
+                    try:
+                        with open(_rp) as _f:
+                            eng_log = _ejson.load(_f)
+                        break
+                    except Exception:
+                        continue
                 now_e = _edt.now(_etz.utc)
                 run_key = now_e.isoformat()
                 # Only write if this run_key isn't already richer (dashboard may have written it)
@@ -2395,6 +2480,16 @@ def api_leadstream_run():
                     with os.fdopen(_fd, "w") as _f:
                         _ejson.dump(eng_log, _f)
                     os.replace(_tmp, eng_log_path)
+                    # Mirror to /tmp/.cache so data survives within same container
+                    if _cache_base != "/tmp/.cache":
+                        try:
+                            os.makedirs("/tmp/.cache", exist_ok=True)
+                            _fb, _ft = _etmp.mkstemp(dir="/tmp/.cache", suffix=".tmp")
+                            with os.fdopen(_fb, "w") as _f:
+                                _ejson.dump(eng_log, _f)
+                            os.replace(_ft, "/tmp/.cache/engagement_log.json")
+                        except Exception:
+                            pass
             except Exception as _ee:
                 logger.warning("Could not write engagement log from scoring run: %s", _ee)
 
