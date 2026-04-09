@@ -2186,6 +2186,48 @@ def api_leadstream_run():
             _run_jobs[job_id]["api_requests"] = client.request_count
             _run_jobs[job_id]["summary"] = f"{total_agent_leads} agent leads + {pond_count} pond leads across {agent_count} agents"
 
+            # ── Write engagement log entry immediately after each scoring run ──
+            # This ensures the weekly tracker captures every scheduled run even
+            # if nobody visits the dashboard that day. Actioned counts start at 0
+            # and get updated (overwritten) next time the dashboard is viewed.
+            try:
+                import json as _ejson, tempfile as _etmp
+                from datetime import datetime as _edt, timezone as _etz, timedelta as _etd
+                _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+                _cache_base = (
+                    os.environ.get("LEADSTREAM_CACHE_DIR")
+                    or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
+                )
+                os.makedirs(_cache_base, exist_ok=True)
+                eng_log_path = os.path.join(_cache_base, "engagement_log.json")
+                try:
+                    with open(eng_log_path) as _f:
+                        eng_log = _ejson.load(_f)
+                except Exception:
+                    eng_log = {}
+                now_e = _edt.now(_etz.utc)
+                run_key = now_e.isoformat()
+                # Only write if this run_key isn't already richer (dashboard may have written it)
+                if run_key not in eng_log:
+                    eng_log[run_key] = {
+                        "captured": now_e.isoformat(),
+                        "mode": "pond" if pond_only else "full",
+                        "agents": {
+                            name: {"tagged": info["count"], "actioned": 0}
+                            for name, info in results.get("agents", {}).items()
+                        },
+                        "pond": {"tagged": pond_count, "actioned": 0},
+                        "total": total_agent_leads + pond_count,
+                    }
+                    cutoff = (now_e - _etd(days=30)).isoformat()
+                    eng_log = {k: v for k, v in eng_log.items() if k >= cutoff}
+                    _fd, _tmp = _etmp.mkstemp(dir=_cache_base, suffix=".tmp")
+                    with os.fdopen(_fd, "w") as _f:
+                        _ejson.dump(eng_log, _f)
+                    os.replace(_tmp, eng_log_path)
+            except Exception as _ee:
+                logger.warning("Could not write engagement log from scoring run: %s", _ee)
+
             # Bust dashboard cache
             _ls_dashboard_cache["data"] = None
             _ls_dashboard_cache["time"] = None
