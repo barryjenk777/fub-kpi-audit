@@ -1945,37 +1945,61 @@ def api_leadstream_weekly():
     _et_h = -4 if 3 <= now.month <= 10 else -5
     _ET = _td(hours=_et_h)
 
-    runs_out = []
+    # Aggregate multiple runs per day into one column per day.
+    # tagged = max seen that day (same pool each run)
+    # actioned = max seen that day (a lead actioned once stays actioned)
+    days_map = {}  # "YYYY-MM-DD" → aggregated record
+    days_order = []
+
     for run_time, rec in sorted_runs:
         try:
             dt_utc = _dt.fromisoformat(run_time.replace("Z", "+00:00"))
-            dt_et = dt_utc + _ET   # convert UTC → ET for display
-            label = dt_et.strftime("%-I:%M %p") + "\n" + dt_et.strftime("%a %-m/%-d")
+            dt_et = dt_utc + _ET
+            day_key = dt_et.strftime("%Y-%m-%d")
+            day_label = dt_et.strftime("%a %-m/%-d")
         except Exception:
-            label = run_time[:16]
+            day_key = run_time[:10]
+            day_label = run_time[:10]
 
-        agents_data = {}
+        if day_key not in days_map:
+            days_map[day_key] = {"label": day_label, "agents": {}, "mode": rec.get("mode", "full")}
+            days_order.append(day_key)
+
+        day = days_map[day_key]
         for agent in all_agents:
             a = rec.get("agents", {}).get(agent, {"tagged": 0, "actioned": 0})
             t = a.get("tagged", 0)
             ac = a.get("actioned", 0)
+            prev = day["agents"].get(agent, {"tagged": 0, "actioned": 0})
+            day["agents"][agent] = {
+                "tagged": max(prev["tagged"], t),
+                "actioned": max(prev["actioned"], ac),
+            }
+
+    runs_out = []
+    for day_key in days_order:
+        day = days_map[day_key]
+        agents_data = {}
+        for agent in all_agents:
+            a = day["agents"].get(agent, {"tagged": 0, "actioned": 0})
+            t = a["tagged"]
+            ac = a["actioned"]
             agents_data[agent] = {
                 "tagged": t,
                 "actioned": ac,
                 "rate": round(ac / t * 100) if t > 0 else 0,
             }
-
-        total = rec.get("total", 0)
+        total_tagged = max((a["tagged"] for a in agents_data.values()), default=0)
         total_actioned = sum(a["actioned"] for a in agents_data.values())
         runs_out.append({
-            "run_time": run_time,
-            "label": label,
-            "mode": rec.get("mode", "full"),
+            "run_time": day_key,
+            "label": day["label"],
+            "mode": day["mode"],
             "agents": agents_data,
             "total": {
-                "tagged": total,
+                "tagged": total_tagged,
                 "actioned": total_actioned,
-                "rate": round(total_actioned / total * 100) if total > 0 else 0,
+                "rate": round(total_actioned / total_tagged * 100) if total_tagged > 0 else 0,
             },
         })
 
