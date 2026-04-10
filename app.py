@@ -30,6 +30,7 @@ from flask import Flask, render_template, jsonify, request
 
 from fub_client import FUBClient
 import config
+import db as _db
 from kpi_audit import (
     auto_detect_agents,
     count_calls_for_user,
@@ -41,6 +42,9 @@ from kpi_audit import (
 )
 
 app = Flask(__name__)
+
+# Initialize Postgres schema (no-op if DATABASE_URL not set)
+_db.init_db()
 
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
@@ -1740,44 +1744,54 @@ def api_leadstream_dashboard():
         # Always overwrites so actioned counts improve as agents engage leads.
         if last_run_str:
             try:
-                import tempfile as _tempfile
-                eng_log_path = os.path.join(_cache_base, "engagement_log.json")
-                # Read — try primary path first, then /tmp/.cache fallback
-                eng_log = {}
-                for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
-                    try:
-                        with open(_rp) as f:
-                            eng_log = _json.load(f)
-                        break
-                    except Exception:
-                        continue
-                eng_log[last_run_str] = {
-                    "captured": now.isoformat(),
-                    "mode": manifest.get("last_run_mode", "full"),
-                    "agents": {
-                        name: {"tagged": a["tagged"], "actioned": a["actioned"]}
-                        for name, a in agents_out.items()
-                    },
-                    "pond": {"tagged": len(pond_leads), "actioned": pond_actioned},
-                    "total": grand_total,
+                agents_snapshot = {
+                    name: {"tagged": a["tagged"], "actioned": a["actioned"]}
+                    for name, a in agents_out.items()
                 }
-                # Prune records older than 30 days
-                cutoff = (now - _td(days=30)).isoformat()
-                eng_log = {k: v for k, v in eng_log.items() if k >= cutoff}
-                fd, tmp = _tempfile.mkstemp(dir=_cache_base, suffix=".tmp")
-                with os.fdopen(fd, "w") as f:
-                    _json.dump(eng_log, f)
-                os.replace(tmp, eng_log_path)
-                # Mirror to /tmp/.cache so data survives within same container
-                if _cache_base != "/tmp/.cache":
-                    try:
-                        os.makedirs("/tmp/.cache", exist_ok=True)
-                        _fb, _ft = _tempfile.mkstemp(dir="/tmp/.cache", suffix=".tmp")
-                        with os.fdopen(_fb, "w") as f:
-                            _json.dump(eng_log, f)
-                        os.replace(_ft, "/tmp/.cache/engagement_log.json")
-                    except Exception:
-                        pass
+                pond_snapshot = {"tagged": len(pond_leads), "actioned": pond_actioned}
+
+                # Write to DB (primary)
+                if _db.is_available():
+                    _db.write_engagement_entries(
+                        last_run_str,
+                        manifest.get("last_run_mode", "full"),
+                        agents_snapshot,
+                        pond_snapshot,
+                    )
+                else:
+                    # File fallback — dual-write to primary + /tmp/.cache
+                    import tempfile as _tempfile
+                    eng_log_path = os.path.join(_cache_base, "engagement_log.json")
+                    eng_log = {}
+                    for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
+                        try:
+                            with open(_rp) as f:
+                                eng_log = _json.load(f)
+                            break
+                        except Exception:
+                            continue
+                    eng_log[last_run_str] = {
+                        "captured": now.isoformat(),
+                        "mode": manifest.get("last_run_mode", "full"),
+                        "agents": agents_snapshot,
+                        "pond": pond_snapshot,
+                        "total": grand_total,
+                    }
+                    cutoff = (now - _td(days=30)).isoformat()
+                    eng_log = {k: v for k, v in eng_log.items() if k >= cutoff}
+                    fd, tmp = _tempfile.mkstemp(dir=_cache_base, suffix=".tmp")
+                    with os.fdopen(fd, "w") as f:
+                        _json.dump(eng_log, f)
+                    os.replace(tmp, eng_log_path)
+                    if _cache_base != "/tmp/.cache":
+                        try:
+                            os.makedirs("/tmp/.cache", exist_ok=True)
+                            _fb, _ft = _tempfile.mkstemp(dir="/tmp/.cache", suffix=".tmp")
+                            with os.fdopen(_fb, "w") as f:
+                                _json.dump(eng_log, f)
+                            os.replace(_ft, "/tmp/.cache/engagement_log.json")
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.warning("Could not save engagement log: %s", e)
 
@@ -1911,32 +1925,43 @@ def api_leadstream_backfill_tracker():
             }
             entries_written += 1
 
-    # Prune > 30 days and save
-    cutoff = (now_utc - _td(days=30)).isoformat()
-    eng_log = {k: v for k, v in eng_log.items() if k >= cutoff}
-    fd, tmp = _tmp.mkstemp(dir=_cache_base, suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
-        _json.dump(eng_log, f)
-    os.replace(tmp, eng_log_path)
-    # Mirror to /tmp/.cache so data survives within same container instance
-    if _cache_base != "/tmp/.cache":
-        try:
-            os.makedirs("/tmp/.cache", exist_ok=True)
-            _fb, _ft = _tmp.mkstemp(dir="/tmp/.cache", suffix=".tmp")
-            with os.fdopen(_fb, "w") as f:
-                _json.dump(eng_log, f)
-            os.replace(_ft, "/tmp/.cache/engagement_log.json")
-        except Exception:
-            pass
-
-    return jsonify({
-        "success": True,
-        "entries_written": entries_written,
-        "entries_skipped": entries_skipped,
-        "days_back": days_back,
-        "total_log_entries": len(eng_log),
-        "storage_path": eng_log_path,
-    })
+    # Save — DB primary, file fallback
+    if _db.is_available():
+        db_written = _db.write_engagement_from_log_dict(eng_log)
+        return jsonify({
+            "success": True,
+            "entries_written": entries_written,
+            "entries_skipped": entries_skipped,
+            "days_back": days_back,
+            "total_log_entries": len(eng_log),
+            "storage": "postgres",
+            "db_rows_written": db_written,
+        })
+    else:
+        cutoff = (now_utc - _td(days=30)).isoformat()
+        eng_log = {k: v for k, v in eng_log.items() if k >= cutoff}
+        fd, tmp2 = _tmp.mkstemp(dir=_cache_base, suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            _json.dump(eng_log, f)
+        os.replace(tmp2, eng_log_path)
+        if _cache_base != "/tmp/.cache":
+            try:
+                os.makedirs("/tmp/.cache", exist_ok=True)
+                _fb, _ft = _tmp.mkstemp(dir="/tmp/.cache", suffix=".tmp")
+                with os.fdopen(_fb, "w") as f:
+                    _json.dump(eng_log, f)
+                os.replace(_ft, "/tmp/.cache/engagement_log.json")
+            except Exception:
+                pass
+        return jsonify({
+            "success": True,
+            "entries_written": entries_written,
+            "entries_skipped": entries_skipped,
+            "days_back": days_back,
+            "total_log_entries": len(eng_log),
+            "storage": "file",
+            "storage_path": eng_log_path,
+        })
 
 
 # ---- LeadStream: Storage Debug ----
@@ -1984,7 +2009,80 @@ def api_debug_storage():
                 info["engagement_log_entries"] = f"error: {e}"
         results["paths"][label] = info
 
+    results["db_available"] = _db.is_available()
+    if _db.is_available():
+        try:
+            eng_from_db = _db.read_engagement_log(days=7)
+            results["db_engagement_entries"] = len(eng_from_db)
+        except Exception as e:
+            results["db_engagement_entries"] = f"error: {e}"
+
     return jsonify(results)
+
+
+# ---- Goals API ----
+
+@app.route("/api/goals", methods=["GET"])
+def api_goals_get():
+    """Return active goals for all agents (or ?agent=Name for one agent)."""
+    agent = request.args.get("agent")
+    goals = _db.get_goals(agent_name=agent)
+    return jsonify({"goals": goals, "db_available": _db.is_available()})
+
+
+@app.route("/api/goals", methods=["POST"])
+def api_goals_post():
+    """Create or update a goal. Body: {agent_name, metric, target, period?, notes?}"""
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected — add Postgres on Railway first"}), 503
+    body = request.json or {}
+    required = ["agent_name", "metric", "target"]
+    missing = [f for f in required if not body.get(f)]
+    if missing:
+        return jsonify({"error": f"Missing fields: {missing}"}), 400
+
+    from datetime import date as _date
+    eff_from = None
+    if body.get("effective_from"):
+        try:
+            eff_from = _date.fromisoformat(body["effective_from"])
+        except Exception:
+            pass
+
+    goal = _db.upsert_goal(
+        agent_name=body["agent_name"],
+        metric=body["metric"],
+        target=int(body["target"]),
+        period=body.get("period", "weekly"),
+        effective_from=eff_from,
+        notes=body.get("notes"),
+    )
+    if goal is None:
+        return jsonify({"error": "Failed to save goal"}), 500
+    return jsonify({"success": True, "goal": goal})
+
+
+@app.route("/api/goals/<int:goal_id>", methods=["DELETE"])
+def api_goals_delete(goal_id):
+    """Delete a goal by ID."""
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+    ok = _db.delete_goal(goal_id)
+    return jsonify({"success": ok})
+
+
+@app.route("/api/goals/progress", methods=["GET"])
+def api_goals_progress():
+    """Return goal vs actual for the current (or specified) week."""
+    from datetime import date as _date
+    week_start = None
+    if request.args.get("week_start"):
+        try:
+            week_start = _date.fromisoformat(request.args["week_start"])
+        except Exception:
+            pass
+    progress = _db.get_goal_progress(week_start=week_start)
+    return jsonify({"progress": progress, "db_available": _db.is_available()})
 
 
 # ---- LeadStream: Weekly Engagement Tracker ----
@@ -2001,16 +2099,22 @@ def api_leadstream_weekly():
         or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
     )
     eng_log_path = os.path.join(_cache_base, "engagement_log.json")
-    eng_log = None
-    for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
-        try:
-            with open(_rp) as f:
-                eng_log = _json.load(f)
-            break
-        except Exception:
-            continue
-    if eng_log is None:
-        return jsonify({"runs": [], "agents": [], "storage_path": eng_log_path})
+
+    # Try DB first, then file fallback
+    if _db.is_available():
+        eng_log = _db.read_engagement_log(days=7)
+    else:
+        eng_log = None
+        for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
+            try:
+                with open(_rp) as f:
+                    eng_log = _json.load(f)
+                break
+            except Exception:
+                continue
+    if not eng_log:
+        return jsonify({"runs": [], "agents": [], "storage_path": eng_log_path,
+                        "db_active": _db.is_available()})
 
     now = _dt.now(_tz.utc)
     cutoff = (now - _td(days=7)).isoformat()
@@ -2449,47 +2553,55 @@ def api_leadstream_run():
                     os.environ.get("LEADSTREAM_CACHE_DIR")
                     or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
                 )
-                os.makedirs(_cache_base, exist_ok=True)
-                eng_log_path = os.path.join(_cache_base, "engagement_log.json")
-                # Read — try primary path, then /tmp/.cache fallback
-                eng_log = {}
-                for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
-                    try:
-                        with open(_rp) as _f:
-                            eng_log = _ejson.load(_f)
-                        break
-                    except Exception:
-                        continue
                 now_e = _edt.now(_etz.utc)
                 run_key = now_e.isoformat()
-                # Only write if this run_key isn't already richer (dashboard may have written it)
-                if run_key not in eng_log:
-                    eng_log[run_key] = {
-                        "captured": now_e.isoformat(),
-                        "mode": "pond" if pond_only else "full",
-                        "agents": {
-                            name: {"tagged": info["count"], "actioned": 0}
-                            for name, info in results.get("agents", {}).items()
-                        },
-                        "pond": {"tagged": pond_count, "actioned": 0},
-                        "total": total_agent_leads + pond_count,
-                    }
-                    cutoff = (now_e - _etd(days=30)).isoformat()
-                    eng_log = {k: v for k, v in eng_log.items() if k >= cutoff}
-                    _fd, _tmp = _etmp.mkstemp(dir=_cache_base, suffix=".tmp")
-                    with os.fdopen(_fd, "w") as _f:
-                        _ejson.dump(eng_log, _f)
-                    os.replace(_tmp, eng_log_path)
-                    # Mirror to /tmp/.cache so data survives within same container
-                    if _cache_base != "/tmp/.cache":
+                _run_agents = {
+                    name: {"tagged": info["count"], "actioned": 0}
+                    for name, info in results.get("agents", {}).items()
+                }
+                _run_pond = {"tagged": pond_count, "actioned": 0}
+
+                if _db.is_available():
+                    _db.write_engagement_entries(
+                        run_key,
+                        "pond" if pond_only else "full",
+                        _run_agents,
+                        _run_pond,
+                    )
+                else:
+                    os.makedirs(_cache_base, exist_ok=True)
+                    eng_log_path = os.path.join(_cache_base, "engagement_log.json")
+                    eng_log = {}
+                    for _rp in [eng_log_path, "/tmp/.cache/engagement_log.json"]:
                         try:
-                            os.makedirs("/tmp/.cache", exist_ok=True)
-                            _fb, _ft = _etmp.mkstemp(dir="/tmp/.cache", suffix=".tmp")
-                            with os.fdopen(_fb, "w") as _f:
-                                _ejson.dump(eng_log, _f)
-                            os.replace(_ft, "/tmp/.cache/engagement_log.json")
+                            with open(_rp) as _f:
+                                eng_log = _ejson.load(_f)
+                            break
                         except Exception:
-                            pass
+                            continue
+                    if run_key not in eng_log:
+                        eng_log[run_key] = {
+                            "captured": now_e.isoformat(),
+                            "mode": "pond" if pond_only else "full",
+                            "agents": _run_agents,
+                            "pond": _run_pond,
+                            "total": total_agent_leads + pond_count,
+                        }
+                        cutoff = (now_e - _etd(days=30)).isoformat()
+                        eng_log = {k: v for k, v in eng_log.items() if k >= cutoff}
+                        _fd, _tmp2 = _etmp.mkstemp(dir=_cache_base, suffix=".tmp")
+                        with os.fdopen(_fd, "w") as _f:
+                            _ejson.dump(eng_log, _f)
+                        os.replace(_tmp2, eng_log_path)
+                        if _cache_base != "/tmp/.cache":
+                            try:
+                                os.makedirs("/tmp/.cache", exist_ok=True)
+                                _fb, _ft = _etmp.mkstemp(dir="/tmp/.cache", suffix=".tmp")
+                                with os.fdopen(_fb, "w") as _f:
+                                    _ejson.dump(eng_log, _f)
+                                os.replace(_ft, "/tmp/.cache/engagement_log.json")
+                            except Exception:
+                                pass
             except Exception as _ee:
                 logger.warning("Could not write engagement log from scoring run: %s", _ee)
 
