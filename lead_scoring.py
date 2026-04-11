@@ -431,36 +431,50 @@ class LeadScorer:
     MANIFEST_FILE = os.path.join(_cache_dir, "leadstream_manifest.json")
 
     def _load_manifest(self):
-        """Load the manifest of previously tagged lead IDs."""
+        """Load the manifest of previously tagged lead IDs.
+
+        Priority: file (fastest, freshest) → Postgres DB (survives Railway restarts).
+        """
+        # 1. Try file first — it's always written right after scoring
         try:
             with open(self.MANIFEST_FILE) as f:
                 data = json.load(f)
-                logger.info("Manifest loaded: %d agents, %d pond leads",
+                logger.info("Manifest loaded from file: %d agents, %d pond leads",
                             len(data.get("agent", {})), len(data.get("pond", [])))
                 return data
         except FileNotFoundError:
-            logger.info("No manifest found at %s — starting fresh", self.MANIFEST_FILE)
-            return {"agent": {}, "pond": []}
+            pass  # Expected after Railway restart — fall through to DB
         except json.JSONDecodeError as e:
-            logger.error("Manifest corrupted (JSON error: %s) — starting fresh", e)
-            return {"agent": {}, "pond": []}
+            logger.error("Manifest corrupted (JSON error: %s) — trying DB", e)
         except Exception as e:
-            logger.error("Could not load manifest: %s — starting fresh", e)
-            return {"agent": {}, "pond": []}
+            logger.error("Could not load manifest from file: %s — trying DB", e)
+
+        # 2. Fall back to Postgres (survives restarts)
+        try:
+            import db as _db
+            db_manifest = _db.read_manifest()
+            if db_manifest:
+                logger.info("Manifest loaded from DB: %d agents, %d pond leads",
+                            len(db_manifest.get("agent", {})), len(db_manifest.get("pond", [])))
+                return db_manifest
+        except Exception as e:
+            logger.warning("Could not load manifest from DB: %s", e)
+
+        logger.info("No manifest found anywhere — starting fresh")
+        return {"agent": {}, "pond": []}
 
     def _save_manifest(self, manifest):
-        """Save the manifest atomically to prevent corruption on crash/restart."""
+        """Save the manifest atomically to file + Postgres so it survives restarts."""
         cache_dir = os.path.dirname(self.MANIFEST_FILE)
+        # 1. Write to file (atomic rename — never half-written)
         try:
             os.makedirs(cache_dir, exist_ok=True)
-            # Write to a temp file first, then atomically rename
-            # This ensures the manifest is never half-written
             fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as f:
                     json.dump(manifest, f, indent=2)
                 os.replace(tmp_path, self.MANIFEST_FILE)  # atomic on POSIX
-                logger.info("Manifest saved: %d agents, %d pond leads",
+                logger.info("Manifest saved to file: %d agents, %d pond leads",
                             len(manifest.get("agent", {})), len(manifest.get("pond", [])))
             except Exception:
                 try:
@@ -469,7 +483,16 @@ class LeadScorer:
                     pass
                 raise
         except OSError as e:
-            logger.warning("Could not save manifest (filesystem issue: %s)", e)
+            logger.warning("Could not save manifest to file (filesystem issue: %s)", e)
+
+        # 2. Also persist to Postgres — this is the durable copy that survives
+        #    Railway restarts which wipe /tmp/.cache
+        try:
+            import db as _db
+            _db.write_manifest(manifest)
+            logger.info("Manifest also saved to Postgres DB")
+        except Exception as e:
+            logger.warning("Could not save manifest to DB (non-fatal): %s", e)
 
     def cleanup_tags(self, dry_run=True, pond_only=False):
         """Remove LeadStream tags from previously tagged leads.

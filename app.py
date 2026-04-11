@@ -1633,10 +1633,19 @@ def api_leadstream_dashboard():
         or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache"))
     )
     MANIFEST_FILE = os.path.join(_cache_base, "leadstream_manifest.json")
+    manifest = None
+    # Try file first (freshest), then Postgres (survives Railway restarts)
     try:
         with open(MANIFEST_FILE) as f:
             manifest = _json.load(f)
     except Exception:
+        pass
+    if not manifest and _db.is_available():
+        try:
+            manifest = _db.read_manifest()
+        except Exception:
+            pass
+    if not manifest:
         manifest = {"agent": {}, "pond": []}
 
     last_run_str = manifest.get("last_run")
@@ -1828,7 +1837,7 @@ def api_leadstream_backfill_tracker():
     manifest_path = os.path.join(_cache_base, "leadstream_manifest.json")
     eng_log_path  = os.path.join(_cache_base, "engagement_log.json")
 
-    # Load manifest — also check /tmp/.cache as fallback if volume path has no manifest yet
+    # Load manifest — file first, then Postgres DB (survives Railway restarts)
     manifest = None
     for mp in [manifest_path, "/tmp/.cache/leadstream_manifest.json"]:
         try:
@@ -1837,6 +1846,11 @@ def api_leadstream_backfill_tracker():
             break
         except Exception:
             continue
+    if manifest is None and _db.is_available():
+        try:
+            manifest = _db.read_manifest()
+        except Exception:
+            pass
     if manifest is None:
         return jsonify({"error": "No manifest found — click Run Now first, then try backfill again"}), 404
 
@@ -3060,14 +3074,23 @@ def api_health():
     MANIFEST_FILE = os.path.join(_cache_base, "leadstream_manifest.json")
 
     now = _dt.now(_tz.utc)
+    manifest = None
     try:
         with open(MANIFEST_FILE) as f:
             manifest = _json.load(f)
+    except Exception:
+        pass
+    if not manifest and _db.is_available():
+        try:
+            manifest = _db.read_manifest()
+        except Exception:
+            pass
+    if manifest:
         last_run_str = manifest.get("last_run")
         last_run = _dt.fromisoformat(last_run_str) if last_run_str else None
         if last_run and last_run.tzinfo is None:
             last_run = last_run.replace(tzinfo=_tz.utc)
-    except Exception:
+    else:
         last_run = None
         last_run_str = None
 
