@@ -432,11 +432,14 @@ def run_morning_nudges(dry_run: bool = False):
             if not dry_run:
                 api_key = os.environ.get("SENDGRID_API_KEY")
                 from sendgrid import SendGridAPIClient
-                from sendgrid.helpers.mail import Mail
-                SendGridAPIClient(api_key).send(Mail(
+                from sendgrid.helpers.mail import Mail, Email as _Email
+                msg = Mail(
                     from_email=EMAIL_FROM, to_emails=email,
                     subject=subject, plain_text_content=body_text, html_content=html,
-                ))
+                )
+                # CC Barry so he can watch the nudges go out
+                msg.personalizations[0].add_cc(_Email(EMAIL_FROM))
+                SendGridAPIClient(api_key).send(msg)
             _db.log_nudge(name, "morning", subject, status="sent" if not dry_run else "dry_run")
             logger.info("Morning nudge [#%d/%d] → %s | %s", rank, team_size, name, subject[:60])
             sent += 1
