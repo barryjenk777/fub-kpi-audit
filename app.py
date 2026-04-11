@@ -2137,7 +2137,12 @@ def api_goals_generate_links():
     if not _db.is_available():
         return jsonify({"error": "Database not connected"}), 503
 
-    base_url = request.host_url.rstrip("/")
+    # Prefer explicit BASE_URL env var (required on Railway where the internal
+    # host differs from the public URL). Falls back to the request host.
+    base_url = (
+        os.environ.get("BASE_URL", "").rstrip("/")
+        or request.host_url.rstrip("/")
+    )
     profiles = _db.get_agent_profiles(active_only=True)
     if not profiles:
         return jsonify({"error": "No agents found — run Scan Agents first"}), 404
