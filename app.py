@@ -2066,9 +2066,14 @@ def goals_setup_page(token):
     agent_name = _db.resolve_goal_token(token)
     if not agent_name:
         return "<h2 style='font-family:sans-serif;padding:2rem'>This link has expired or is invalid. Ask Barry for a new one.</h2>", 404
-    existing = _db.get_goal(agent_name, year=datetime.now().year)
-    return render_template("goal_setup.html", agent_name=agent_name, token=token,
-                           goal=existing, year=datetime.now().year)
+    existing      = _db.get_goal(agent_name, year=datetime.now().year)
+    existing_why  = _db.get_agent_why(agent_name)
+    existing_ident= _db.get_agent_identity(agent_name)
+    return render_template("goal_setup.html",
+                           agent_name=agent_name, token=token,
+                           goal=existing, year=datetime.now().year,
+                           existing_why=existing_why,
+                           existing_identity=existing_ident)
 
 
 @app.route("/api/goals/setup/<token>", methods=["POST"])
@@ -2093,9 +2098,107 @@ def api_goals_setup_save(token):
             set_by="agent",
             notes=body.get("notes"),
         )
+        # Save why
+        why = body.get("why") or {}
+        if why.get("why_statement") or why.get("who_benefits"):
+            _db.upsert_agent_why(
+                agent_name=agent_name,
+                why_statement=why.get("why_statement"),
+                who_benefits=why.get("who_benefits"),
+                who_benefits_custom=why.get("who_benefits_custom"),
+                what_happens=why.get("what_happens"),
+            )
+        # Save identity
+        ident = body.get("identity") or {}
+        if ident.get("identity_archetype"):
+            _db.upsert_agent_identity(
+                agent_name=agent_name,
+                identity_archetype=ident.get("identity_archetype"),
+                custom_identity=ident.get("custom_identity"),
+                power_hour_time=ident.get("power_hour_time"),
+                daily_calls_target=ident.get("daily_calls_target"),
+                daily_texts_target=ident.get("daily_texts_target"),
+                daily_appts_target=ident.get("daily_appts_target"),
+            )
         return jsonify({"success": True, "goal": goal})
     except (KeyError, ValueError) as e:
         return jsonify({"error": f"Bad input: {e}"}), 400
+
+
+# ── Agent self-serve daily dashboard ─────────────────────────────────────────
+
+@app.route("/my-goals/<token>")
+def agent_dashboard_page(token):
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return "<h2 style='font-family:sans-serif;padding:2rem'>This link has expired or is invalid. Ask Barry for a new one.</h2>", 404
+    return render_template("agent_dashboard.html",
+                           agent_name=agent_name, token=token,
+                           year=datetime.now().year)
+
+
+@app.route("/api/goals/my-goals/<token>")
+def api_agent_dashboard(token):
+    """Return everything an agent needs to render their personal dashboard."""
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return jsonify({"error": "Invalid token"}), 403
+    year = datetime.now().year
+    goal     = _db.get_goal(agent_name, year=year)
+    why      = _db.get_agent_why(agent_name)
+    ident    = _db.get_agent_identity(agent_name)
+    streak   = _db.get_streak(agent_name)
+    today_act= _db.get_todays_activity(agent_name)
+    activity = _db.get_daily_activity(agent_name, days=60)
+
+    targets  = _db.compute_targets(goal) if goal else {}
+    actuals  = {}
+    if goal:
+        ytd = _db.get_ytd_cache(year=year)
+        a   = ytd.get(agent_name, {})
+        from db import get_closing_counts
+        closing_counts = get_closing_counts(agent_name, year=year)
+        actuals = {
+            "calls_ytd": a.get("calls_ytd", 0),
+            "appts_ytd": a.get("appts_ytd", 0),
+            "closings_ytd": closing_counts.get("closings", 0),
+        }
+    pace = _db.compute_pace(goal, targets, actuals) if goal else {}
+
+    return jsonify({
+        "agent_name": agent_name,
+        "year": year,
+        "goal": goal,
+        "why": why,
+        "identity": ident,
+        "streak": streak,
+        "today": today_act,
+        "activity_log": activity,
+        "targets": targets,
+        "actuals": actuals,
+        "pace": pace,
+    })
+
+
+@app.route("/api/goals/my-goals/<token>/log", methods=["POST"])
+def api_agent_log_activity(token):
+    """Agent logs today's activity (calls, texts, appts)."""
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return jsonify({"error": "Invalid token"}), 403
+    body = request.json or {}
+    from datetime import date as _date
+    ok = _db.log_daily_activity(
+        agent_name=agent_name,
+        activity_date=_date.today(),
+        calls=int(body.get("calls", 0)),
+        texts=int(body.get("texts", 0)),
+        appts=float(body.get("appts", 0)),
+    )
+    if ok:
+        _db.update_streak(agent_name)
+    streak = _db.get_streak(agent_name)
+    return jsonify({"success": ok, "streak": streak})
 
 
 # ---- Manager goals dashboard ----
@@ -2463,6 +2566,65 @@ def api_goals_sync_deals():
 
 # ---- Manual closing log ----
 
+@app.route("/api/goals/send-nudge", methods=["POST"])
+def api_goals_send_nudge():
+    """
+    Manager sends a custom Twilio SMS to one agent, with their why pre-populated.
+    Body: {agent_name, message?, nudge_type?}
+    """
+    body = request.json or {}
+    agent_name = body.get("agent_name")
+    if not agent_name:
+        return jsonify({"error": "agent_name required"}), 400
+
+    profiles = {p["agent_name"]: p for p in _db.get_agent_profiles(active_only=False)}
+    profile  = profiles.get(agent_name, {})
+    phone    = profile.get("phone") or body.get("phone")
+    if not phone:
+        return jsonify({"error": f"No phone number on file for {agent_name}"}), 400
+
+    try:
+        import nudge_engine as _nudge
+        custom_msg = body.get("message")
+        nudge_type = body.get("nudge_type", "custom")
+        ok = _nudge.nudge_agent(
+            agent_name, nudge_type, phone,
+            extra={"message": custom_msg} if custom_msg else None,
+        )
+        return jsonify({"success": ok})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/goals/nudge-context/<agent_name>")
+def api_goals_nudge_context(agent_name):
+    """Return agent why + identity for pre-populating the manager nudge compose box."""
+    why   = _db.get_agent_why(agent_name) or {}
+    ident = _db.get_agent_identity(agent_name) or {}
+    streak= _db.get_streak(agent_name) or {}
+    first = agent_name.split()[0]
+
+    # Build a suggested message
+    import nudge_engine as _nudge
+    ctx = _nudge._ctx(agent_name)
+    suggested = ""
+    if why.get("why_statement"):
+        suggested = (
+            f"Hey {first}, checking in. Remember why you started: "
+            f"\"{why['why_statement'][:80]}{'…' if len(why.get('why_statement','')) > 80 else ''}\" "
+            f"Let's make today count."
+        )
+    else:
+        suggested = f"Hey {first}, just wanted to check in and see how you're doing. What do you need from me this week?"
+
+    return jsonify({
+        "why": why,
+        "identity": ident,
+        "streak": streak,
+        "suggested_message": suggested,
+    })
+
+
 @app.route("/api/goals/log-closing", methods=["POST"])
 def api_goals_log_closing():
     """Manually log a closing. Body: {agent_name, deal_name, sale_price, close_date?}"""
@@ -2580,8 +2742,12 @@ def api_goals_scorecard():
     _order = {"red": 0, "yellow": 1, "green": 2, "gray": 3}
     scorecard.sort(key=lambda x: _order.get(x["pace"]["overall_status"], 3))
 
+    # Attach streak data so manager cards can show 🔥 streak + last active
+    all_streaks = _db.get_all_streaks()
+
     return jsonify({
         "scorecard":     scorecard,
+        "streaks":       all_streaks,
         "year":          year,
         "week_num":      datetime.now().isocalendar()[1],
         "cache_updated": cache_updated,
@@ -3527,6 +3693,17 @@ def scheduled_send_isa_email():
         print(f"[SCHEDULER] ISA email error: {e}")
 
 
+def _recalc_all_streaks():
+    """Nightly: recalculate and persist streaks for all agents."""
+    profiles = _db.get_agent_profiles(active_only=True)
+    identities = _db.get_all_agent_identities()
+    for p in profiles:
+        name = p["agent_name"]
+        ident = identities.get(name, {})
+        targets = {"daily_calls_target": ident.get("daily_calls_target", 1)}
+        _db.update_streak(name, targets)
+
+
 def scheduled_sync_goals_data():
     """
     Scheduled twice-weekly job (Mon + Thu, 6am ET):
@@ -3695,6 +3872,56 @@ def start_scheduler():
     _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET),
                        id="audit_email", name="Monday KPI audit email",
                        max_instances=1, coalesce=True)
+
+    # ── Nudge engine jobs ──────────────────────────────────────────────────
+    try:
+        import nudge_engine as _nudge
+
+        # Morning nudges: run every 30 min 7am–10am ET so we catch each agent's power-hour window
+        _scheduler.add_job(
+            lambda: _nudge.run_morning_nudges(),
+            CronTrigger(hour="7,8,9,10", minute="0,30", timezone=ET),
+            id="nudge_morning", name="Morning nudges (every 30min 7-10am)",
+            max_instances=1, coalesce=True,
+        )
+        # Missed-day check: 5pm ET
+        _scheduler.add_job(
+            lambda: _nudge.run_missed_day_check(),
+            CronTrigger(hour=17, minute=0, timezone=ET),
+            id="nudge_missed", name="Missed-day check (5pm ET)",
+            max_instances=1, coalesce=True,
+        )
+        # Streak break + recalculate: 7:15am ET daily (before morning nudges)
+        _scheduler.add_job(
+            lambda: (_nudge.run_streak_break_check(), _recalc_all_streaks()),
+            CronTrigger(hour=7, minute=15, timezone=ET),
+            id="nudge_streak_break", name="Streak break check (7:15am ET)",
+            max_instances=1, coalesce=True,
+        )
+        # Weekly summary: Sunday 6pm ET
+        _scheduler.add_job(
+            lambda: _nudge.run_weekly_summary(),
+            CronTrigger(day_of_week="sun", hour=18, minute=0, timezone=ET),
+            id="nudge_weekly", name="Weekly summary SMS (Sunday 6pm)",
+            max_instances=1, coalesce=True,
+        )
+        # Plateau check: every Monday morning
+        _scheduler.add_job(
+            lambda: _nudge.run_plateau_check(),
+            CronTrigger(day_of_week="mon", hour=7, minute=30, timezone=ET),
+            id="nudge_plateau", name="Plateau detection (Monday 7:30am)",
+            max_instances=1, coalesce=True,
+        )
+        # Post-closing follow-ups: daily 9am ET
+        _scheduler.add_job(
+            lambda: _nudge.run_post_closing_followups(),
+            CronTrigger(hour=9, minute=0, timezone=ET),
+            id="nudge_post_closing", name="Post-closing follow-ups (9am daily)",
+            max_instances=1, coalesce=True,
+        )
+        logger.info("[SCHEDULER] Nudge engine jobs added")
+    except Exception as _e:
+        logger.warning("[SCHEDULER] Nudge engine failed to load (Twilio not required to run): %s", _e)
 
     # Fhalen ISA email: Monday 10am ET
     _scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0, timezone=ET),

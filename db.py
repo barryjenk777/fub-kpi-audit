@@ -90,10 +90,16 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
     agent_name   TEXT PRIMARY KEY,
     fub_user_id  INTEGER,
     email        TEXT,
+    phone        TEXT,   -- mobile number for Twilio nudges (E.164 format, e.g. +17045551234)
     is_active    BOOLEAN NOT NULL DEFAULT TRUE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Add phone column if table already exists (idempotent migration)
+DO $$ BEGIN
+  ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS phone TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 -- Secure tokens for agent self-service goal setup links
 CREATE TABLE IF NOT EXISTS goal_tokens (
@@ -169,6 +175,81 @@ CREATE TABLE IF NOT EXISTS agent_ytd_cache (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (agent_name, year)
 );
+
+-- Behavioral goal-setting: agent's "why" (Cheplak framework)
+CREATE TABLE IF NOT EXISTS agent_why (
+    agent_name          TEXT PRIMARY KEY REFERENCES agent_profiles(agent_name) ON DELETE CASCADE,
+    why_statement       TEXT,           -- "If this year goes exactly how I want..."
+    who_benefits        TEXT,           -- 'my_kids', 'spouse_partner', 'myself', 'family', 'other'
+    who_benefits_custom TEXT,           -- free text when 'other'
+    what_happens        TEXT,           -- "What specifically happens for them?"
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Behavioral goal-setting: agent's identity archetype (Atomic Habits)
+CREATE TABLE IF NOT EXISTS agent_identity (
+    agent_name          TEXT PRIMARY KEY REFERENCES agent_profiles(agent_name) ON DELETE CASCADE,
+    identity_archetype  TEXT,           -- 'consistent', 'closer', 'prospecting_machine', 'relationship_builder', 'comeback_story', 'custom'
+    custom_identity     TEXT,           -- free text if custom
+    power_hour_time     TIME,           -- "When will you do your power hour?" e.g. 08:30
+    daily_calls_target  INTEGER NOT NULL DEFAULT 20,
+    daily_texts_target  INTEGER NOT NULL DEFAULT 5,
+    daily_appts_target  NUMERIC(4,1) NOT NULL DEFAULT 1.0,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Daily activity logging (for streaks and nudge engine)
+CREATE TABLE IF NOT EXISTS daily_activity (
+    id                  SERIAL PRIMARY KEY,
+    agent_name          TEXT    NOT NULL REFERENCES agent_profiles(agent_name) ON DELETE CASCADE,
+    activity_date       DATE    NOT NULL,
+    calls_logged        INTEGER NOT NULL DEFAULT 0,
+    texts_logged        INTEGER NOT NULL DEFAULT 0,
+    appts_logged        NUMERIC(4,1) NOT NULL DEFAULT 0,
+    logged_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (agent_name, activity_date)
+);
+CREATE INDEX IF NOT EXISTS idx_da_agent_date ON daily_activity (agent_name, activity_date DESC);
+
+-- Streak tracking per agent (updated nightly by scheduler)
+CREATE TABLE IF NOT EXISTS streaks (
+    agent_name          TEXT PRIMARY KEY REFERENCES agent_profiles(agent_name) ON DELETE CASCADE,
+    current_streak      INTEGER NOT NULL DEFAULT 0,
+    longest_streak      INTEGER NOT NULL DEFAULT 0,
+    last_activity_date  DATE,
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Nudge log: track every SMS sent so we don't double-send and can measure opens
+CREATE TABLE IF NOT EXISTS nudge_log (
+    id              SERIAL PRIMARY KEY,
+    agent_name      TEXT    NOT NULL,
+    nudge_type      TEXT    NOT NULL,   -- 'morning', 'missed_day', 'streak_break', 'weekly_summary', 'milestone', 'post_closing', 'custom'
+    message_content TEXT,
+    sent_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    twilio_sid      TEXT,
+    status          TEXT NOT NULL DEFAULT 'sent'   -- 'sent', 'failed', 'preview'
+);
+CREATE INDEX IF NOT EXISTS idx_nl_agent_type ON nudge_log (agent_name, nudge_type, sent_at DESC);
+
+-- Post-closing follow-up reminders (30/60/90 day)
+CREATE TABLE IF NOT EXISTS post_closing_followups (
+    id                  SERIAL PRIMARY KEY,
+    agent_name          TEXT    NOT NULL,
+    fub_deal_id         INTEGER,
+    client_name         TEXT,
+    close_date          DATE    NOT NULL,
+    followup_30_sent    BOOLEAN NOT NULL DEFAULT FALSE,
+    followup_60_sent    BOOLEAN NOT NULL DEFAULT FALSE,
+    followup_90_sent    BOOLEAN NOT NULL DEFAULT FALSE,
+    followup_30_date    DATE,
+    followup_60_date    DATE,
+    followup_90_date    DATE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pcf_agent ON post_closing_followups (agent_name, close_date DESC);
 """
 
 
@@ -312,21 +393,22 @@ def read_manifest():
 # Agent profiles
 # ---------------------------------------------------------------------------
 
-def upsert_agent_profile(agent_name, fub_user_id=None, email=None, is_active=True):
+def upsert_agent_profile(agent_name, fub_user_id=None, email=None, phone=None, is_active=True):
     if not is_available():
         return False
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO agent_profiles (agent_name, fub_user_id, email, is_active, updated_at)
-                    VALUES (%s, %s, %s, %s, NOW())
+                    INSERT INTO agent_profiles (agent_name, fub_user_id, email, phone, is_active, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (agent_name) DO UPDATE SET
                         fub_user_id = COALESCE(EXCLUDED.fub_user_id, agent_profiles.fub_user_id),
                         email       = COALESCE(EXCLUDED.email,       agent_profiles.email),
+                        phone       = COALESCE(EXCLUDED.phone,       agent_profiles.phone),
                         is_active   = EXCLUDED.is_active,
                         updated_at  = NOW()
-                """, (agent_name, fub_user_id, email, is_active))
+                """, (agent_name, fub_user_id, email, phone, is_active))
         return True
     except Exception as e:
         logger.warning("upsert_agent_profile failed: %s", e)
@@ -341,16 +423,16 @@ def get_agent_profiles(active_only=True):
             with conn.cursor() as cur:
                 if active_only:
                     cur.execute("""
-                        SELECT agent_name, fub_user_id, email, is_active
+                        SELECT agent_name, fub_user_id, email, phone, is_active
                         FROM   agent_profiles WHERE is_active = TRUE ORDER BY agent_name
                     """)
                 else:
                     cur.execute("""
-                        SELECT agent_name, fub_user_id, email, is_active
+                        SELECT agent_name, fub_user_id, email, phone, is_active
                         FROM   agent_profiles ORDER BY agent_name
                     """)
                 rows = cur.fetchall()
-        return [{"agent_name": r[0], "fub_user_id": r[1], "email": r[2], "is_active": r[3]}
+        return [{"agent_name": r[0], "fub_user_id": r[1], "email": r[2], "phone": r[3], "is_active": r[4]}
                 for r in rows]
     except Exception as e:
         logger.warning("get_agent_profiles failed: %s", e)
@@ -404,6 +486,11 @@ def resolve_goal_token(token):
     except Exception as e:
         logger.warning("resolve_goal_token failed: %s", e)
         return None
+
+
+# Alias used by nudge_engine.py
+def get_goal_token(agent_name):
+    return get_token_for_agent(agent_name)
 
 
 def get_token_for_agent(agent_name):
@@ -857,3 +944,515 @@ def compute_pace(goal: dict, targets: dict, actuals: dict) -> dict:
         # in the first 7 weeks (Q1 ramp, goal-setting lag, etc.)
         "needs_conversation": week_num >= 8 and overall_pct < 70,
     }
+
+
+# ---------------------------------------------------------------------------
+# Agent Why
+# ---------------------------------------------------------------------------
+
+def upsert_agent_why(agent_name, why_statement=None, who_benefits=None,
+                     who_benefits_custom=None, what_happens=None):
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO agent_why
+                        (agent_name, why_statement, who_benefits, who_benefits_custom, what_happens, updated_at)
+                    VALUES (%s,%s,%s,%s,%s,NOW())
+                    ON CONFLICT (agent_name) DO UPDATE SET
+                        why_statement       = COALESCE(EXCLUDED.why_statement,       agent_why.why_statement),
+                        who_benefits        = COALESCE(EXCLUDED.who_benefits,        agent_why.who_benefits),
+                        who_benefits_custom = COALESCE(EXCLUDED.who_benefits_custom, agent_why.who_benefits_custom),
+                        what_happens        = COALESCE(EXCLUDED.what_happens,        agent_why.what_happens),
+                        updated_at          = NOW()
+                """, (agent_name, why_statement, who_benefits, who_benefits_custom, what_happens))
+        return True
+    except Exception as e:
+        logger.warning("upsert_agent_why failed: %s", e)
+        return False
+
+
+def get_agent_why(agent_name):
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT why_statement, who_benefits, who_benefits_custom, what_happens
+                    FROM agent_why WHERE agent_name = %s
+                """, (agent_name,))
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "why_statement": row[0],
+            "who_benefits": row[1],
+            "who_benefits_custom": row[2],
+            "what_happens": row[3],
+        }
+    except Exception as e:
+        logger.warning("get_agent_why failed: %s", e)
+        return None
+
+
+def get_all_agent_whys():
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT agent_name, why_statement, who_benefits, who_benefits_custom, what_happens FROM agent_why")
+                rows = cur.fetchall()
+        return {
+            r[0]: {"why_statement": r[1], "who_benefits": r[2],
+                   "who_benefits_custom": r[3], "what_happens": r[4]}
+            for r in rows
+        }
+    except Exception as e:
+        logger.warning("get_all_agent_whys failed: %s", e)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Agent Identity
+# ---------------------------------------------------------------------------
+
+def upsert_agent_identity(agent_name, identity_archetype=None, custom_identity=None,
+                          power_hour_time=None, daily_calls_target=None,
+                          daily_texts_target=None, daily_appts_target=None):
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO agent_identity
+                        (agent_name, identity_archetype, custom_identity, power_hour_time,
+                         daily_calls_target, daily_texts_target, daily_appts_target, updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,NOW())
+                    ON CONFLICT (agent_name) DO UPDATE SET
+                        identity_archetype  = COALESCE(EXCLUDED.identity_archetype,  agent_identity.identity_archetype),
+                        custom_identity     = COALESCE(EXCLUDED.custom_identity,     agent_identity.custom_identity),
+                        power_hour_time     = COALESCE(EXCLUDED.power_hour_time,     agent_identity.power_hour_time),
+                        daily_calls_target  = COALESCE(EXCLUDED.daily_calls_target,  agent_identity.daily_calls_target),
+                        daily_texts_target  = COALESCE(EXCLUDED.daily_texts_target,  agent_identity.daily_texts_target),
+                        daily_appts_target  = COALESCE(EXCLUDED.daily_appts_target,  agent_identity.daily_appts_target),
+                        updated_at          = NOW()
+                """, (agent_name, identity_archetype, custom_identity, power_hour_time,
+                      daily_calls_target, daily_texts_target, daily_appts_target))
+        return True
+    except Exception as e:
+        logger.warning("upsert_agent_identity failed: %s", e)
+        return False
+
+
+def get_agent_identity(agent_name):
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT identity_archetype, custom_identity, power_hour_time,
+                           daily_calls_target, daily_texts_target, daily_appts_target
+                    FROM agent_identity WHERE agent_name = %s
+                """, (agent_name,))
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "identity_archetype": row[0],
+            "custom_identity": row[1],
+            "power_hour_time": str(row[2]) if row[2] else "08:30",
+            "daily_calls_target": row[3] or 20,
+            "daily_texts_target": row[4] or 5,
+            "daily_appts_target": float(row[5] or 1.0),
+        }
+    except Exception as e:
+        logger.warning("get_agent_identity failed: %s", e)
+        return None
+
+
+def get_all_agent_identities():
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, identity_archetype, custom_identity, power_hour_time,
+                           daily_calls_target, daily_texts_target, daily_appts_target
+                    FROM agent_identity
+                """)
+                rows = cur.fetchall()
+        return {
+            r[0]: {
+                "identity_archetype": r[1], "custom_identity": r[2],
+                "power_hour_time": str(r[3]) if r[3] else "08:30",
+                "daily_calls_target": r[4] or 20,
+                "daily_texts_target": r[5] or 5,
+                "daily_appts_target": float(r[6] or 1.0),
+            }
+            for r in rows
+        }
+    except Exception as e:
+        logger.warning("get_all_agent_identities failed: %s", e)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Daily Activity Logging
+# ---------------------------------------------------------------------------
+
+def log_daily_activity(agent_name, activity_date, calls=0, texts=0, appts=0):
+    """Upsert today's activity for an agent."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO daily_activity
+                        (agent_name, activity_date, calls_logged, texts_logged, appts_logged, logged_at)
+                    VALUES (%s,%s,%s,%s,%s,NOW())
+                    ON CONFLICT (agent_name, activity_date) DO UPDATE SET
+                        calls_logged = EXCLUDED.calls_logged,
+                        texts_logged = EXCLUDED.texts_logged,
+                        appts_logged = EXCLUDED.appts_logged,
+                        logged_at    = NOW()
+                """, (agent_name, activity_date, calls, texts, appts))
+        return True
+    except Exception as e:
+        logger.warning("log_daily_activity failed: %s", e)
+        return False
+
+
+def get_daily_activity(agent_name, days=30):
+    """Return daily activity for the last N days, most recent first."""
+    if not is_available():
+        return []
+    try:
+        cutoff = date.today() - timedelta(days=days)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT activity_date, calls_logged, texts_logged, appts_logged, logged_at
+                    FROM   daily_activity
+                    WHERE  agent_name = %s AND activity_date >= %s
+                    ORDER  BY activity_date DESC
+                """, (agent_name, cutoff))
+                rows = cur.fetchall()
+        return [
+            {
+                "date": r[0].isoformat(),
+                "calls": r[1], "texts": r[2], "appts": float(r[3] or 0),
+                "logged_at": r[4].isoformat() if r[4] else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("get_daily_activity failed: %s", e)
+        return []
+
+
+def get_todays_activity(agent_name):
+    """Return today's logged activity or zeros."""
+    if not is_available():
+        return {"calls": 0, "texts": 0, "appts": 0}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT calls_logged, texts_logged, appts_logged
+                    FROM   daily_activity
+                    WHERE  agent_name = %s AND activity_date = %s
+                """, (agent_name, date.today()))
+                row = cur.fetchone()
+        if row:
+            return {"calls": row[0], "texts": row[1], "appts": float(row[2] or 0)}
+        return {"calls": 0, "texts": 0, "appts": 0}
+    except Exception as e:
+        logger.warning("get_todays_activity failed: %s", e)
+        return {"calls": 0, "texts": 0, "appts": 0}
+
+
+# ---------------------------------------------------------------------------
+# Streaks
+# ---------------------------------------------------------------------------
+
+def _recalculate_streak(agent_name, targets: dict) -> dict:
+    """
+    Recalculate current and longest streaks for an agent based on daily_activity.
+    A day counts toward the streak if calls_logged >= daily_calls_target.
+    Returns {current_streak, longest_streak, last_activity_date}.
+    """
+    if not is_available():
+        return {"current_streak": 0, "longest_streak": 0, "last_activity_date": None}
+    calls_target = targets.get("daily_calls_target", 1)
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT activity_date, calls_logged
+                    FROM   daily_activity
+                    WHERE  agent_name = %s
+                    ORDER  BY activity_date DESC
+                    LIMIT  365
+                """, (agent_name,))
+                rows = cur.fetchall()
+        if not rows:
+            return {"current_streak": 0, "longest_streak": 0, "last_activity_date": None}
+
+        today = date.today()
+        hit_days = {r[0] for r in rows if r[1] >= calls_target}
+        last_activity = rows[0][0] if rows else None
+
+        # Current streak — count backwards from today (or yesterday if today not yet logged)
+        current = 0
+        check = today
+        while check in hit_days:
+            current += 1
+            check -= timedelta(days=1)
+        # Also count from yesterday if today not logged yet
+        if current == 0:
+            check = today - timedelta(days=1)
+            while check in hit_days:
+                current += 1
+                check -= timedelta(days=1)
+
+        # Longest streak ever
+        longest = 0
+        run = 0
+        all_dates = sorted(hit_days)
+        for i, d in enumerate(all_dates):
+            if i == 0 or (d - all_dates[i-1]).days == 1:
+                run += 1
+            else:
+                run = 1
+            longest = max(longest, run)
+
+        return {
+            "current_streak": current,
+            "longest_streak": max(longest, current),
+            "last_activity_date": last_activity.isoformat() if last_activity else None,
+        }
+    except Exception as e:
+        logger.warning("_recalculate_streak failed: %s", e)
+        return {"current_streak": 0, "longest_streak": 0, "last_activity_date": None}
+
+
+def update_streak(agent_name, targets: dict = None):
+    """Recalculate and persist streak for one agent."""
+    if not is_available():
+        return False
+    if targets is None:
+        ident = get_agent_identity(agent_name)
+        targets = {"daily_calls_target": ident["daily_calls_target"]} if ident else {"daily_calls_target": 1}
+    streak = _recalculate_streak(agent_name, targets)
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO streaks (agent_name, current_streak, longest_streak, last_activity_date, updated_at)
+                    VALUES (%s,%s,%s,%s,NOW())
+                    ON CONFLICT (agent_name) DO UPDATE SET
+                        current_streak     = EXCLUDED.current_streak,
+                        longest_streak     = GREATEST(streaks.longest_streak, EXCLUDED.longest_streak),
+                        last_activity_date = EXCLUDED.last_activity_date,
+                        updated_at         = NOW()
+                """, (agent_name, streak["current_streak"], streak["longest_streak"],
+                      streak["last_activity_date"]))
+        return True
+    except Exception as e:
+        logger.warning("update_streak failed: %s", e)
+        return False
+
+
+def get_streak(agent_name):
+    if not is_available():
+        return {"current_streak": 0, "longest_streak": 0, "last_activity_date": None}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT current_streak, longest_streak, last_activity_date, updated_at
+                    FROM streaks WHERE agent_name = %s
+                """, (agent_name,))
+                row = cur.fetchone()
+        if not row:
+            return {"current_streak": 0, "longest_streak": 0, "last_activity_date": None, "updated_at": None}
+        return {
+            "current_streak": row[0],
+            "longest_streak": row[1],
+            "last_activity_date": row[2].isoformat() if row[2] else None,
+            "updated_at": row[3].isoformat() if row[3] else None,
+        }
+    except Exception as e:
+        logger.warning("get_streak failed: %s", e)
+        return {"current_streak": 0, "longest_streak": 0, "last_activity_date": None}
+
+
+def get_all_streaks():
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, current_streak, longest_streak, last_activity_date, updated_at
+                    FROM streaks
+                """)
+                rows = cur.fetchall()
+        return {
+            r[0]: {
+                "current_streak": r[1], "longest_streak": r[2],
+                "last_activity_date": r[2].isoformat() if r[2] else None,
+                "updated_at": r[4].isoformat() if r[4] else None,
+            }
+            for r in rows
+        }
+    except Exception as e:
+        logger.warning("get_all_streaks failed: %s", e)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Nudge Log
+# ---------------------------------------------------------------------------
+
+def log_nudge(agent_name, nudge_type, message_content, twilio_sid=None, status="sent"):
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO nudge_log (agent_name, nudge_type, message_content, twilio_sid, status)
+                    VALUES (%s,%s,%s,%s,%s)
+                """, (agent_name, nudge_type, message_content, twilio_sid, status))
+        return True
+    except Exception as e:
+        logger.warning("log_nudge failed: %s", e)
+        return False
+
+
+def get_last_nudge(agent_name, nudge_type):
+    """Return the most recent nudge of a given type for an agent."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT sent_at, message_content, status
+                    FROM   nudge_log
+                    WHERE  agent_name = %s AND nudge_type = %s
+                    ORDER  BY sent_at DESC LIMIT 1
+                """, (agent_name, nudge_type))
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {"sent_at": row[0].isoformat(), "message": row[1], "status": row[2]}
+    except Exception as e:
+        logger.warning("get_last_nudge failed: %s", e)
+        return None
+
+
+def get_nudge_counts_today(agent_name):
+    """How many nudges sent today per type — prevents double-sending."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT nudge_type, COUNT(*) FROM nudge_log
+                    WHERE  agent_name = %s AND sent_at >= NOW() - INTERVAL '24 hours'
+                    GROUP  BY nudge_type
+                """, (agent_name,))
+                rows = cur.fetchall()
+        return {r[0]: r[1] for r in rows}
+    except Exception as e:
+        logger.warning("get_nudge_counts_today failed: %s", e)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Post-closing follow-ups
+# ---------------------------------------------------------------------------
+
+def create_post_closing_followup(agent_name, client_name, close_date, fub_deal_id=None):
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO post_closing_followups
+                        (agent_name, fub_deal_id, client_name, close_date,
+                         followup_30_date, followup_60_date, followup_90_date)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT DO NOTHING
+                """, (agent_name, fub_deal_id, client_name, close_date,
+                      close_date + timedelta(days=30),
+                      close_date + timedelta(days=60),
+                      close_date + timedelta(days=90)))
+        return True
+    except Exception as e:
+        logger.warning("create_post_closing_followup failed: %s", e)
+        return False
+
+
+def get_due_followups(as_of: date = None):
+    """Return all unsent follow-ups that are due on or before as_of date."""
+    if not is_available():
+        return []
+    if as_of is None:
+        as_of = date.today()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, agent_name, client_name, close_date,
+                           followup_30_sent, followup_60_sent, followup_90_sent,
+                           followup_30_date, followup_60_date, followup_90_date
+                    FROM   post_closing_followups
+                    WHERE  (followup_30_sent = FALSE AND followup_30_date <= %s)
+                        OR (followup_60_sent = FALSE AND followup_60_date <= %s)
+                        OR (followup_90_sent = FALSE AND followup_90_date <= %s)
+                    ORDER  BY close_date DESC
+                """, (as_of, as_of, as_of))
+                rows = cur.fetchall()
+        result = []
+        for r in rows:
+            due = []
+            if not r[4] and r[7] and r[7] <= as_of: due.append(30)
+            if not r[5] and r[8] and r[8] <= as_of: due.append(60)
+            if not r[6] and r[9] and r[9] <= as_of: due.append(90)
+            result.append({
+                "id": r[0], "agent_name": r[1], "client_name": r[2],
+                "close_date": r[3].isoformat(), "due_days": due,
+            })
+        return result
+    except Exception as e:
+        logger.warning("get_due_followups failed: %s", e)
+        return []
+
+
+def mark_followup_sent(followup_id, days):
+    if not is_available():
+        return False
+    col = {30: "followup_30_sent", 60: "followup_60_sent", 90: "followup_90_sent"}.get(days)
+    if not col:
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE post_closing_followups SET {col} = TRUE WHERE id = %s", (followup_id,))
+        return True
+    except Exception as e:
+        logger.warning("mark_followup_sent failed: %s", e)
+        return False

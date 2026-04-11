@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My {{ year }} Dashboard — Legacy Home Team</title>
+<style>
+:root {
+  --bg:      #080c14;
+  --surface: #0f1520;
+  --surface2:#161e2e;
+  --surface3:#1d2740;
+  --border:  #243050;
+  --text:    #e8edf8;
+  --muted:   #68789a;
+  --subtle:  #3d506e;
+  --gold:    #f5a623;
+  --gold-bg: rgba(245,166,35,.1);
+  --green:   #10b981;
+  --green-bg:rgba(16,185,129,.1);
+  --yellow:  #f59e0b;
+  --yellow-bg:rgba(245,158,11,.1);
+  --red:     #ef4444;
+  --red-bg:  rgba(239,68,68,.1);
+  --blue:    #3b82f6;
+  --purple:  #8b5cf6;
+  --r: 12px; --r-sm: 8px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:15px}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;padding-bottom:5rem}
+a{color:inherit;text-decoration:none}
+button{cursor:pointer;border:none;font-family:inherit}
+
+/* Header */
+.header{background:var(--surface);border-bottom:1px solid var(--border);padding:.9rem 1.25rem;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:20}
+.header-left{display:flex;align-items:center;gap:.6rem}
+.header-icon{font-size:1.3rem}
+.header-name{font-size:.9rem;font-weight:700;color:var(--gold)}
+.header-sub{font-size:.68rem;color:var(--muted)}
+.header-streak{display:flex;align-items:center;gap:.3rem;background:var(--gold-bg);border:1px solid rgba(245,166,35,.25);border-radius:20px;padding:.3rem .75rem;font-size:.78rem;font-weight:700;color:var(--gold)}
+
+/* View tabs */
+.view-tabs{display:flex;background:var(--surface);border-bottom:1px solid var(--border);padding:0 1rem}
+.view-tab{padding:.75rem 1.1rem;font-size:.8rem;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+.view-tab.active{color:var(--text);border-bottom-color:var(--gold)}
+
+/* Container */
+.container{max-width:540px;margin:0 auto;padding:1.1rem 1rem}
+.view{display:none}
+.view.active{display:block}
+
+/* Why card */
+.why-card{background:linear-gradient(135deg,rgba(245,166,35,.08),rgba(245,166,35,.02));border-left:3px solid var(--gold);border-radius:0 var(--r-sm) var(--r-sm) 0;padding:.9rem 1rem;margin-bottom:1rem}
+.why-eyebrow{font-size:.6rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin-bottom:.3rem}
+.why-text{font-size:.88rem;color:var(--text);line-height:1.55;font-style:italic}
+.why-for{font-size:.72rem;color:var(--muted);margin-top:.35rem}
+
+/* Daily logging */
+.log-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.1rem 1.2rem;margin-bottom:.9rem}
+.log-title{font-size:.65rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between}
+.log-date{font-size:.72rem;color:var(--muted);font-weight:400}
+.log-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.75rem;margin-bottom:1rem}
+.log-item{text-align:center}
+.log-label{font-size:.65rem;color:var(--muted);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.06em}
+.log-circle{width:72px;height:72px;border-radius:50%;border:3px solid var(--border);display:flex;flex-direction:column;align-items:center;justify-content:center;margin:0 auto .4rem;position:relative;cursor:pointer;transition:border-color .2s;background:var(--surface2)}
+.log-circle.hit{border-color:var(--green);background:var(--green-bg)}
+.log-circle.partial{border-color:var(--yellow);background:var(--yellow-bg)}
+.log-val{font-size:1.3rem;font-weight:800;line-height:1}
+.log-target{font-size:.62rem;color:var(--muted)}
+.log-input-row{display:flex;align-items:center;gap:.5rem;margin-top:.3rem}
+.log-input-row label{font-size:.72rem;color:var(--muted);white-space:nowrap}
+.log-number{width:64px;background:#0a0f1a;border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);font-size:.95rem;font-weight:700;padding:.4rem .5rem;text-align:center;outline:none;-moz-appearance:textfield}
+.log-number::-webkit-outer-spin-button,.log-number::-webkit-inner-spin-button{-webkit-appearance:none}
+.log-number:focus{border-color:var(--gold)}
+.btn-log{width:100%;background:var(--gold);color:#080c14;font-size:.9rem;font-weight:800;border-radius:var(--r-sm);padding:.75rem;transition:opacity .15s}
+.btn-log:hover{opacity:.9}
+.btn-log:disabled{opacity:.4;cursor:not-allowed}
+.log-saved{text-align:center;font-size:.8rem;color:var(--green);margin-top:.5rem;min-height:1.1rem}
+
+/* Streak card */
+.streak-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem;margin-bottom:.9rem;display:flex;align-items:center;justify-content:space-between}
+.streak-left{}
+.streak-num{font-size:2.2rem;font-weight:800;color:var(--gold);line-height:1}
+.streak-label{font-size:.72rem;color:var(--muted);margin-top:.15rem}
+.streak-best{font-size:.72rem;color:var(--subtle);margin-top:.3rem}
+.streak-flame{font-size:2.2rem}
+
+/* Don't break the chain calendar */
+.chain-title{font-size:.65rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:.6rem}
+.chain-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.chain-day{aspect-ratio:1;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:600;color:var(--subtle);background:var(--surface2)}
+.chain-day.hit{background:var(--green);color:#fff}
+.chain-day.partial{background:var(--yellow);color:#000}
+.chain-day.missed{background:var(--red-bg);color:var(--red)}
+.chain-day.today{outline:2px solid var(--gold);outline-offset:1px}
+.chain-day.future{opacity:.2}
+.chain-legend{display:flex;gap:1rem;margin-top:.5rem;font-size:.65rem;color:var(--muted)}
+.chain-legend span{display:flex;align-items:center;gap:.3rem}
+.chain-dot{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+
+/* KPI cards (weekly view) */
+.kpi-row{display:grid;grid-template-columns:1fr 1fr;gap:.65rem;margin-bottom:.9rem}
+.kpi-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:.85rem .9rem}
+.kpi-label{font-size:.62rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:.25rem}
+.kpi-val{font-size:1.5rem;font-weight:800;line-height:1;margin-bottom:.15rem}
+.kpi-target{font-size:.68rem;color:var(--muted)}
+.kpi-trend{font-size:.7rem;font-weight:600;margin-top:.2rem}
+.trend-up{color:var(--green)} .trend-down{color:var(--red)} .trend-flat{color:var(--muted)}
+
+/* Progress bar */
+.bar-wrap{margin-bottom:.9rem}
+.bar-label{display:flex;justify-content:space-between;font-size:.75rem;margin-bottom:.35rem}
+.bar-track{height:8px;background:var(--surface2);border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;transition:width .5s ease}
+.fill-green{background:var(--green)} .fill-yellow{background:var(--yellow)} .fill-red{background:var(--red)}
+
+/* Pace card */
+.pace-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem;margin-bottom:.9rem}
+.pace-title{font-size:.65rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:.9rem}
+.pace-projection{background:var(--surface2);border-radius:var(--r-sm);padding:.8rem 1rem;font-size:.85rem;color:var(--text);line-height:1.5;margin-top:.75rem}
+.pace-projection strong{color:var(--gold)}
+
+/* Toast */
+#toast{position:fixed;bottom:1.5rem;right:1rem;left:1rem;max-width:400px;margin:0 auto;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:.75rem 1rem;font-size:.83rem;font-weight:600;z-index:100;box-shadow:0 4px 24px rgba(0,0,0,.4);transition:opacity .3s;opacity:0;pointer-events:none;text-align:center}
+#toast.show{opacity:1}
+
+/* Loading */
+.skeleton{background:linear-gradient(90deg,var(--surface2) 25%,var(--surface3) 50%,var(--surface2) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:8px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="header-icon">🏠</div>
+    <div>
+      <div class="header-name" id="hdr-name">Loading…</div>
+      <div class="header-sub">{{ year }} Dashboard</div>
+    </div>
+  </div>
+  <div class="header-streak" id="hdr-streak" style="display:none">
+    🔥 <span id="hdr-streak-num">0</span> day streak
+  </div>
+</div>
+
+<div class="view-tabs">
+  <div class="view-tab active" onclick="switchView('daily')">Today</div>
+  <div class="view-tab" onclick="switchView('weekly')">This Week</div>
+  <div class="view-tab" onclick="switchView('annual')">Big Picture</div>
+</div>
+
+<div class="container">
+
+  <!-- ── DAILY VIEW ── -->
+  <div class="view active" id="view-daily">
+
+    <div class="why-card" id="daily-why" style="display:none">
+      <div class="why-eyebrow">Your Why</div>
+      <div class="why-text" id="daily-why-text"></div>
+      <div class="why-for" id="daily-why-for"></div>
+    </div>
+
+    <!-- Streak -->
+    <div class="streak-card">
+      <div class="streak-left">
+        <div class="streak-num" id="streak-num">—</div>
+        <div class="streak-label">day streak 🔥</div>
+        <div class="streak-best" id="streak-best">Best: — days</div>
+      </div>
+      <div class="streak-flame" id="streak-icon">🔥</div>
+    </div>
+
+    <!-- Log today -->
+    <div class="log-card">
+      <div class="log-title">
+        Log Today's Activity
+        <span class="log-date" id="log-date"></span>
+      </div>
+
+      <div class="log-grid">
+        <div class="log-item">
+          <div class="log-label">📞 Calls</div>
+          <div class="log-circle" id="circle-calls">
+            <div class="log-val" id="circle-calls-val">0</div>
+            <div class="log-target" id="circle-calls-target">/ 20</div>
+          </div>
+          <div class="log-input-row">
+            <input class="log-number" type="number" id="inp-calls" min="0" value="0" oninput="updateCircles()">
+          </div>
+        </div>
+        <div class="log-item">
+          <div class="log-label">💬 Texts</div>
+          <div class="log-circle" id="circle-texts">
+            <div class="log-val" id="circle-texts-val">0</div>
+            <div class="log-target" id="circle-texts-target">/ 5</div>
+          </div>
+          <div class="log-input-row">
+            <input class="log-number" type="number" id="inp-texts" min="0" value="0" oninput="updateCircles()">
+          </div>
+        </div>
+        <div class="log-item">
+          <div class="log-label">📅 Appts</div>
+          <div class="log-circle" id="circle-appts">
+            <div class="log-val" id="circle-appts-val">0</div>
+            <div class="log-target" id="circle-appts-target">/ 1</div>
+          </div>
+          <div class="log-input-row">
+            <input class="log-number" type="number" id="inp-appts" min="0" step="0.5" value="0" oninput="updateCircles()">
+          </div>
+        </div>
+      </div>
+
+      <button class="btn-log" id="btn-log" onclick="logActivity()">Save Today's Numbers</button>
+      <div class="log-saved" id="log-saved"></div>
+    </div>
+
+    <!-- Chain calendar -->
+    <div class="log-card">
+      <div class="chain-title">Don't Break the Chain — Last 35 Days</div>
+      <div class="chain-grid" id="chain-grid"></div>
+      <div class="chain-legend">
+        <span><div class="chain-dot" style="background:var(--green)"></div> Hit target</span>
+        <span><div class="chain-dot" style="background:var(--yellow)"></div> Partial</span>
+        <span><div class="chain-dot" style="background:var(--red-bg);border:1px solid var(--red)"></div> Missed</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── WEEKLY VIEW ── -->
+  <div class="view" id="view-weekly">
+
+    <div class="why-card" id="weekly-why" style="display:none">
+      <div class="why-eyebrow">Keep This In Mind</div>
+      <div class="why-text" id="weekly-why-text"></div>
+    </div>
+
+    <div class="kpi-row" id="weekly-kpi-row">
+      <div class="kpi-card"><div class="skeleton" style="height:80px"></div></div>
+      <div class="kpi-card"><div class="skeleton" style="height:80px"></div></div>
+      <div class="kpi-card"><div class="skeleton" style="height:80px"></div></div>
+      <div class="kpi-card"><div class="skeleton" style="height:80px"></div></div>
+    </div>
+
+    <div class="log-card" id="weekly-trend-card" style="display:none">
+      <div class="log-title">Week-over-Week</div>
+      <div id="weekly-trend-text" style="font-size:.85rem;color:var(--text);line-height:1.6"></div>
+    </div>
+
+  </div>
+
+  <!-- ── ANNUAL VIEW ── -->
+  <div class="view" id="view-annual">
+
+    <div class="pace-card" id="annual-pace-card">
+      <div class="pace-title">📈 Your {{ year }} Progress</div>
+      <div id="annual-bars"><div class="skeleton" style="height:120px"></div></div>
+      <div class="pace-projection" id="annual-projection" style="display:none"></div>
+    </div>
+
+    <div class="log-card" style="text-align:center;padding:1.2rem">
+      <div style="font-size:.72rem;color:var(--muted);margin-bottom:.75rem">Need to update your goals?</div>
+      <a href="/goals/setup/{{ token }}" style="display:inline-block;background:var(--gold);color:#080c14;font-weight:700;font-size:.85rem;padding:.6rem 1.4rem;border-radius:var(--r-sm)">Update My Goals →</a>
+    </div>
+
+  </div>
+
+</div><!-- /container -->
+
+<div id="toast"></div>
+
+<script>
+const TOKEN = "{{ token }}";
+const YEAR  = {{ year }};
+
+let _data = null;
+let _targets = {};
+let _identity = {};
+
+// ── Init ──────────────────────────────────────────────────────────
+
+async function loadDashboard() {
+  try {
+    const res = await fetch(`/api/goals/my-goals/${TOKEN}`);
+    if (!res.ok) throw new Error('Failed to load');
+    _data = await res.json();
+    renderAll();
+  } catch(e) {
+    showToast('Failed to load dashboard', true);
+  }
+}
+
+function renderAll() {
+  const d = _data;
+  _identity = d.identity || {};
+  _targets  = _identity;
+
+  // Header
+  const first = (d.agent_name || '').split(' ')[0];
+  document.getElementById('hdr-name').textContent = first + "'s Dashboard";
+
+  // Streak header badge
+  const streak = (d.streak || {}).current_streak || 0;
+  if (streak > 0) {
+    document.getElementById('hdr-streak-num').textContent = streak;
+    document.getElementById('hdr-streak').style.display = 'flex';
+  }
+
+  renderWhyCards(d.why);
+  renderStreak(d.streak);
+  renderTodayLog(d.today, d.identity);
+  renderChain(d.activity_log, d.identity);
+  renderWeekly(d.activity_log, d.identity);
+  renderAnnual(d.goal, d.pace, d.actuals, d.targets, d.why);
+}
+
+// ── Why cards ─────────────────────────────────────────────────────
+
+function renderWhyCards(why) {
+  if (!why || !why.why_statement) return;
+  ['daily-why','weekly-why'].forEach(id => {
+    const card = document.getElementById(id);
+    if (!card) return;
+    card.style.display = 'block';
+  });
+  document.getElementById('daily-why-text').textContent = why.why_statement;
+  document.getElementById('weekly-why-text').textContent = why.why_statement;
+  if (why.what_happens) {
+    document.getElementById('daily-why-for').textContent = '→ ' + why.what_happens;
+  }
+  ['daily-why','weekly-why'].forEach(id => {
+    document.getElementById(id) && (document.getElementById(id).style.display = 'block');
+  });
+}
+
+// ── Streak ────────────────────────────────────────────────────────
+
+function renderStreak(streak) {
+  if (!streak) return;
+  const cur = streak.current_streak || 0;
+  const best = streak.longest_streak || 0;
+  document.getElementById('streak-num').textContent = cur;
+  document.getElementById('streak-best').textContent = `Best: ${best} days`;
+  document.getElementById('streak-icon').textContent = cur >= 21 ? '🏆' : cur >= 7 ? '🔥' : cur > 0 ? '⚡' : '💤';
+  document.getElementById('hdr-streak-num').textContent = cur;
+  if (cur > 0) document.getElementById('hdr-streak').style.display = 'flex';
+}
+
+// ── Today logging ─────────────────────────────────────────────────
+
+function renderTodayLog(today, ident) {
+  const calls = today?.calls || 0;
+  const texts = today?.texts || 0;
+  const appts = today?.appts || 0;
+  const callsT = ident?.daily_calls_target || 20;
+  const textsT = ident?.daily_texts_target || 5;
+  const apptsT = ident?.daily_appts_target || 1;
+
+  document.getElementById('inp-calls').value = calls;
+  document.getElementById('inp-texts').value = texts;
+  document.getElementById('inp-appts').value = appts;
+
+  document.getElementById('circle-calls-target').textContent = '/ ' + callsT;
+  document.getElementById('circle-texts-target').textContent = '/ ' + textsT;
+  document.getElementById('circle-appts-target').textContent = '/ ' + apptsT;
+
+  const now = new Date();
+  document.getElementById('log-date').textContent = now.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+
+  updateCircles();
+}
+
+function updateCircles() {
+  const callsT = _identity?.daily_calls_target || 20;
+  const textsT = _identity?.daily_texts_target || 5;
+  const apptsT = _identity?.daily_appts_target || 1;
+
+  [
+    ['calls', callsT],
+    ['texts', textsT],
+    ['appts', apptsT],
+  ].forEach(([key, target]) => {
+    const val = parseFloat(document.getElementById(`inp-${key}`)?.value) || 0;
+    document.getElementById(`circle-${key}-val`).textContent = val;
+    const circle = document.getElementById(`circle-${key}`);
+    circle.className = 'log-circle' + (val >= target ? ' hit' : val > 0 ? ' partial' : '');
+  });
+}
+
+async function logActivity() {
+  const btn = document.getElementById('btn-log');
+  const saved = document.getElementById('log-saved');
+  btn.disabled = true;
+  btn.textContent = '⏳ Saving…';
+  const calls = parseFloat(document.getElementById('inp-calls').value) || 0;
+  const texts = parseFloat(document.getElementById('inp-texts').value) || 0;
+  const appts = parseFloat(document.getElementById('inp-appts').value) || 0;
+  try {
+    const res = await fetch(`/api/goals/my-goals/${TOKEN}/log`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({calls, texts, appts}),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error('Failed to save');
+    saved.textContent = '✅ Saved!';
+    // Update streak live
+    if (data.streak) {
+      renderStreak(data.streak);
+      if (_data) _data.streak = data.streak;
+    }
+    // Refresh chain
+    if (_data) {
+      _data.today = {calls, texts, appts};
+      renderChain(_data.activity_log, _data.identity);
+    }
+    showToast(streakMessage(data.streak?.current_streak || 0, calls));
+    setTimeout(() => { saved.textContent = ''; }, 3000);
+  } catch(e) {
+    saved.textContent = '❌ Error saving. Try again.';
+    saved.style.color = 'var(--red)';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Save Today\'s Numbers';
+}
+
+function streakMessage(streak, calls) {
+  if (streak >= 21) return `Day ${streak}. Science says that's a habit now. 🏆`;
+  if (streak >= 7)  return `${streak} days straight. You're building something real. 🔥`;
+  if (streak >= 3)  return `${streak} days in a row. Keep the chain going. ⚡`;
+  if (calls > 0)    return `Day 1 of a new streak. Every great run starts here.`;
+  return '✅ Activity logged.';
+}
+
+// ── Chain calendar ────────────────────────────────────────────────
+
+function renderChain(activityLog, ident) {
+  const callsT = ident?.daily_calls_target || 1;
+  const grid = document.getElementById('chain-grid');
+  if (!grid) return;
+
+  // Build lookup from activity log
+  const logMap = {};
+  (activityLog || []).forEach(r => { logMap[r.date] = r; });
+
+  // Also include today if logged
+  if (_data?.today?.calls > 0) {
+    const todayStr = new Date().toISOString().slice(0,10);
+    logMap[todayStr] = _data.today;
+  }
+
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0,10);
+  const days = [];
+  for (let i = 34; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    days.push(d.toISOString().slice(0,10));
+  }
+
+  grid.innerHTML = days.map(dateStr => {
+    const act = logMap[dateStr];
+    const isFuture = dateStr > todayStr;
+    const isToday  = dateStr === todayStr;
+    let cls = 'chain-day';
+    let label = new Date(dateStr + 'T12:00:00').getDate();
+    if (isFuture) {
+      cls += ' future';
+    } else if (!act || (act.calls === 0 && act.texts === 0 && act.appts === 0)) {
+      cls += ' missed';
+    } else if ((act.calls || 0) >= callsT) {
+      cls += ' hit';
+    } else {
+      cls += ' partial';
+    }
+    if (isToday) cls += ' today';
+    return `<div class="${cls}" title="${dateStr}">${label}</div>`;
+  }).join('');
+}
+
+// ── Weekly view ───────────────────────────────────────────────────
+
+function renderWeekly(activityLog, ident) {
+  const callsT  = ident?.daily_calls_target || 20;
+  const textsT  = ident?.daily_texts_target || 5;
+  const apptsT  = (ident?.daily_appts_target || 1) * 5; // weekly
+
+  // This week Mon–today
+  const today = new Date();
+  const dow = today.getDay(); // 0=Sun
+  const monOffset = dow === 0 ? -6 : 1 - dow;
+  const weekDays = [];
+  for (let i = 0; i < 7 && i <= dow; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + monOffset + i);
+    weekDays.push(d.toISOString().slice(0,10));
+  }
+
+  // Last week
+  const lastWeekDays = weekDays.map(ds => {
+    const d = new Date(ds); d.setDate(d.getDate() - 7); return d.toISOString().slice(0,10);
+  });
+
+  const logMap = {};
+  (activityLog || []).forEach(r => { logMap[r.date] = r; });
+  if (_data?.today) {
+    const todayStr = today.toISOString().slice(0,10);
+    logMap[todayStr] = _data.today;
+  }
+
+  const sum = (days, key) => days.reduce((acc, d) => acc + ((logMap[d] || {})[key] || 0), 0);
+
+  const thisCalls = sum(weekDays, 'calls');
+  const thisTexts = sum(weekDays, 'texts');
+  const thisAppts = sum(weekDays, 'appts');
+  const lastCalls = sum(lastWeekDays, 'calls');
+
+  const daysWorked = Math.max(weekDays.length, 1);
+  const callsTarget  = callsT * daysWorked;
+  const textsTarget  = textsT * daysWorked;
+  const apptsTarget  = apptsT;
+
+  function pctColor(actual, target) {
+    const p = target > 0 ? actual / target * 100 : 0;
+    return p >= 90 ? 'var(--green)' : p >= 60 ? 'var(--yellow)' : 'var(--red)';
+  }
+
+  document.getElementById('weekly-kpi-row').innerHTML = `
+    <div class="kpi-card">
+      <div class="kpi-label">📞 Calls</div>
+      <div class="kpi-val" style="color:${pctColor(thisCalls,callsTarget)}">${thisCalls}</div>
+      <div class="kpi-target">target: ${callsTarget}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">💬 Texts</div>
+      <div class="kpi-val" style="color:${pctColor(thisTexts,textsTarget)}">${thisTexts}</div>
+      <div class="kpi-target">target: ${textsTarget}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">📅 Appts</div>
+      <div class="kpi-val" style="color:${pctColor(thisAppts,apptsTarget)}">${thisAppts}</div>
+      <div class="kpi-target">target: ${apptsTarget}</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">🔥 Streak</div>
+      <div class="kpi-val" style="color:var(--gold)">${(_data?.streak?.current_streak)||0}</div>
+      <div class="kpi-target">days in a row</div>
+    </div>
+  `;
+
+  // Week-over-week trend for calls
+  const trendCard = document.getElementById('weekly-trend-card');
+  const trendText = document.getElementById('weekly-trend-text');
+  if (lastCalls > 0) {
+    const change = Math.round((thisCalls - lastCalls) / lastCalls * 100);
+    const why = _data?.why?.why_statement || '';
+    let msg = '';
+    if (change > 0) {
+      msg = `<span class="trend-up">↑ +${change}% more calls than last week.</span> You're building momentum.`;
+      if (why) msg += ` Every call is a step toward: <em>"${why.slice(0, 80)}${why.length > 80 ? '…' : ''}"</em>`;
+    } else if (change < -10) {
+      msg = `<span class="trend-down">↓ ${Math.abs(change)}% fewer calls than last week.</span> Results lag behind effort — this week is the week to close the gap.`;
+    } else {
+      msg = `<span class="trend-flat">→ About the same as last week.</span> Consistency is the foundation. Keep going.`;
+    }
+    trendText.innerHTML = msg;
+    trendCard.style.display = 'block';
+  }
+}
+
+// ── Annual view ───────────────────────────────────────────────────
+
+function renderAnnual(goal, pace, actuals, targets, why) {
+  if (!goal || !pace) {
+    document.getElementById('annual-bars').innerHTML = '<div style="color:var(--muted);font-size:.85rem">Set your goals to see your annual progress.</div>';
+    return;
+  }
+
+  const gci = parseFloat(goal.gci_goal || 0);
+  const commPct = parseFloat(goal.commission_pct || 0.025);
+  const avgPrice = parseFloat(goal.avg_sale_price || 425000);
+  const perDeal = avgPrice * commPct;
+  const closingsNeeded = perDeal > 0 ? gci / perDeal : 0;
+
+  const callsYtd    = actuals?.calls_ytd || 0;
+  const apptsYtd    = actuals?.appts_ytd || 0;
+  const closingsYtd = actuals?.closings_ytd || 0;
+  const callsNeeded = targets?.calls_needed_yr || 0;
+  const apptsNeeded = targets?.appts_needed_yr || 0;
+
+  function bar(label, actual, target, color) {
+    const pct = target > 0 ? Math.min(actual / target * 100, 100) : 0;
+    const fillCls = pct >= 90 ? 'fill-green' : pct >= 60 ? 'fill-yellow' : 'fill-red';
+    return `
+      <div class="bar-wrap">
+        <div class="bar-label"><span>${label}</span><span style="color:${color}">${actual.toLocaleString()} / ${Math.round(target).toLocaleString()}</span></div>
+        <div class="bar-track"><div class="bar-fill ${fillCls}" style="width:${pct}%"></div></div>
+      </div>`;
+  }
+
+  document.getElementById('annual-bars').innerHTML =
+    bar('📞 Calls YTD', callsYtd, callsNeeded, 'var(--blue)') +
+    bar('📅 Appointments YTD', apptsYtd, apptsNeeded, 'var(--purple)') +
+    bar('🏡 Closings YTD', closingsYtd, closingsNeeded, 'var(--green)');
+
+  // Projection
+  const weekNum = pace.week_num || 1;
+  const weeksLeft = Math.max(50 - weekNum, 1);
+  const gciFromClosings = closingsYtd * perDeal;
+  const closingRate = weekNum > 0 ? closingsYtd / weekNum : 0;
+  const projectedClosings = closingsYtd + (closingRate * weeksLeft);
+  const projectedGci = projectedClosings * perDeal;
+
+  const projEl = document.getElementById('annual-projection');
+  const gciFormatted = (n) => n >= 1000 ? '$' + Math.round(n/1000) + 'K' : '$' + Math.round(n);
+  const direction = projectedGci >= gci ? 'ahead of' : 'behind';
+  const dirColor  = projectedGci >= gci ? 'var(--green)' : 'var(--yellow)';
+
+  projEl.innerHTML = `At your current pace, you'll finish ${YEAR} at <strong>${gciFormatted(projectedGci)}</strong>. Your goal is <strong style="color:var(--gold)">${gciFormatted(gci)}</strong>. You are <span style="color:${dirColor}">${direction} pace</span>.`;
+  projEl.style.display = 'block';
+}
+
+// ── View switching ────────────────────────────────────────────────
+
+function switchView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(`view-${name}`).classList.add('active');
+  event.target.classList.add('active');
+}
+
+// ── Toast ─────────────────────────────────────────────────────────
+
+function showToast(msg, isError=false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderColor = isError ? 'var(--red)' : 'var(--green)';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+// ── Boot ──────────────────────────────────────────────────────────
+loadDashboard();
+</script>
+</body>
+</html>

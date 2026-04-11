@@ -5,432 +5,636 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ year }} Goal Setting — Legacy Home Team</title>
 <style>
-  :root {
-    --bg:      #0f1117;
-    --card:    #1a1d27;
-    --border:  #2a2d3a;
-    --text:    #e8eaf0;
-    --muted:   #8b8fa8;
-    --gold:    #f5a623;
-    --green:   #22c55e;
-    --yellow:  #eab308;
-    --red:     #ef4444;
-    --blue:    #3b82f6;
-    --radius:  12px;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:      #080c14;
+  --surface: #0f1520;
+  --surface2:#161e2e;
+  --border:  #243050;
+  --text:    #e8edf8;
+  --muted:   #68789a;
+  --subtle:  #3d506e;
+  --gold:    #f5a623;
+  --gold-bg: rgba(245,166,35,.1);
+  --green:   #10b981;
+  --green-bg:rgba(16,185,129,.08);
+  --yellow:  #f59e0b;
+  --red:     #ef4444;
+  --blue:    #3b82f6;
+  --purple:  #8b5cf6;
+  --r: 12px; --r-sm: 8px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:15px}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;padding:0 0 5rem}
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    min-height: 100vh;
-    padding: 0 0 4rem;
-  }
+/* Header */
+.header{background:var(--surface);border-bottom:1px solid var(--border);padding:1rem 1.25rem;display:flex;align-items:center;gap:.75rem;position:sticky;top:0;z-index:20}
+.header-icon{font-size:1.4rem}
+.header-title{font-size:.9rem;font-weight:700;color:var(--gold)}
+.header-sub{font-size:.7rem;color:var(--muted)}
 
-  .header {
-    background: var(--card);
-    border-bottom: 1px solid var(--border);
-    padding: 1.25rem 1.5rem;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
-  .header-logo { font-size: 1.4rem; }
-  .header-title { font-size: 1rem; font-weight: 600; color: var(--gold); }
-  .header-sub { font-size: 0.75rem; color: var(--muted); }
+/* Progress bar */
+.progress-wrap{background:var(--surface);border-bottom:1px solid var(--border);padding:.75rem 1.25rem}
+.progress-label{font-size:.68rem;color:var(--muted);margin-bottom:.4rem;display:flex;justify-content:space-between}
+.progress-track{height:4px;background:var(--surface2);border-radius:2px;overflow:hidden}
+.progress-fill{height:100%;background:var(--gold);border-radius:2px;transition:width .4s ease}
+.step-dots{display:flex;gap:.5rem;justify-content:center;margin-top:.5rem}
+.step-dot{width:7px;height:7px;border-radius:50%;background:var(--border);transition:all .3s}
+.step-dot.done{background:var(--green)}
+.step-dot.active{background:var(--gold);transform:scale(1.3)}
 
-  .container { max-width: 560px; margin: 0 auto; padding: 1.5rem 1rem; }
+/* Container */
+.container{max-width:540px;margin:0 auto;padding:1.25rem 1rem}
 
-  .greeting {
-    background: linear-gradient(135deg, #1e2535 0%, #1a1d27 100%);
-    border: 1px solid var(--border);
-    border-left: 4px solid var(--gold);
-    border-radius: var(--radius);
-    padding: 1.25rem 1.5rem;
-    margin-bottom: 1.5rem;
-  }
-  .greeting h1 { font-size: 1.3rem; margin-bottom: 0.4rem; }
-  .greeting p  { font-size: 0.875rem; color: var(--muted); line-height: 1.5; }
+/* Section slides */
+.section{display:none}
+.section.active{display:block}
 
-  .section {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1.25rem 1.5rem;
-    margin-bottom: 1rem;
-  }
-  .section-title {
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border);
-  }
+/* Section heading */
+.sec-eyebrow{font-size:.62rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin-bottom:.4rem}
+.sec-headline{font-size:1.35rem;font-weight:800;line-height:1.25;margin-bottom:.5rem}
+.sec-sub{font-size:.85rem;color:var(--muted);line-height:1.55;margin-bottom:1.4rem}
 
-  .field { margin-bottom: 1rem; }
-  .field:last-child { margin-bottom: 0; }
-  .field label {
-    display: block;
-    font-size: 0.8rem;
-    color: var(--muted);
-    margin-bottom: 0.35rem;
-    font-weight: 500;
-  }
-  .field label span { color: var(--text); font-weight: 600; }
+/* Cards */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.1rem 1.2rem;margin-bottom:.9rem}
+.card-title{font-size:.65rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:.9rem;padding-bottom:.5rem;border-bottom:1px solid var(--border)}
 
-  .input-wrap { position: relative; }
-  .input-prefix {
-    position: absolute;
-    left: 0.9rem;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--muted);
-    font-size: 1rem;
-    pointer-events: none;
-  }
-  .input-suffix {
-    position: absolute;
-    right: 0.9rem;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--muted);
-    font-size: 0.9rem;
-    pointer-events: none;
-  }
-  input[type="number"], input[type="text"] {
-    width: 100%;
-    background: #12151f;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text);
-    font-size: 1.1rem;
-    padding: 0.75rem 2.5rem 0.75rem 2rem;
-    outline: none;
-    transition: border-color 0.2s;
-    -moz-appearance: textfield;
-  }
-  input[type="number"]::-webkit-outer-spin-button,
-  input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
-  input:focus { border-color: var(--gold); }
-  input.no-prefix { padding-left: 0.9rem; }
+/* Fields */
+.field{margin-bottom:.9rem}
+.field:last-child{margin-bottom:0}
+.field label{display:block;font-size:.78rem;color:var(--muted);margin-bottom:.3rem;font-weight:500}
+.field label strong{color:var(--text)}
+textarea,input[type="text"],input[type="number"],input[type="time"],select{
+  width:100%;background:#0a0f1a;border:1px solid var(--border);border-radius:var(--r-sm);
+  color:var(--text);font-size:.95rem;padding:.65rem .85rem;outline:none;
+  transition:border-color .2s;font-family:inherit;resize:vertical
+}
+textarea{min-height:80px;line-height:1.55}
+input:focus,textarea:focus,select:focus{border-color:var(--gold)}
+select option{background:#0a0f1a}
+.input-wrap{position:relative}
+.input-prefix{position:absolute;left:.85rem;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+.input-suffix{position:absolute;right:.85rem;top:50%;transform:translateY(-50%);color:var(--muted);font-size:.85rem;pointer-events:none}
+.has-prefix input,.has-prefix textarea{padding-left:1.8rem}
+.has-suffix input{padding-right:2.2rem}
+.helper{font-size:.7rem;color:var(--muted);margin-top:.28rem}
+input[type="number"]{-moz-appearance:textfield}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
 
-  .helper { font-size: 0.72rem; color: var(--muted); margin-top: 0.3rem; }
+/* Identity archetypes */
+.archetypes{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.9rem}
+.archetype-btn{background:var(--surface2);border:2px solid var(--border);border-radius:var(--r-sm);padding:.8rem .9rem;cursor:pointer;transition:all .2s;text-align:left}
+.archetype-btn:hover{border-color:var(--subtle);background:var(--surface)}
+.archetype-btn.selected{border-color:var(--gold);background:var(--gold-bg)}
+.arch-emoji{font-size:1.2rem;margin-bottom:.25rem}
+.arch-name{font-size:.82rem;font-weight:700;color:var(--text)}
+.arch-desc{font-size:.68rem;color:var(--muted);margin-top:.15rem;line-height:1.4}
 
-  /* Results card */
-  .results {
-    background: linear-gradient(135deg, #1a2535 0%, #1a1d27 100%);
-    border: 2px solid var(--gold);
-    border-radius: var(--radius);
-    padding: 1.5rem;
-    margin-bottom: 1rem;
-  }
-  .results-title {
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--gold);
-    margin-bottom: 1.25rem;
-  }
+/* Daily habit preview */
+.habit-preview{background:linear-gradient(135deg,rgba(245,166,35,.06),rgba(245,166,35,.02));border:1px solid rgba(245,166,35,.2);border-radius:var(--r);padding:1rem 1.1rem;margin-bottom:.9rem}
+.habit-preview-title{font-size:.65rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--gold);margin-bottom:.7rem}
+.habit-row{display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid rgba(36,48,80,.5)}
+.habit-row:last-child{border-bottom:none}
+.habit-label{font-size:.8rem;color:var(--muted)}
+.habit-val{font-size:.95rem;font-weight:700;color:var(--gold)}
 
-  .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
-  .result-item {
-    background: rgba(255,255,255,0.04);
-    border-radius: 8px;
-    padding: 0.9rem 1rem;
-  }
-  .result-item.full { grid-column: 1 / -1; }
-  .result-label { font-size: 0.7rem; color: var(--muted); margin-bottom: 0.25rem; }
-  .result-value { font-size: 1.5rem; font-weight: 700; color: var(--gold); }
-  .result-unit  { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
+/* Result card */
+.result-card{background:linear-gradient(135deg,#101b2a,#0f1520);border:2px solid var(--gold);border-radius:var(--r);padding:1.2rem 1.3rem;margin-bottom:.9rem}
+.result-title{font-size:.65rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--gold);margin-bottom:1rem}
+.result-grid{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+.result-item{background:rgba(255,255,255,.04);border-radius:var(--r-sm);padding:.8rem .9rem}
+.result-item.full{grid-column:1/-1}
+.result-label{font-size:.65rem;color:var(--muted);margin-bottom:.2rem}
+.result-value{font-size:1.5rem;font-weight:800;color:var(--gold)}
+.result-unit{font-size:.68rem;color:var(--muted);margin-top:.1rem}
+.result-divider{grid-column:1/-1;border:none;border-top:1px solid var(--border);margin:.2rem 0}
 
-  .divider {
-    border: none;
-    border-top: 1px solid var(--border);
-    margin: 1rem 0;
-  }
+/* SOI note */
+.soi-note{background:var(--green-bg);border:1px solid rgba(16,185,129,.2);border-radius:var(--r-sm);padding:.7rem .9rem;font-size:.78rem;color:#6ee7b7;line-height:1.5;margin-top:.6rem}
 
-  /* SOI section */
-  .soi-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-  }
-  .soi-note {
-    background: rgba(34,197,94,0.08);
-    border: 1px solid rgba(34,197,94,0.2);
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    font-size: 0.8rem;
-    color: #86efac;
-    margin-top: 0.75rem;
-    line-height: 1.5;
-  }
+/* Daily system equation */
+.equation{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:.9rem 1rem;text-align:center;font-size:.85rem;color:var(--muted);margin-bottom:.9rem;line-height:1.6}
+.equation strong{color:var(--gold)}
 
-  /* Advanced toggle */
-  .advanced-toggle {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    cursor: pointer;
-    color: var(--muted);
-    font-size: 0.8rem;
-    padding: 0.5rem 0;
-    user-select: none;
-  }
-  .advanced-toggle:hover { color: var(--text); }
-  .advanced-arrow { transition: transform 0.2s; }
-  .advanced-arrow.open { transform: rotate(90deg); }
-  #advanced-fields { display: none; margin-top: 1rem; }
-  #advanced-fields.open { display: block; }
+/* Advanced toggle */
+.adv-toggle{display:flex;align-items:center;gap:.4rem;cursor:pointer;color:var(--muted);font-size:.78rem;padding:.4rem 0;user-select:none}
+.adv-toggle:hover{color:var(--text)}
+.adv-arrow{font-size:.7rem;transition:transform .2s}
+.adv-arrow.open{transform:rotate(90deg)}
+#adv-fields{display:none;margin-top:.8rem}
+#adv-fields.open{display:block}
+.rate-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem}
 
-  .rate-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 0.6rem;
-  }
+/* Nav buttons */
+.nav-wrap{display:flex;gap:.6rem;margin-top:1.4rem}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.4rem;padding:.7rem 1.2rem;border-radius:var(--r-sm);font-size:.85rem;font-weight:700;cursor:pointer;border:none;transition:all .15s;font-family:inherit;width:100%}
+.btn-gold{background:var(--gold);color:#080c14}
+.btn-gold:hover{opacity:.9}
+.btn-gold:disabled{opacity:.4;cursor:not-allowed}
+.btn-ghost{background:var(--surface2);border:1px solid var(--border);color:var(--muted);width:auto;flex:0 0 auto;padding:.7rem 1rem}
+.btn-ghost:hover{color:var(--text);border-color:var(--subtle)}
 
-  /* Save button */
-  .btn-save {
-    width: 100%;
-    background: var(--gold);
-    color: #0f1117;
-    font-size: 1rem;
-    font-weight: 700;
-    border: none;
-    border-radius: var(--radius);
-    padding: 1rem;
-    cursor: pointer;
-    transition: opacity 0.2s, transform 0.1s;
-    margin-top: 0.5rem;
-  }
-  .btn-save:hover  { opacity: 0.9; }
-  .btn-save:active { transform: scale(0.98); }
-  .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Why display card */
+.why-card{background:linear-gradient(135deg,rgba(245,166,35,.07),transparent);border-left:3px solid var(--gold);border-radius:0 var(--r-sm) var(--r-sm) 0;padding:.9rem 1rem;margin-bottom:1rem}
+.why-label{font-size:.62rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:.3rem}
+.why-text{font-size:.9rem;color:var(--text);line-height:1.55;font-style:italic}
 
-  .save-status {
-    text-align: center;
-    font-size: 0.85rem;
-    margin-top: 0.75rem;
-    min-height: 1.2rem;
-  }
-  .save-status.ok  { color: var(--green); }
-  .save-status.err { color: var(--red); }
+/* Already saved banner */
+.saved-banner{background:var(--green-bg);border:1px solid rgba(16,185,129,.25);border-radius:var(--r);padding:.8rem 1rem;margin-bottom:1rem;font-size:.82rem;color:#6ee7b7;display:flex;align-items:center;gap:.5rem}
 
-  /* Already saved banner */
-  .saved-banner {
-    background: rgba(34,197,94,0.1);
-    border: 1px solid rgba(34,197,94,0.3);
-    border-radius: var(--radius);
-    padding: 0.9rem 1.25rem;
-    margin-bottom: 1rem;
-    font-size: 0.85rem;
-    color: #86efac;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
+/* Save status */
+.save-status{text-align:center;font-size:.83rem;margin-top:.6rem;min-height:1.2rem}
+.save-status.ok{color:var(--green)}
+.save-status.err{color:var(--red)}
+
+@media(max-width:400px){.archetypes{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
 <div class="header">
-  <div class="header-logo">🏠</div>
+  <div class="header-icon">🏠</div>
   <div>
     <div class="header-title">Legacy Home Team</div>
     <div class="header-sub">{{ year }} Business Goal Setting</div>
   </div>
 </div>
 
+<div class="progress-wrap">
+  <div class="progress-label">
+    <span id="step-label">Step 1 of 6</span>
+    <span id="step-name">Your Why</span>
+  </div>
+  <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:16.6%"></div></div>
+  <div class="step-dots">
+    <div class="step-dot active" id="dot-1"></div>
+    <div class="step-dot" id="dot-2"></div>
+    <div class="step-dot" id="dot-3"></div>
+    <div class="step-dot" id="dot-4"></div>
+    <div class="step-dot" id="dot-5"></div>
+    <div class="step-dot" id="dot-6"></div>
+  </div>
+</div>
+
 <div class="container">
 
-  <div class="greeting">
-    <h1>Hey {{ agent_name.split()[0] }}! 👋</h1>
-    <p>Set your {{ year }} income goal below and we'll automatically calculate
-       exactly how many calls and appointments you need to hit it each week.
-       Takes about 2 minutes.</p>
-  </div>
-
   {% if goal and goal.gci_goal and goal.gci_goal > 0 %}
-  <div class="saved-banner">
-    ✅ You've already set your goals for {{ year }}. Update them any time below.
-  </div>
+  <div class="saved-banner">✅ Your goals are already set for {{ year }}. Update them any time below.</div>
   {% endif %}
 
-  <!-- Income Goal -->
-  <div class="section">
-    <div class="section-title">💰 Your Income Goal</div>
-    <div class="field">
-      <label>What do you want to earn in {{ year }}? <span>(Gross Commission Income)</span></label>
-      <div class="input-wrap">
-        <span class="input-prefix">$</span>
-        <input type="number" id="gci_goal" min="0" step="1000"
-               value="{{ (goal.gci_goal | int) if goal and goal.gci_goal else '' }}"
-               placeholder="150000" oninput="recalc()">
-      </div>
-      <div class="helper">This is your gross commission before office split deductions.</div>
-    </div>
-  </div>
+  <!-- ── SECTION 1: YOUR WHY ── -->
+  <div class="section active" id="section-1">
+    <div class="sec-eyebrow">Section 1 — Your Why</div>
+    <div class="sec-headline">Forget the numbers for a second.</div>
+    <div class="sec-sub">If this year goes exactly the way you want it to, what changes in your life? Be specific — the more real this is, the more powerful the rest of this process becomes.</div>
 
-  <!-- Deal Economics -->
-  <div class="section">
-    <div class="section-title">🏡 Your Market</div>
-    <div class="field">
-      <label>Average sale price in your deals</label>
-      <div class="input-wrap">
-        <span class="input-prefix">$</span>
-        <input type="number" id="avg_sale_price" min="0" step="10000"
-               value="{{ (goal.avg_sale_price | int) if goal and goal.avg_sale_price else 425000 }}"
-               placeholder="425000" oninput="recalc()">
-      </div>
-    </div>
-    <div class="field">
-      <label>Commission rate you net after splits <span>(e.g. 2.5%)</span></label>
-      <div class="input-wrap">
-        <input type="number" id="commission_pct" min="0" max="10" step="0.1"
-               value="{{ '%.1f' | format((goal.commission_pct | float) * 100) if goal and goal.commission_pct else '2.5' }}"
-               placeholder="2.5" oninput="recalc()" class="no-prefix">
-        <span class="input-suffix">%</span>
-      </div>
-      <div class="helper" id="commission-helper">≈ $<span id="per-deal">—</span> per closing</div>
-    </div>
-  </div>
-
-  <!-- Sphere of Influence -->
-  <div class="section">
-    <div class="section-title">👥 Sphere of Influence</div>
-    <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1rem;line-height:1.5">
-      How many deals do you expect from referrals, past clients, family &amp; friends
-      this year — without actively prospecting for them?
-    </p>
-    <div class="soi-row">
+    <div class="card">
+      <div class="card-title">✍️ In your own words</div>
       <div class="field">
-        <label>Expected SOI closings</label>
-        <div class="input-wrap">
-          <input type="number" id="soi_closings" min="0" step="1"
-                 value="{{ goal.soi_closings_expected if goal else 0 }}"
-                 placeholder="0" oninput="recalc()" class="no-prefix">
-        </div>
+        <label>If {{ year }} goes exactly how you want, what changes?</label>
+        <textarea id="why_statement" placeholder="e.g. I pay off my car, I take my kids to Disney, I stop worrying about money every month, I finally feel like I made it..." rows="4">{{ existing_why.why_statement if existing_why else '' }}</textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">❤️ Who benefits most?</div>
+      <div class="field">
+        <label>When you hit this goal, who feels it the most?</label>
+        <select id="who_benefits" onchange="toggleBenefitsCustom()">
+          <option value="">Select...</option>
+          <option value="my_kids" {% if existing_why and existing_why.who_benefits == 'my_kids' %}selected{% endif %}>My kids</option>
+          <option value="spouse_partner" {% if existing_why and existing_why.who_benefits == 'spouse_partner' %}selected{% endif %}>My spouse / partner</option>
+          <option value="myself" {% if existing_why and existing_why.who_benefits == 'myself' %}selected{% endif %}>Myself</option>
+          <option value="my_family" {% if existing_why and existing_why.who_benefits == 'my_family' %}selected{% endif %}>My family</option>
+          <option value="other" {% if existing_why and existing_why.who_benefits == 'other' %}selected{% endif %}>Other...</option>
+        </select>
+      </div>
+      <div class="field" id="custom-benefits-wrap" style="display:none">
+        <label>Who specifically?</label>
+        <input type="text" id="who_benefits_custom" placeholder="e.g. my mom, my team, my community..." value="{{ existing_why.who_benefits_custom if existing_why else '' }}">
       </div>
       <div class="field">
-        <label>SOI sphere touches / month</label>
-        <div class="input-wrap">
-          <input type="number" id="sphere_touch" min="0" step="1"
-                 value="{{ goal.sphere_touch_monthly if goal else 2 }}"
-                 placeholder="2" oninput="recalc()" class="no-prefix">
-        </div>
+        <label>What specifically happens for them when you hit this goal?</label>
+        <textarea id="what_happens" placeholder="e.g. My daughter gets to go to private school. My wife stops working a second job. I stop borrowing from my parents..." rows="3">{{ existing_why.what_happens if existing_why else '' }}</textarea>
       </div>
     </div>
-    <div class="soi-note" id="soi-note" style="display:none">
-      🎉 Your sphere will cover <strong id="soi-pct">—</strong> of your income goal —
-      you only need to prospect for the remaining <strong id="prospect-gci">—</strong>.
+
+    <div class="nav-wrap">
+      <button class="btn btn-gold" onclick="goTo(2)">That's my why — Next →</button>
     </div>
   </div>
 
-  <!-- Results -->
-  <div class="results">
-    <div class="results-title">📊 Your {{ year }} Roadmap</div>
-    <div class="results-grid">
-      <div class="result-item full">
-        <div class="result-label">Total closings needed</div>
-        <div class="result-value" id="r-closings">—</div>
-        <div class="result-unit">deals to hit your GCI goal</div>
+  <!-- ── SECTION 2: YOUR IDENTITY ── -->
+  <div class="section" id="section-2">
+    <div class="sec-eyebrow">Section 2 — Your Identity</div>
+    <div class="sec-headline">Who do you want to be known as this year?</div>
+    <div class="sec-sub">Goals don't change behavior. Identity does. Pick the agent you're becoming — the habits follow automatically.</div>
+
+    <div class="archetypes" id="archetype-grid">
+      <div class="archetype-btn" data-arch="consistent" onclick="selectArchetype(this)">
+        <div class="arch-emoji">🔁</div>
+        <div class="arch-name">The Consistent One</div>
+        <div class="arch-desc">Shows up every single day. Never flashy. Always there.</div>
       </div>
-      <div class="result-item">
-        <div class="result-label">From prospecting</div>
-        <div class="result-value" id="r-prospect-close">—</div>
-        <div class="result-unit">closings to go get</div>
+      <div class="archetype-btn" data-arch="closer" onclick="selectArchetype(this)">
+        <div class="arch-emoji">🎯</div>
+        <div class="arch-name">The Closer</div>
+        <div class="arch-desc">Converts appointments. Known for getting contracts signed.</div>
       </div>
-      <div class="result-item">
-        <div class="result-label">From sphere (SOI)</div>
-        <div class="result-value" id="r-soi-close">—</div>
-        <div class="result-unit">referral closings</div>
+      <div class="archetype-btn" data-arch="prospecting_machine" onclick="selectArchetype(this)">
+        <div class="arch-emoji">📞</div>
+        <div class="arch-name">The Prospecting Machine</div>
+        <div class="arch-desc">Dials more than anyone. Builds pipeline through sheer volume.</div>
+      </div>
+      <div class="archetype-btn" data-arch="relationship_builder" onclick="selectArchetype(this)">
+        <div class="arch-emoji">🤝</div>
+        <div class="arch-name">The Relationship Builder</div>
+        <div class="arch-desc">Sphere-first. Referrals are the strategy, not the bonus.</div>
+      </div>
+      <div class="archetype-btn" data-arch="comeback_story" onclick="selectArchetype(this)">
+        <div class="arch-emoji">🔥</div>
+        <div class="arch-name">The Comeback Story</div>
+        <div class="arch-desc">Last year wasn't the year. This year is different. Prove it.</div>
+      </div>
+      <div class="archetype-btn" data-arch="custom" onclick="selectArchetype(this)">
+        <div class="arch-emoji">✏️</div>
+        <div class="arch-name">Write My Own</div>
+        <div class="arch-desc">Define what kind of agent you are in your own words.</div>
       </div>
     </div>
-    <hr class="divider">
-    <div class="results-grid">
-      <div class="result-item">
-        <div class="result-label">Appointments / week</div>
-        <div class="result-value" id="r-appts">—</div>
-        <div class="result-unit">to set from prospecting</div>
+
+    <div id="custom-identity-wrap" style="display:none" class="card" style="margin-bottom:.9rem">
+      <div class="field">
+        <label>Describe the agent you're becoming in one sentence:</label>
+        <input type="text" id="custom_identity" placeholder="e.g. The agent who never misses a follow-up" value="{{ existing_identity.custom_identity if existing_identity else '' }}">
       </div>
-      <div class="result-item">
-        <div class="result-label">Calls / week</div>
-        <div class="result-value" id="r-calls">—</div>
-        <div class="result-unit">contacts to make</div>
+    </div>
+
+    <div class="habit-preview" id="habit-preview" style="display:none">
+      <div class="habit-preview-title">⚡ An agent with that identity does this every day:</div>
+      <div class="habit-row">
+        <span class="habit-label">📞 Calls</span>
+        <span class="habit-val" id="prev-calls">20</span>
       </div>
+      <div class="habit-row">
+        <span class="habit-label">💬 Texts / Video texts</span>
+        <span class="habit-val" id="prev-texts">5</span>
+      </div>
+      <div class="habit-row">
+        <span class="habit-label">📅 Appointments</span>
+        <span class="habit-val" id="prev-appts">1</span>
+      </div>
+      <div style="margin-top:.6rem;font-size:.72rem;color:var(--muted)">You'll fine-tune these in the last step.</div>
+    </div>
+
+    <div class="nav-wrap">
+      <button class="btn btn-ghost" onclick="goTo(1)">← Back</button>
+      <button class="btn btn-gold" onclick="goTo(3)">That's me — Next →</button>
     </div>
   </div>
 
-  <!-- Advanced (conversion rates) -->
-  <div class="section">
-    <div class="advanced-toggle" onclick="toggleAdvanced()">
-      <span class="advanced-arrow" id="adv-arrow">▶</span>
-      Adjust conversion rates
-      <span style="color:var(--muted);font-size:0.7rem;margin-left:auto">
-        (defaults = industry average)
-      </span>
-    </div>
-    <div id="advanced-fields">
-      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:1rem;line-height:1.5">
-        These are pre-set to industry averages for a competent agent.
-        If you know your actual conversion numbers, enter them here.
-      </p>
-      <div class="rate-row">
-        <div class="field">
-          <label>Calls → Appt</label>
-          <div class="input-wrap">
-            <input type="number" id="call_to_appt" min="1" max="100" step="1"
-                   value="{{ '%.0f' | format((goal.call_to_appt_rate | float) * 100) if goal and goal.call_to_appt_rate else '10' }}"
-                   class="no-prefix" oninput="recalc()">
-            <span class="input-suffix">%</span>
-          </div>
-          <div class="helper">avg 10%</div>
+  <!-- ── SECTION 3: INCOME GOAL ── -->
+  <div class="section" id="section-3">
+    <div class="sec-eyebrow">Section 3 — Income Goal</div>
+    <div class="sec-headline">What do you want to earn in {{ year }}?</div>
+    <div class="sec-sub">This is your gross commission income — before your office split. Don't be conservative. You said why you want it. Now name the number.</div>
+
+    <div class="card">
+      <div class="card-title">💰 Your GCI Target</div>
+      <div class="field">
+        <label>Gross Commission Income goal for {{ year }}</label>
+        <div class="input-wrap has-prefix">
+          <span class="input-prefix">$</span>
+          <input type="number" id="gci_goal" min="0" step="1000"
+                 value="{{ (goal.gci_goal | int) if goal and goal.gci_goal else '' }}"
+                 placeholder="150000" oninput="recalc()">
         </div>
-        <div class="field">
-          <label>Appt → Contract</label>
-          <div class="input-wrap">
-            <input type="number" id="appt_to_contract" min="1" max="100" step="1"
-                   value="{{ '%.0f' | format((goal.appt_to_contract_rate | float) * 100) if goal and goal.appt_to_contract_rate else '30' }}"
-                   class="no-prefix" oninput="recalc()">
-            <span class="input-suffix">%</span>
-          </div>
-          <div class="helper">avg 30%</div>
-        </div>
-        <div class="field">
-          <label>Contract → Close</label>
-          <div class="input-wrap">
-            <input type="number" id="contract_to_close" min="1" max="100" step="1"
-                   value="{{ '%.0f' | format((goal.contract_to_close_rate | float) * 100) if goal and goal.contract_to_close_rate else '80' }}"
-                   class="no-prefix" oninput="recalc()">
-            <span class="input-suffix">%</span>
-          </div>
-          <div class="helper">avg 80%</div>
-        </div>
+        <div class="helper">Gross — before splits. We'll account for your net commission rate next.</div>
       </div>
+    </div>
+
+    <div class="nav-wrap">
+      <button class="btn btn-ghost" onclick="goTo(2)">← Back</button>
+      <button class="btn btn-gold" onclick="goTo(4)">Got it — Next →</button>
     </div>
   </div>
 
-  <!-- Save -->
-  <button class="btn-save" id="btn-save" onclick="saveGoals()" disabled>
-    Save My {{ year }} Goals
-  </button>
-  <div class="save-status" id="save-status"></div>
+  <!-- ── SECTION 4: YOUR MARKET ── -->
+  <div class="section" id="section-4">
+    <div class="sec-eyebrow">Section 4 — Your Market</div>
+    <div class="sec-headline">What does a typical deal look like for you?</div>
+    <div class="sec-sub">These numbers let us calculate exactly how many closings you need and what you net per deal.</div>
+
+    <div class="card">
+      <div class="card-title">🏡 Deal Economics</div>
+      <div class="field">
+        <label>Average sale price of your deals</label>
+        <div class="input-wrap has-prefix">
+          <span class="input-prefix">$</span>
+          <input type="number" id="avg_sale_price" min="0" step="10000"
+                 value="{{ (goal.avg_sale_price | int) if goal and goal.avg_sale_price else 425000 }}"
+                 placeholder="425000" oninput="recalc()">
+        </div>
+      </div>
+      <div class="field">
+        <label>Commission rate you net after all splits <strong>(e.g. 2.5%)</strong></label>
+        <div class="input-wrap has-suffix">
+          <input type="number" id="commission_pct" min="0" max="10" step="0.1"
+                 value="{{ '%.1f' | format((goal.commission_pct | float) * 100) if goal and goal.commission_pct else '2.5' }}"
+                 placeholder="2.5" oninput="recalc()">
+          <span class="input-suffix">%</span>
+        </div>
+        <div class="helper">≈ $<span id="per-deal">—</span> per closing at your current numbers</div>
+      </div>
+    </div>
+
+    <div class="nav-wrap">
+      <button class="btn btn-ghost" onclick="goTo(3)">← Back</button>
+      <button class="btn btn-gold" onclick="goTo(5)">Next →</button>
+    </div>
+  </div>
+
+  <!-- ── SECTION 5: SPHERE OF INFLUENCE ── -->
+  <div class="section" id="section-5">
+    <div class="sec-eyebrow">Section 5 — Sphere of Influence</div>
+    <div class="sec-headline">How many deals will come to you?</div>
+    <div class="sec-sub">Referrals, past clients, family, friends — deals that land without cold prospecting. This reduces how hard you need to work on outbound activity.</div>
+
+    <div class="card">
+      <div class="card-title">👥 Your Sphere</div>
+      <div class="field">
+        <label>Expected closings from referrals / past clients this year</label>
+        <input type="number" id="soi_closings" min="0" step="1"
+               value="{{ goal.soi_closings_expected if goal else 0 }}"
+               placeholder="0" oninput="recalc()">
+      </div>
+      <div class="field">
+        <label>How many times per month do you touch your sphere?</label>
+        <input type="number" id="sphere_touch" min="0" step="1"
+               value="{{ goal.sphere_touch_monthly if goal else 2 }}"
+               placeholder="2" oninput="recalc()">
+        <div class="helper">Texts, calls, emails, social, pop-bys — any intentional touch counts.</div>
+      </div>
+      <div class="soi-note" id="soi-note" style="display:none">
+        🎉 Your sphere covers <strong id="soi-pct">—</strong> of your income goal —
+        you only need to prospect for the remaining <strong id="prospect-gci">—</strong>.
+      </div>
+    </div>
+
+    <div class="nav-wrap">
+      <button class="btn btn-ghost" onclick="goTo(4)">← Back</button>
+      <button class="btn btn-gold" onclick="goTo(6)">Almost done →</button>
+    </div>
+  </div>
+
+  <!-- ── SECTION 6: DAILY SYSTEM ── -->
+  <div class="section" id="section-6">
+    <div class="sec-eyebrow">Section 6 — Your Daily System</div>
+    <div class="sec-headline" id="daily-headline">Here's what your day looks like.</div>
+    <div class="sec-sub">These are your daily non-negotiables. The math from your income goal is already built in. Adjust until it feels like a stretch — not impossible, not comfortable.</div>
+
+    <!-- Why reminder -->
+    <div class="why-card" id="why-reminder" style="display:none">
+      <div class="why-label">Your why</div>
+      <div class="why-text" id="why-reminder-text"></div>
+    </div>
+
+    <!-- Closing equation -->
+    <div class="equation" id="daily-equation">
+      Do this <strong>5 days a week</strong> for <strong>50 weeks</strong> =
+      <strong id="eq-closings">—</strong> closings = <strong id="eq-gci">—</strong>
+    </div>
+
+    <!-- Result card -->
+    <div class="result-card">
+      <div class="result-title">📊 Your {{ year }} Numbers</div>
+      <div class="result-grid">
+        <div class="result-item full">
+          <div class="result-label">Total closings needed</div>
+          <div class="result-value" id="r-closings">—</div>
+          <div class="result-unit">deals to hit your GCI goal</div>
+        </div>
+        <div class="result-item">
+          <div class="result-label">From prospecting</div>
+          <div class="result-value" id="r-prospect">—</div>
+          <div class="result-unit">closings to go get</div>
+        </div>
+        <div class="result-item">
+          <div class="result-label">From sphere (SOI)</div>
+          <div class="result-value" id="r-soi">—</div>
+          <div class="result-unit">referral closings</div>
+        </div>
+        <hr class="result-divider">
+        <div class="result-item">
+          <div class="result-label">Appointments / week</div>
+          <div class="result-value" id="r-appts-wk">—</div>
+          <div class="result-unit">from prospecting</div>
+        </div>
+        <div class="result-item">
+          <div class="result-label">Calls / week</div>
+          <div class="result-value" id="r-calls-wk">—</div>
+          <div class="result-unit">contacts to make</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">⚡ Your Daily Targets</div>
+      <div class="field">
+        <label>Daily calls target</label>
+        <input type="number" id="daily_calls" min="1" step="1"
+               value="{{ existing_identity.daily_calls_target if existing_identity else 20 }}"
+               oninput="recalc()">
+        <div class="helper">Adjust until this feels like a real commitment, not a wish.</div>
+      </div>
+      <div class="field">
+        <label>Daily texts / video texts target</label>
+        <input type="number" id="daily_texts" min="0" step="1"
+               value="{{ existing_identity.daily_texts_target if existing_identity else 5 }}"
+               oninput="recalc()">
+      </div>
+      <div class="field">
+        <label>Daily appointments target</label>
+        <input type="number" id="daily_appts" min="0" step="0.5"
+               value="{{ existing_identity.daily_appts_target if existing_identity else 1 }}"
+               oninput="recalc()">
+        <div class="helper">1 appointment/day = 5/week. Even 0.5/day = 2–3/week.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🕗 Your Power Hour</div>
+      <div class="field">
+        <label>When will you do your power hour every day?</label>
+        <input type="time" id="power_hour"
+               value="{{ existing_identity.power_hour_time[:5] if existing_identity and existing_identity.power_hour_time else '08:30' }}">
+        <div class="helper">We'll send your morning nudge at this time — before the day gets noisy.</div>
+      </div>
+    </div>
+
+    <!-- Advanced conversion rates -->
+    <div class="card">
+      <div class="adv-toggle" onclick="toggleAdv()">
+        <span class="adv-arrow" id="adv-arrow">▶</span>
+        Advanced: adjust conversion rates
+        <span style="font-size:.68rem;color:var(--subtle);margin-left:auto">defaults = industry average</span>
+      </div>
+      <div id="adv-fields">
+        <div class="rate-grid" style="margin-top:.8rem">
+          <div class="field">
+            <label>Calls → Appt</label>
+            <div class="input-wrap has-suffix">
+              <input type="number" id="call_to_appt" min="1" max="100" step="1"
+                     value="{{ '%.0f' | format((goal.call_to_appt_rate | float) * 100) if goal and goal.call_to_appt_rate else '10' }}"
+                     oninput="recalc()">
+              <span class="input-suffix">%</span>
+            </div>
+            <div class="helper">avg 10%</div>
+          </div>
+          <div class="field">
+            <label>Appt → Contract</label>
+            <div class="input-wrap has-suffix">
+              <input type="number" id="appt_to_contract" min="1" max="100" step="1"
+                     value="{{ '%.0f' | format((goal.appt_to_contract_rate | float) * 100) if goal and goal.appt_to_contract_rate else '30' }}"
+                     oninput="recalc()">
+              <span class="input-suffix">%</span>
+            </div>
+            <div class="helper">avg 30%</div>
+          </div>
+          <div class="field">
+            <label>Contract → Close</label>
+            <div class="input-wrap has-suffix">
+              <input type="number" id="contract_to_close" min="1" max="100" step="1"
+                     value="{{ '%.0f' | format((goal.contract_to_close_rate | float) * 100) if goal and goal.contract_to_close_rate else '80' }}"
+                     oninput="recalc()">
+              <span class="input-suffix">%</span>
+            </div>
+            <div class="helper">avg 80%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn btn-gold" id="btn-save" onclick="saveAll()" disabled>
+      🔒 Lock In My {{ year }} System
+    </button>
+    <div class="save-status" id="save-status"></div>
+
+    <div style="margin-top:1rem" class="nav-wrap">
+      <button class="btn btn-ghost" onclick="goTo(5)">← Back</button>
+    </div>
+  </div>
 
 </div><!-- /container -->
 
 <script>
-const TOKEN    = "{{ token }}";
-const YEAR     = {{ year }};
-const AGENT    = "{{ agent_name }}";
+const TOKEN = "{{ token }}";
+const YEAR  = {{ year }};
+const AGENT = "{{ agent_name }}";
+const FIRST = AGENT.split(' ')[0];
 
-function v(id) {
-  return parseFloat(document.getElementById(id).value) || 0;
+const STEP_NAMES = ['Your Why','Your Identity','Income Goal','Your Market','Sphere','Daily System'];
+
+const ARCHETYPE_DEFAULTS = {
+  consistent:           {calls:20, texts:5,  appts:1},
+  closer:               {calls:15, texts:5,  appts:2},
+  prospecting_machine:  {calls:40, texts:10, appts:1},
+  relationship_builder: {calls:10, texts:8,  appts:1},
+  comeback_story:       {calls:30, texts:8,  appts:1.5},
+  custom:               {calls:20, texts:5,  appts:1},
+};
+
+let selectedArchetype = '{{ existing_identity.identity_archetype if existing_identity else "" }}';
+let currentStep = 1;
+
+// ── Navigation ────────────────────────────────────────────────────
+
+function goTo(step) {
+  document.getElementById(`section-${currentStep}`).classList.remove('active');
+  document.getElementById(`section-${step}`).classList.add('active');
+  currentStep = step;
+  updateProgress();
+  if (step === 6) prepSection6();
+  window.scrollTo({top:0, behavior:'smooth'});
 }
+
+function updateProgress() {
+  const pct = (currentStep / 6) * 100;
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('step-label').textContent = `Step ${currentStep} of 6`;
+  document.getElementById('step-name').textContent = STEP_NAMES[currentStep - 1];
+  for (let i = 1; i <= 6; i++) {
+    const dot = document.getElementById(`dot-${i}`);
+    dot.className = 'step-dot' + (i < currentStep ? ' done' : i === currentStep ? ' active' : '');
+  }
+}
+
+// ── Archetype selection ───────────────────────────────────────────
+
+function selectArchetype(el) {
+  document.querySelectorAll('.archetype-btn').forEach(b => b.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedArchetype = el.dataset.arch;
+
+  const defs = ARCHETYPE_DEFAULTS[selectedArchetype] || {calls:20,texts:5,appts:1};
+  document.getElementById('prev-calls').textContent = defs.calls;
+  document.getElementById('prev-texts').textContent = defs.texts;
+  document.getElementById('prev-appts').textContent = defs.appts;
+  document.getElementById('habit-preview').style.display = 'block';
+
+  const isCustom = selectedArchetype === 'custom';
+  document.getElementById('custom-identity-wrap').style.display = isCustom ? 'block' : 'none';
+
+  // Pre-fill daily targets
+  document.getElementById('daily_calls').value = defs.calls;
+  document.getElementById('daily_texts').value = defs.texts;
+  document.getElementById('daily_appts').value = defs.appts;
+  recalc();
+}
+
+function toggleBenefitsCustom() {
+  const v = document.getElementById('who_benefits').value;
+  document.getElementById('custom-benefits-wrap').style.display = v === 'other' ? 'block' : 'none';
+}
+
+// ── Pre-select archetype on load ─────────────────────────────────
+
+if (selectedArchetype) {
+  const btn = document.querySelector(`[data-arch="${selectedArchetype}"]`);
+  if (btn) selectArchetype(btn);
+}
+
+// ── Section 6 prep ────────────────────────────────────────────────
+
+function prepSection6() {
+  // Show why reminder
+  const why = document.getElementById('why_statement').value.trim();
+  const reminder = document.getElementById('why-reminder');
+  if (why) {
+    document.getElementById('why-reminder-text').textContent = why;
+    reminder.style.display = 'block';
+  }
+  // Update headline with identity
+  const arch = selectedArchetype;
+  const archNames = {
+    consistent:'The Consistent One', closer:'The Closer',
+    prospecting_machine:'The Prospecting Machine',
+    relationship_builder:'The Relationship Builder',
+    comeback_story:'The Comeback Story', custom: ''
+  };
+  const customId = document.getElementById('custom_identity')?.value;
+  const idLabel = arch === 'custom' ? (customId || 'your identity') : (archNames[arch] || 'your identity');
+  if (arch) {
+    document.getElementById('daily-headline').textContent =
+      `To become ${idLabel}, here's what your day looks like:`;
+  }
+  recalc();
+}
+
+// ── Calculator ────────────────────────────────────────────────────
+
+function v(id) { return parseFloat(document.getElementById(id)?.value) || 0; }
 
 function fmt(n) {
   if (n >= 1000000) return '$' + (n/1000000).toFixed(1) + 'M';
@@ -438,72 +642,110 @@ function fmt(n) {
   return '$' + Math.round(n);
 }
 
+function set(id, val) { const el = document.getElementById(id); if(el) el.textContent = val; }
+
 function recalc() {
-  const gci        = v('gci_goal');
-  const avgPrice   = v('avg_sale_price');
-  const commPct    = v('commission_pct') / 100;
-  const soiClose   = v('soi_closings');
-  const c2a        = v('call_to_appt')       / 100 || 0.10;
-  const a2c        = v('appt_to_contract')   / 100 || 0.30;
-  const c2cl       = v('contract_to_close')  / 100 || 0.80;
+  const gci      = v('gci_goal');
+  const avgPrice = v('avg_sale_price');
+  const commPct  = v('commission_pct') / 100;
+  const soiClose = v('soi_closings');
+  const c2a      = v('call_to_appt')      / 100 || 0.10;
+  const a2c      = v('appt_to_contract')  / 100 || 0.30;
+  const c2cl     = v('contract_to_close') / 100 || 0.80;
 
-  const perDeal         = avgPrice * commPct;
-  const closingsNeeded  = perDeal > 0 ? gci / perDeal : 0;
-  const soiGci          = soiClose * perDeal;
-  const prospectClose   = Math.max(closingsNeeded - soiClose, 0);
-  const contractsNeeded = c2cl > 0 ? prospectClose / c2cl : 0;
-  const apptsYr         = a2c  > 0 ? contractsNeeded / a2c : 0;
-  const callsYr         = c2a  > 0 ? apptsYr / c2a : 0;
-  const apptsWk         = apptsYr / 50;
-  const callsWk         = callsYr / 50;
+  const perDeal        = avgPrice * commPct;
+  const closingsNeeded = perDeal > 0 ? gci / perDeal : 0;
+  const soiGci         = soiClose * perDeal;
+  const prospectClose  = Math.max(closingsNeeded - soiClose, 0);
+  const contractsNeeded= c2cl > 0 ? prospectClose / c2cl : 0;
+  const apptsYr        = a2c  > 0 ? contractsNeeded / a2c : 0;
+  const callsYr        = c2a  > 0 ? apptsYr / c2a : 0;
+  const apptsWk        = apptsYr / 50;
+  const callsWk        = callsYr / 50;
 
-  // Update per-deal helper
-  document.getElementById('per-deal').textContent =
-    perDeal > 0 ? Math.round(perDeal).toLocaleString() : '—';
+  // Per-deal helper
+  set('per-deal', perDeal > 0 ? Math.round(perDeal).toLocaleString() : '—');
 
   // SOI note
   const soiNote = document.getElementById('soi-note');
-  if (soiClose > 0 && gci > 0) {
+  if (soiNote && soiClose > 0 && gci > 0) {
     const soiPct = Math.round(soiGci / gci * 100);
-    document.getElementById('soi-pct').textContent = soiPct + '%';
-    document.getElementById('prospect-gci').textContent = fmt(Math.max(gci - soiGci, 0));
+    set('soi-pct', soiPct + '%');
+    set('prospect-gci', fmt(Math.max(gci - soiGci, 0)));
     soiNote.style.display = 'block';
-  } else {
+  } else if (soiNote) {
     soiNote.style.display = 'none';
   }
 
-  // Results
-  set('r-closings',      gci > 0 ? Math.ceil(closingsNeeded) : '—');
-  set('r-prospect-close', gci > 0 ? Math.ceil(prospectClose) : '—');
-  set('r-soi-close',     soiClose || '—');
-  set('r-appts',         gci > 0 ? apptsWk.toFixed(1) : '—');
-  set('r-calls',         gci > 0 ? Math.ceil(callsWk) : '—');
+  // Section 6 results
+  set('r-closings', gci > 0 ? Math.ceil(closingsNeeded) : '—');
+  set('r-prospect',  gci > 0 ? Math.ceil(prospectClose) : '—');
+  set('r-soi',       soiClose || '—');
+  set('r-appts-wk',  gci > 0 ? apptsWk.toFixed(1) : '—');
+  set('r-calls-wk',  gci > 0 ? Math.ceil(callsWk) : '—');
 
-  // Enable save button only when GCI is entered
-  document.getElementById('btn-save').disabled = (gci <= 0);
+  // Equation
+  const dailyCalls = v('daily_calls') || Math.ceil(callsWk / 5);
+  const dailyAppts = v('daily_appts') || (apptsWk / 5).toFixed(1);
+  const annualClosingsFromDaily = perDeal > 0
+    ? Math.round(dailyCalls * 5 * 50 * c2a * a2c * c2cl)
+    : 0;
+  const gciFromDaily = annualClosingsFromDaily * perDeal;
+  set('eq-closings', annualClosingsFromDaily || '—');
+  set('eq-gci', annualClosingsFromDaily > 0 ? fmt(gciFromDaily) : '—');
+
+  // Pre-fill daily targets from math if not manually set
+  const callsInput = document.getElementById('daily_calls');
+  if (callsInput && !callsInput.dataset.userEdited && gci > 0) {
+    callsInput.value = Math.max(Math.ceil(callsWk / 5), 1);
+  }
+  const apptsInput = document.getElementById('daily_appts');
+  if (apptsInput && !apptsInput.dataset.userEdited && gci > 0) {
+    apptsInput.value = Math.max((apptsWk / 5).toFixed(1), 0.5);
+  }
+
+  // Enable save only when on step 6 and GCI is entered
+  const saveBtn = document.getElementById('btn-save');
+  if (saveBtn) saveBtn.disabled = (gci <= 0);
 }
 
-function set(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = val;
+// Mark inputs as user-edited so auto-fill stops overriding them
+document.getElementById('daily_calls')?.addEventListener('input', e => e.target.dataset.userEdited = '1');
+document.getElementById('daily_appts')?.addEventListener('input', e => e.target.dataset.userEdited = '1');
+
+function toggleAdv() {
+  const f = document.getElementById('adv-fields');
+  const a = document.getElementById('adv-arrow');
+  f.classList.toggle('open');
+  a.classList.toggle('open');
 }
 
-function toggleAdvanced() {
-  const fields = document.getElementById('advanced-fields');
-  const arrow  = document.getElementById('adv-arrow');
-  fields.classList.toggle('open');
-  arrow.classList.toggle('open');
-}
+// ── Save everything ───────────────────────────────────────────────
 
-async function saveGoals() {
+async function saveAll() {
   const btn    = document.getElementById('btn-save');
   const status = document.getElementById('save-status');
   btn.disabled = true;
-  btn.textContent = 'Saving…';
+  btn.textContent = '⏳ Saving…';
   status.textContent = '';
-  status.className = 'save-status';
 
-  const payload = {
+  const whyPayload = {
+    why_statement:       document.getElementById('why_statement').value.trim(),
+    who_benefits:        document.getElementById('who_benefits').value,
+    who_benefits_custom: document.getElementById('who_benefits_custom')?.value.trim() || '',
+    what_happens:        document.getElementById('what_happens').value.trim(),
+  };
+
+  const identPayload = {
+    identity_archetype:  selectedArchetype,
+    custom_identity:     document.getElementById('custom_identity')?.value.trim() || '',
+    power_hour_time:     document.getElementById('power_hour').value,
+    daily_calls_target:  Math.round(v('daily_calls')),
+    daily_texts_target:  Math.round(v('daily_texts')),
+    daily_appts_target:  v('daily_appts'),
+  };
+
+  const goalPayload = {
     year:                    YEAR,
     gci_goal:                v('gci_goal'),
     avg_sale_price:          v('avg_sale_price'),
@@ -514,32 +756,33 @@ async function saveGoals() {
     call_to_appt_rate:       v('call_to_appt')      / 100,
     appt_to_contract_rate:   v('appt_to_contract')  / 100,
     contract_to_close_rate:  v('contract_to_close') / 100,
+    why:      whyPayload,
+    identity: identPayload,
   };
 
   try {
     const resp = await fetch(`/api/goals/setup/${TOKEN}`, {
       method:  'POST',
       headers: {'Content-Type': 'application/json'},
-      body:    JSON.stringify(payload),
+      body:    JSON.stringify(goalPayload),
     });
     const data = await resp.json();
-    if (data.success) {
-      status.textContent = '✅ Goals saved! Barry can see them now.';
-      status.className   = 'save-status ok';
-      btn.textContent    = 'Update My Goals';
-      btn.disabled       = false;
-    } else {
-      throw new Error(data.error || 'Unknown error');
-    }
-  } catch (e) {
-    status.textContent = '❌ ' + e.message;
+    if (!data.success) throw new Error(data.error || 'Unknown error');
+
+    status.className   = 'save-status ok';
+    status.textContent = '✅ System locked in. Barry can see it now.';
+    btn.textContent    = '🔒 Update My System';
+    btn.disabled       = false;
+  } catch(e) {
     status.className   = 'save-status err';
-    btn.textContent    = 'Save My {{ year }} Goals';
+    status.textContent = '❌ ' + e.message;
+    btn.textContent    = `🔒 Lock In My ${YEAR} System`;
     btn.disabled       = false;
   }
 }
 
-// Run on load to populate results if editing existing goal
+// Init
+toggleBenefitsCustom();
 recalc();
 </script>
 </body>

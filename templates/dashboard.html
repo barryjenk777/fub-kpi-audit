@@ -424,6 +424,33 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 
 <div class="toast" id="toast"></div>
 
+<!-- Nudge Modal -->
+<div id="nudge-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;align-items:center;justify-content:center;padding:1rem">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;max-width:480px;width:100%;padding:1.5rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+      <div>
+        <div style="font-size:.65rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--gold)">Send Nudge</div>
+        <div style="font-size:1rem;font-weight:700;margin-top:.2rem" id="nudge-agent-name"></div>
+      </div>
+      <button onclick="closeNudgeModal()" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:.4rem .75rem;color:var(--muted);font-size:.8rem;cursor:pointer">✕</button>
+    </div>
+    <div id="nudge-why-row" style="display:none;background:rgba(245,166,35,.07);border-left:3px solid var(--gold);border-radius:0 8px 8px 0;padding:.7rem .9rem;margin-bottom:1rem">
+      <div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:.25rem">Their Why</div>
+      <div style="font-size:.8rem;color:var(--text);font-style:italic;line-height:1.5" id="nudge-why-text"></div>
+    </div>
+    <div style="font-size:.7rem;color:var(--muted);margin-bottom:.25rem" id="nudge-streak"></div>
+    <div style="margin-bottom:.75rem">
+      <label style="font-size:.72rem;color:var(--muted);display:block;margin-bottom:.3rem">Message (editable)</label>
+      <textarea id="nudge-msg" style="width:100%;background:#0a0f1a;border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.88rem;padding:.65rem .85rem;outline:none;resize:vertical;min-height:80px;font-family:inherit;line-height:1.55" onkeydown="if(event.key==='Escape')closeNudgeModal()"></textarea>
+    </div>
+    <div style="display:flex;gap:.5rem">
+      <button onclick="closeNudgeModal()" class="btn btn-ghost btn-sm" style="flex:0 0 auto">Cancel</button>
+      <button id="btn-send-nudge" onclick="sendNudge()" class="btn btn-gold" style="flex:1">Send Text</button>
+    </div>
+    <div id="nudge-modal-status" style="font-size:.78rem;margin-top:.5rem;text-align:center;min-height:1rem"></div>
+  </div>
+</div>
+
 <script>
 // ── GLOBAL STATE ──
 let agentData=null, managerData=null, isaData=null, appointmentData=null;
@@ -527,18 +554,34 @@ function renderGoalCards(rows){
   const withGoal=rows.filter(r=>r.goal&&parseFloat(r.goal.gci_goal)>0);
   const noGoal=rows.filter(r=>!r.goal||!(parseFloat(r.goal.gci_goal)>0));
 
+  // Build streak lookup from data (populated via scorecard API)
+  const streakMap=(_goalsData&&_goalsData.streaks)||{};
+
   let html='';
   withGoal.forEach(row=>{
     const {agent_name,email,goal,targets,actuals,pace}=row;
     const st=pace.overall_status||'gray';
     const stLabel={green:'🟢 On Pace',yellow:'🟡 At Risk',red:'🔴 Off Track',gray:'⚫ No Data'}[st]||'';
     const badgeCls={green:'badge-green',yellow:'badge-yellow',red:'badge-red',gray:'badge-gray'}[st]||'badge-gray';
-    const callNeed=targets.calls_needed_yr?Math.round(targets.calls_needed_yr*(new Date().getDay()+1)/365):'—';
-    const apptNeed=targets.appts_needed_yr?Math.round(targets.appts_needed_yr*(new Date().getDay()+1)/365):'—';
+
+    const streak=streakMap[agent_name]||{};
+    const streakNum=streak.current_streak||0;
+    const lastActive=streak.last_activity_date;
+    const daysInactive=lastActive?Math.floor((Date.now()-new Date(lastActive).getTime())/86400000):null;
+    const inactiveFlag=daysInactive!==null&&daysInactive>=3;
+    const streakHtml=streakNum>0
+      ?`<span style="font-size:.68rem;font-weight:700;color:var(--gold);background:rgba(245,166,35,.12);padding:2px 7px;border-radius:10px;margin-left:.4rem">🔥 ${streakNum}d</span>`
+      :'';
+    const lastActiveHtml=lastActive
+      ?`<span style="font-size:.63rem;color:${inactiveFlag?'var(--red)':'var(--muted)'}">Last active: ${_daysAgoLabel(lastActive)}${inactiveFlag?' ⚠':''}</span>`
+      :'';
 
     html+=`<div class="goal-card ${st}">
       <div class="gc-head">
-        <div><div class="gc-name">${agent_name}</div><div class="gc-email">${email||''}</div></div>
+        <div>
+          <div class="gc-name">${agent_name}${streakHtml}</div>
+          <div class="gc-email">${lastActiveHtml||email||''}</div>
+        </div>
         <span class="badge ${badgeCls}">${stLabel}</span>
       </div>
       <div class="gc-gci-row">
@@ -546,7 +589,8 @@ function renderGoalCards(rows){
         <div class="gc-pct c-${st}">${pace.overall_pct}% of pace</div>
       </div>
       <div class="gc-bar"><div class="gc-fill ${st}" style="width:${Math.min(pace.overall_pct,100)}%"></div></div>
-      ${pace.needs_conversation?'<div style="font-size:.68rem;color:var(--red);font-weight:700;margin-bottom:.5rem">⚠ Needs conversation</div>':''}
+      ${pace.needs_conversation?`<div style="font-size:.68rem;color:var(--red);font-weight:700;margin-bottom:.5rem">⚠ Needs conversation</div>`:''}
+      ${inactiveFlag?`<div style="font-size:.68rem;color:var(--yellow);font-weight:600;margin-bottom:.5rem">⚠ No activity logged in ${daysInactive} days</div>`:''}
       <div class="gc-metrics">
         <div>
           <div class="gc-m-label">Calls YTD</div>
@@ -564,17 +608,92 @@ function renderGoalCards(rows){
           <div class="gc-m-need">of ${targets.closings_needed||'—'} needed</div>
         </div>
       </div>
+      <div style="margin-top:.75rem;display:flex;gap:.4rem">
+        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:.68rem" onclick="openNudgeModal('${agent_name}')">📱 Send Nudge</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:.68rem" onclick="copyOneLink('${agent_name}')">🔗 Copy Link</button>
+      </div>
     </div>`;
   });
 
   noGoal.forEach(row=>{
+    const streak=streakMap[row.agent_name]||{};
+    const daysInactive=streak.last_activity_date?Math.floor((Date.now()-new Date(streak.last_activity_date).getTime())/86400000):null;
     html+=`<div class="no-goal-card">
-      <div><div class="no-goal-name">${row.agent_name}</div><div class="no-goal-sub">${row.email||'No goals set yet'}</div></div>
-      <button class="btn btn-ghost btn-sm" onclick="copyOneLink('${row.agent_name}')">Send Link</button>
+      <div>
+        <div class="no-goal-name">${row.agent_name}</div>
+        <div class="no-goal-sub">${row.email||'No goals set yet'}${daysInactive&&daysInactive>=3?` · ⚠ inactive ${daysInactive}d`:''}</div>
+      </div>
+      <div style="display:flex;gap:.3rem">
+        <button class="btn btn-ghost btn-sm" onclick="openNudgeModal('${row.agent_name}')">📱</button>
+        <button class="btn btn-ghost btn-sm" onclick="copyOneLink('${row.agent_name}')">Send Link</button>
+      </div>
     </div>`;
   });
 
   container.innerHTML=html;
+}
+
+function _daysAgoLabel(dateStr){
+  if(!dateStr)return '';
+  const d=Math.floor((Date.now()-new Date(dateStr).getTime())/86400000);
+  if(d===0)return 'today';
+  if(d===1)return 'yesterday';
+  return `${d}d ago`;
+}
+
+// ── Nudge modal ───────────────────────────────────────────────────────────
+
+let _nudgeAgent='';
+
+async function openNudgeModal(agentName){
+  _nudgeAgent=agentName;
+  const modal=document.getElementById('nudge-modal');
+  document.getElementById('nudge-agent-name').textContent=agentName;
+  document.getElementById('nudge-msg').value='Loading…';
+  document.getElementById('nudge-modal-status').textContent='';
+  modal.style.display='flex';
+
+  try{
+    const res=await fetch(`/api/goals/nudge-context/${encodeURIComponent(agentName)}`);
+    const d=await res.json();
+    document.getElementById('nudge-msg').value=d.suggested_message||'';
+    if(d.why&&d.why.why_statement){
+      document.getElementById('nudge-why-text').textContent=`"${d.why.why_statement}"`;
+      document.getElementById('nudge-why-row').style.display='block';
+    } else {
+      document.getElementById('nudge-why-row').style.display='none';
+    }
+    const s=d.streak||{};
+    document.getElementById('nudge-streak').textContent=s.current_streak>0?`🔥 ${s.current_streak} day streak`:'No active streak';
+  }catch(e){
+    document.getElementById('nudge-msg').value=`Hey ${agentName.split(' ')[0]}, just checking in — how's the week going?`;
+  }
+}
+
+function closeNudgeModal(){
+  document.getElementById('nudge-modal').style.display='none';
+  _nudgeAgent='';
+}
+
+async function sendNudge(){
+  const msg=document.getElementById('nudge-msg').value.trim();
+  if(!msg||!_nudgeAgent)return;
+  const btn=document.getElementById('btn-send-nudge');
+  const status=document.getElementById('nudge-modal-status');
+  btn.disabled=true;btn.textContent='Sending…';
+  try{
+    const res=await fetch('/api/goals/send-nudge',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({agent_name:_nudgeAgent,message:msg,nudge_type:'custom'}),
+    });
+    const d=await res.json();
+    if(!d.success&&d.error)throw new Error(d.error);
+    status.textContent='✅ Sent!';status.style.color='var(--green)';
+    setTimeout(closeNudgeModal,1500);
+  }catch(e){
+    status.textContent='❌ '+e.message;status.style.color='var(--red)';
+    btn.disabled=false;btn.textContent='Send Text';
+  }
 }
 
 async function forceRefreshGoals(){
