@@ -378,21 +378,224 @@ def nudge_agent(agent_name: str, nudge_type: str, email: str,
 
 def run_morning_nudges(dry_run: bool = False):
     """
-    Called once daily at 8am ET by APScheduler.
-    Sends one inspirational morning email to every active agent.
-    The nudge_counts_today guard in nudge_agent() ensures no double-sends.
+    Called once daily at 8am ET.
+    Pulls yesterday's FUB-synced activity for all agents, ranks the team,
+    then sends each agent a personalized sassy email with their rank,
+    team context, and top 3 LeadStream leads.
     """
-    profiles = _db.get_agent_profiles(active_only=True)
+    yesterday = date.today() - timedelta(days=1)
+    day_name  = yesterday.strftime("%A")
+
+    # Single query — all agents' yesterday FUB data
+    team_data = _db.get_team_activity_yesterday()
+    if not team_data:
+        logger.warning("run_morning_nudges: no team data found")
+        return 0
+
+    # Build leaderboard (calls + texts + appts*3)
+    leaderboard = []
+    for name, d in team_data.items():
+        calls = int(d.get("calls", 0) or 0)
+        appts = int(d.get("appts", 0) or 0)
+        texts = int(d.get("texts", 0) or 0)
+        score = calls + texts + (appts * 3)
+        leaderboard.append({
+            "name": name, "email": d["email"],
+            "calls": calls, "appts": appts, "texts": texts, "score": score,
+        })
+
+    leaderboard.sort(key=lambda x: x["score"], reverse=True)
+    team_size      = len(leaderboard)
+    team_avg_calls = round(sum(a["calls"] for a in leaderboard) / max(team_size, 1))
+    top_agent      = leaderboard[0]
+
     sent = 0
-    for p in profiles:
-        name  = p["agent_name"]
-        email = p.get("email")
+    for rank, agent in enumerate(leaderboard, 1):
+        name  = agent["name"]
+        email = agent["email"]
         if not email:
             continue
-        if nudge_agent(name, "morning", email, dry_run=dry_run):
+        if _db.get_nudge_counts_today(name).get("morning", 0) > 0:
+            continue
+
+        ctx   = _ctx(name)
+        leads = _db.get_leadstream_top_leads(name, limit=3)
+
+        subject, body_text = _sassy_morning_copy(
+            ctx=ctx, rank=rank, team_size=team_size,
+            calls=agent["calls"], appts=agent["appts"], texts=agent["texts"],
+            team_avg_calls=team_avg_calls, top_agent=top_agent, day_name=day_name,
+        )
+        html = _build_morning_html(body_text, leads, ctx.get("dashboard_url", ""))
+
+        try:
+            if not dry_run:
+                api_key = os.environ.get("SENDGRID_API_KEY")
+                from sendgrid import SendGridAPIClient
+                from sendgrid.helpers.mail import Mail
+                SendGridAPIClient(api_key).send(Mail(
+                    from_email=EMAIL_FROM, to_emails=email,
+                    subject=subject, plain_text_content=body_text, html_content=html,
+                ))
+            _db.log_nudge(name, "morning", subject, status="sent" if not dry_run else "dry_run")
+            logger.info("Morning nudge [#%d/%d] → %s | %s", rank, team_size, name, subject[:60])
             sent += 1
-    logger.info("run_morning_nudges: sent %d nudge emails", sent)
+        except Exception as e:
+            _db.log_nudge(name, "morning", subject, status="failed")
+            logger.warning("Morning nudge failed for %s: %s", name, e)
+
+    logger.info("run_morning_nudges: sent %d emails", sent)
     return sent
+
+
+def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
+                         team_avg_calls, top_agent, day_name):
+    """Return (subject, plain_text_body) based on yesterday's team rank."""
+    first     = ctx["first"]
+    who       = ctx["who"]
+    gci_fmt   = ctx["gci_fmt"]
+    top_first = top_agent["name"].split()[0]
+    top_calls = top_agent["calls"]
+    top_appts = top_agent["appts"]
+    score     = calls + texts + (appts * 3)
+    is_zero   = score == 0
+    is_last   = rank == team_size
+    is_first  = rank == 1
+
+    # ── ZERO activity ──────────────────────────────────────────────────
+    if is_zero:
+        subject = random.choice([
+            f"Did you binge watch Netflix {day_name}? 📺",
+            f"I checked FUB for you {day_name}... and checked again 👀",
+            f"FUB says you took {day_name} off. Bold choice, {first}. 😅",
+            f"Zero calls. Zero appointments. Just vibes, {first}? 🫠",
+            f"Your leads called. FUB didn't see you pick up. 🤙",
+        ])
+        body = random.choice([
+            f"Haha kidding — but actually I'm not.\n\nFUB is showing zero conversations and zero appointments for you {day_name}. Which means either the servers went down (they didn't) or it was a full couch day.\n\nNo judgment. Today is a brand new shot. {who} is still counting on you. Get after it.",
+            f"Look, I'm not saying you watched six hours of TV {day_name}. I'm just saying FUB is showing me a big fat zero for you.\n\nThe rest of the team was out there making moves. Today is your turn, {first}. Let's go.",
+            f"I ran the numbers. Double-checked. Triple-checked.\n\nStill zero.\n\nEveryone has off days — the agents who win bounce back the next morning. That's today. {team_avg_calls} conversations. Build.",
+        ])
+
+    # ── LAST PLACE but tried ───────────────────────────────────────────
+    elif is_last:
+        subject = random.choice([
+            f"Dead last on the team {day_name}. But at least you showed up 👏",
+            f"While everyone called more than you... you did try a few, {first} 😅",
+            f"#{rank} of {team_size} yesterday. Technically still on the leaderboard.",
+        ])
+        body = random.choice([
+            f"I'll be honest — everyone else on the team outworked you {day_name}.\n\nBut you logged {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. So I respect the effort.\n\n{top_first} led with {top_calls} calls{(' and ' + str(top_appts) + ' appts') if top_appts > 0 else ''}. The gap isn't that wide. Close it today, {first}.",
+            f"Bottom of the leaderboard {day_name}. But you showed up, which is more than a lot of people do.\n\n{calls} conversation{'s' if calls != 1 else ''} logged. Tomorrow you're going for {team_avg_calls + 5}. Deal?",
+        ])
+
+    # ── BOTTOM HALF ────────────────────────────────────────────────────
+    elif rank > team_size // 2:
+        subject = random.choice([
+            f"#{rank} of {team_size} {day_name}. The top is right there, {first} 📈",
+            f"Solidly in the middle {day_name}. Good is the enemy of great, {first}.",
+            f"You blended in with the pack {day_name}. Stand out today 👊",
+        ])
+        body = (
+            f"#{rank} out of {team_size} {day_name} — {calls} conversation{'s' if calls != 1 else ''}"
+            f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\n"
+            f"Team average: {team_avg_calls} calls. {top_first} led with {top_calls}.\n\n"
+            f"The difference between #{rank} and the top half is usually just one more focused hour. You've got that in you today, {first}. Make it count for {who}."
+        )
+
+    # ── TOP 3 (not #1) ─────────────────────────────────────────────────
+    elif not is_first:
+        subject = random.choice([
+            f"Top {rank} {day_name}, {first} 🔥 {top_first}'s spot is right there",
+            f"#{rank} on the team {day_name}. {top_first} is looking over their shoulder 👀",
+            f"You were cooking {day_name}, {first}. Don't let up 🔥",
+        ])
+        body = (
+            f"Top {rank} on the team {day_name} — {calls} conversation{'s' if calls != 1 else ''}"
+            f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\n"
+            f"{top_first} edged you out with {top_calls} calls. One more conversation today and that could flip.\n\n"
+            f"You're in the zone, {first}. {who} is watching the scoreboard. Stay there."
+        )
+
+    # ── #1 ────────────────────────────────────────────────────────────
+    else:
+        subject = random.choice([
+            f"👑 You ran laps around the team {day_name}, {first}",
+            f"#1 on the team {day_name}. Bow down. 🏆",
+            f"Team leaderboard {day_name}: {first} first. Everyone else: trying. 😤",
+            f"Barry might actually high-five you for {day_name}, {first} 🙌",
+        ])
+        body = random.choice([
+            f"#1 out of {team_size}. You led the entire team {day_name} with {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\nEveryone else is gunning for your spot today. Defend it, {first}.",
+            f"Top of the leaderboard. {calls} calls. {appts} appointments. That's what {gci_fmt} looks like when it's being built one day at a time.\n\n{who} is going to feel this year. Do it again today, {first}.",
+        ])
+
+    return subject, body
+
+
+def _build_morning_html(body_text: str, leads: list, dashboard_url: str) -> str:
+    """Build the full branded HTML email for the morning nudge."""
+    FUB_PERSON_URL = "https://yourfriendlyagent.followupboss.com/2/people/view/{person_id}"
+    FUB_LIST_URL   = "https://yourfriendlyagent.followupboss.com/2/people?smart-list=leadstream"
+
+    html_body = "<p>" + body_text.replace("\n\n", "</p><p>").replace("\n", "<br>") + "</p>"
+
+    # LeadStream leads section
+    leads_html = ""
+    if leads:
+        lead_rows = ""
+        for lead in leads:
+            pid   = lead.get("id")
+            lname = lead.get("name", "Unknown")
+            score = lead.get("score", 0)
+            tier  = (lead.get("tier") or "").lower()
+            stage = lead.get("stage", "")
+            url   = FUB_PERSON_URL.format(person_id=pid) if pid else "#"
+            tier_color = {"hot": "#ef4444", "warm": "#f97316", "active": "#3b82f6"}.get(tier, "#6b7280")
+            lead_rows += f"""
+            <tr>
+              <td style="padding:10px 0;border-bottom:1px solid #f1f5f9">
+                <a href="{url}" style="font-size:15px;font-weight:600;color:#1a1a2e;text-decoration:none">{lname}</a>
+                <span style="margin-left:8px;font-size:11px;font-weight:700;color:{tier_color};text-transform:uppercase;background:rgba(0,0,0,0.05);padding:2px 7px;border-radius:10px">{tier}</span><br>
+                <span style="font-size:12px;color:#94a3b8">{stage} &nbsp;·&nbsp; Score: {score}</span>
+              </td>
+              <td style="padding:10px 0;border-bottom:1px solid #f1f5f9;text-align:right;vertical-align:middle">
+                <a href="{url}" style="font-size:12px;font-weight:700;color:#667eea;text-decoration:none">Open in FUB →</a>
+              </td>
+            </tr>"""
+
+        leads_html = f"""
+  <div style="background:#f8fafc;border-radius:10px;padding:20px 24px;margin:24px 0">
+    <p style="margin:0 0 14px;font-size:12px;font-weight:700;color:#94a3b8;letter-spacing:1px;text-transform:uppercase">🔥 Your Top LeadStream Leads</p>
+    <table width="100%" cellpadding="0" cellspacing="0">{lead_rows}
+    </table>
+    <p style="margin:16px 0 0;text-align:center">
+      <a href="{FUB_LIST_URL}" style="font-size:13px;font-weight:700;color:#667eea;text-decoration:none">See all your LeadStream leads →</a>
+    </p>
+  </div>"""
+
+    dash_btn = f"""
+  <div style="text-align:center;margin:20px 0 8px">
+    <a href="{dashboard_url}" style="display:inline-block;background:#f5a623;color:#0d1117;padding:13px 32px;border-radius:8px;text-decoration:none;font-weight:800;font-size:14px">View My Dashboard →</a>
+  </div>""" if dashboard_url else ""
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<div style="max-width:560px;margin:24px auto;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
+  <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:22px 32px;text-align:center">
+    <img src="{LOGO_URL}" alt="Legacy Home Team" width="120" style="display:block;margin:0 auto;height:auto">
+  </div>
+  <div style="padding:28px 32px 12px">
+    <div style="font-size:16px;line-height:1.75;color:#2d3748">{html_body}</div>
+    {leads_html}
+    {dash_btn}
+  </div>
+  <div style="background:#f7fafc;padding:14px 32px;text-align:center;border-top:1px solid #e2e8f0">
+    <p style="margin:0;font-size:12px;color:#a0aec0">Legacy Home Team &middot; Daily accountability &middot; <a href="{dashboard_url}" style="color:#a0aec0">My Dashboard</a></p>
+  </div>
+</div>
+</body></html>"""
 
 
 def run_missed_day_check(dry_run: bool = False):

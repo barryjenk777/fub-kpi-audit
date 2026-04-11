@@ -1540,6 +1540,65 @@ def get_all_streaks():
         return {}
 
 
+def get_team_activity_yesterday():
+    """
+    Return yesterday's FUB-synced activity for every active agent in one query.
+    Used by the morning nudge engine to rank the team without N+1 DB calls.
+    Returns dict: { agent_name: {calls, texts, appts, email} }
+    """
+    if not is_available():
+        return {}
+    try:
+        yesterday = date.today() - timedelta(days=1)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ap.agent_name, ap.email,
+                           COALESCE(da.calls_logged, 0) AS calls,
+                           COALESCE(da.texts_logged, 0) AS texts,
+                           COALESCE(da.appts_logged, 0) AS appts
+                    FROM   agent_profiles ap
+                    LEFT   JOIN daily_activity da
+                           ON  da.agent_name = ap.agent_name
+                           AND da.activity_date = %s
+                    WHERE  ap.is_active = TRUE AND ap.email IS NOT NULL
+                """, (yesterday,))
+                rows = cur.fetchall()
+        return {
+            r[0]: {"email": r[1], "calls": int(r[2] or 0),
+                   "texts": int(r[3] or 0), "appts": float(r[4] or 0)}
+            for r in rows
+        }
+    except Exception as e:
+        logger.warning("get_team_activity_yesterday failed: %s", e)
+        return {}
+
+
+def get_leadstream_top_leads(agent_name, limit=3):
+    """
+    Return the top N LeadStream leads for an agent from the latest manifest.
+    Each lead: {id, name, score, tier, stage}
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT data->'agent'->%s
+                    FROM   leadstream_manifest
+                    ORDER  BY updated_at DESC LIMIT 1
+                """, (agent_name,))
+                row = cur.fetchone()
+        if not row or not row[0]:
+            return []
+        leads = row[0] if isinstance(row[0], list) else []
+        return leads[:limit]
+    except Exception as e:
+        logger.warning("get_leadstream_top_leads failed for %s: %s", agent_name, e)
+        return []
+
+
 def get_agents_gone_dark(days=10):
     """
     Return agents who haven't logged ANY activity in `days` days.
