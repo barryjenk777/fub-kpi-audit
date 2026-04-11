@@ -78,6 +78,14 @@ select option{background:#0a0f1a}
 .has-prefix input,.has-prefix textarea{padding-left:1.8rem}
 .has-suffix input{padding-right:2.2rem}
 .helper{font-size:.7rem;color:var(--muted);margin-top:.28rem}
+.req{color:var(--red);margin-left:2px;font-style:normal}
+.field-err{display:none;font-size:.7rem;color:var(--red);margin-top:.28rem;font-weight:500}
+.field.invalid textarea,.field.invalid input,.field.invalid select{border-color:var(--red)!important;animation:shake .25s ease}
+.field.invalid .field-err{display:block}
+.field.invalid label{color:var(--red)}
+.step-err{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);border-radius:var(--r-sm);padding:.55rem .85rem;font-size:.8rem;color:#fca5a5;margin-bottom:.9rem;display:none}
+.step-err.show{display:block}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
 input[type="number"]{-moz-appearance:textfield}
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
@@ -192,7 +200,8 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
     <div class="card">
       <div class="card-title">✍️ In your own words</div>
       <div class="field">
-        <label>If {{ year }} goes exactly how you want, what changes?</label>
+        <label>If {{ year }} goes exactly how you want, what changes?<em class="req">*</em></label>
+        <div class="field-err">This is the foundation — please share your why.</div>
         <textarea id="why_statement" placeholder="e.g. I pay off my car, I take my kids to Disney, I stop worrying about money every month, I finally feel like I made it..." rows="4">{{ existing_why.why_statement if existing_why else '' }}</textarea>
       </div>
     </div>
@@ -200,7 +209,8 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
     <div class="card">
       <div class="card-title">❤️ Who benefits most?</div>
       <div class="field">
-        <label>When you hit this goal, who feels it the most?</label>
+        <label>When you hit this goal, who feels it the most?<em class="req">*</em></label>
+        <div class="field-err">Please select who benefits most.</div>
         <select id="who_benefits" onchange="toggleBenefitsCustom()">
           <option value="">Select...</option>
           <option value="my_kids" {% if existing_why and existing_why.who_benefits == 'my_kids' %}selected{% endif %}>My kids</option>
@@ -215,11 +225,13 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
         <input type="text" id="who_benefits_custom" placeholder="e.g. my mom, my team, my community..." value="{{ existing_why.who_benefits_custom if existing_why else '' }}">
       </div>
       <div class="field">
-        <label>What specifically happens for them when you hit this goal?</label>
+        <label>What specifically happens for them when you hit this goal?<em class="req">*</em></label>
+        <div class="field-err">Please describe what changes for them.</div>
         <textarea id="what_happens" placeholder="e.g. My daughter gets to go to private school. My wife stops working a second job. I stop borrowing from my parents..." rows="3">{{ existing_why.what_happens if existing_why else '' }}</textarea>
       </div>
     </div>
 
+    <div class="step-err" id="err-step1">Please fill in all three fields above before continuing.</div>
     <div class="nav-wrap">
       <button class="btn btn-gold" onclick="goTo(2)">That's my why — Next →</button>
     </div>
@@ -288,6 +300,7 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
       <div style="margin-top:.6rem;font-size:.72rem;color:var(--muted)">You'll fine-tune these in the last step.</div>
     </div>
 
+    <div class="step-err" id="err-step2">Please pick an identity before continuing.</div>
     <div class="nav-wrap">
       <button class="btn btn-ghost" onclick="goTo(1)">← Back</button>
       <button class="btn btn-gold" onclick="goTo(3)">That's me — Next →</button>
@@ -303,7 +316,8 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
     <div class="card">
       <div class="card-title">💰 Your GCI Target</div>
       <div class="field">
-        <label>Gross Commission Income goal for {{ year }}</label>
+        <label>Gross Commission Income goal for {{ year }}<em class="req">*</em></label>
+        <div class="field-err">Enter your income goal to continue.</div>
         <div class="input-wrap has-prefix">
           <span class="input-prefix">$</span>
           <input type="number" id="gci_goal" min="0" step="1000"
@@ -314,6 +328,7 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
       </div>
     </div>
 
+    <div class="step-err" id="err-step3">Please enter your income goal to continue.</div>
     <div class="nav-wrap">
       <button class="btn btn-ghost" onclick="goTo(2)">← Back</button>
       <button class="btn btn-gold" onclick="goTo(4)">Got it — Next →</button>
@@ -548,9 +563,65 @@ const ARCHETYPE_DEFAULTS = {
 let selectedArchetype = '{{ existing_identity.identity_archetype if existing_identity else "" }}';
 let currentStep = 1;
 
+// ── Validation ────────────────────────────────────────────────────
+
+function markField(id, ok) {
+  // Find the .field wrapper that contains this element
+  const el = document.getElementById(id);
+  if (!el) return;
+  const field = el.closest('.field');
+  if (!field) return;
+  field.classList.toggle('invalid', !ok);
+}
+
+function validate(step) {
+  let ok = true;
+
+  if (step === 1) {
+    const why   = document.getElementById('why_statement').value.trim();
+    const who   = document.getElementById('who_benefits').value;
+    const what  = document.getElementById('what_happens').value.trim();
+    markField('why_statement', !!why);
+    markField('who_benefits',  !!who);
+    markField('what_happens',  !!what);
+    ok = !!(why && who && what);
+    const banner = document.getElementById('err-step1');
+    if (banner) banner.classList.toggle('show', !ok);
+  }
+
+  if (step === 2) {
+    const hasArch = !!selectedArchetype;
+    const needsCustom = selectedArchetype === 'custom';
+    const customOk = !needsCustom || !!(document.getElementById('custom_identity')?.value.trim());
+    ok = hasArch && customOk;
+    if (needsCustom && !customOk) markField('custom_identity', false);
+    const banner = document.getElementById('err-step2');
+    if (banner) banner.classList.toggle('show', !ok);
+  }
+
+  if (step === 3) {
+    const gci = parseFloat(document.getElementById('gci_goal')?.value) || 0;
+    markField('gci_goal', gci > 0);
+    ok = gci > 0;
+    const banner = document.getElementById('err-step3');
+    if (banner) banner.classList.toggle('show', !ok);
+  }
+
+  return ok;
+}
+
 // ── Navigation ────────────────────────────────────────────────────
 
 function goTo(step) {
+  // Only validate when advancing (not when going back)
+  if (step > currentStep && !validate(currentStep)) return;
+
+  // Clear validation state on the section we're leaving
+  document.querySelectorAll(`#section-${currentStep} .field.invalid`)
+    .forEach(f => f.classList.remove('invalid'));
+  const leavingBanner = document.getElementById(`err-step${currentStep}`);
+  if (leavingBanner) leavingBanner.classList.remove('show');
+
   document.getElementById(`section-${currentStep}`).classList.remove('active');
   document.getElementById(`section-${step}`).classList.add('active');
   currentStep = step;
