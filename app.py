@@ -824,6 +824,26 @@ def api_isa():
         isa_id = config.ISA_USER_ID
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
+        # Build the full set of FUB user IDs whose calls count as Fhalen's.
+        # Fhalen dials through MojoDialer under Barry's account, so those calls
+        # land in FUB under Barry's userId and must be merged in.
+        isa_user_ids = {isa_id}
+        mojo_names = getattr(config, "ISA_MOJO_USER_NAMES", [])
+        if mojo_names:
+            try:
+                all_users = client.get_users()
+                name_to_id = {
+                    f"{u.get('firstName','')} {u.get('lastName','')}".strip(): u.get("id")
+                    for u in all_users
+                }
+                for n in mojo_names:
+                    uid = name_to_id.get(n)
+                    if uid:
+                        isa_user_ids.add(uid)
+                        logger.info("ISA merge: crediting calls from '%s' (uid=%s) to Fhalen", n, uid)
+            except Exception as e:
+                logger.warning("ISA: could not resolve mojo user IDs: %s", e)
+
         until_curr = today
         since_curr = today - timedelta(days=7)
         until_prev = since_curr
@@ -847,7 +867,7 @@ def api_isa():
         def isa_calls(all_calls):
             outbound = 0; convos = 0; talk_secs = 0; connected = 0
             for c in all_calls:
-                if c.get("userId") != isa_id:
+                if c.get("userId") not in isa_user_ids:
                     continue
                 dur = c.get("duration", 0) or 0
                 if not c.get("isIncoming", False):
@@ -869,7 +889,8 @@ def api_isa():
         convo_rate_prev = round(conv_prev / conn_prev * 100) if conn_prev else 0
 
         # ── Call quality: duration buckets ──
-        fhalen_out_curr = [c for c in calls_curr if c.get("userId") == isa_id and not c.get("isIncoming")]
+        # Include calls from all ISA user IDs (Fhalen's own + MojoDialer under Barry)
+        fhalen_out_curr = [c for c in calls_curr if c.get("userId") in isa_user_ids and not c.get("isIncoming")]
         durations = [(c.get("duration", 0) or 0) for c in fhalen_out_curr]
         dur_buckets = {
             "no_answer": sum(1 for d in durations if d == 0),
@@ -955,7 +976,7 @@ def api_isa():
 
         fhalen_connected_sweep = {}
         for c in all_calls_sweep:
-            if c.get("userId") == isa_id and (c.get("duration", 0) or 0) > 0:
+            if c.get("userId") in isa_user_ids and (c.get("duration", 0) or 0) > 0:
                 pid = c.get("personId")
                 if pid and pid not in fhalen_connected_sweep:
                     fhalen_connected_sweep[pid] = c.get("created", "")

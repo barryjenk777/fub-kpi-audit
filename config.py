@@ -55,6 +55,10 @@ MANAGER_NAME = "Joseph Fuscaldo"
 ISA_USER_ID = 46           # Fhalen Tendencia
 ISA_NAME = "Fhalen Tendencia"
 
+# Fhalen also dials through MojoDialer under Barry's FUB account, so calls
+# logged under these FUB user names are also credited to her on the ISA tab.
+ISA_MOJO_USER_NAMES = ["Barry Jenkins"]
+
 # Tag applied to leads where ISA set an appointment but agent hasn't followed up
 DROPPED_BALL_TAG = "Fhalen_Pending"
 
