@@ -2290,9 +2290,10 @@ def api_goals_generate_links():
         token = _db.create_goal_token(p["agent_name"])
         if token:
             links.append({
-                "agent_name": p["agent_name"],
-                "email":      p["email"],
-                "setup_url":  f"{base_url}/goals/setup/{token}",
+                "agent_name":   p["agent_name"],
+                "email":        p["email"],
+                "setup_url":    f"{base_url}/goals/setup/{token}",
+                "my_goals_url": f"{base_url}/my-goals/{token}",
             })
     return jsonify({"success": True, "links": links})
 
@@ -2325,10 +2326,11 @@ def api_goals_send_emails():
     year = datetime.now().year
 
     for a in agents:
-        name      = a.get("agent_name", "")
-        email     = a.get("email", "")
-        setup_url = a.get("setup_url", "")
-        first     = name.split()[0] if name else "there"
+        name          = a.get("agent_name", "")
+        email         = a.get("email", "")
+        setup_url     = a.get("setup_url", "")
+        my_goals_url  = a.get("my_goals_url", setup_url.replace("/goals/setup/", "/my-goals/"))
+        first         = name.split()[0] if name else "there"
 
         html_body = f"""<!DOCTYPE html>
 <html>
@@ -2427,6 +2429,11 @@ def api_goals_send_emails():
           </tr>
         </table>
 
+        <p style="margin:0 0 16px;font-size:13px;color:#888888;text-align:center">
+          After setup, bookmark your personal dashboard:<br>
+          <a href="{my_goals_url}" style="color:#f5a623;font-weight:700">View My Dashboard →</a>
+        </p>
+
         <p style="margin:0 0 8px;font-size:15px;line-height:1.65;color:#333333">
           {first}, the sooner you set this, the sooner the system starts working for you.
           Don't leave this in your inbox — it'll take less time than a coffee run.
@@ -2474,6 +2481,9 @@ Here's what happens when you take 2 minutes to set your goal:
 
 Your personal setup link (takes 2 minutes, works on your phone):
 {setup_url}
+
+After you set up your goals, bookmark your personal dashboard here:
+{my_goals_url}
 
 {first}, the sooner you set this, the sooner the system starts working for you.
 
@@ -2619,16 +2629,16 @@ def api_goals_send_nudge():
 
     profiles = {p["agent_name"]: p for p in _db.get_agent_profiles(active_only=False)}
     profile  = profiles.get(agent_name, {})
-    phone    = profile.get("phone") or body.get("phone")
-    if not phone:
-        return jsonify({"error": f"No phone number on file for {agent_name}"}), 400
+    email    = profile.get("email") or body.get("email")
+    if not email:
+        return jsonify({"error": f"No email address on file for {agent_name}"}), 400
 
     try:
         import nudge_engine as _nudge
         custom_msg = body.get("message")
         nudge_type = body.get("nudge_type", "custom")
         ok = _nudge.nudge_agent(
-            agent_name, nudge_type, phone,
+            agent_name, nudge_type, email,
             extra={"message": custom_msg} if custom_msg else None,
         )
         return jsonify({"success": ok})
@@ -3927,11 +3937,12 @@ def sync_fub_roster():
             name  = agent["name"]
             first = name.split()[0]
             token = _db.get_token_for_agent(name)
-            base_url  = os.environ.get("BASE_URL", "").rstrip("/")
-            setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
+            base_url      = os.environ.get("BASE_URL", "").rstrip("/")
+            setup_url     = f"{base_url}/goals/setup/{token}" if base_url and token else ""
+            dashboard_url = f"{base_url}/my-goals/{token}" if base_url and token else ""
             if setup_url and agent["email"]:
                 from email_report import send_goal_onboarding_email
-                send_goal_onboarding_email(name, first, agent["email"], setup_url)
+                send_goal_onboarding_email(name, first, agent["email"], setup_url, dashboard_url=dashboard_url)
                 _db.mark_onboarding_sent(name)
                 print(f"[ROSTER SYNC] Onboarding email sent → {name} <{agent['email']}>")
             else:
@@ -4204,18 +4215,7 @@ def scheduled_onboarding_escalation():
                         print(f"[ONBOARDING] Day 7 reminder sent to {name}")
                     except Exception as e:
                         print(f"[ONBOARDING] Day 7 email failed for {name}: {e}")
-                phone = agent.get("phone")
-                if phone:
-                    try:
-                        import nudge_engine as _nudge
-                        msg = (
-                            f"Hey {first} — still waiting on your goal setup! "
-                            f"Takes 5 min and unlocks your personal dashboard: {setup_url}"
-                        )
-                        _nudge._send_sms(phone, msg)
-                        print(f"[ONBOARDING] Day 7 SMS sent to {name}")
-                    except Exception as e:
-                        print(f"[ONBOARDING] Day 7 SMS failed for {name}: {e}")
+                # Day 7 follow-up email already handles this — no SMS fallback needed
     except Exception as e:
         _alert_on_job_failure("onboarding_escalation", str(e))
         raise
@@ -4345,7 +4345,7 @@ def start_scheduler():
         _scheduler.add_job(
             lambda: _nudge.run_weekly_summary(),
             CronTrigger(day_of_week="sun", hour=18, minute=0, timezone=ET),
-            id="nudge_weekly", name="Weekly summary SMS (Sunday 6pm)",
+            id="nudge_weekly", name="Weekly summary email (Sunday 6pm)",
             max_instances=1, coalesce=True,
         )
         # Plateau check: every Monday morning

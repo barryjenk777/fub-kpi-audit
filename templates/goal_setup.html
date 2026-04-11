@@ -882,9 +882,12 @@ async function saveAll() {
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
     status.className   = 'save-status ok';
-    status.textContent = '✅ System locked in. Barry can see it now.';
-    btn.textContent    = '🔒 Update My System';
-    btn.disabled       = false;
+    status.textContent = '✅ System locked in — taking you to your dashboard…';
+    btn.textContent    = '✅ Done!';
+    btn.disabled       = true;
+    setTimeout(() => {
+      window.location.href = `/my-goals/${TOKEN}`;
+    }, 1200);
   } catch(e) {
     status.className   = 'save-status err';
     status.textContent = '❌ ' + e.message;

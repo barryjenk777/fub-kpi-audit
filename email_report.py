@@ -1136,7 +1136,7 @@ def send_appointment_email(appt_data, subject_override=None):
 # Uses identity-based framing (Cheplak / Atomic Habits) to connect emotionally.
 # =============================================================================
 
-def build_goal_onboarding_email(first_name, setup_url):
+def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
     """Build the HTML onboarding email asking a new agent to complete goal setup."""
     _S = {
         "body": "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background: #f4f4f4;",
@@ -1195,7 +1195,7 @@ def build_goal_onboarding_email(first_name, setup_url):
     <div style="{_S['bullets']}">
       <p style="{_S['bullet']}">🎯 <strong>Your number, made real</strong> — We calculate exactly how many calls to make each day to hit your income goal</p>
       <p style="{_S['bullet']}">🔥 <strong>A streak to protect</strong> — Daily habit tracking with a "don't break the chain" calendar that keeps you accountable</p>
-      <p style="{_S['bullet']}">💬 <strong>Personalized nudges</strong> — Morning texts built around your why and your goals (not generic reminders)</p>
+      <p style="{_S['bullet']}">💬 <strong>Personalized nudges</strong> — Morning emails built around your why and your goals (not generic reminders)</p>
       <p style="{_S['bullet']}">📊 <strong>Your own dashboard</strong> — See your pace toward your annual goal, updated daily</p>
     </div>
 
@@ -1208,6 +1208,10 @@ def build_goal_onboarding_email(first_name, setup_url):
       <a href="{setup_url}" style="{_S['cta_btn']}">Set Up My Goals →</a>
     </div>
     <p style="{_S['time_note']}">Takes about 5 minutes &nbsp;·&nbsp; Your link is personal and secure</p>
+    {f'''<p style="text-align:center;font-size:13px;color:#718096;margin:0 0 24px">
+      Once you've set up your goals, bookmark your personal dashboard:<br>
+      <a href="{dashboard_url}" style="color:#667eea;font-weight:600">View My Dashboard →</a>
+    </p>''' if dashboard_url else ''}
 
     <p style="{_S['p']}">
       If you have questions, reply here or reach out to Barry directly.
@@ -1284,7 +1288,7 @@ If you've got questions or want to talk through your goal, reply to this email o
         return False
 
 
-def send_goal_onboarding_email(agent_name, first_name, email, setup_url):
+def send_goal_onboarding_email(agent_name, first_name, email, setup_url, dashboard_url=None):
     """
     Send the goal setup onboarding email to a new agent.
     Triggered automatically by the FUB roster sync when a new agent is detected.
@@ -1301,7 +1305,7 @@ def send_goal_onboarding_email(agent_name, first_name, email, setup_url):
         print("[ONBOARDING EMAIL] sendgrid package not installed")
         return False
 
-    html_body = build_goal_onboarding_email(first_name, setup_url)
+    html_body = build_goal_onboarding_email(first_name, setup_url, dashboard_url=dashboard_url)
     subject = f"{first_name}, your goals are waiting — 5 minutes to set them up 🎯"
 
     message = Mail(

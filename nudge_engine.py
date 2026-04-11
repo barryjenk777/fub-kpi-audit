@@ -1,7 +1,7 @@
 """
-Legacy Home Team — Nudge Engine (Phase 3)
+Legacy Home Team — Nudge Engine (Phase 3, Email Edition)
 
-Sends personalized Twilio SMS nudges to agents based on:
+Sends personalized email nudges to agents based on:
 - Morning power hour (daily, at their chosen time)
 - Missed day check (5pm if nothing logged yet)
 - Streak break (next morning after a missed day)
@@ -10,13 +10,12 @@ Sends personalized Twilio SMS nudges to agents based on:
 - Post-closing follow-up reminders (30/60/90 days)
 
 All messages pull from the agent's stored 'why', 'identity', and activity data.
-Uses a 15-20 message template pool so texts never feel repetitive.
+Uses a 15-20 message template pool so emails never feel repetitive.
 
 Environment variables required:
-  TWILIO_ACCOUNT_SID
-  TWILIO_AUTH_TOKEN
-  TWILIO_PHONE_NUMBER   (e.g. +17045551234)
-  BASE_URL              (for dashboard links in texts)
+  SENDGRID_API_KEY
+  EMAIL_FROM      (e.g. barry@legacyhometeam.com)
+  BASE_URL        (for dashboard links)
 """
 
 import logging
@@ -28,24 +27,79 @@ import db as _db
 
 logger = logging.getLogger(__name__)
 
+BASE_URL  = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+LOGO_URL  = f"{BASE_URL}/static/logo-white.png"
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "barry@legacyhometeam.com")
+
+
 # ---------------------------------------------------------------------------
-# Twilio send
+# Email send
 # ---------------------------------------------------------------------------
 
-def _send_sms(to_number: str, message: str, dry_run: bool = False) -> dict:
-    """Send an SMS via Twilio. Returns {sid, status} or raises."""
+def _send_email(to_email: str, subject: str, text_body: str,
+                dashboard_url: str = "", dry_run: bool = False) -> dict:
+    """Send a nudge email via SendGrid. Returns {status} or raises."""
     if dry_run:
-        logger.info("[DRY RUN] SMS to %s: %s", to_number, message)
-        return {"sid": "DRY_RUN", "status": "dry_run"}
-    account_sid = os.environ.get("TWILIO_ACCOUNT_SID")
-    auth_token  = os.environ.get("TWILIO_AUTH_TOKEN")
-    from_number = os.environ.get("TWILIO_PHONE_NUMBER")
-    if not all([account_sid, auth_token, from_number]):
-        raise RuntimeError("Twilio env vars not set (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER)")
-    from twilio.rest import Client
-    client = Client(account_sid, auth_token)
-    msg = client.messages.create(body=message, from_=from_number, to=to_number)
-    return {"sid": msg.sid, "status": msg.status}
+        logger.info("[DRY RUN] Email to %s | %s", to_email, subject)
+        return {"status": "dry_run"}
+
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    if not api_key:
+        raise RuntimeError("SENDGRID_API_KEY not set")
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+    except ImportError:
+        raise RuntimeError("sendgrid package not installed")
+
+    # Dashboard button (optional, shown on missed_day / streak_break)
+    dashboard_btn = ""
+    if dashboard_url:
+        dashboard_btn = f"""
+    <div style="text-align:center;margin:24px 0 8px">
+      <a href="{dashboard_url}"
+         style="display:inline-block;background:#f5a623;color:#0d1117;padding:13px 32px;
+                border-radius:8px;text-decoration:none;font-weight:800;font-size:14px">
+        Log My Numbers →
+      </a>
+    </div>"""
+
+    # Render message text with line breaks preserved
+    html_text = text_body.replace("\n", "<br>")
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<div style="max-width:520px;margin:24px auto;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
+  <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:22px 32px;text-align:center">
+    <img src="{LOGO_URL}" alt="Legacy Home Team" width="120" style="display:block;margin:0 auto;height:auto">
+  </div>
+  <div style="padding:28px 32px">
+    <p style="font-size:16px;line-height:1.75;color:#2d3748;margin:0 0 12px">{html_text}</p>
+    {dashboard_btn}
+  </div>
+  <div style="background:#f7fafc;padding:14px 32px;text-align:center;border-top:1px solid #e2e8f0">
+    <p style="margin:0;font-size:12px;color:#a0aec0">
+      Legacy Home Team &middot; Your daily accountability system<br>
+      <a href="{dashboard_url or BASE_URL}" style="color:#a0aec0">View My Dashboard</a>
+    </p>
+  </div>
+</div>
+</body></html>"""
+
+    msg = Mail(
+        from_email=EMAIL_FROM,
+        to_emails=to_email,
+        subject=subject,
+        plain_text_content=text_body,
+        html_content=html_body,
+    )
+
+    sg = SendGridAPIClient(api_key)
+    resp = sg.send(msg)
+    return {"status": "sent", "code": resp.status_code}
 
 
 # ---------------------------------------------------------------------------
@@ -76,10 +130,9 @@ def _ctx(agent_name: str) -> dict:
     daily_calls = ident.get("daily_calls_target", 20)
     gci_goal    = goals.get("gci_goal", 0)
 
-    base_url = os.environ.get("BASE_URL", "").rstrip("/")
-    # Try to get their dashboard token
+    # Dashboard URL
     token = _db.get_goal_token(agent_name) or ""
-    dashboard_url = f"{base_url}/my-goals/{token}" if base_url and token else ""
+    dashboard_url = f"{BASE_URL}/my-goals/{token}" if token else ""
 
     return {
         "first": first,
@@ -137,7 +190,7 @@ MORNING_TEMPLATES = [
 ]
 
 MISSED_DAY_TEMPLATES = [
-    "{first}, haven't seen your numbers today. Even 5 calls keeps the chain alive. Under 30 seconds to log. Go.",
+    "{first}, haven't seen your numbers today. Even 5 calls keeps the chain alive. Under 30 seconds to log.",
     "Quick check-in — your activity isn't in yet. One call. Log it. That's the two-minute version.",
     "{first} — the day isn't over yet. {daily_calls} calls feels like a lot. Try 5. Then keep going.",
     "Still time today, {first}. Open the app, make one call, log it. The streak is worth saving.",
@@ -168,6 +221,22 @@ MILESTONE_TEMPLATES = {
     "post_closing":"You just closed. In 30 days, reach out to {client} for a referral — they're warm. I'll remind you.",
 }
 
+# Subject lines per nudge type
+SUBJECTS = {
+    "morning":        "Time to make your calls, {first} 🔥",
+    "missed_day":     "{first}, your streak is still alive — log before midnight",
+    "streak_break":   "{first} — reset, restart, go. Day 1 starts now.",
+    "weekly_summary": "Your week in numbers, {first}",
+    "plateau":        "The compound effect is building, {first}",
+    "milestone_first_close": "First closing! 🏡 {first}, you're on the board",
+    "milestone_streak_7":    "7-day streak 🔥 {first}, you're building a habit",
+    "milestone_streak_14":   "14 days straight 🔥🔥 {first}, this is momentum",
+    "milestone_streak_21":   "21-day streak 🏆 {first}, it's officially a habit",
+    "milestone_streak_30":   "30-DAY STREAK 💪 {first}, that's elite",
+    "milestone_pace_ahead":  "Ahead of pace, {first} — keep going",
+    "post_closing":          "30-day follow-up reminder, {first}",
+}
+
 
 def _pick(templates, ctx):
     """Pick a random template and format it with ctx, with safe fallback."""
@@ -192,22 +261,30 @@ def _pick(templates, ctx):
         return tmpl  # Return unformatted rather than crash
 
 
+def _subject(nudge_type: str, ctx: dict) -> str:
+    tmpl = SUBJECTS.get(nudge_type, "A message from Legacy Home Team")
+    try:
+        return tmpl.format(**ctx)
+    except Exception:
+        return tmpl
+
+
 # ---------------------------------------------------------------------------
 # Nudge dispatcher
 # ---------------------------------------------------------------------------
 
-def nudge_agent(agent_name: str, nudge_type: str, phone: str,
+def nudge_agent(agent_name: str, nudge_type: str, email: str,
                 extra: dict = None, dry_run: bool = False) -> bool:
     """
-    Build and send a nudge of the given type.
+    Build and send an email nudge of the given type.
 
     nudge_type: 'morning' | 'missed_day' | 'streak_break' | 'weekly_summary' |
                 'milestone_*' | 'custom'
     extra:  additional merge fields (calls, appts, remaining, client, pace_word, one_liner)
     Returns True on success.
     """
-    if not phone:
-        logger.warning("nudge_agent: no phone for %s", agent_name)
+    if not email:
+        logger.warning("nudge_agent: no email for %s", agent_name)
         return False
 
     ctx = _ctx(agent_name)
@@ -221,7 +298,7 @@ def nudge_agent(agent_name: str, nudge_type: str, phone: str,
             logger.info("Skipping %s nudge for %s — already sent today", nudge_type, agent_name)
             return False
 
-    # Pick message
+    # Build message body
     if nudge_type == "morning":
         msg = _pick(MORNING_TEMPLATES, ctx)
     elif nudge_type == "missed_day":
@@ -257,18 +334,24 @@ def nudge_agent(agent_name: str, nudge_type: str, phone: str,
         logger.warning("Unknown nudge_type: %s", nudge_type)
         return False
 
-    # Append dashboard link if we have one
-    if ctx.get("dashboard_url") and nudge_type in ("missed_day", "streak_break"):
-        msg += f"\nLog it: {ctx['dashboard_url']}"
+    subject = _subject(nudge_type, ctx)
+
+    # Include dashboard link button on actionable nudges
+    dashboard_url = ctx.get("dashboard_url", "")
+    show_btn = nudge_type in ("missed_day", "streak_break")
 
     try:
-        result = _send_sms(phone, msg, dry_run=dry_run)
-        _db.log_nudge(agent_name, nudge_type, msg, twilio_sid=result.get("sid"), status=result.get("status", "sent"))
-        logger.info("Nudge sent [%s] → %s: %s", nudge_type, agent_name, msg[:60])
+        result = _send_email(
+            email, subject, msg,
+            dashboard_url=dashboard_url if show_btn else "",
+            dry_run=dry_run,
+        )
+        _db.log_nudge(agent_name, nudge_type, msg, status=result.get("status", "sent"))
+        logger.info("Nudge email sent [%s] → %s: %s", nudge_type, agent_name, msg[:60])
         return True
     except Exception as e:
         _db.log_nudge(agent_name, nudge_type, msg, status="failed")
-        logger.warning("nudge_agent failed for %s: %s", agent_name, e)
+        logger.warning("nudge_agent email failed for %s: %s", agent_name, e)
         return False
 
 
@@ -281,15 +364,15 @@ def run_morning_nudges(dry_run: bool = False):
     Called each morning by APScheduler.
     Checks each agent's power_hour_time — only sends within a 30-min window.
     """
-    profiles  = _db.get_agent_profiles(active_only=True)
-    identities= _db.get_all_agent_identities()
-    now_et    = _et_now()
+    profiles   = _db.get_agent_profiles(active_only=True)
+    identities = _db.get_all_agent_identities()
+    now_et     = _et_now()
 
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
-        phone = p.get("phone")
-        if not phone:
+        email = p.get("email")
+        if not email:
             continue
         ident = identities.get(name, {})
         power_hour = ident.get("power_hour_time", "08:30")
@@ -301,9 +384,9 @@ def run_morning_nudges(dry_run: bool = False):
         window_start = now_et.replace(hour=ph_h, minute=ph_m, second=0, microsecond=0)
         diff = abs((now_et - window_start).total_seconds())
         if diff <= 1800:  # within 30 min
-            if nudge_agent(name, "morning", phone, dry_run=dry_run):
+            if nudge_agent(name, "morning", email, dry_run=dry_run):
                 sent += 1
-    logger.info("run_morning_nudges: sent %d nudges", sent)
+    logger.info("run_morning_nudges: sent %d nudge emails", sent)
     return sent
 
 
@@ -313,18 +396,17 @@ def run_missed_day_check(dry_run: bool = False):
     send a gentle missed-day nudge.
     """
     profiles = _db.get_agent_profiles(active_only=True)
-    today    = date.today()
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
-        phone = p.get("phone")
-        if not phone:
+        email = p.get("email")
+        if not email:
             continue
         act = _db.get_todays_activity(name)
         if act["calls"] == 0 and act["texts"] == 0 and act["appts"] == 0:
-            if nudge_agent(name, "missed_day", phone, dry_run=dry_run):
+            if nudge_agent(name, "missed_day", email, dry_run=dry_run):
                 sent += 1
-    logger.info("run_missed_day_check: sent %d nudges", sent)
+    logger.info("run_missed_day_check: sent %d nudge emails", sent)
     return sent
 
 
@@ -338,8 +420,8 @@ def run_streak_break_check(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
-        phone = p.get("phone")
-        if not phone:
+        email = p.get("email")
+        if not email:
             continue
         streak = _db.get_streak(name)
         last   = streak.get("last_activity_date")
@@ -348,9 +430,9 @@ def run_streak_break_check(dry_run: bool = False):
         days_since = (today - date.fromisoformat(last)).days
         if days_since == 1 and streak.get("current_streak", 0) == 0:
             # Broke it yesterday — nudge this morning
-            if nudge_agent(name, "streak_break", phone, dry_run=dry_run):
+            if nudge_agent(name, "streak_break", email, dry_run=dry_run):
                 sent += 1
-    logger.info("run_streak_break_check: sent %d nudges", sent)
+    logger.info("run_streak_break_check: sent %d nudge emails", sent)
     return sent
 
 
@@ -362,8 +444,8 @@ def run_weekly_summary(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
-        phone = p.get("phone")
-        if not phone:
+        email = p.get("email")
+        if not email:
             continue
 
         activity = _db.get_daily_activity(name, days=7)
@@ -391,9 +473,9 @@ def run_weekly_summary(dry_run: bool = False):
                 one_liner = f"Next week: get back to your why."
 
         extra = {"calls": calls, "appts": appts, "pace_word": pace_word, "one_liner": one_liner}
-        if nudge_agent(name, "weekly_summary", phone, extra=extra, dry_run=dry_run):
+        if nudge_agent(name, "weekly_summary", email, extra=extra, dry_run=dry_run):
             sent += 1
-    logger.info("run_weekly_summary: sent %d nudges", sent)
+    logger.info("run_weekly_summary: sent %d nudge emails", sent)
     return sent
 
 
@@ -405,13 +487,12 @@ def run_plateau_check(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
-        phone = p.get("phone")
-        if not phone:
+        email = p.get("email")
+        if not email:
             continue
         activity = _db.get_daily_activity(name, days=21)
         if len(activity) < 10:
             continue
-        # Split into this week, last week, week before
         weeks = [
             [r["calls"] for r in activity if _days_ago(r["date"]) <= 7],
             [r["calls"] for r in activity if 7 < _days_ago(r["date"]) <= 14],
@@ -424,18 +505,20 @@ def run_plateau_check(dry_run: bool = False):
         min_t = min(totals)
         variance = (max_t - min_t) / max_t
         if variance <= 0.10 and totals[0] <= totals[-1]:  # flat or declining
+            ctx = _ctx(name)
             msg = (
-                f"Your effort has been steady, {name.split()[0]}. "
+                f"Your effort has been steady, {ctx['first']}. "
                 "Results sometimes lag behind the work. Atomic Habits calls this the valley of disappointment. "
                 "The compound effect is building — don't stop now."
             )
             _db.log_nudge(name, "plateau", msg)
-            if phone and not dry_run:
+            if not dry_run:
                 try:
-                    _send_sms(phone, msg)
+                    subject = _subject("plateau", ctx)
+                    _send_email(email, subject, msg)
                     sent += 1
                 except Exception as e:
-                    logger.warning("plateau nudge failed for %s: %s", name, e)
+                    logger.warning("plateau nudge email failed for %s: %s", name, e)
     return sent
 
 
@@ -446,20 +529,21 @@ def run_post_closing_followups(dry_run: bool = False):
     sent = 0
     for item in due:
         name   = item["agent_name"]
-        phone  = (profiles.get(name) or {}).get("phone")
+        email  = (profiles.get(name) or {}).get("email")
         client = item["client_name"] or "your recent client"
         for days in item["due_days"]:
             ctx = _ctx(name)
             msg = MILESTONE_TEMPLATES["post_closing"].format(client=client, **ctx)
-            if phone:
+            if email:
                 try:
                     if not dry_run:
-                        result = _send_sms(phone, msg)
-                        _db.log_nudge(name, f"post_closing_{days}d", msg, twilio_sid=result.get("sid"))
+                        subject = _subject("post_closing", ctx)
+                        _send_email(email, subject, msg)
+                        _db.log_nudge(name, f"post_closing_{days}d", msg, status="sent")
                     _db.mark_followup_sent(item["id"], days)
                     sent += 1
                 except Exception as e:
-                    logger.warning("post_closing nudge failed for %s: %s", name, e)
+                    logger.warning("post_closing nudge email failed for %s: %s", name, e)
     return sent
 
 
@@ -468,7 +552,7 @@ def run_post_closing_followups(dry_run: bool = False):
 # ---------------------------------------------------------------------------
 
 def trigger_milestone(agent_name: str, milestone_key: str,
-                       phone: str, extra: dict = None, dry_run: bool = False):
+                       email: str, extra: dict = None, dry_run: bool = False):
     """
     milestone_key: 'first_close' | 'streak_7' | 'streak_14' | 'streak_21' |
                    'streak_30' | 'pace_ahead' | 'post_closing'
@@ -481,13 +565,14 @@ def trigger_milestone(agent_name: str, milestone_key: str,
         msg = tmpl.format(**ctx)
     except Exception:
         msg = f"Great milestone, {ctx['first']}! Keep going."
-    if phone:
+    nudge_type = f"milestone_{milestone_key}"
+    subject = _subject(nudge_type, ctx)
+    if email:
         try:
-            result = _send_sms(phone, msg, dry_run=dry_run)
-            _db.log_nudge(agent_name, f"milestone_{milestone_key}", msg,
-                          twilio_sid=result.get("sid"), status=result.get("status", "sent"))
+            result = _send_email(email, subject, msg, dry_run=dry_run)
+            _db.log_nudge(agent_name, nudge_type, msg, status=result.get("status", "sent"))
         except Exception as e:
-            logger.warning("trigger_milestone failed for %s: %s", agent_name, e)
+            logger.warning("trigger_milestone email failed for %s: %s", agent_name, e)
 
 
 # ---------------------------------------------------------------------------
@@ -496,11 +581,9 @@ def trigger_milestone(agent_name: str, milestone_key: str,
 
 def _et_now():
     """Current time in US/Eastern."""
-    from datetime import timezone as _tz, timedelta as _td
-    # Simple offset: -5 in winter, -4 in summer (March–Nov)
-    m = datetime.now(_tz.utc).month
+    m = datetime.now(timezone.utc).month
     offset = -4 if 3 <= m <= 11 else -5
-    return datetime.now(_tz(timedelta(hours=offset)))
+    return datetime.now(timezone(timedelta(hours=offset)))
 
 
 def _days_ago(date_str: str) -> int:
