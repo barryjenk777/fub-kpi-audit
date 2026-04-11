@@ -2664,6 +2664,19 @@ def api_goals_nudge_context(agent_name):
     })
 
 
+@app.route("/api/admin/update-phones", methods=["POST"])
+def api_admin_update_phones():
+    """Batch-update agent phone numbers. Body: {phones: {agent_name: phone, ...}}"""
+    if not _db.is_available():
+        return jsonify({"error": "DB not available"}), 503
+    phones = (request.json or {}).get("phones", {})
+    results = {}
+    for name, phone in phones.items():
+        ok = _db.upsert_agent_profile(name, phone=phone.strip())
+        results[name] = "ok" if ok else "failed"
+    return jsonify({"success": True, "results": results})
+
+
 @app.route("/api/goals/sync-roster", methods=["POST"])
 def api_sync_fub_roster():
     """Manually trigger a FUB roster sync. Detects new agents and sends onboarding emails."""
