@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ year }} Goal Setting — Legacy Home Team</title>
+<style>
+  :root {
+    --bg:      #0f1117;
+    --card:    #1a1d27;
+    --border:  #2a2d3a;
+    --text:    #e8eaf0;
+    --muted:   #8b8fa8;
+    --gold:    #f5a623;
+    --green:   #22c55e;
+    --yellow:  #eab308;
+    --red:     #ef4444;
+    --blue:    #3b82f6;
+    --radius:  12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    padding: 0 0 4rem;
+  }
+
+  .header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 1.25rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .header-logo { font-size: 1.4rem; }
+  .header-title { font-size: 1rem; font-weight: 600; color: var(--gold); }
+  .header-sub { font-size: 0.75rem; color: var(--muted); }
+
+  .container { max-width: 560px; margin: 0 auto; padding: 1.5rem 1rem; }
+
+  .greeting {
+    background: linear-gradient(135deg, #1e2535 0%, #1a1d27 100%);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--gold);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+  .greeting h1 { font-size: 1.3rem; margin-bottom: 0.4rem; }
+  .greeting p  { font-size: 0.875rem; color: var(--muted); line-height: 1.5; }
+
+  .section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1rem;
+  }
+  .section-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .field { margin-bottom: 1rem; }
+  .field:last-child { margin-bottom: 0; }
+  .field label {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 0.35rem;
+    font-weight: 500;
+  }
+  .field label span { color: var(--text); font-weight: 600; }
+
+  .input-wrap { position: relative; }
+  .input-prefix {
+    position: absolute;
+    left: 0.9rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    font-size: 1rem;
+    pointer-events: none;
+  }
+  .input-suffix {
+    position: absolute;
+    right: 0.9rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    font-size: 0.9rem;
+    pointer-events: none;
+  }
+  input[type="number"], input[type="text"] {
+    width: 100%;
+    background: #12151f;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 1.1rem;
+    padding: 0.75rem 2.5rem 0.75rem 2rem;
+    outline: none;
+    transition: border-color 0.2s;
+    -moz-appearance: textfield;
+  }
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  input:focus { border-color: var(--gold); }
+  input.no-prefix { padding-left: 0.9rem; }
+
+  .helper { font-size: 0.72rem; color: var(--muted); margin-top: 0.3rem; }
+
+  /* Results card */
+  .results {
+    background: linear-gradient(135deg, #1a2535 0%, #1a1d27 100%);
+    border: 2px solid var(--gold);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+  }
+  .results-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 1.25rem;
+  }
+
+  .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+  .result-item {
+    background: rgba(255,255,255,0.04);
+    border-radius: 8px;
+    padding: 0.9rem 1rem;
+  }
+  .result-item.full { grid-column: 1 / -1; }
+  .result-label { font-size: 0.7rem; color: var(--muted); margin-bottom: 0.25rem; }
+  .result-value { font-size: 1.5rem; font-weight: 700; color: var(--gold); }
+  .result-unit  { font-size: 0.75rem; color: var(--muted); margin-top: 0.1rem; }
+
+  .divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1rem 0;
+  }
+
+  /* SOI section */
+  .soi-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+  }
+  .soi-note {
+    background: rgba(34,197,94,0.08);
+    border: 1px solid rgba(34,197,94,0.2);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-size: 0.8rem;
+    color: #86efac;
+    margin-top: 0.75rem;
+    line-height: 1.5;
+  }
+
+  /* Advanced toggle */
+  .advanced-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.8rem;
+    padding: 0.5rem 0;
+    user-select: none;
+  }
+  .advanced-toggle:hover { color: var(--text); }
+  .advanced-arrow { transition: transform 0.2s; }
+  .advanced-arrow.open { transform: rotate(90deg); }
+  #advanced-fields { display: none; margin-top: 1rem; }
+  #advanced-fields.open { display: block; }
+
+  .rate-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.6rem;
+  }
+
+  /* Save button */
+  .btn-save {
+    width: 100%;
+    background: var(--gold);
+    color: #0f1117;
+    font-size: 1rem;
+    font-weight: 700;
+    border: none;
+    border-radius: var(--radius);
+    padding: 1rem;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    margin-top: 0.5rem;
+  }
+  .btn-save:hover  { opacity: 0.9; }
+  .btn-save:active { transform: scale(0.98); }
+  .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .save-status {
+    text-align: center;
+    font-size: 0.85rem;
+    margin-top: 0.75rem;
+    min-height: 1.2rem;
+  }
+  .save-status.ok  { color: var(--green); }
+  .save-status.err { color: var(--red); }
+
+  /* Already saved banner */
+  .saved-banner {
+    background: rgba(34,197,94,0.1);
+    border: 1px solid rgba(34,197,94,0.3);
+    border-radius: var(--radius);
+    padding: 0.9rem 1.25rem;
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+    color: #86efac;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-logo">🏠</div>
+  <div>
+    <div class="header-title">Legacy Home Team</div>
+    <div class="header-sub">{{ year }} Business Goal Setting</div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="greeting">
+    <h1>Hey {{ agent_name.split()[0] }}! 👋</h1>
+    <p>Set your {{ year }} income goal below and we'll automatically calculate
+       exactly how many calls and appointments you need to hit it each week.
+       Takes about 2 minutes.</p>
+  </div>
+
+  {% if goal and goal.gci_goal and goal.gci_goal > 0 %}
+  <div class="saved-banner">
+    ✅ You've already set your goals for {{ year }}. Update them any time below.
+  </div>
+  {% endif %}
+
+  <!-- Income Goal -->
+  <div class="section">
+    <div class="section-title">💰 Your Income Goal</div>
+    <div class="field">
+      <label>What do you want to earn in {{ year }}? <span>(Gross Commission Income)</span></label>
+      <div class="input-wrap">
+        <span class="input-prefix">$</span>
+        <input type="number" id="gci_goal" min="0" step="1000"
+               value="{{ (goal.gci_goal | int) if goal and goal.gci_goal else '' }}"
+               placeholder="150000" oninput="recalc()">
+      </div>
+      <div class="helper">This is your gross commission before office split deductions.</div>
+    </div>
+  </div>
+
+  <!-- Deal Economics -->
+  <div class="section">
+    <div class="section-title">🏡 Your Market</div>
+    <div class="field">
+      <label>Average sale price in your deals</label>
+      <div class="input-wrap">
+        <span class="input-prefix">$</span>
+        <input type="number" id="avg_sale_price" min="0" step="10000"
+               value="{{ (goal.avg_sale_price | int) if goal and goal.avg_sale_price else 425000 }}"
+               placeholder="425000" oninput="recalc()">
+      </div>
+    </div>
+    <div class="field">
+      <label>Commission rate you net after splits <span>(e.g. 2.5%)</span></label>
+      <div class="input-wrap">
+        <input type="number" id="commission_pct" min="0" max="10" step="0.1"
+               value="{{ '%.1f' | format((goal.commission_pct | float) * 100) if goal and goal.commission_pct else '2.5' }}"
+               placeholder="2.5" oninput="recalc()" class="no-prefix">
+        <span class="input-suffix">%</span>
+      </div>
+      <div class="helper" id="commission-helper">≈ $<span id="per-deal">—</span> per closing</div>
+    </div>
+  </div>
+
+  <!-- Sphere of Influence -->
+  <div class="section">
+    <div class="section-title">👥 Sphere of Influence</div>
+    <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1rem;line-height:1.5">
+      How many deals do you expect from referrals, past clients, family &amp; friends
+      this year — without actively prospecting for them?
+    </p>
+    <div class="soi-row">
+      <div class="field">
+        <label>Expected SOI closings</label>
+        <div class="input-wrap">
+          <input type="number" id="soi_closings" min="0" step="1"
+                 value="{{ goal.soi_closings_expected if goal else 0 }}"
+                 placeholder="0" oninput="recalc()" class="no-prefix">
+        </div>
+      </div>
+      <div class="field">
+        <label>SOI sphere touches / month</label>
+        <div class="input-wrap">
+          <input type="number" id="sphere_touch" min="0" step="1"
+                 value="{{ goal.sphere_touch_monthly if goal else 2 }}"
+                 placeholder="2" oninput="recalc()" class="no-prefix">
+        </div>
+      </div>
+    </div>
+    <div class="soi-note" id="soi-note" style="display:none">
+      🎉 Your sphere will cover <strong id="soi-pct">—</strong> of your income goal —
+      you only need to prospect for the remaining <strong id="prospect-gci">—</strong>.
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="results">
+    <div class="results-title">📊 Your {{ year }} Roadmap</div>
+    <div class="results-grid">
+      <div class="result-item full">
+        <div class="result-label">Total closings needed</div>
+        <div class="result-value" id="r-closings">—</div>
+        <div class="result-unit">deals to hit your GCI goal</div>
+      </div>
+      <div class="result-item">
+        <div class="result-label">From prospecting</div>
+        <div class="result-value" id="r-prospect-close">—</div>
+        <div class="result-unit">closings to go get</div>
+      </div>
+      <div class="result-item">
+        <div class="result-label">From sphere (SOI)</div>
+        <div class="result-value" id="r-soi-close">—</div>
+        <div class="result-unit">referral closings</div>
+      </div>
+    </div>
+    <hr class="divider">
+    <div class="results-grid">
+      <div class="result-item">
+        <div class="result-label">Appointments / week</div>
+        <div class="result-value" id="r-appts">—</div>
+        <div class="result-unit">to set from prospecting</div>
+      </div>
+      <div class="result-item">
+        <div class="result-label">Calls / week</div>
+        <div class="result-value" id="r-calls">—</div>
+        <div class="result-unit">contacts to make</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Advanced (conversion rates) -->
+  <div class="section">
+    <div class="advanced-toggle" onclick="toggleAdvanced()">
+      <span class="advanced-arrow" id="adv-arrow">▶</span>
+      Adjust conversion rates
+      <span style="color:var(--muted);font-size:0.7rem;margin-left:auto">
+        (defaults = industry average)
+      </span>
+    </div>
+    <div id="advanced-fields">
+      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:1rem;line-height:1.5">
+        These are pre-set to industry averages for a competent agent.
+        If you know your actual conversion numbers, enter them here.
+      </p>
+      <div class="rate-row">
+        <div class="field">
+          <label>Calls → Appt</label>
+          <div class="input-wrap">
+            <input type="number" id="call_to_appt" min="1" max="100" step="1"
+                   value="{{ '%.0f' | format((goal.call_to_appt_rate | float) * 100) if goal and goal.call_to_appt_rate else '10' }}"
+                   class="no-prefix" oninput="recalc()">
+            <span class="input-suffix">%</span>
+          </div>
+          <div class="helper">avg 10%</div>
+        </div>
+        <div class="field">
+          <label>Appt → Contract</label>
+          <div class="input-wrap">
+            <input type="number" id="appt_to_contract" min="1" max="100" step="1"
+                   value="{{ '%.0f' | format((goal.appt_to_contract_rate | float) * 100) if goal and goal.appt_to_contract_rate else '30' }}"
+                   class="no-prefix" oninput="recalc()">
+            <span class="input-suffix">%</span>
+          </div>
+          <div class="helper">avg 30%</div>
+        </div>
+        <div class="field">
+          <label>Contract → Close</label>
+          <div class="input-wrap">
+            <input type="number" id="contract_to_close" min="1" max="100" step="1"
+                   value="{{ '%.0f' | format((goal.contract_to_close_rate | float) * 100) if goal and goal.contract_to_close_rate else '80' }}"
+                   class="no-prefix" oninput="recalc()">
+            <span class="input-suffix">%</span>
+          </div>
+          <div class="helper">avg 80%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Save -->
+  <button class="btn-save" id="btn-save" onclick="saveGoals()" disabled>
+    Save My {{ year }} Goals
+  </button>
+  <div class="save-status" id="save-status"></div>
+
+</div><!-- /container -->
+
+<script>
+const TOKEN    = "{{ token }}";
+const YEAR     = {{ year }};
+const AGENT    = "{{ agent_name }}";
+
+function v(id) {
+  return parseFloat(document.getElementById(id).value) || 0;
+}
+
+function fmt(n) {
+  if (n >= 1000000) return '$' + (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000)    return '$' + Math.round(n/1000) + 'K';
+  return '$' + Math.round(n);
+}
+
+function recalc() {
+  const gci        = v('gci_goal');
+  const avgPrice   = v('avg_sale_price');
+  const commPct    = v('commission_pct') / 100;
+  const soiClose   = v('soi_closings');
+  const c2a        = v('call_to_appt')       / 100 || 0.10;
+  const a2c        = v('appt_to_contract')   / 100 || 0.30;
+  const c2cl       = v('contract_to_close')  / 100 || 0.80;
+
+  const perDeal         = avgPrice * commPct;
+  const closingsNeeded  = perDeal > 0 ? gci / perDeal : 0;
+  const soiGci          = soiClose * perDeal;
+  const prospectClose   = Math.max(closingsNeeded - soiClose, 0);
+  const contractsNeeded = c2cl > 0 ? prospectClose / c2cl : 0;
+  const apptsYr         = a2c  > 0 ? contractsNeeded / a2c : 0;
+  const callsYr         = c2a  > 0 ? apptsYr / c2a : 0;
+  const apptsWk         = apptsYr / 50;
+  const callsWk         = callsYr / 50;
+
+  // Update per-deal helper
+  document.getElementById('per-deal').textContent =
+    perDeal > 0 ? Math.round(perDeal).toLocaleString() : '—';
+
+  // SOI note
+  const soiNote = document.getElementById('soi-note');
+  if (soiClose > 0 && gci > 0) {
+    const soiPct = Math.round(soiGci / gci * 100);
+    document.getElementById('soi-pct').textContent = soiPct + '%';
+    document.getElementById('prospect-gci').textContent = fmt(Math.max(gci - soiGci, 0));
+    soiNote.style.display = 'block';
+  } else {
+    soiNote.style.display = 'none';
+  }
+
+  // Results
+  set('r-closings',      gci > 0 ? Math.ceil(closingsNeeded) : '—');
+  set('r-prospect-close', gci > 0 ? Math.ceil(prospectClose) : '—');
+  set('r-soi-close',     soiClose || '—');
+  set('r-appts',         gci > 0 ? apptsWk.toFixed(1) : '—');
+  set('r-calls',         gci > 0 ? Math.ceil(callsWk) : '—');
+
+  // Enable save button only when GCI is entered
+  document.getElementById('btn-save').disabled = (gci <= 0);
+}
+
+function set(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function toggleAdvanced() {
+  const fields = document.getElementById('advanced-fields');
+  const arrow  = document.getElementById('adv-arrow');
+  fields.classList.toggle('open');
+  arrow.classList.toggle('open');
+}
+
+async function saveGoals() {
+  const btn    = document.getElementById('btn-save');
+  const status = document.getElementById('save-status');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  status.textContent = '';
+  status.className = 'save-status';
+
+  const payload = {
+    year:                    YEAR,
+    gci_goal:                v('gci_goal'),
+    avg_sale_price:          v('avg_sale_price'),
+    commission_pct:          v('commission_pct') / 100,
+    soi_closings_expected:   Math.round(v('soi_closings')),
+    soi_gci_expected:        Math.round(v('soi_closings')) * v('avg_sale_price') * (v('commission_pct') / 100),
+    sphere_touch_monthly:    Math.round(v('sphere_touch')),
+    call_to_appt_rate:       v('call_to_appt')      / 100,
+    appt_to_contract_rate:   v('appt_to_contract')  / 100,
+    contract_to_close_rate:  v('contract_to_close') / 100,
+  };
+
+  try {
+    const resp = await fetch(`/api/goals/setup/${TOKEN}`, {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      status.textContent = '✅ Goals saved! Barry can see them now.';
+      status.className   = 'save-status ok';
+      btn.textContent    = 'Update My Goals';
+      btn.disabled       = false;
+    } else {
+      throw new Error(data.error || 'Unknown error');
+    }
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+    status.className   = 'save-status err';
+    btn.textContent    = 'Save My {{ year }} Goals';
+    btn.disabled       = false;
+  }
+}
+
+// Run on load to populate results if editing existing goal
+recalc();
+</script>
+</body>
+</html>

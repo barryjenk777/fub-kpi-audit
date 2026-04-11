@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Goals — Legacy Home Team</title>
+<style>
+  :root {
+    --bg:      #0f1117;
+    --card:    #1a1d27;
+    --border:  #2a2d3a;
+    --text:    #e8eaf0;
+    --muted:   #8b8fa8;
+    --gold:    #f5a623;
+    --green:   #22c55e;
+    --yellow:  #eab308;
+    --red:     #ef4444;
+    --blue:    #3b82f6;
+    --radius:  12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh; }
+
+  /* Nav */
+  .nav { background: var(--card); border-bottom: 1px solid var(--border);
+    padding: 0.9rem 1.5rem; display: flex; align-items: center; gap: 1.5rem; }
+  .nav-brand { font-weight: 700; font-size: 1rem; color: var(--gold); text-decoration:none; }
+  .nav-links { display: flex; gap: 1.25rem; margin-left: auto; }
+  .nav-links a { color: var(--muted); font-size: 0.85rem; text-decoration: none; }
+  .nav-links a:hover { color: var(--text); }
+  .nav-links a.active { color: var(--gold); }
+
+  .page { max-width: 1200px; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+
+  /* Header row */
+  .page-header { display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .page-title  { font-size: 1.4rem; font-weight: 700; }
+  .page-sub    { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+
+  .header-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+
+  .btn { display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.55rem 1rem; border-radius: 8px; font-size: 0.82rem;
+    font-weight: 600; cursor: pointer; border: none; transition: opacity .15s; }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-gold  { background: var(--gold);  color: #0f1117; }
+  .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-sm    { padding: 0.35rem 0.7rem; font-size: 0.75rem; }
+
+  /* Summary cards */
+  .summary-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 0.75rem; margin-bottom: 1.5rem; }
+  .stat-card { background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1rem 1.25rem; }
+  .stat-label { font-size: 0.68rem; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: .4rem; }
+  .stat-value { font-size: 1.7rem; font-weight: 700; }
+  .stat-sub   { font-size: 0.72rem; color: var(--muted); margin-top: .15rem; }
+  .stat-green  { color: var(--green); }
+  .stat-yellow { color: var(--yellow); }
+  .stat-red    { color: var(--red); }
+  .stat-gold   { color: var(--gold); }
+
+  /* Status badge */
+  .badge { display: inline-block; padding: .2rem .55rem; border-radius: 20px;
+    font-size: 0.68rem; font-weight: 700; letter-spacing: .04em; }
+  .badge-green  { background: rgba(34,197,94,.15);  color: var(--green); }
+  .badge-yellow { background: rgba(234,179,8,.15);  color: var(--yellow); }
+  .badge-red    { background: rgba(239,68,68,.15);  color: var(--red); }
+  .badge-gray   { background: rgba(139,143,168,.12); color: var(--muted); }
+
+  /* Scorecard table */
+  .scorecard-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  th { padding: .6rem .9rem; text-align: left; font-size: .65rem; font-weight: 700;
+    letter-spacing: .07em; text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: .8rem .9rem; border-bottom: 1px solid rgba(42,45,58,.5);
+    vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+
+  .agent-name { font-weight: 600; font-size: 0.88rem; }
+  .agent-sub  { font-size: 0.7rem; color: var(--muted); margin-top: .15rem; }
+
+  /* Pace bar */
+  .pace-wrap { min-width: 130px; }
+  .pace-label { display: flex; justify-content: space-between;
+    font-size: .7rem; color: var(--muted); margin-bottom: .25rem; }
+  .pace-bar { height: 6px; background: rgba(255,255,255,.07); border-radius: 3px; overflow: hidden; }
+  .pace-fill { height: 100%; border-radius: 3px; transition: width .4s; }
+  .pace-fill.green  { background: var(--green); }
+  .pace-fill.yellow { background: var(--yellow); }
+  .pace-fill.red    { background: var(--red); }
+
+  .metric-cell { text-align: right; }
+  .metric-val  { font-weight: 600; font-size: .92rem; }
+  .metric-target { font-size: .68rem; color: var(--muted); }
+
+  .flag-convo { color: var(--red); font-size: .7rem; font-weight: 700;
+    display: flex; align-items: center; gap: .25rem; }
+
+  .no-goal { color: var(--muted); font-size: .78rem; font-style: italic; }
+
+  /* Modal */
+  .modal-overlay { display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.65); z-index: 100; align-items: center;
+    justify-content: center; padding: 1rem; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.5rem; width: 100%; max-width: 460px; }
+  .modal-title { font-size: 1rem; font-weight: 700; margin-bottom: 1.25rem;
+    padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
+  .modal-field { margin-bottom: .9rem; }
+  .modal-field label { display: block; font-size: .75rem; color: var(--muted);
+    margin-bottom: .3rem; }
+  .modal-field input, .modal-field select {
+    width: 100%; background: #12151f; border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: .9rem;
+    padding: .6rem .85rem; outline: none; }
+  .modal-field input:focus { border-color: var(--gold); }
+  .modal-row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+  .modal-actions { display: flex; gap: .6rem; margin-top: 1.25rem; justify-content: flex-end; }
+
+  /* Email panel */
+  .email-panel { background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;
+    display: none; }
+  .email-panel.open { display: block; }
+  .email-panel-title { font-weight: 600; margin-bottom: 1rem; font-size: .9rem; }
+  .agent-link-row { display: flex; align-items: center; gap: .75rem;
+    padding: .6rem 0; border-bottom: 1px solid var(--border); }
+  .agent-link-row:last-child { border-bottom: none; }
+  .agent-link-check { accent-color: var(--gold); width: 16px; height: 16px; cursor: pointer; }
+  .agent-link-name  { flex: 1; font-size: .85rem; }
+  .agent-link-email { font-size: .75rem; color: var(--muted); }
+  .agent-link-url   { font-size: .68rem; color: var(--blue);
+    word-break: break-all; flex: 2; }
+
+  .toast { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 200;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: .9rem 1.25rem; font-size: .85rem; max-width: 340px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.4); display: none; }
+  .toast.show { display: block; }
+  .toast.ok   { border-left: 4px solid var(--green); }
+  .toast.err  { border-left: 4px solid var(--red); }
+
+  .spinner { display: inline-block; width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,.2); border-top-color: var(--gold);
+    border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty-state { text-align: center; padding: 4rem 1rem; color: var(--muted); }
+  .empty-state h3 { font-size: 1.1rem; margin-bottom: .5rem; color: var(--text); }
+  .empty-state p  { font-size: .85rem; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <a href="/" class="nav-brand">🏠 Legacy Home Team</a>
+  <div class="nav-links">
+    <a href="/">KPI Audit</a>
+    <a href="/leadstream">LeadStream</a>
+    <a href="/goals" class="active">Goals</a>
+  </div>
+</nav>
+
+<div class="page">
+
+  <!-- Header -->
+  <div class="page-header">
+    <div>
+      <div class="page-title">🎯 Agent Goals — <span id="year-label">2026</span></div>
+      <div class="page-sub" id="week-label">Loading…</div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-ghost" onclick="syncDeals()">🔄 Sync FUB Deals</button>
+      <button class="btn btn-ghost" onclick="openLogClosing()">+ Log Closing</button>
+      <button class="btn btn-ghost" onclick="toggleEmailPanel()">📧 Send Setup Emails</button>
+      <button class="btn btn-gold"  onclick="loadScorecard()">↺ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Summary row -->
+  <div class="summary-row" id="summary-row">
+    <div class="stat-card">
+      <div class="stat-label">Agents with Goals</div>
+      <div class="stat-value stat-gold" id="s-with-goals">—</div>
+      <div class="stat-sub" id="s-total-agents">of — agents</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">On Pace 🟢</div>
+      <div class="stat-value stat-green" id="s-green">—</div>
+      <div class="stat-sub">≥ 90% pace</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">At Risk 🟡</div>
+      <div class="stat-value stat-yellow" id="s-yellow">—</div>
+      <div class="stat-sub">70–89% pace</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Off Track 🔴</div>
+      <div class="stat-value stat-red" id="s-red">—</div>
+      <div class="stat-sub">needs conversation</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Team GCI Goal</div>
+      <div class="stat-value stat-gold" id="s-gci">—</div>
+      <div class="stat-sub">combined annual target</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Closings YTD</div>
+      <div class="stat-value" id="s-closings">—</div>
+      <div class="stat-sub">across all agents</div>
+    </div>
+  </div>
+
+  <!-- Email panel -->
+  <div class="email-panel" id="email-panel">
+    <div class="email-panel-title">📧 Send Goal Setup Emails</div>
+    <p style="font-size:.82rem;color:var(--muted);margin-bottom:1rem;line-height:1.5">
+      Each agent gets a personalised link to set their own goals. Links are valid for 90 days.
+      You can re-send at any time — it generates a fresh link.
+    </p>
+    <div id="email-links-list">
+      <div style="color:var(--muted);font-size:.85rem">
+        <span class="spinner"></span> Scanning FUB for agents…
+      </div>
+    </div>
+    <div style="margin-top:1rem;display:flex;gap:.6rem;flex-wrap:wrap">
+      <button class="btn btn-gold" onclick="sendSelectedEmails()">
+        📨 Send to Selected Agents
+      </button>
+      <button class="btn btn-ghost btn-sm" onclick="selectAllAgents(true)">Select all</button>
+      <button class="btn btn-ghost btn-sm" onclick="selectAllAgents(false)">Deselect all</button>
+      <button class="btn btn-ghost btn-sm" onclick="copyLinksToClipboard()">📋 Copy links</button>
+    </div>
+  </div>
+
+  <!-- Scorecard -->
+  <div class="scorecard-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>GCI Goal</th>
+          <th>Overall Pace</th>
+          <th>Calls YTD</th>
+          <th>Appts YTD</th>
+          <th>Contracts</th>
+          <th>Closings</th>
+          <th>Est. GCI</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="scorecard-body">
+        <tr><td colspan="9" class="empty-state">
+          <div class="spinner"></div> Loading scorecard…
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div><!-- /page -->
+
+<!-- Log Closing Modal -->
+<div class="modal-overlay" id="modal-closing">
+  <div class="modal">
+    <div class="modal-title">📝 Log a Closing</div>
+    <div class="modal-field">
+      <label>Agent</label>
+      <select id="close-agent"></select>
+    </div>
+    <div class="modal-field">
+      <label>Property / Deal Name</label>
+      <input type="text" id="close-name" placeholder="123 Main St, Anytown">
+    </div>
+    <div class="modal-row">
+      <div class="modal-field">
+        <label>Sale Price</label>
+        <input type="number" id="close-price" placeholder="425000" min="0" step="1000">
+      </div>
+      <div class="modal-field">
+        <label>Close Date</label>
+        <input type="date" id="close-date">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-closing')">Cancel</button>
+      <button class="btn btn-gold" onclick="submitClosing()">Save Closing</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+let _scorecard = [];
+let _emailLinks = [];
+
+// ── Init ──────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadScorecard();
+  // Default close date to today
+  document.getElementById('close-date').value = new Date().toISOString().slice(0,10);
+});
+
+// ── Scorecard ─────────────────────────────────────────────────────────
+async function loadScorecard() {
+  const tbody = document.getElementById('scorecard-body');
+  tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:2rem;color:var(--muted)"><span class="spinner"></span> Loading…</td></tr>';
+  try {
+    const resp = await fetch('/api/goals/scorecard');
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    _scorecard = data.scorecard || [];
+    renderScorecard(_scorecard);
+    updateSummary(_scorecard);
+    document.getElementById('year-label').textContent = data.year || new Date().getFullYear();
+    document.getElementById('week-label').textContent =
+      `Week ${data.week_num} of 52 — ${Math.round(data.week_num/52*100)}% through the year`;
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-state">
+      <h3>Could not load scorecard</h3>
+      <p>${e.message}</p>
+      ${e.message.includes('Database') ? '<p style="margin-top:.5rem">Add PostgreSQL on Railway to enable goals.</p>' : ''}
+    </td></tr>`;
+  }
+}
+
+function renderScorecard(rows) {
+  const tbody = document.getElementById('scorecard-body');
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-state">
+      <h3>No goals set yet</h3>
+      <p>Click <strong>Send Setup Emails</strong> to invite agents to set their goals,<br>
+         or use the Scan FUB button to get started.</p>
+    </td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(row => {
+    const { agent_name, email, goal, targets, actuals, pace } = row;
+    const hasGoal = goal && parseFloat(goal.gci_goal) > 0;
+
+    if (!hasGoal) {
+      return `<tr>
+        <td><div class="agent-name">${agent_name}</div>
+            <div class="agent-sub">${email || ''}</div></td>
+        <td colspan="7"><span class="no-goal">No goals set yet</span></td>
+        <td><button class="btn btn-ghost btn-sm" onclick="copyAgentLink('${agent_name}')">Send Link</button></td>
+      </tr>`;
+    }
+
+    const gci    = parseFloat(goal.gci_goal || 0);
+    const estGci = parseFloat(actuals.gci_ytd || 0);
+    const oc     = pace.overall_status;
+
+    return `<tr>
+      <td>
+        <div class="agent-name">${agent_name}</div>
+        <div class="agent-sub">${email || ''}</div>
+        ${pace.needs_conversation ? '<div class="flag-convo">⚠ Needs conversation</div>' : ''}
+      </td>
+      <td>
+        <div class="metric-val">${fmtK(gci)}</div>
+        <div class="metric-target">${targets.closings_needed} closings needed</div>
+      </td>
+      <td>
+        <div class="pace-wrap">
+          <div class="pace-label">
+            <span><span class="badge badge-${oc}">${pace.overall_pct}%</span></span>
+            <span style="color:var(--muted)">of pace</span>
+          </div>
+          <div class="pace-bar">
+            <div class="pace-fill ${oc}" style="width:${Math.min(pace.overall_pct,100)}%"></div>
+          </div>
+        </div>
+      </td>
+      <td class="metric-cell">
+        ${paceCell(pace.calls, actuals.calls_ytd)}
+      </td>
+      <td class="metric-cell">
+        ${paceCell(pace.appointments, actuals.appts_ytd)}
+      </td>
+      <td class="metric-cell">
+        <div class="metric-val">${actuals.contracts_ytd}</div>
+        <div class="metric-target">under contract</div>
+      </td>
+      <td class="metric-cell">
+        ${paceCell(pace.closings, actuals.closings_ytd)}
+      </td>
+      <td class="metric-cell">
+        <div class="metric-val">${fmtK(estGci)}</div>
+        <div class="metric-target">est. GCI</div>
+      </td>
+      <td>
+        <button class="btn btn-ghost btn-sm" onclick="openLogClosingFor('${agent_name}')">+ Close</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function paceCell(p, actual) {
+  if (!p) return '<span class="no-goal">—</span>';
+  const st = p.status || 'gray';
+  return `<div class="metric-val" style="color:var(--${st === 'green' ? 'green' : st === 'yellow' ? 'yellow' : 'red'})">${actual}</div>
+          <div class="metric-target">need ${p.target_ytd} by now</div>`;
+}
+
+function updateSummary(rows) {
+  const withGoals = rows.filter(r => r.goal && parseFloat(r.goal.gci_goal) > 0);
+  const green  = withGoals.filter(r => r.pace.overall_status === 'green').length;
+  const yellow = withGoals.filter(r => r.pace.overall_status === 'yellow').length;
+  const red    = withGoals.filter(r => r.pace.overall_status === 'red').length;
+  const gciSum = withGoals.reduce((s, r) => s + parseFloat(r.goal.gci_goal || 0), 0);
+  const closes = rows.reduce((s, r) => s + (r.actuals.closings_ytd || 0), 0);
+
+  document.getElementById('s-with-goals').textContent = withGoals.length;
+  document.getElementById('s-total-agents').textContent = `of ${rows.length} agents`;
+  document.getElementById('s-green').textContent  = green;
+  document.getElementById('s-yellow').textContent = yellow;
+  document.getElementById('s-red').textContent    = red;
+  document.getElementById('s-gci').textContent    = fmtK(gciSum);
+  document.getElementById('s-closings').textContent = closes;
+}
+
+// ── Email panel ───────────────────────────────────────────────────────
+async function toggleEmailPanel() {
+  const panel = document.getElementById('email-panel');
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open') && !_emailLinks.length) {
+    await generateLinks();
+  }
+}
+
+async function generateLinks() {
+  document.getElementById('email-links-list').innerHTML =
+    '<div style="color:var(--muted);font-size:.85rem"><span class="spinner"></span> Scanning FUB for agents…</div>';
+  try {
+    // Scan agents first
+    await fetch('/api/goals/scan-agents', {method:'POST'});
+    // Generate links
+    const resp = await fetch('/api/goals/generate-links', {method:'POST'});
+    const data = await resp.json();
+    if (!data.success) throw new Error(data.error);
+    _emailLinks = data.links || [];
+    renderEmailLinks(_emailLinks);
+  } catch(e) {
+    document.getElementById('email-links-list').innerHTML =
+      `<div style="color:var(--red);font-size:.85rem">Error: ${e.message}</div>`;
+  }
+}
+
+function renderEmailLinks(links) {
+  if (!links.length) {
+    document.getElementById('email-links-list').innerHTML =
+      '<div style="color:var(--muted);font-size:.85rem">No agents found in FUB.</div>';
+    return;
+  }
+  document.getElementById('email-links-list').innerHTML = links.map((l, i) => `
+    <div class="agent-link-row">
+      <input type="checkbox" class="agent-link-check" id="chk-${i}" checked>
+      <div style="flex:1">
+        <div class="agent-link-name">${l.agent_name}</div>
+        <div class="agent-link-email">${l.email}</div>
+        <div class="agent-link-url">${l.setup_url}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function selectAllAgents(checked) {
+  document.querySelectorAll('.agent-link-check').forEach(c => c.checked = checked);
+}
+
+async function sendSelectedEmails() {
+  const selected = _emailLinks.filter((_, i) =>
+    document.getElementById(`chk-${i}`)?.checked);
+  if (!selected.length) { showToast('No agents selected', 'err'); return; }
+
+  showToast(`Sending ${selected.length} emails…`, 'ok');
+  try {
+    const resp = await fetch('/api/goals/send-emails', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({agents: selected}),
+    });
+    const data = await resp.json();
+    showToast(`✅ Sent to ${data.sent.length} agents${data.failed.length ? `, ${data.failed.length} failed` : ''}`, 'ok');
+  } catch(e) {
+    showToast('Send failed: ' + e.message, 'err');
+  }
+}
+
+async function copyAgentLink(agentName) {
+  // Generate a fresh link for just this agent
+  try {
+    await fetch('/api/goals/scan-agents', {method:'POST'});
+    const resp = await fetch('/api/goals/generate-links', {method:'POST'});
+    const data = await resp.json();
+    const link = (data.links || []).find(l => l.agent_name === agentName);
+    if (link) {
+      await navigator.clipboard.writeText(link.setup_url);
+      showToast(`✅ Link for ${agentName} copied to clipboard`, 'ok');
+    }
+  } catch(e) {
+    showToast('Error: ' + e.message, 'err');
+  }
+}
+
+async function copyLinksToClipboard() {
+  const selected = _emailLinks.filter((_, i) =>
+    document.getElementById(`chk-${i}`)?.checked);
+  const text = selected.map(l => `${l.agent_name}: ${l.setup_url}`).join('\n');
+  await navigator.clipboard.writeText(text);
+  showToast(`📋 ${selected.length} links copied`, 'ok');
+}
+
+// ── Deal sync ─────────────────────────────────────────────────────────
+async function syncDeals() {
+  showToast('🔄 Syncing FUB deals…', 'ok');
+  try {
+    const resp = await fetch('/api/goals/sync-deals', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({days_back: 365}),
+    });
+    const data = await resp.json();
+    showToast(`✅ Synced ${data.synced} deals (${data.skipped_unrecognised} skipped)`, 'ok');
+    loadScorecard();
+  } catch(e) {
+    showToast('Sync failed: ' + e.message, 'err');
+  }
+}
+
+// ── Log closing modal ─────────────────────────────────────────────────
+function openLogClosing() {
+  // Populate agent dropdown
+  const sel = document.getElementById('close-agent');
+  sel.innerHTML = _scorecard
+    .filter(r => r.goal && parseFloat(r.goal.gci_goal) > 0)
+    .map(r => `<option value="${r.agent_name}">${r.agent_name}</option>`)
+    .join('');
+  if (!sel.options.length) {
+    sel.innerHTML = '<option value="">No agents with goals yet</option>';
+  }
+  document.getElementById('modal-closing').classList.add('open');
+}
+
+function openLogClosingFor(agentName) {
+  openLogClosing();
+  const sel = document.getElementById('close-agent');
+  for (const opt of sel.options) {
+    if (opt.value === agentName) { opt.selected = true; break; }
+  }
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+async function submitClosing() {
+  const agent    = document.getElementById('close-agent').value;
+  const name     = document.getElementById('close-name').value;
+  const price    = document.getElementById('close-price').value;
+  const closeDate = document.getElementById('close-date').value;
+
+  if (!agent || !name || !price) {
+    showToast('Please fill in all required fields', 'err'); return;
+  }
+
+  try {
+    const resp = await fetch('/api/goals/log-closing', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({agent_name:agent, deal_name:name,
+                            sale_price:parseFloat(price), close_date:closeDate}),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      showToast(`✅ Closing logged for ${agent}`, 'ok');
+      closeModal('modal-closing');
+      document.getElementById('close-name').value  = '';
+      document.getElementById('close-price').value = '';
+      loadScorecard();
+    } else {
+      throw new Error(data.error);
+    }
+  } catch(e) {
+    showToast('Error: ' + e.message, 'err');
+  }
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────
+function fmtK(n) {
+  n = parseFloat(n) || 0;
+  if (n >= 1000000) return '$' + (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000)    return '$' + Math.round(n/1000) + 'K';
+  return '$' + Math.round(n);
+}
+
+let _toastTimer;
+function showToast(msg, type='ok') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast show ${type}`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+// Close modals on overlay click
+document.querySelectorAll('.modal-overlay').forEach(el =>
+  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); }));
+</script>
+</body>
+</html>

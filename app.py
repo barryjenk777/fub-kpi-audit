@@ -2020,69 +2020,397 @@ def api_debug_storage():
     return jsonify(results)
 
 
-# ---- Goals API ----
+# ============================================================
+# GOALS  — agent setup, manager scorecard, FUB deal sync
+# ============================================================
 
-@app.route("/api/goals", methods=["GET"])
-def api_goals_get():
-    """Return active goals for all agents (or ?agent=Name for one agent)."""
-    agent = request.args.get("agent")
-    goals = _db.get_goals(agent_name=agent)
-    return jsonify({"goals": goals, "db_available": _db.is_available()})
+# ---- Agent self-service setup page (token link) ----
+
+@app.route("/goals/setup/<token>")
+def goals_setup_page(token):
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return "<h2 style='font-family:sans-serif;padding:2rem'>This link has expired or is invalid. Ask Barry for a new one.</h2>", 404
+    existing = _db.get_goal(agent_name, year=datetime.now().year)
+    return render_template("goal_setup.html", agent_name=agent_name, token=token,
+                           goal=existing, year=datetime.now().year)
 
 
-@app.route("/api/goals", methods=["POST"])
-def api_goals_post():
-    """Create or update a goal. Body: {agent_name, metric, target, period?, notes?}"""
-    if not _db.is_available():
-        return jsonify({"error": "Database not connected — add Postgres on Railway first"}), 503
+@app.route("/api/goals/setup/<token>", methods=["POST"])
+def api_goals_setup_save(token):
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return jsonify({"error": "Invalid or expired link"}), 403
     body = request.json or {}
-    required = ["agent_name", "metric", "target"]
+    try:
+        goal = _db.upsert_goal(
+            agent_name=agent_name,
+            year=int(body.get("year", datetime.now().year)),
+            gci_goal=float(body["gci_goal"]),
+            avg_sale_price=float(body.get("avg_sale_price", 400000)),
+            commission_pct=float(body.get("commission_pct", 0.025)),
+            soi_closings_expected=int(body.get("soi_closings_expected", 0)),
+            soi_gci_expected=float(body.get("soi_gci_expected", 0)),
+            sphere_touch_monthly=int(body.get("sphere_touch_monthly", 2)),
+            call_to_appt_rate=float(body.get("call_to_appt_rate", 0.10)),
+            appt_to_contract_rate=float(body.get("appt_to_contract_rate", 0.30)),
+            contract_to_close_rate=float(body.get("contract_to_close_rate", 0.80)),
+            set_by="agent",
+            notes=body.get("notes"),
+        )
+        return jsonify({"success": True, "goal": goal})
+    except (KeyError, ValueError) as e:
+        return jsonify({"error": f"Bad input: {e}"}), 400
+
+
+# ---- Manager goals dashboard ----
+
+@app.route("/goals")
+def goals_dashboard():
+    return render_template("goals.html")
+
+
+# ---- Scan FUB for agents and seed agent_profiles ----
+
+@app.route("/api/goals/scan-agents", methods=["POST"])
+def api_goals_scan_agents():
+    """Pull agent roster from FUB, upsert into agent_profiles, return list."""
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+    try:
+        client = FUBClient()
+        excluded = list(config.EXCLUDED_USERS)
+        agents = client.get_agents_with_email(excluded_names=excluded)
+        for a in agents:
+            _db.upsert_agent_profile(a["name"], fub_user_id=a["fub_user_id"],
+                                     email=a["email"], is_active=True)
+        return jsonify({"success": True, "agents": agents, "count": len(agents)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---- Generate setup links for agents ----
+
+@app.route("/api/goals/generate-links", methods=["POST"])
+def api_goals_generate_links():
+    """
+    Generate (or refresh) goal setup tokens for all active agents.
+    Returns list of {agent_name, email, setup_url}.
+    """
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+
+    base_url = request.host_url.rstrip("/")
+    profiles = _db.get_agent_profiles(active_only=True)
+    if not profiles:
+        return jsonify({"error": "No agents found — run Scan Agents first"}), 404
+
+    links = []
+    for p in profiles:
+        token = _db.create_goal_token(p["agent_name"])
+        if token:
+            links.append({
+                "agent_name": p["agent_name"],
+                "email":      p["email"],
+                "setup_url":  f"{base_url}/goals/setup/{token}",
+            })
+    return jsonify({"success": True, "links": links})
+
+
+# ---- Send goal setup emails ----
+
+@app.route("/api/goals/send-emails", methods=["POST"])
+def api_goals_send_emails():
+    """
+    Send personalised goal setup emails to agents.
+    Body: { agents: [{agent_name, email, setup_url}] }  — output from generate-links.
+    Optional: { agents: [...], test_mode: true } to preview without sending.
+    """
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+
+    body = request.json or {}
+    agents = body.get("agents", [])
+    test_mode = body.get("test_mode", False)
+
+    if not agents:
+        return jsonify({"error": "No agents provided"}), 400
+
+    sg_key = os.environ.get("SENDGRID_API_KEY")
+    if not sg_key and not test_mode:
+        return jsonify({"error": "SENDGRID_API_KEY not set"}), 503
+
+    sent = []
+    failed = []
+    year = datetime.now().year
+
+    for a in agents:
+        name      = a.get("agent_name", "")
+        email     = a.get("email", "")
+        setup_url = a.get("setup_url", "")
+        first     = name.split()[0] if name else "there"
+
+        html_body = f"""
+<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a">
+  <h2 style="color:#f5a623">Legacy Home Team — {year} Goal Setting</h2>
+  <p>Hey {first},</p>
+  <p>Barry wants every agent on the team to set their business goals for {year}.
+     It only takes <strong>2 minutes</strong> — you enter your income goal and
+     the system automatically calculates the calls and appointments you need to
+     get there.</p>
+  <p style="margin:2rem 0">
+    <a href="{setup_url}"
+       style="background:#f5a623;color:#fff;padding:14px 28px;border-radius:8px;
+              text-decoration:none;font-weight:bold;font-size:16px">
+      Set My {year} Goals →
+    </a>
+  </p>
+  <p style="color:#666;font-size:13px">
+    This link is personal to you — don't share it.<br>
+    It works on your phone too.
+  </p>
+  <p>— Barry &amp; the Legacy Home Team</p>
+</div>"""
+
+        plain_body = (
+            f"Hey {first},\n\nBarry wants you to set your {year} business goals. "
+            f"It takes 2 minutes:\n\n{setup_url}\n\n"
+            f"Enter your income goal and we'll calculate the activity you need. "
+            f"Works on your phone.\n\n— Barry & Legacy Home Team"
+        )
+
+        if test_mode:
+            sent.append({"agent_name": name, "email": email, "status": "preview",
+                         "html": html_body})
+            continue
+
+        try:
+            import sendgrid as _sg
+            from sendgrid.helpers.mail import Mail as _Mail
+            sg = _sg.SendGridAPIClient(sg_key)
+            msg = _Mail(
+                from_email=config.EMAIL_FROM,
+                to_emails=email,
+                subject=f"Set your {year} business goals — takes 2 min",
+                html_content=html_body,
+                plain_text_content=plain_body,
+            )
+            resp = sg.send(msg)
+            sent.append({"agent_name": name, "email": email,
+                         "status": "sent", "code": resp.status_code})
+        except Exception as e:
+            failed.append({"agent_name": name, "email": email, "error": str(e)})
+
+    return jsonify({"success": True, "sent": sent, "failed": failed,
+                    "test_mode": test_mode})
+
+
+# ---- FUB Deal sync ----
+
+@app.route("/api/goals/sync-deals", methods=["POST"])
+def api_goals_sync_deals():
+    """
+    Pull deals from FUB (populated by Dotloop) and upsert into deal_log.
+    Classifies each deal as 'contract' or 'closing' based on stage label.
+    """
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+
+    body = request.json or {}
+    days_back = int(body.get("days_back", 365))
+
+    try:
+        client = FUBClient()
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        since = _dt.now(_tz.utc) - _td(days=days_back)
+        deals = client.get_deals(since=since)
+    except Exception as e:
+        return jsonify({"error": f"FUB fetch failed: {e}"}), 500
+
+    # Build name→commission_pct lookup from goals
+    all_goals = _db.get_all_goals()
+    comm_lookup = {g["agent_name"]: float(g["commission_pct"]) for g in all_goals}
+
+    synced = 0
+    skipped = 0
+    unrecognised_stages = set()
+
+    for deal in deals:
+        stage_raw = (
+            deal.get("stage") or deal.get("stageName") or
+            deal.get("stageLabel") or ""
+        )
+        fub_deal_id = deal.get("id")
+        if not fub_deal_id:
+            continue
+
+        # Agent name — FUB may store as assignedTo string or nested user object
+        agent_raw = deal.get("assignedTo") or ""
+        if isinstance(agent_raw, dict):
+            agent_raw = (f"{agent_raw.get('firstName','')} "
+                         f"{agent_raw.get('lastName','')}").strip()
+
+        sale_price = deal.get("price") or deal.get("salePrice") or 0
+        deal_name  = deal.get("name") or deal.get("address") or f"Deal #{fub_deal_id}"
+
+        # Dates
+        def _parse_date(val):
+            if not val:
+                return None
+            try:
+                from datetime import date as _d
+                return _d.fromisoformat(str(val)[:10])
+            except Exception:
+                return None
+
+        close_date    = _parse_date(deal.get("closedAt") or deal.get("closeDate"))
+        contract_date = _parse_date(deal.get("contractDate") or deal.get("created"))
+
+        comm_pct = comm_lookup.get(agent_raw)
+
+        result = _db.upsert_deal(
+            fub_deal_id=fub_deal_id,
+            agent_name=agent_raw,
+            deal_name=deal_name,
+            sale_price=sale_price,
+            stage_raw=stage_raw,
+            contract_date=contract_date,
+            close_date=close_date,
+            commission_pct=comm_pct,
+        )
+        if result:
+            synced += 1
+        else:
+            skipped += 1
+            if stage_raw:
+                unrecognised_stages.add(stage_raw)
+
+    return jsonify({
+        "success": True,
+        "total_deals": len(deals),
+        "synced": synced,
+        "skipped_unrecognised": skipped,
+        "unrecognised_stages": list(unrecognised_stages),
+    })
+
+
+# ---- Manual closing log ----
+
+@app.route("/api/goals/log-closing", methods=["POST"])
+def api_goals_log_closing():
+    """Manually log a closing. Body: {agent_name, deal_name, sale_price, close_date?}"""
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+    body = request.json or {}
+    required = ["agent_name", "deal_name", "sale_price"]
     missing = [f for f in required if not body.get(f)]
     if missing:
-        return jsonify({"error": f"Missing fields: {missing}"}), 400
+        return jsonify({"error": f"Missing: {missing}"}), 400
 
     from datetime import date as _date
-    eff_from = None
-    if body.get("effective_from"):
+    close_date = None
+    if body.get("close_date"):
         try:
-            eff_from = _date.fromisoformat(body["effective_from"])
+            close_date = _date.fromisoformat(body["close_date"])
         except Exception:
             pass
 
-    goal = _db.upsert_goal(
+    goal = _db.get_goal(body["agent_name"])
+    comm_pct = float(goal["commission_pct"]) if goal else None
+
+    ok = _db.log_manual_closing(
         agent_name=body["agent_name"],
-        metric=body["metric"],
-        target=int(body["target"]),
-        period=body.get("period", "weekly"),
-        effective_from=eff_from,
-        notes=body.get("notes"),
+        deal_name=body["deal_name"],
+        sale_price=float(body["sale_price"]),
+        close_date=close_date,
+        commission_pct=comm_pct,
     )
-    if goal is None:
-        return jsonify({"error": "Failed to save goal"}), 500
-    return jsonify({"success": True, "goal": goal})
-
-
-@app.route("/api/goals/<int:goal_id>", methods=["DELETE"])
-def api_goals_delete(goal_id):
-    """Delete a goal by ID."""
-    if not _db.is_available():
-        return jsonify({"error": "Database not connected"}), 503
-    ok = _db.delete_goal(goal_id)
     return jsonify({"success": ok})
 
 
-@app.route("/api/goals/progress", methods=["GET"])
-def api_goals_progress():
-    """Return goal vs actual for the current (or specified) week."""
-    from datetime import date as _date
-    week_start = None
-    if request.args.get("week_start"):
-        try:
-            week_start = _date.fromisoformat(request.args["week_start"])
-        except Exception:
-            pass
-    progress = _db.get_goal_progress(week_start=week_start)
-    return jsonify({"progress": progress, "db_available": _db.is_available()})
+# ---- Scorecard API (manager view) ----
+
+@app.route("/api/goals/scorecard")
+def api_goals_scorecard():
+    """
+    Return full scorecard for all agents: goals + targets + YTD actuals + pace.
+    Pulls calls + appointments from FUB for YTD counts.
+    """
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected", "scorecard": []}), 503
+
+    year = int(request.args.get("year", datetime.now().year))
+    all_goals = _db.get_all_goals(year=year)
+    deal_summaries = _db.get_deal_summary(year=year)  # {agent_name: {contracts, closings, gci_est}}
+    profiles = {p["agent_name"]: p for p in _db.get_agent_profiles()}
+
+    # Pull YTD calls + appointments from FUB for each agent
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    year_start = _dt(year, 1, 1, tzinfo=_tz.utc)
+
+    try:
+        client = FUBClient()
+        fub_users = {
+            f"{u.get('firstName','')} {u.get('lastName','')}".strip(): u.get("id")
+            for u in client.get_users()
+        }
+        ytd_calls = client.get_calls(since=year_start)
+        ytd_appts = client.get_appointments(since=year_start)
+    except Exception as e:
+        logger.warning("Scorecard FUB fetch failed: %s", e)
+        fub_users = {}
+        ytd_calls = []
+        ytd_appts = []
+
+    # Count calls per agent (outbound only)
+    calls_by_agent = {}
+    for call in ytd_calls:
+        if call.get("isIncoming"):
+            continue
+        uid = call.get("userId")
+        for name, fub_id in fub_users.items():
+            if fub_id == uid:
+                calls_by_agent[name] = calls_by_agent.get(name, 0) + 1
+                break
+
+    # Count appointments per agent
+    appts_by_agent = {}
+    for appt in ytd_appts:
+        uid = appt.get("assignedUserId") or appt.get("userId")
+        for name, fub_id in fub_users.items():
+            if fub_id == uid:
+                appts_by_agent[name] = appts_by_agent.get(name, 0) + 1
+                break
+
+    scorecard = []
+    for goal in all_goals:
+        agent = goal["agent_name"]
+        targets = _db.compute_targets(goal)
+        deals   = deal_summaries.get(agent, {"contracts": 0, "closings": 0, "gci_est": 0.0})
+        actuals = {
+            "calls_ytd":     calls_by_agent.get(agent, 0),
+            "appts_ytd":     appts_by_agent.get(agent, 0),
+            "contracts_ytd": deals["contracts"],
+            "closings_ytd":  deals["closings"],
+            "gci_ytd":       deals["gci_est"],
+        }
+        pace = _db.compute_pace(goal, targets, actuals)
+        profile = profiles.get(agent, {})
+        scorecard.append({
+            "agent_name": agent,
+            "email":      profile.get("email", ""),
+            "goal":       goal,
+            "targets":    targets,
+            "actuals":    actuals,
+            "pace":       pace,
+        })
+
+    # Sort: red first, then yellow, then green
+    order = {"red": 0, "yellow": 1, "green": 2}
+    scorecard.sort(key=lambda x: order.get(x["pace"]["overall_status"], 3))
+
+    return jsonify({"scorecard": scorecard, "year": year,
+                    "week_num": datetime.now().isocalendar()[1]})
 
 
 # ---- LeadStream: Weekly Engagement Tracker ----

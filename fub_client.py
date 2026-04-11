@@ -103,6 +103,87 @@ class FUBClient:
                 return user
         return None
 
+    def get_agents_with_email(self, excluded_names=None):
+        """
+        Return a list of active agent dicts with name, email, and FUB user ID.
+        Filters out users in excluded_names (e.g. Barry, ISA, manager).
+        """
+        excluded = {n.lower() for n in (excluded_names or [])}
+        users = self.get_users()
+        agents = []
+        for u in users:
+            full_name = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
+            if full_name.lower() in excluded:
+                continue
+            # FUB returns isActive or active field
+            if not u.get("isActive", u.get("active", True)):
+                continue
+            # Skip users with no email (system accounts)
+            email = u.get("email", "")
+            if not email:
+                continue
+            agents.append({
+                "name":        full_name,
+                "fub_user_id": u.get("id"),
+                "email":       email,
+                "role":        u.get("roleType", u.get("role", "")),
+            })
+        return agents
+
+    # ---- Deals ----
+
+    def get_deals(self, since=None, stage=None, limit=100):
+        """
+        Fetch deals from FUB (populated by Dotloop via API Nation / native sync).
+
+        FUB Deals endpoint: GET /v1/deals
+        Each deal includes: id, name, price, stage, stageId, createdAt,
+        updatedAt, closedAt, person (linked contact), assignedTo (agent name),
+        assignedUserId.
+        """
+        params = {"limit": limit, "sort": "-updated"}
+        if stage:
+            params["stage"] = stage
+
+        all_deals = []
+        offset = 0
+        since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None
+
+        while offset < 2000:
+            params["offset"] = offset
+            try:
+                data = self._request("GET", "deals", params=params)
+            except Exception as e:
+                logger.warning("FUB deals fetch failed at offset %s: %s", offset, e)
+                break
+
+            # FUB wraps deals under "deals" key
+            items = []
+            if isinstance(data, dict):
+                for key in ("deals", "opportunities"):
+                    if key in data:
+                        items = data[key]
+                        break
+            elif isinstance(data, list):
+                items = data
+
+            if not items:
+                break
+
+            past_range = False
+            for deal in items:
+                updated = deal.get("updated", deal.get("updatedAt", ""))
+                if since_str and updated and updated < since_str:
+                    past_range = True
+                    break
+                all_deals.append(deal)
+
+            if past_range or len(items) < limit:
+                break
+            offset += limit
+
+        return all_deals
+
     # ---- Calls ----
 
     def get_calls(self, user_id=None, since=None, until=None):
