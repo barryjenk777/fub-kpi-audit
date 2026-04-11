@@ -454,7 +454,11 @@ def run_morning_nudges(dry_run: bool = False):
 def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
                          team_avg_calls, top_agent, day_name):
     """Return (subject, plain_text_body) based on yesterday's team rank.
-    Goals and motivation lead every email — rank is the accountability lens."""
+
+    Each email randomly picks ONE tone and stays in it the whole way through:
+      - 'funny'  : sassy, leaderboard trash talk, light teasing — no serious why
+      - 'serious': leads with their goals/why/identity, no jokes
+    """
     first        = ctx["first"]
     who          = ctx["who"]
     what_happens = ctx.get("what_happens") or ""
@@ -469,89 +473,178 @@ def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
     is_last      = rank == team_size
     is_first     = rank == 1
 
-    # Build the personal "why" opener — the goal context that leads every email
+    # Random tone for today — pick a lane and stay in it
+    tone = random.choice(["funny", "serious"])
+
+    # Funny-but-grounded kicker — ends every funny email with their why (clean, warm, punchy)
+    if who and what_happens:
+        who_kicker = random.choice([
+            f"P.S. {what_happens[:60]}{'…' if len(what_happens) > 60 else ''} — that's the whole point. Go make some calls.",
+            f"Now go do it for {who}. They're not going to care about your rank. They'll care about the result.",
+            f"(Seriously though — {who} is counting on you. Make today count.)",
+            f"Your {who} didn't sign up for a half-effort year. Neither did you. Let's go.",
+            f"James Clear would say every call you make is a vote for the agent you're becoming. Cast some votes today. Your {who} is watching.",
+        ])
+    elif who:
+        who_kicker = random.choice([
+            f"(Seriously though — {who} is counting on you. Make today count.)",
+            f"Now go do it for {who}. Let's go.",
+            f"Your {who} didn't sign up for a half-effort year. Neither did you.",
+        ])
+    else:
+        who_kicker = f"Now go make {gci_fmt} happen one conversation at a time."
+
+    # Serious why-opener (only used in serious tone)
     if why and who and what_happens:
         why_hook = random.choice([
-            f"You told us you're building toward this: \"{what_happens[:80]}{'…' if len(what_happens) > 80 else ''}\" — for {who}.",
-            f"You said your why is {who}. You wrote: \"{why[:70]}{'…' if len(why) > 70 else ''}\". That doesn't happen without the work.",
-            f"You're chasing {gci_fmt} this year — not for a number on a spreadsheet, but because of what it means for {who}.",
+            f"You told us you're building toward this: \"{what_happens[:80]}{'…' if len(what_happens) > 80 else ''}\" — for {who}. That's the whole point.",
+            f"You wrote: \"{why[:70]}{'…' if len(why) > 70 else ''}\"\n\nThat's why you're here. That's what every conversation is building toward.",
+            f"You're chasing {gci_fmt} this year — not for a number on a spreadsheet, but because of what it unlocks for {who}.",
         ])
     elif who and gci_fmt:
-        why_hook = f"You're after {gci_fmt} this year. That number means something real for {who} — and it only happens one conversation at a time."
+        why_hook = f"You're after {gci_fmt} this year. That number means something real for {who}. It doesn't happen without the work."
     else:
-        why_hook = f"You set a goal of {gci_fmt} this year. Every call is a brick in that building, {first}."
+        why_hook = f"You set a goal of {gci_fmt} this year. Every conversation is a brick. Every day counts."
 
     # ── ZERO activity ──────────────────────────────────────────────────
     if is_zero:
-        subject = random.choice([
-            f"Did you binge watch Netflix {day_name}? 📺",
-            f"I checked FUB for you {day_name}... and checked again 👀",
-            f"FUB says you took {day_name} off. Bold choice, {first}. 😅",
-            f"Zero calls. Zero appointments. Just vibes, {first}? 🫠",
-            f"Your leads called. FUB didn't see you pick up. 🤙",
-        ])
-        body = random.choice([
-            f"{why_hook}\n\nHaha kidding about the Netflix — but actually I'm not.\n\nFUB is showing zero conversations and zero appointments for you {day_name}. Which means {day_name} wasn't a step toward any of that.\n\nToday is. {who.capitalize() if who else 'The people counting on you'} don't get a pause button. Get after it, {first}.",
-            f"{why_hook}\n\nSo imagine my surprise when FUB showed me a big fat zero for you {day_name}.\n\nThe rest of the team was out there grinding. Today is your turn. Every conversation moves the needle toward {gci_fmt}. Start now.",
-            f"{why_hook}\n\nI ran the numbers for {day_name}. Double-checked. Triple-checked.\n\nStill zero.\n\nEveryone has off days. The agents who win are the ones who bounce back the very next morning. That's today, {first}. Make {day_name} irrelevant by what you do right now.",
-        ])
+        if tone == "funny":
+            subject = random.choice([
+                f"Did you binge watch Netflix {day_name}? 📺",
+                f"I checked FUB for you {day_name}... and checked again 👀",
+                f"FUB says you took {day_name} off. Bold choice, {first}. 😅",
+                f"Zero calls. Zero appointments. Just vibes? 🫠",
+                f"Your leads called. FUB didn't see you pick up. 🤙",
+                f"Alexa, play 'Where Did {first} Go' 🎵",
+            ])
+            body = random.choice([
+                f"Haha kidding about the Netflix — but actually I'm not.\n\nFUB is showing zero conversations and zero appointments for you {day_name}. Zero. Zilch. Nada. The rest of the team was out there stacking calls while you were apparently in a parallel universe where real estate works differently.\n\nSpoiler: it doesn't.\n\nToday is a fresh start. Let's see you on the leaderboard.\n\n{who_kicker}",
+                f"Look, I'm not saying you watched six hours of TV {day_name}. I'm just saying FUB has absolutely nothing to show for it, and the TV guide might.\n\n{top_first} led the team with {top_calls} calls. You had zero. James Clear would call this 'failing to cast a single vote for the agent you want to become.' I'd call it a tomorrow problem — except tomorrow is today.\n\n{who_kicker}",
+                f"I ran the numbers for {day_name}. Double-checked. Triple-checked. Asked a colleague. Checked one more time.\n\nStill zero.\n\nLook, every great agent has an off day. The difference is they don't let it become an off week. Today is the bounce-back. The redemption arc. The sequel where {first} shows up.\n\n{who_kicker}",
+            ])
+        else:  # serious
+            subject = random.choice([
+                f"{first}, FUB showed nothing for you {day_name}. Let's fix that today.",
+                f"No conversations logged {day_name}, {first}. Today matters.",
+                f"{gci_fmt} doesn't happen on zero-call days, {first}.",
+            ])
+            body = random.choice([
+                f"{why_hook}\n\nFUB is showing zero conversations and zero appointments for you {day_name}. That's not a step toward any of it.\n\nToday is. {who.capitalize() if who else 'The people counting on you'} don't get a pause button — and neither does {gci_fmt}. Get after it, {first}.",
+                f"{why_hook}\n\nI ran the numbers for {day_name}. Still zero.\n\nEvery agent who's hit a big year has had off days. What separates them is what they do the very next morning. That's today. Make {day_name} irrelevant.",
+            ])
 
     # ── LAST PLACE but tried ───────────────────────────────────────────
     elif is_last:
-        subject = random.choice([
-            f"Dead last on the team {day_name}. But at least you showed up 👏",
-            f"While everyone called more than you... you did try a few, {first} 😅",
-            f"#{rank} of {team_size} {day_name}. Technically still on the leaderboard.",
-        ])
-        body = random.choice([
-            f"{why_hook}\n\nI'll be honest — everyone else on the team outworked you {day_name}. But you logged {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. So I respect the effort.\n\n{top_first} led with {top_calls} calls. The gap isn't that wide. Close it today — {who} is worth more than last place.",
-            f"{why_hook}\n\nBottom of the leaderboard {day_name}. But here's the thing — you showed up, which is more than a lot of people do.\n\n{calls} conversation{'s' if calls != 1 else ''} logged. {identity} doesn't stay at the bottom. Tomorrow you're going for {team_avg_calls + 5}. Deal?",
-        ])
+        if tone == "funny":
+            subject = random.choice([
+                f"Dead last on the team {day_name}. But at least you showed up 👏",
+                f"While everyone called more than you... you did try a few 😅",
+                f"#{rank} of {team_size} {day_name}. Technically still on the leaderboard.",
+                f"Last place ribbon. But it's still a ribbon, {first}. 🎀",
+            ])
+            body = random.choice([
+                f"I'll be honest — everyone else on the team outworked you {day_name}. But you logged {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. So I respect the effort. Kind of. The scoreboard less so.\n\n{top_first} led with {top_calls} calls. The gap between last place and first place is almost always just reps — and today you've got a full day of them.\n\n{who_kicker}",
+                f"Last place {day_name}. But here's the thing about last place — it's the best starting point for a comeback story. You know who loves a comeback story? Atomic Habits. You know who else? {who}.\n\n{calls} conversation{'s' if calls != 1 else ''} logged. Today you're going for {team_avg_calls + 5}. That's the whole plan. Simple.\n\n{who_kicker}",
+            ])
+        else:  # serious
+            subject = random.choice([
+                f"#{rank} of {team_size} {day_name}, {first}. You're built for better than that.",
+                f"The team outworked you {day_name}. Time to flip the script, {first}.",
+                f"{identity} doesn't finish last. Let's reset today, {first}.",
+            ])
+            body = random.choice([
+                f"{why_hook}\n\nEveryone else on the team outworked you {day_name} — you landed at #{rank} of {team_size}. But {calls} conversation{'s' if calls != 1 else ''} is a start, not a ceiling.\n\n{top_first} led with {top_calls} calls. The gap isn't that wide. Close it today — {who} is worth more than last place.",
+                f"{why_hook}\n\nBottom of the leaderboard {day_name}. That's the data — it's not the story.\n\n{identity} bounces back. Today is day one of that. Make {team_avg_calls + 5} conversations happen and let's see a different number tomorrow.",
+            ])
 
     # ── BOTTOM HALF ────────────────────────────────────────────────────
     elif rank > team_size // 2:
-        subject = random.choice([
-            f"#{rank} of {team_size} {day_name}. The top is right there, {first} 📈",
-            f"Solidly in the middle {day_name}. Good is the enemy of great, {first}.",
-            f"You blended in with the pack {day_name}. Stand out today 👊",
-        ])
-        body = (
-            f"{why_hook}\n\n"
-            f"#{rank} out of {team_size} {day_name} — {calls} conversation{'s' if calls != 1 else ''}"
-            f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. "
-            f"Team average: {team_avg_calls}. {top_first} led with {top_calls}.\n\n"
-            f"{identity} doesn't finish in the bottom half. The difference between #{rank} and the top is one more focused hour. "
-            f"You've got that in you today — and {who} is the reason to use it."
-        )
+        if tone == "funny":
+            subject = random.choice([
+                f"#{rank} of {team_size} {day_name}. The top is right there, {first} 📈",
+                f"Solidly average {day_name}. Good is the enemy of great, {first}.",
+                f"You blended in with the pack {day_name}. Stand out today 👊",
+                f"#{rank} of {team_size}. Respectably mediocre. Let's fix that 😤",
+            ])
+            body = (
+                f"#{rank} out of {team_size} {day_name} — {calls} conversation{'s' if calls != 1 else ''}"
+                f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. "
+                f"Solidly... middle. Like a ham sandwich. Totally fine. Not what you came here for.\n\n"
+                f"Team average: {team_avg_calls}. {top_first} led with {top_calls}. "
+                f"The difference between #{rank} and the top half is usually just one more focused hour — which you absolutely have today.\n\n"
+                f"{who_kicker}"
+            )
+        else:  # serious
+            subject = random.choice([
+                f"#{rank} of {team_size} {day_name}. You're capable of more, {first}.",
+                f"Middle of the pack {day_name}. {identity} belongs at the top.",
+                f"The top half is one conversation away, {first}. Go get it.",
+            ])
+            body = (
+                f"{why_hook}\n\n"
+                f"#{rank} out of {team_size} {day_name} — {calls} conversation{'s' if calls != 1 else ''}"
+                f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. "
+                f"Team average: {team_avg_calls}. {top_first} led with {top_calls}.\n\n"
+                f"{identity} doesn't finish in the bottom half. The difference between #{rank} and the top is one more focused hour. "
+                f"You've got that in you today — and {who} is the reason to use it."
+            )
 
     # ── TOP 3 (not #1) ─────────────────────────────────────────────────
     elif not is_first:
-        subject = random.choice([
-            f"Top {rank} {day_name}, {first} 🔥 {top_first}'s spot is right there",
-            f"#{rank} on the team {day_name}. {top_first} is looking over their shoulder 👀",
-            f"You were cooking {day_name}, {first}. Don't let up 🔥",
-        ])
-        body = (
-            f"{why_hook}\n\n"
-            f"And {day_name}? You showed up — top {rank} on the team. "
-            f"{calls} conversation{'s' if calls != 1 else ''}"
-            f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\n"
-            f"{top_first} edged you out with {top_calls} calls. One more conversation today and {gci_fmt} gets closer — and so does everything {who} is counting on. "
-            f"You're in the zone, {first}. Stay there."
-        )
+        if tone == "funny":
+            subject = random.choice([
+                f"Top {rank} {day_name}, {first} 🔥 {top_first}'s spot is right there",
+                f"#{rank} on the team {day_name}. {top_first} is looking over their shoulder 👀",
+                f"You were cooking {day_name}, {first}. Don't let up 🔥",
+                f"Almost #1, {first}. {top_first} would like to have a word. 😤",
+            ])
+            body = (
+                f"Top {rank} on the team {day_name} — {calls} conversation{'s' if calls != 1 else ''}"
+                f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\n"
+                f"{top_first} edged you out with {top_calls} calls. ONE more conversation today and that flips. "
+                f"You're in the zone. {top_first} is not sleeping great right now. Keep that energy.\n\n"
+                f"{who_kicker}"
+            )
+        else:  # serious
+            subject = random.choice([
+                f"Top {rank} {day_name}, {first}. {top_first}'s spot is yours if you want it.",
+                f"#{rank} on the team and building, {first}. Keep going.",
+                f"You showed up {day_name}, {first}. {gci_fmt} is getting closer.",
+            ])
+            body = (
+                f"{why_hook}\n\n"
+                f"And {day_name}? You showed up — top {rank} on the team. "
+                f"{calls} conversation{'s' if calls != 1 else ''}"
+                f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\n"
+                f"{top_first} edged you out with {top_calls} calls. One more conversation today and {gci_fmt} gets closer — and so does everything {who} is counting on. "
+                f"You're in the zone, {first}. Stay there."
+            )
 
     # ── #1 ────────────────────────────────────────────────────────────
     else:
-        subject = random.choice([
-            f"👑 You ran laps around the team {day_name}, {first}",
-            f"#1 on the team {day_name}. Bow down. 🏆",
-            f"Team leaderboard {day_name}: {first} first. Everyone else: trying. 😤",
-            f"Barry might actually high-five you for {day_name}, {first} 🙌",
-        ])
-        body = random.choice([
-            f"{why_hook}\n\n{day_name} you proved it — #1 out of {team_size}. {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. That's {identity} in action.\n\nEveryone else is gunning for your spot today. Defend it, {first}. {who.capitalize() if who else 'The people counting on you'} deserve that version of you every single day.",
-            f"{why_hook}\n\nTop of the leaderboard {day_name}. {calls} calls. {appts} appointments. That's what {gci_fmt} looks like when it's being built right.\n\nThe best agents don't coast after a big day — they stack another one on top of it. Do it again today, {first}.",
-        ])
+        if tone == "funny":
+            subject = random.choice([
+                f"👑 You ran laps around the team {day_name}, {first}",
+                f"#1 on the team {day_name}. Bow down. 🏆",
+                f"Team leaderboard {day_name}: {first} first. Everyone else: trying. 😤",
+                f"Barry might actually high-five you for {day_name}, {first} 🙌",
+                f"Did you even break a sweat yesterday, {first}? Because the scoreboard says no. 👀",
+            ])
+            body = random.choice([
+                f"#1 out of {team_size}. You led the entire team {day_name} with {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\nEveryone else is in their feelings about the leaderboard right now. You should be in a good mood. Stack another one today and make it a habit.\n\n{who_kicker}",
+                f"Top of the leaderboard {day_name}. {calls} calls. {appts} appointments. The rest of the team saw that and said 'oh, so we're doing THIS now.'\n\nYes. Yes you are. Don't stop.\n\n{who_kicker}",
+                f"#1, {first}. Which means today every single person on this team is your competition. They saw the scoreboard. They're motivated.\n\nGood. So are you. Let's go.\n\n{who_kicker}",
+            ])
+        else:  # serious
+            subject = random.choice([
+                f"#1 on the team {day_name}, {first}. That's {identity} showing up.",
+                f"You led the team {day_name}, {first}. This is what {gci_fmt} looks like.",
+                f"{first}, you showed {who} something real {day_name}. Do it again.",
+            ])
+            body = random.choice([
+                f"{why_hook}\n\n{day_name} you proved it — #1 out of {team_size}. {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. That's {identity} in action.\n\nEveryone else is gunning for your spot today. Defend it, {first}. {who.capitalize() if who else 'The people counting on you'} deserve that version of you every single day.",
+                f"{why_hook}\n\nTop of the leaderboard {day_name}. {calls} calls. {appts} appointments. That's what {gci_fmt} looks like when it's being built right.\n\nThe best agents don't coast after a big day — they stack another one on top of it. Do it again today, {first}.",
+            ])
 
     return subject, body
 
