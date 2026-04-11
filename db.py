@@ -260,6 +260,33 @@ CREATE TABLE IF NOT EXISTS post_closing_followups (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_pcf_agent ON post_closing_followups (agent_name, close_date DESC);
+
+-- Scheduler mutex: prevents duplicate job execution across gunicorn workers
+CREATE TABLE IF NOT EXISTS scheduler_locks (
+    job_name   TEXT PRIMARY KEY,
+    locked_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '10 minutes'
+);
+
+-- Archived versions of goals (preserved when agent updates mid-year)
+CREATE TABLE IF NOT EXISTS goal_history (
+    id                      SERIAL PRIMARY KEY,
+    agent_name              TEXT,
+    year                    INTEGER,
+    gci_goal                NUMERIC(12,2),
+    avg_sale_price          NUMERIC(12,2),
+    commission_pct          NUMERIC(5,4),
+    soi_closings_expected   INTEGER,
+    soi_gci_expected        NUMERIC(12,2),
+    sphere_touch_monthly    INTEGER,
+    call_to_appt_rate       NUMERIC(5,4),
+    appt_to_contract_rate   NUMERIC(5,4),
+    contract_to_close_rate  NUMERIC(5,4),
+    set_by                  TEXT,
+    notes                   TEXT,
+    archived_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_gh_agent_year ON goal_history (agent_name, year, archived_at DESC);
 """
 
 
@@ -277,6 +304,45 @@ def init_db():
     except Exception as e:
         logger.warning("DB init failed (continuing without DB): %s", e)
         return False
+
+
+def try_acquire_job_lock(job_name: str) -> bool:
+    """
+    Attempt to acquire a distributed lock for a scheduled job.
+    Returns True if the lock was acquired (this worker should run the job).
+    Returns False if another worker already holds the lock.
+    Stale locks (> 10 min old) are auto-cleared before attempting acquisition.
+    """
+    if not is_available():
+        return True  # No DB — always proceed (single-process mode)
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Clear stale locks first
+                cur.execute("DELETE FROM scheduler_locks WHERE expires_at < NOW()")
+                # Try to insert — ON CONFLICT means another worker holds it
+                cur.execute("""
+                    INSERT INTO scheduler_locks (job_name, locked_at, expires_at)
+                    VALUES (%s, NOW(), NOW() + INTERVAL '10 minutes')
+                    ON CONFLICT (job_name) DO NOTHING
+                    RETURNING job_name
+                """, (job_name,))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("try_acquire_job_lock failed: %s", e)
+        return True  # On error, proceed so jobs don't silently stop
+
+
+def release_job_lock(job_name: str):
+    """Release a previously acquired job lock."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM scheduler_locks WHERE job_name = %s", (job_name,))
+    except Exception as e:
+        logger.warning("release_job_lock failed: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -459,15 +525,15 @@ def upsert_agent_from_fub_roster(agent_name, fub_user_id=None, email=None,
     """
     Upsert agent from FUB roster sync.
     - Only writes to fub_phone (NEVER overwrites user-provided `phone`)
-    - Returns True if this is a NEW agent (inserted for first time), False if existing
+    - Returns True if this is a NEW agent (first time seen)
+    Uses INSERT ... ON CONFLICT with a sentinel to detect new inserts atomically.
     """
     if not is_available():
         return False
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM agent_profiles WHERE agent_name = %s", (agent_name,))
-                is_new = cur.fetchone() is None
+                # Use created_at as sentinel: if it equals NOW() it was just inserted
                 cur.execute("""
                     INSERT INTO agent_profiles
                         (agent_name, fub_user_id, email, fub_phone, is_active, updated_at)
@@ -478,8 +544,10 @@ def upsert_agent_from_fub_roster(agent_name, fub_user_id=None, email=None,
                         fub_phone   = COALESCE(EXCLUDED.fub_phone,   agent_profiles.fub_phone),
                         is_active   = EXCLUDED.is_active,
                         updated_at  = NOW()
+                    RETURNING (NOW() - created_at) < INTERVAL '5 seconds' AS is_new
                 """, (agent_name, fub_user_id, email, fub_phone, is_active))
-        return is_new
+                row = cur.fetchone()
+                return bool(row and row[0])
     except Exception as e:
         logger.warning("upsert_agent_from_fub_roster failed: %s", e)
         return False
@@ -555,7 +623,7 @@ def create_goal_token(agent_name):
 def resolve_goal_token(token):
     """
     Validate a token and return the agent_name, or None if invalid/expired.
-    Does NOT mark it used — tokens are reusable so agents can update goals.
+    Auto-renews for 90 days on every valid access so active agents are never locked out.
     """
     if not is_available():
         return None
@@ -563,8 +631,10 @@ def resolve_goal_token(token):
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT agent_name FROM goal_tokens
-                    WHERE  token = %s AND expires_at > NOW()
+                    UPDATE goal_tokens
+                    SET expires_at = GREATEST(expires_at, NOW() + INTERVAL '90 days')
+                    WHERE token = %s AND expires_at > NOW()
+                    RETURNING agent_name
                 """, (token,))
                 row = cur.fetchone()
         return row[0] if row else None
@@ -1295,9 +1365,9 @@ def get_todays_activity(agent_name):
 
 def _recalculate_streak(agent_name, targets: dict) -> dict:
     """
-    Recalculate current and longest streaks for an agent based on daily_activity.
-    A day counts toward the streak if calls_logged >= daily_calls_target.
-    Returns {current_streak, longest_streak, last_activity_date}.
+    Recalculate current and longest streaks.
+    A day counts if calls_logged >= daily_calls_target.
+    Sundays are treated as grace days — a missed Sunday does NOT break the streak.
     """
     if not is_available():
         return {"current_streak": 0, "longest_streak": 0, "last_activity_date": None}
@@ -1320,28 +1390,54 @@ def _recalculate_streak(agent_name, targets: dict) -> dict:
         hit_days = {r[0] for r in rows if r[1] >= calls_target}
         last_activity = rows[0][0] if rows else None
 
-        # Current streak — count backwards from today (or yesterday if today not yet logged)
+        def _is_grace(d):
+            """Sundays are grace days — skipped in streak counting."""
+            return d.weekday() == 6  # Sunday
+
+        # Current streak — count backwards, skipping Sundays
         current = 0
         check = today
-        while check in hit_days:
-            current += 1
-            check -= timedelta(days=1)
-        # Also count from yesterday if today not logged yet
-        if current == 0:
-            check = today - timedelta(days=1)
-            while check in hit_days:
+        while True:
+            if _is_grace(check):
+                check -= timedelta(days=1)
+                continue
+            if check in hit_days:
                 current += 1
                 check -= timedelta(days=1)
+            else:
+                break
 
-        # Longest streak ever
+        # If nothing counted from today, try from yesterday
+        if current == 0:
+            check = today - timedelta(days=1)
+            while True:
+                if _is_grace(check):
+                    check -= timedelta(days=1)
+                    continue
+                if check in hit_days:
+                    current += 1
+                    check -= timedelta(days=1)
+                else:
+                    break
+
+        # Longest streak (also skips Sundays)
         longest = 0
         run = 0
-        all_dates = sorted(hit_days)
+        all_dates = sorted(d for d in hit_days)
         for i, d in enumerate(all_dates):
-            if i == 0 or (d - all_dates[i-1]).days == 1:
-                run += 1
-            else:
+            if i == 0:
                 run = 1
+            else:
+                # Count gap, ignoring Sundays
+                prev = all_dates[i - 1]
+                gap_days = (d - prev).days
+                sundays_between = sum(1 for j in range(1, gap_days)
+                                      if _is_grace(prev + timedelta(days=j)))
+                effective_gap = gap_days - sundays_between
+                if effective_gap == 1:
+                    run += 1
+                else:
+                    run = 1
             longest = max(longest, run)
 
         return {
@@ -1427,6 +1523,119 @@ def get_all_streaks():
     except Exception as e:
         logger.warning("get_all_streaks failed: %s", e)
         return {}
+
+
+def get_agents_gone_dark(days=10):
+    """
+    Return agents who haven't logged ANY activity in `days` days.
+    Used for the manager scorecard 'gone dark' alert.
+    """
+    if not is_available():
+        return []
+    try:
+        cutoff = date.today() - timedelta(days=days)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ap.agent_name, ap.email,
+                           COALESCE(ap.phone, ap.fub_phone) AS phone,
+                           MAX(da.activity_date) AS last_activity
+                    FROM   agent_profiles ap
+                    LEFT   JOIN daily_activity da ON da.agent_name = ap.agent_name
+                    WHERE  ap.is_active = TRUE
+                    GROUP  BY ap.agent_name, ap.email, ap.phone, ap.fub_phone
+                    HAVING MAX(da.activity_date) IS NULL
+                        OR MAX(da.activity_date) < %s
+                    ORDER  BY last_activity ASC NULLS FIRST
+                """, (cutoff,))
+                rows = cur.fetchall()
+        return [
+            {"agent_name": r[0], "email": r[1], "phone": r[2],
+             "last_activity": r[3].isoformat() if r[3] else None}
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("get_agents_gone_dark failed: %s", e)
+        return []
+
+
+def get_agents_no_goal_setup():
+    """Return active agents who have no goals set (haven't completed goal setup)."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ap.agent_name, ap.email,
+                           COALESCE(ap.phone, ap.fub_phone) AS phone,
+                           ap.onboarding_sent_at
+                    FROM   agent_profiles ap
+                    LEFT   JOIN goals g ON g.agent_name = ap.agent_name
+                                       AND g.year = EXTRACT(YEAR FROM NOW())
+                    WHERE  ap.is_active = TRUE
+                      AND  (g.agent_name IS NULL OR g.gci_goal = 0)
+                    ORDER  BY ap.agent_name
+                """)
+                rows = cur.fetchall()
+        return [
+            {"agent_name": r[0], "email": r[1], "phone": r[2],
+             "onboarding_sent_at": r[3].isoformat() if r[3] else None}
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("get_agents_no_goal_setup failed: %s", e)
+        return []
+
+
+def get_agents_no_phone():
+    """Return active agents with no phone number in the system (neither user nor FUB)."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, email
+                    FROM   agent_profiles
+                    WHERE  is_active = TRUE
+                      AND  phone IS NULL
+                      AND  fub_phone IS NULL
+                    ORDER  BY agent_name
+                """)
+                rows = cur.fetchall()
+        return [{"agent_name": r[0], "email": r[1]} for r in rows]
+    except Exception as e:
+        logger.warning("get_agents_no_phone failed: %s", e)
+        return []
+
+
+def save_goal_with_history(agent_name, year, **kwargs):
+    """
+    Save a goal and archive the previous version in goal_history.
+    Ensures we never lose a previous goal when an agent updates mid-year.
+    """
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Archive existing goal before overwriting
+                cur.execute("""
+                    INSERT INTO goal_history (agent_name, year, gci_goal, avg_sale_price,
+                        commission_pct, soi_closings_expected, soi_gci_expected,
+                        sphere_touch_monthly, call_to_appt_rate, appt_to_contract_rate,
+                        contract_to_close_rate, set_by, notes, archived_at)
+                    SELECT agent_name, year, gci_goal, avg_sale_price, commission_pct,
+                           soi_closings_expected, soi_gci_expected, sphere_touch_monthly,
+                           call_to_appt_rate, appt_to_contract_rate, contract_to_close_rate,
+                           set_by, notes, NOW()
+                    FROM   goals
+                    WHERE  agent_name = %s AND year = %s
+                """, (agent_name, year))
+    except Exception:
+        pass  # History table may not exist yet — non-fatal
+    return upsert_goal(agent_name, year, **kwargs)
 
 
 # ---------------------------------------------------------------------------

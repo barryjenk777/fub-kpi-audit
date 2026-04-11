@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
 <title>My {{ year }} Dashboard — Legacy Home Team</title>
 <style>
 :root {
@@ -134,10 +135,10 @@ button{cursor:pointer;border:none;font-family:inherit}
 
 <div class="header">
   <div class="header-left">
-    <div class="header-icon">🏠</div>
+    <div class="header-icon" aria-hidden="true">🏠</div>
     <div>
       <div class="header-name" id="hdr-name">Loading…</div>
-      <div class="header-sub">{{ year }} Dashboard</div>
+      <div class="header-sub">My {{ year }} Goals</div>
     </div>
   </div>
   <div class="header-streak" id="hdr-streak" style="display:none">
@@ -270,6 +271,11 @@ button{cursor:pointer;border:none;font-family:inherit}
 </div><!-- /container -->
 
 <div id="toast"></div>
+
+<div style="text-align:center;padding:2rem 1rem;font-size:.72rem;color:var(--subtle)">
+  Your personal goals dashboard &nbsp;·&nbsp; Legacy Home Team<br>
+  <span style="font-size:.65rem">Questions? Reply to your setup email or text Barry directly.</span>
+</div>
 
 <script>
 const TOKEN = "{{ token }}";

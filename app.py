@@ -2083,9 +2083,31 @@ def api_goals_setup_save(token):
         return jsonify({"error": "Invalid or expired link"}), 403
     body = request.json or {}
     try:
-        goal = _db.upsert_goal(
+        year = int(body.get("year", datetime.now().year))
+
+        # Goal quality validation
+        gci = float(body.get("gci_goal", 0))
+        quality_flags = []
+        if gci > 0:
+            if gci < 30000:
+                quality_flags.append(f"GCI goal of ${gci:,.0f} seems very low — is this intentional?")
+            if gci > 1000000:
+                quality_flags.append(f"GCI goal of ${gci:,.0f} is ambitious — great, but make sure your activity targets reflect it.")
+            # Flag if agent already has a goal and is changing it by >50%
+            existing = _db.get_goal(agent_name)
+            if existing and float(existing.get("gci_goal", 0)) > 0:
+                old_gci = float(existing["gci_goal"])
+                change_pct = abs(gci - old_gci) / old_gci * 100
+                if change_pct > 50:
+                    quality_flags.append(f"Goal changed by {change_pct:.0f}% — archiving previous goal of ${old_gci:,.0f}.")
+        # Log flags for Barry visibility (non-blocking)
+        if quality_flags:
+            print(f"[GOAL QA] {agent_name}: {'; '.join(quality_flags)}")
+            # TODO: surface these on manager scorecard
+
+        goal = _db.save_goal_with_history(
             agent_name=agent_name,
-            year=int(body.get("year", datetime.now().year)),
+            year=year,
             gci_goal=float(body["gci_goal"]),
             avg_sale_price=float(body.get("avg_sale_price", 400000)),
             commission_pct=float(body.get("commission_pct", 0.025)),
@@ -2664,16 +2686,43 @@ def api_goals_log_closing():
         except Exception:
             pass
 
-    goal = _db.get_goal(body["agent_name"])
+    agent_name = body["agent_name"]
+    goal = _db.get_goal(agent_name)
     comm_pct = float(goal["commission_pct"]) if goal else None
 
     ok = _db.log_manual_closing(
-        agent_name=body["agent_name"],
+        agent_name=agent_name,
         deal_name=body["deal_name"],
         sale_price=float(body["sale_price"]),
         close_date=close_date,
         commission_pct=comm_pct,
     )
+
+    # Notify Barry of first close milestone
+    try:
+        year = datetime.now(timezone.utc).year
+        deals = _db.get_deal_summary(agent_name=agent_name, year=year)
+        closings = deals.get("closings", 0)
+        if closings == 1:  # First closing of the year
+            api_key = os.environ.get("SENDGRID_API_KEY")
+            if api_key:
+                import sendgrid as _sg
+                from sendgrid.helpers.mail import Mail as _Mail
+                msg = _Mail(
+                    from_email=config.EMAIL_FROM,
+                    to_emails=config.EMAIL_FROM,
+                    subject=f"🏆 {agent_name} just logged their first closing of {year}!",
+                    plain_text_content=(
+                        f"{agent_name} logged their first closing of {year}.\n\n"
+                        f"Deal: {body.get('deal_name', 'Unknown')}\n"
+                        f"Price: ${float(body.get('sale_price', 0)):,.0f}\n\n"
+                        "This is a great moment to reach out personally."
+                    ),
+                )
+                _sg.SendGridAPIClient(api_key).send(msg)
+    except Exception:
+        pass  # Non-fatal
+
     return jsonify({"success": ok})
 
 
@@ -2772,6 +2821,21 @@ def api_goals_scorecard():
         "week_num":      datetime.now().isocalendar()[1],
         "cache_updated": cache_updated,
         "force_refresh": force_refresh,
+    })
+
+
+@app.route("/api/goals/scorecard-meta")
+def api_goals_scorecard_meta():
+    """
+    Returns metadata for manager scorecard:
+    - Agents with no goal setup
+    - Agents with no phone number
+    - Agents gone dark (no activity in 10+ days)
+    """
+    return jsonify({
+        "no_setup":   _db.get_agents_no_goal_setup(),
+        "no_phone":   _db.get_agents_no_phone(),
+        "gone_dark":  _db.get_agents_gone_dark(days=10),
     })
 
 
@@ -3581,11 +3645,37 @@ def _already_fired_recently(job_id, within_hours=4):
         return False
 
 
+def _alert_on_job_failure(job_name: str, error: str):
+    """Send a quick email to Barry when a scheduled job throws an unhandled exception."""
+    try:
+        api_key = os.environ.get("SENDGRID_API_KEY")
+        if not api_key:
+            return
+        import sendgrid as _sg
+        from sendgrid.helpers.mail import Mail as _Mail
+        msg = _Mail(
+            from_email=config.EMAIL_FROM,
+            to_emails=config.EMAIL_FROM,  # Barry's email
+            subject=f"[ALERT] Scheduled job failed: {job_name}",
+            plain_text_content=(
+                f"Job: {job_name}\n"
+                f"Error: {error}\n"
+                f"Time: {datetime.now(timezone.utc).isoformat()}\n\n"
+                "Check Railway logs for details."
+            ),
+        )
+        _sg.SendGridAPIClient(api_key).send(msg)
+    except Exception:
+        pass  # Don't let alerting failures mask the original error
+
+
 def scheduled_cache_warm():
     """Called by APScheduler 3x/day to keep cache fresh."""
-    print(f"[SCHEDULER] Cache warm started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
-    cache_clear()
+    if not _db.try_acquire_job_lock("cache_warm"):
+        return  # Another worker is already running this job
     try:
+        print(f"[SCHEDULER] Cache warm started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+        cache_clear()
         with app.test_client() as tc:
             tc.get("/api/audit")
             print("[SCHEDULER] Audit cache warmed ✓")
@@ -3597,13 +3687,19 @@ def scheduled_cache_warm():
             print("[SCHEDULER] Appointments cache warmed ✓")
         _record_fired("cache_warm")
     except Exception as e:
+        _alert_on_job_failure("cache_warm", str(e))
         print(f"[SCHEDULER] Cache warm error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("cache_warm")
 
 
 def scheduled_run_leadstream():
     """Runs every 4 hours — full score (agents + pond) and apply tags."""
-    print(f"[SCHEDULER] LeadStream scoring started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    if not _db.try_acquire_job_lock("leadstream"):
+        return  # Another worker is already running this job
     try:
+        print(f"[SCHEDULER] LeadStream scoring started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
         with app.test_client() as tc:
             resp = tc.post("/api/leadstream/run", json={"apply": True})
             result = resp.get_json() or {}
@@ -3612,7 +3708,11 @@ def scheduled_run_leadstream():
                   f"{result.get('pond_leads_tagged',0)} pond leads tagged")
         _record_fired("leadstream")
     except Exception as e:
+        _alert_on_job_failure("leadstream", str(e))
         print(f"[SCHEDULER] LeadStream error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("leadstream")
 
 
 def scheduled_run_leadstream_pond():
@@ -3630,15 +3730,21 @@ def scheduled_run_leadstream_pond():
 
 def scheduled_leadstream_nightly_cleanup():
     """Runs at 2am ET — deep cleanup of all stale LeadStream tags in FUB."""
-    print(f"[SCHEDULER] LeadStream nightly cleanup at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    if not _db.try_acquire_job_lock("leadstream_cleanup"):
+        return  # Another worker is already running this job
     try:
+        print(f"[SCHEDULER] LeadStream nightly cleanup at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
         with app.test_client() as tc:
             resp = tc.post("/api/leadstream/deep-cleanup")
             result = resp.get_json() or {}
             print(f"[SCHEDULER] Nightly cleanup: {result.get('removed',0)} tags removed")
         _record_fired("leadstream_cleanup")
     except Exception as e:
+        _alert_on_job_failure("leadstream_cleanup", str(e))
         print(f"[SCHEDULER] LeadStream cleanup error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("leadstream_cleanup")
 
 
 def scheduled_send_audit_email():
@@ -3673,14 +3779,20 @@ def scheduled_send_manager_email():
 
 def scheduled_sync_appointment_tags():
     """Runs 3x/day — sync APT_SET/APT_OUTCOME_NEEDED/APT_STALE tags."""
-    print(f"[SCHEDULER] Syncing appointment tags at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    if not _db.try_acquire_job_lock("appt_tag_sync"):
+        return  # Another worker is already running this job
     try:
+        print(f"[SCHEDULER] Syncing appointment tags at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
         with app.test_client() as tc:
             resp = tc.post("/api/appointments/sync-tags")
             print(f"[SCHEDULER] Appointment tag sync: {resp.data.decode()}")
         _record_fired("appt_tag_sync")
     except Exception as e:
+        _alert_on_job_failure("appt_tag_sync", str(e))
         print(f"[SCHEDULER] Appointment tag sync error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("appt_tag_sync")
 
 
 def scheduled_send_appointment_email():
@@ -3770,6 +3882,14 @@ def sync_fub_roster():
             print(f"[ROSTER SYNC] Error upserting {name}: {e}")
             errors += 1
 
+    # Mark agents no longer in FUB as inactive
+    fub_names = {a["name"] for a in fub_agents}
+    all_active = _db.get_agent_profiles(active_only=True)
+    for profile in all_active:
+        if profile["agent_name"] not in fub_names and profile["agent_name"] not in config.EXCLUDED_USERS:
+            _db.upsert_agent_profile(profile["agent_name"], is_active=False)
+            print(f"[ROSTER SYNC] Marked {profile['agent_name']} as inactive (not in FUB)")
+
     # Send onboarding emails to newly detected agents
     for agent in new_agents:
         try:
@@ -3794,10 +3914,16 @@ def sync_fub_roster():
 
 def scheduled_sync_fub_roster():
     """Scheduler wrapper for sync_fub_roster()."""
+    if not _db.try_acquire_job_lock("roster_sync"):
+        return  # Another worker is already running this job
     try:
         sync_fub_roster()
     except Exception as e:
+        _alert_on_job_failure("roster_sync", str(e))
         print(f"[ROSTER SYNC] Unhandled error in scheduled run: {e}")
+        raise
+    finally:
+        _db.release_job_lock("roster_sync")
 
 
 def sync_daily_activity_from_fub():
@@ -3866,23 +3992,32 @@ def sync_daily_activity_from_fub():
 
 def scheduled_sync_daily_activity():
     """Scheduler wrapper for sync_daily_activity_from_fub()."""
+    if not _db.try_acquire_job_lock("activity_sync"):
+        return  # Another worker is already running this job
     try:
         sync_daily_activity_from_fub()
     except Exception as e:
+        _alert_on_job_failure("activity_sync", str(e))
         print(f"[ACTIVITY SYNC] Unhandled error in scheduled run: {e}")
+        raise
+    finally:
+        _db.release_job_lock("activity_sync")
 
 
 def scheduled_sync_goals_data():
     """
-    Scheduled twice-weekly job (Mon + Thu, 6am ET):
+    Scheduled daily job (5:45am ET):
     1. Sync FUB Deals → deal_log (contracts + closings from Dotloop)
     2. Compute YTD calls + appointments per agent → agent_ytd_cache
 
     This keeps the manager scorecard fast (reads from DB, no live FUB calls)
     and means the data is always fresh without anyone clicking a button.
     """
+    if not _db.try_acquire_job_lock("goals_data_sync"):
+        return  # Another worker is already running this job
     if not _db.is_available():
         print("[GOALS SYNC] DB not available — skipping")
+        _db.release_job_lock("goals_data_sync")
         return
 
     year = datetime.now(timezone.utc).year
@@ -3985,8 +4120,117 @@ def scheduled_sync_goals_data():
         print(f"[GOALS SYNC] YTD cache updated for {cached} agents")
     except Exception as e:
         print(f"[GOALS SYNC] YTD cache error: {e}")
+        _alert_on_job_failure("goals_data_sync", str(e))
 
     print("[GOALS SYNC] Done.")
+    _db.release_job_lock("goals_data_sync")
+
+
+def scheduled_onboarding_escalation():
+    """
+    Daily job: send follow-up to agents who received the onboarding email
+    3 or 7 days ago but still haven't completed goal setup.
+    Day 3 = gentle reminder email
+    Day 7 = text + email if phone available
+    """
+    if not _db.try_acquire_job_lock("onboarding_escalation"):
+        return
+    try:
+        agents_needed = _db.get_agents_no_goal_setup()
+        today = datetime.now(timezone.utc).date()
+
+        for agent in agents_needed:
+            sent_at = agent.get("onboarding_sent_at")
+            if not sent_at:
+                continue
+            try:
+                sent_date = datetime.fromisoformat(sent_at.replace("Z", "+00:00")).date()
+            except Exception:
+                continue
+            days_since = (today - sent_date).days
+            name  = agent["agent_name"]
+            first = name.split()[0]
+            email = agent.get("email")
+            token = _db.get_token_for_agent(name)
+            base_url  = os.environ.get("BASE_URL", "").rstrip("/")
+            setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
+
+            if days_since == 3 and email and setup_url:
+                # Day 3: reminder email
+                try:
+                    from email_report import send_goal_onboarding_reminder
+                    send_goal_onboarding_reminder(name, first, email, setup_url, day=3)
+                    print(f"[ONBOARDING] Day 3 reminder sent to {name}")
+                except Exception as e:
+                    print(f"[ONBOARDING] Day 3 email failed for {name}: {e}")
+
+            elif days_since == 7:
+                # Day 7: email + text if phone available
+                if email and setup_url:
+                    try:
+                        from email_report import send_goal_onboarding_reminder
+                        send_goal_onboarding_reminder(name, first, email, setup_url, day=7)
+                        print(f"[ONBOARDING] Day 7 reminder sent to {name}")
+                    except Exception as e:
+                        print(f"[ONBOARDING] Day 7 email failed for {name}: {e}")
+                phone = agent.get("phone")
+                if phone:
+                    try:
+                        import nudge_engine as _nudge
+                        msg = (
+                            f"Hey {first} — still waiting on your goal setup! "
+                            f"Takes 5 min and unlocks your personal dashboard: {setup_url}"
+                        )
+                        _nudge._send_sms(phone, msg)
+                        print(f"[ONBOARDING] Day 7 SMS sent to {name}")
+                    except Exception as e:
+                        print(f"[ONBOARDING] Day 7 SMS failed for {name}: {e}")
+    except Exception as e:
+        _alert_on_job_failure("onboarding_escalation", str(e))
+        raise
+    finally:
+        _db.release_job_lock("onboarding_escalation")
+
+
+def scheduled_gone_dark_alert():
+    """
+    Weekly job (Monday 7am ET): email Barry a list of agents who haven't
+    logged any activity in 10+ days so he can reach out directly.
+    """
+    if not _db.try_acquire_job_lock("gone_dark_alert"):
+        return
+    try:
+        gone_dark = _db.get_agents_gone_dark(days=10)
+        if not gone_dark:
+            print("[GONE DARK] No agents gone dark — skipping email")
+            return
+
+        api_key = os.environ.get("SENDGRID_API_KEY")
+        if not api_key:
+            return
+        import sendgrid as _sg
+        from sendgrid.helpers.mail import Mail as _Mail
+
+        rows = "\n".join(
+            f"  - {a['agent_name']} (last active: {a['last_activity'] or 'never'})"
+            for a in gone_dark
+        )
+        msg = _Mail(
+            from_email=config.EMAIL_FROM,
+            to_emails=config.EMAIL_FROM,
+            subject=f"⚠ {len(gone_dark)} Agent(s) Gone Dark — No Activity in 10+ Days",
+            plain_text_content=(
+                f"These agents haven't logged any activity in 10+ days:\n\n{rows}\n\n"
+                "Reach out directly. They may have disengaged from the system.\n\n"
+                "— Legacy Home Team Automated Alert"
+            ),
+        )
+        _sg.SendGridAPIClient(api_key).send(msg)
+        print(f"[GONE DARK] Alert sent — {len(gone_dark)} agents")
+    except Exception as e:
+        _alert_on_job_failure("gone_dark_alert", str(e))
+    finally:
+        _db.release_job_lock("gone_dark_alert")
 
 
 def start_scheduler():
@@ -4101,12 +4345,12 @@ def start_scheduler():
                        id="appt_email", name="Tuesday appointment email",
                        max_instances=1, coalesce=True)
 
-    # Goals data sync: Monday + Thursday 6am ET
+    # Goals data sync: daily 5:45am ET
     # Syncs FUB Deals (from Dotloop) and caches YTD call/appt counts per agent.
     # Keeps the manager scorecard fast and current without manual clicking.
     _scheduler.add_job(scheduled_sync_goals_data,
-                       CronTrigger(day_of_week="mon,thu", hour=6, minute=0, timezone=ET),
-                       id="goals_sync", name="Goals data sync (Mon+Thu 6am)",
+                       CronTrigger(hour=5, minute=45, timezone=ET),
+                       id="goals_sync", name="Goals data sync (daily 5:45am ET)",
                        max_instances=1, coalesce=True)
 
     # FUB roster sync: every 4 hours (2am, 6am, 10am, 2pm, 6pm, 10pm ET)
@@ -4124,6 +4368,18 @@ def start_scheduler():
     _scheduler.add_job(scheduled_sync_daily_activity,
                        CronTrigger(hour=3, minute=30, timezone=ET),
                        id="activity_sync", name="FUB daily activity sync (3:30am)",
+                       max_instances=1, coalesce=True)
+
+    # Onboarding escalation: daily 8am ET (Day 3 + Day 7 follow-ups)
+    _scheduler.add_job(scheduled_onboarding_escalation,
+                       CronTrigger(hour=8, minute=0, timezone=ET),
+                       id="onboarding_escalation", name="Onboarding escalation (daily 8am)",
+                       max_instances=1, coalesce=True)
+
+    # Gone dark alert: Monday 7am ET
+    _scheduler.add_job(scheduled_gone_dark_alert,
+                       CronTrigger(day_of_week="mon", hour=7, minute=0, timezone=ET),
+                       id="gone_dark", name="Gone dark alert (Mon 7am)",
                        max_instances=1, coalesce=True)
 
     _scheduler.start()

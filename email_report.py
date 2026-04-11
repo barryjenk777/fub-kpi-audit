@@ -1211,6 +1211,65 @@ def build_goal_onboarding_email(first_name, setup_url):
 </body></html>"""
 
 
+def send_goal_onboarding_reminder(agent_name, first_name, email, setup_url, day=3):
+    """
+    Follow-up reminder for agents who haven't completed goal setup.
+    day=3: gentle nudge
+    day=7: more direct, mentions Barry is watching
+    """
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    if not api_key:
+        return False
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail, To
+    except ImportError:
+        return False
+
+    if day == 3:
+        subject = f"{first_name}, still waiting on your goals (2 min setup)"
+        body = f"""Hey {first_name},
+
+Just a quick follow-up — your personal goal dashboard is set up and ready, but I'm missing your numbers.
+
+It's a 2-minute form. Here's your link:
+{setup_url}
+
+Once you set your goal, the system calculates your daily call target automatically and tracks your progress all year.
+
+— Barry"""
+    else:  # day 7
+        subject = f"{first_name} — last nudge on this (your goal link)"
+        body = f"""Hey {first_name},
+
+I don't want to keep pinging you, but this matters.
+
+Every agent who set a clear income goal last January outperformed every agent who didn't. It's not a coincidence.
+
+Your personal setup link (takes 2 minutes):
+{setup_url}
+
+If you've got questions or want to talk through your goal, reply to this email or text me.
+
+— Barry"""
+
+    message = Mail(
+        from_email=config.EMAIL_FROM,
+        to_emails=[To(email)],
+        subject=subject,
+        plain_text_content=body,
+    )
+
+    try:
+        SendGridAPIClient(api_key).send(message)
+        print(f"[ONBOARDING REMINDER] Day {day} sent to {agent_name} <{email}>")
+        return True
+    except Exception as e:
+        print(f"[ONBOARDING REMINDER] Failed for {agent_name}: {e}")
+        return False
+
+
 def send_goal_onboarding_email(agent_name, first_name, email, setup_url):
     """
     Send the goal setup onboarding email to a new agent.
