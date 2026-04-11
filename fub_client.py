@@ -3,10 +3,13 @@ Follow Up Boss API client.
 Handles authentication, pagination, and rate limiting.
 """
 
+import logging
 import os
 import time
 import requests
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 
 class FUBClient:

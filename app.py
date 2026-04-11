@@ -2344,23 +2344,51 @@ def api_goals_scorecard():
 
     year = int(request.args.get("year", datetime.now().year))
     force_refresh = request.args.get("force_refresh") == "1"
-    all_goals     = _db.get_all_goals(year=year)
+
+    if force_refresh:
+        # Run synchronously so the response contains the freshly-pulled data.
+        # Takes ~30-60s — the frontend disables the button and shows "syncing…"
+        # while waiting, so this is expected.
+        scheduled_sync_goals_data()
+
+    all_goals      = _db.get_all_goals(year=year)
     deal_summaries = _db.get_deal_summary(year=year)
     profiles       = {p["agent_name"]: p for p in _db.get_agent_profiles()}
 
-    if force_refresh:
-        # Admin: pull live FUB data right now and repopulate cache
-        import threading
-        t = threading.Thread(target=scheduled_sync_goals_data, daemon=True)
-        t.start()
-
-    # Read from cache (populated by scheduled job)
-    ytd_cache   = _db.get_ytd_cache(year=year)
+    # Read from cache (populated by scheduled job or the force_refresh above)
+    ytd_cache     = _db.get_ytd_cache(year=year)
     cache_updated = _db.get_cache_updated_at(year=year)
 
+    # Build a complete list — agents WITH goals first, then agents with no goals.
+    # This ensures every agent_profile is visible on the scorecard so Barry can
+    # see who still needs to set goals.
+    goals_map = {g["agent_name"]: g for g in all_goals}
+    all_agents = sorted(set(goals_map.keys()) | set(profiles.keys()))
+
+    _empty_pace = {
+        "overall_status": "gray", "overall_pct": 0,
+        "needs_conversation": False, "week_num": datetime.now().isocalendar()[1],
+        "pct_of_year": 0, "calls": None, "appointments": None, "closings": None,
+    }
+
     scorecard = []
-    for goal in all_goals:
-        agent   = goal["agent_name"]
+    for agent in all_agents:
+        goal    = goals_map.get(agent)
+        profile = profiles.get(agent, {})
+
+        if not goal:
+            # Agent has a profile but hasn't set their goals yet
+            scorecard.append({
+                "agent_name": agent,
+                "email":      profile.get("email", ""),
+                "goal":       None,
+                "targets":    {},
+                "actuals":    {"calls_ytd": 0, "appts_ytd": 0,
+                               "contracts_ytd": 0, "closings_ytd": 0, "gci_ytd": 0},
+                "pace":       _empty_pace,
+            })
+            continue
+
         targets = _db.compute_targets(goal)
         deals   = deal_summaries.get(agent, {"contracts": 0, "closings": 0, "gci_est": 0.0})
         cached  = ytd_cache.get(agent, {"calls_ytd": 0, "appts_ytd": 0})
@@ -2371,8 +2399,7 @@ def api_goals_scorecard():
             "closings_ytd":  deals["closings"],
             "gci_ytd":       deals["gci_est"],
         }
-        pace    = _db.compute_pace(goal, targets, actuals)
-        profile = profiles.get(agent, {})
+        pace = _db.compute_pace(goal, targets, actuals)
         scorecard.append({
             "agent_name": agent,
             "email":      profile.get("email", ""),
@@ -2382,19 +2409,15 @@ def api_goals_scorecard():
             "pace":       pace,
         })
 
-    # Sort: red first, then yellow, then green
-    order = {"red": 0, "yellow": 1, "green": 2}
-    scorecard.sort(key=lambda x: order.get(x["pace"]["overall_status"], 3))
-
-    # Sort: red first, then yellow, then green, then no-goal
-    order = {"red": 0, "yellow": 1, "green": 2}
-    scorecard.sort(key=lambda x: order.get(x["pace"]["overall_status"], 3))
+    # Sort: red → yellow → green → no-goal (gray)
+    _order = {"red": 0, "yellow": 1, "green": 2, "gray": 3}
+    scorecard.sort(key=lambda x: _order.get(x["pace"]["overall_status"], 3))
 
     return jsonify({
         "scorecard":     scorecard,
         "year":          year,
         "week_num":      datetime.now().isocalendar()[1],
-        "cache_updated": cache_updated,   # ISO timestamp of last Mon/Thu refresh
+        "cache_updated": cache_updated,
         "force_refresh": force_refresh,
     })
 
@@ -3357,6 +3380,16 @@ def scheduled_sync_goals_data():
         profiles = _db.get_agent_profiles(active_only=False)
         uid_to_name = {p["fub_user_id"]: p["agent_name"] for p in profiles if p["fub_user_id"]}
 
+        def _pd(val):
+            """Parse an ISO date string or None — defined once, used per deal."""
+            if not val:
+                return None
+            try:
+                from datetime import date as _d
+                return _d.fromisoformat(str(val)[:10])
+            except Exception:
+                return None
+
         synced = skipped = 0
         for deal in deals:
             fub_deal_id = deal.get("id")
@@ -3378,15 +3411,6 @@ def scheduled_sync_goals_data():
 
             sale_price = deal.get("price") or deal.get("salePrice") or 0
             deal_name  = deal.get("name") or deal.get("address") or f"Deal #{fub_deal_id}"
-
-            def _pd(val):
-                if not val:
-                    return None
-                try:
-                    from datetime import date as _d
-                    return _d.fromisoformat(str(val)[:10])
-                except Exception:
-                    return None
 
             close_date    = _pd(deal.get("closedAt") or deal.get("closeDate"))
             contract_date = _pd(deal.get("contractDate") or deal.get("created"))

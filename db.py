@@ -853,5 +853,7 @@ def compute_pace(goal: dict, targets: dict, actuals: dict) -> dict:
         "closings":      closings_pace,
         "overall_pct":   overall_pct,
         "overall_status": overall_status,
-        "needs_conversation": overall_pct < 70,
+        # Don't flag before week 8 — agents can't be meaningfully behind
+        # in the first 7 weeks (Q1 ramp, goal-setting lag, etc.)
+        "needs_conversation": week_num >= 8 and overall_pct < 70,
     }
