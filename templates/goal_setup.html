@@ -531,6 +531,31 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-title">👤 Your Contact Info</div>
+      <div class="field">
+        <label>Your name</label>
+        <input type="text" id="contact_name" value="{{ agent_name }}" readonly
+               style="opacity:.6;cursor:default" title="Name on file — text Barry to change it">
+        <div class="helper">This is the name Barry has on file. Text him if it needs to change.</div>
+      </div>
+      <div class="field">
+        <label>Cell phone number<em class="req">*</em></label>
+        <div class="field-err">We need your number to send your morning nudges.</div>
+        <input type="tel" id="contact_phone" placeholder="+1 (555) 000-0000"
+               value="{{ existing_profile.phone if existing_profile and existing_profile.phone else '' }}">
+        <div class="helper">This is how we'll text your daily power hour reminder.</div>
+      </div>
+      <div class="field">
+        <label>Email address</label>
+        <input type="email" id="contact_email" placeholder="you@example.com"
+               value="{{ existing_profile.email if existing_profile and existing_profile.email else '' }}">
+        <div class="helper">We already have this from FUB — update it here if it's wrong.</div>
+      </div>
+    </div>
+
+    <div class="step-err" id="err-step6">Please enter your cell phone number so we can send your morning nudge.</div>
+
     <button class="btn btn-gold" id="btn-save" onclick="saveAll()" disabled>
       🔒 Lock In My {{ year }} System
     </button>
@@ -604,6 +629,15 @@ function validate(step) {
     markField('gci_goal', gci > 0);
     ok = gci > 0;
     const banner = document.getElementById('err-step3');
+    if (banner) banner.classList.toggle('show', !ok);
+  }
+
+  if (step === 6) {
+    const phone = document.getElementById('contact_phone')?.value.trim();
+    const phoneOk = phone && phone.replace(/\D/g,'').length >= 10;
+    markField('contact_phone', phoneOk);
+    ok = phoneOk;
+    const banner = document.getElementById('err-step6');
     if (banner) banner.classList.toggle('show', !ok);
   }
 
@@ -794,6 +828,9 @@ function toggleAdv() {
 // ── Save everything ───────────────────────────────────────────────
 
 async function saveAll() {
+  // Validate phone before saving
+  if (!validate(6)) return;
+
   const btn    = document.getElementById('btn-save');
   const status = document.getElementById('save-status');
   btn.disabled = true;
@@ -829,6 +866,10 @@ async function saveAll() {
     contract_to_close_rate:  v('contract_to_close') / 100,
     why:      whyPayload,
     identity: identPayload,
+    contact: {
+      phone: document.getElementById('contact_phone')?.value.trim() || '',
+      email: document.getElementById('contact_email')?.value.trim() || '',
+    },
   };
 
   try {

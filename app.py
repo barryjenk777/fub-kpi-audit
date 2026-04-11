@@ -2069,11 +2069,14 @@ def goals_setup_page(token):
     existing      = _db.get_goal(agent_name, year=datetime.now().year)
     existing_why  = _db.get_agent_why(agent_name)
     existing_ident= _db.get_agent_identity(agent_name)
+    profiles      = {p["agent_name"]: p for p in _db.get_agent_profiles(active_only=False)}
+    existing_profile = profiles.get(agent_name, {})
     return render_template("goal_setup.html",
                            agent_name=agent_name, token=token,
                            goal=existing, year=datetime.now().year,
                            existing_why=existing_why,
-                           existing_identity=existing_ident)
+                           existing_identity=existing_ident,
+                           existing_profile=existing_profile)
 
 
 @app.route("/api/goals/setup/<token>", methods=["POST"])
@@ -2141,6 +2144,16 @@ def api_goals_setup_save(token):
                 daily_calls_target=ident.get("daily_calls_target"),
                 daily_texts_target=ident.get("daily_texts_target"),
                 daily_appts_target=ident.get("daily_appts_target"),
+            )
+        # Save contact info (phone + email — agent-provided wins over FUB)
+        contact = body.get("contact") or {}
+        phone = (contact.get("phone") or "").strip()
+        email = (contact.get("email") or "").strip()
+        if phone or email:
+            _db.upsert_agent_profile(
+                agent_name=agent_name,
+                phone=phone or None,
+                email=email or None,
             )
         return jsonify({"success": True, "goal": goal})
     except (KeyError, ValueError) as e:
