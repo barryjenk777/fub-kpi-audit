@@ -100,6 +100,16 @@ DO $$ BEGIN
   ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS phone TEXT;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+-- fub_phone: phone sourced from FUB roster sync (fallback if agent hasn't self-reported)
+DO $$ BEGIN
+  ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS fub_phone TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+-- onboarding_sent_at: timestamp when goal setup onboarding email was sent (NULL = not yet sent)
+DO $$ BEGIN
+  ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS onboarding_sent_at TIMESTAMPTZ;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 -- Secure tokens for agent self-service goal setup links
 CREATE TABLE IF NOT EXISTS goal_tokens (
@@ -423,20 +433,95 @@ def get_agent_profiles(active_only=True):
             with conn.cursor() as cur:
                 if active_only:
                     cur.execute("""
-                        SELECT agent_name, fub_user_id, email, phone, is_active
+                        SELECT agent_name, fub_user_id, email,
+                               COALESCE(phone, fub_phone) AS phone,
+                               is_active, fub_phone, onboarding_sent_at
                         FROM   agent_profiles WHERE is_active = TRUE ORDER BY agent_name
                     """)
                 else:
                     cur.execute("""
-                        SELECT agent_name, fub_user_id, email, phone, is_active
+                        SELECT agent_name, fub_user_id, email,
+                               COALESCE(phone, fub_phone) AS phone,
+                               is_active, fub_phone, onboarding_sent_at
                         FROM   agent_profiles ORDER BY agent_name
                     """)
                 rows = cur.fetchall()
-        return [{"agent_name": r[0], "fub_user_id": r[1], "email": r[2], "phone": r[3], "is_active": r[4]}
+        return [{"agent_name": r[0], "fub_user_id": r[1], "email": r[2], "phone": r[3],
+                 "is_active": r[4], "fub_phone": r[5], "onboarding_sent_at": r[6]}
                 for r in rows]
     except Exception as e:
         logger.warning("get_agent_profiles failed: %s", e)
         return []
+
+
+def upsert_agent_from_fub_roster(agent_name, fub_user_id=None, email=None,
+                                  fub_phone=None, is_active=True):
+    """
+    Upsert agent from FUB roster sync.
+    - Only writes to fub_phone (NEVER overwrites user-provided `phone`)
+    - Returns True if this is a NEW agent (inserted for first time), False if existing
+    """
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM agent_profiles WHERE agent_name = %s", (agent_name,))
+                is_new = cur.fetchone() is None
+                cur.execute("""
+                    INSERT INTO agent_profiles
+                        (agent_name, fub_user_id, email, fub_phone, is_active, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (agent_name) DO UPDATE SET
+                        fub_user_id = COALESCE(EXCLUDED.fub_user_id, agent_profiles.fub_user_id),
+                        email       = COALESCE(EXCLUDED.email,       agent_profiles.email),
+                        fub_phone   = COALESCE(EXCLUDED.fub_phone,   agent_profiles.fub_phone),
+                        is_active   = EXCLUDED.is_active,
+                        updated_at  = NOW()
+                """, (agent_name, fub_user_id, email, fub_phone, is_active))
+        return is_new
+    except Exception as e:
+        logger.warning("upsert_agent_from_fub_roster failed: %s", e)
+        return False
+
+
+def get_agents_needing_onboarding():
+    """Return active agents with an email address who have not yet received the onboarding email."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, email, COALESCE(phone, fub_phone) AS phone
+                    FROM   agent_profiles
+                    WHERE  is_active = TRUE
+                      AND  email IS NOT NULL
+                      AND  onboarding_sent_at IS NULL
+                    ORDER  BY agent_name
+                """)
+                rows = cur.fetchall()
+        return [{"agent_name": r[0], "email": r[1], "phone": r[2]} for r in rows]
+    except Exception as e:
+        logger.warning("get_agents_needing_onboarding failed: %s", e)
+        return []
+
+
+def mark_onboarding_sent(agent_name):
+    """Record that the goal setup onboarding email was sent to this agent."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE agent_profiles SET onboarding_sent_at = NOW()
+                    WHERE  agent_name = %s
+                """, (agent_name,))
+        return True
+    except Exception as e:
+        logger.warning("mark_onboarding_sent failed: %s", e)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1127,6 +1212,31 @@ def log_daily_activity(agent_name, activity_date, calls=0, texts=0, appts=0):
         return True
     except Exception as e:
         logger.warning("log_daily_activity failed: %s", e)
+        return False
+
+
+def upsert_daily_activity_fub(agent_name, activity_date, calls_fub=0, appts_fub=0):
+    """
+    Write FUB-sourced activity for a date. Uses GREATEST so a manual entry
+    that is higher than the FUB number is never overwritten. Safe to call
+    repeatedly — if the agent already logged more calls manually, that wins.
+    """
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO daily_activity
+                        (agent_name, activity_date, calls_logged, appts_logged, logged_at)
+                    VALUES (%s, %s, %s, %s, NOW())
+                    ON CONFLICT (agent_name, activity_date) DO UPDATE SET
+                        calls_logged = GREATEST(daily_activity.calls_logged, EXCLUDED.calls_logged),
+                        appts_logged = GREATEST(daily_activity.appts_logged, EXCLUDED.appts_logged)
+                """, (agent_name, activity_date, calls_fub, appts_fub))
+        return True
+    except Exception as e:
+        logger.warning("upsert_daily_activity_fub failed: %s", e)
         return False
 
 

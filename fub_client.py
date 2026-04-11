@@ -125,11 +125,15 @@ class FUBClient:
             email = u.get("email", "")
             if not email:
                 continue
+            # FUB stores phone on the user object under several possible keys
+            fub_phone = (u.get("mobilePhone") or u.get("phone") or
+                         u.get("phoneNumber") or u.get("mobile") or "")
             agents.append({
                 "name":        full_name,
                 "fub_user_id": u.get("id"),
                 "email":       email,
                 "role":        u.get("roleType", u.get("role", "")),
+                "fub_phone":   fub_phone or None,
             })
         return agents
 

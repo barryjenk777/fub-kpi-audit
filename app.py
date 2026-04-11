@@ -2625,6 +2625,26 @@ def api_goals_nudge_context(agent_name):
     })
 
 
+@app.route("/api/goals/sync-roster", methods=["POST"])
+def api_sync_fub_roster():
+    """Manually trigger a FUB roster sync. Detects new agents and sends onboarding emails."""
+    try:
+        result = sync_fub_roster()
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/goals/sync-activity", methods=["POST"])
+def api_sync_daily_activity():
+    """Manually trigger yesterday's FUB activity sync into daily_activity table."""
+    try:
+        sync_daily_activity_from_fub()
+        return jsonify({"ok": True, "message": "Activity sync complete"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/goals/log-closing", methods=["POST"])
 def api_goals_log_closing():
     """Manually log a closing. Body: {agent_name, deal_name, sale_price, close_date?}"""
@@ -3704,6 +3724,154 @@ def _recalc_all_streaks():
         _db.update_streak(name, targets)
 
 
+def sync_fub_roster():
+    """
+    Pull all active agents from FUB and upsert into agent_profiles.
+    - Updates fub_phone (never overwrites user-provided phone)
+    - Detects NEW agents and sends them the goal setup onboarding email
+    - Ensures every agent has a goal token (creates one if missing)
+    Runs every 4 hours via scheduler so new hires get onboarded same day.
+    """
+    if not _db.is_available():
+        print("[ROSTER SYNC] DB not available — skipping")
+        return {"synced": 0, "new": 0, "errors": 0}
+
+    try:
+        fub = FUBClient()
+        fub_agents = fub.get_agents_with_email(excluded_names=config.EXCLUDED_USERS)
+    except Exception as e:
+        print(f"[ROSTER SYNC] FUB API error: {e}")
+        return {"synced": 0, "new": 0, "errors": 1}
+
+    synced = 0
+    new_agents = []
+    errors = 0
+
+    for agent in fub_agents:
+        name      = agent["name"]
+        fub_uid   = agent["fub_user_id"]
+        email     = agent["email"]
+        fub_phone = agent.get("fub_phone")
+        try:
+            is_new = _db.upsert_agent_from_fub_roster(
+                agent_name=name,
+                fub_user_id=fub_uid,
+                email=email,
+                fub_phone=fub_phone,
+                is_active=True
+            )
+            # Every agent needs a goal token — create if missing
+            if not _db.get_token_for_agent(name):
+                _db.create_goal_token(name)
+            synced += 1
+            if is_new:
+                new_agents.append({"name": name, "email": email})
+        except Exception as e:
+            print(f"[ROSTER SYNC] Error upserting {name}: {e}")
+            errors += 1
+
+    # Send onboarding emails to newly detected agents
+    for agent in new_agents:
+        try:
+            name  = agent["name"]
+            first = name.split()[0]
+            token = _db.get_token_for_agent(name)
+            base_url  = os.environ.get("BASE_URL", "").rstrip("/")
+            setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
+            if setup_url and agent["email"]:
+                from email_report import send_goal_onboarding_email
+                send_goal_onboarding_email(name, first, agent["email"], setup_url)
+                _db.mark_onboarding_sent(name)
+                print(f"[ROSTER SYNC] Onboarding email sent → {name} <{agent['email']}>")
+            else:
+                print(f"[ROSTER SYNC] New agent {name} — no setup URL or email, skipping email")
+        except Exception as e:
+            print(f"[ROSTER SYNC] Onboarding email failed for {agent['name']}: {e}")
+
+    print(f"[ROSTER SYNC] Done: {synced} synced, {len(new_agents)} new, {errors} errors")
+    return {"synced": synced, "new": len(new_agents), "errors": errors}
+
+
+def scheduled_sync_fub_roster():
+    """Scheduler wrapper for sync_fub_roster()."""
+    try:
+        sync_fub_roster()
+    except Exception as e:
+        print(f"[ROSTER SYNC] Unhandled error in scheduled run: {e}")
+
+
+def sync_daily_activity_from_fub():
+    """
+    Nightly job (3:30am ET): pull yesterday's call and appointment counts from
+    FUB and upsert into daily_activity using GREATEST so manual entries that
+    are higher are never overwritten.
+
+    This means agents who forget to log manually still see their numbers
+    in the dashboard by morning — sourced directly from FUB.
+    """
+    if not _db.is_available():
+        print("[ACTIVITY SYNC] DB not available — skipping")
+        return
+
+    # Compute yesterday in ET (handles DST via manual offset same as rest of codebase)
+    _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+    ET = timezone(timedelta(hours=_et_h))
+    now_et    = datetime.now(ET)
+    yesterday = (now_et - timedelta(days=1)).date()
+
+    print(f"[ACTIVITY SYNC] Syncing FUB activity for {yesterday}…")
+
+    try:
+        fub = FUBClient()
+
+        # Yesterday in UTC bounds for FUB API
+        y_start_utc = datetime.combine(yesterday, datetime.min.time()).replace(tzinfo=ET).astimezone(timezone.utc)
+        y_end_utc   = datetime.combine(yesterday, datetime.max.time()).replace(tzinfo=ET).astimezone(timezone.utc)
+
+        # ── Calls ──────────────────────────────────────────────────────
+        all_calls = fub.get_calls(since=y_start_utc, until=y_end_utc)
+        calls_by_uid = {}
+        for c in all_calls:
+            uid = c.get("userId")
+            if uid:
+                calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+
+        # ── Appointments ───────────────────────────────────────────────
+        all_appts = fub.get_appointments(since=y_start_utc, until=y_end_utc)
+        appts_by_uid = {}
+        for a in all_appts:
+            uid = a.get("userId") or a.get("assignedUserId")
+            if uid:
+                appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
+
+        # ── Upsert per agent ───────────────────────────────────────────
+        agents  = _db.get_agent_profiles(active_only=True)
+        updated = 0
+        for agent in agents:
+            fub_uid = agent.get("fub_user_id")
+            if not fub_uid:
+                continue
+            calls = calls_by_uid.get(fub_uid, 0)
+            appts = appts_by_uid.get(fub_uid, 0)
+            # Only write rows where FUB reported something (don't create empty rows)
+            if calls > 0 or appts > 0:
+                _db.upsert_daily_activity_fub(agent["agent_name"], yesterday, calls, appts)
+                updated += 1
+
+        print(f"[ACTIVITY SYNC] Done — {updated} agents updated for {yesterday} "
+              f"(calls pool: {len(calls_by_uid)}, appts pool: {len(appts_by_uid)})")
+    except Exception as e:
+        print(f"[ACTIVITY SYNC] Error: {e}")
+
+
+def scheduled_sync_daily_activity():
+    """Scheduler wrapper for sync_daily_activity_from_fub()."""
+    try:
+        sync_daily_activity_from_fub()
+    except Exception as e:
+        print(f"[ACTIVITY SYNC] Unhandled error in scheduled run: {e}")
+
+
 def scheduled_sync_goals_data():
     """
     Scheduled twice-weekly job (Mon + Thu, 6am ET):
@@ -3939,6 +4107,23 @@ def start_scheduler():
     _scheduler.add_job(scheduled_sync_goals_data,
                        CronTrigger(day_of_week="mon,thu", hour=6, minute=0, timezone=ET),
                        id="goals_sync", name="Goals data sync (Mon+Thu 6am)",
+                       max_instances=1, coalesce=True)
+
+    # FUB roster sync: every 4 hours (2am, 6am, 10am, 2pm, 6pm, 10pm ET)
+    # Detects new agents and sends them the goal setup onboarding email.
+    # Lightweight — one FUB API call, updates fub_phone only (never overwrites user-provided phone).
+    _scheduler.add_job(scheduled_sync_fub_roster,
+                       CronTrigger(hour="2,6,10,14,18,22", minute=15, timezone=ET),
+                       id="roster_sync", name="FUB roster sync (every 4h)",
+                       max_instances=1, coalesce=True)
+
+    # Daily activity sync: 3:30am ET nightly
+    # Pulls yesterday's calls + appointments from FUB → daily_activity table.
+    # Agents who forget to log manually still see their numbers by morning.
+    # Uses GREATEST so manual entries that are higher are never overwritten.
+    _scheduler.add_job(scheduled_sync_daily_activity,
+                       CronTrigger(hour=3, minute=30, timezone=ET),
+                       id="activity_sync", name="FUB daily activity sync (3:30am)",
                        max_instances=1, coalesce=True)
 
     _scheduler.start()

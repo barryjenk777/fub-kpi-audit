@@ -1114,3 +1114,135 @@ def send_appointment_email(appt_data, subject_override=None):
 
     print(f"\n✅ Appointment emails: {sent} agents notified, {skipped} skipped (no email)")
     return sent > 0 or skipped == 0
+
+
+# =============================================================================
+# Goal Setup Onboarding Email
+# Sent automatically when a new agent is detected in FUB roster sync.
+# Uses identity-based framing (Cheplak / Atomic Habits) to connect emotionally.
+# =============================================================================
+
+def build_goal_onboarding_email(first_name, setup_url):
+    """Build the HTML onboarding email asking a new agent to complete goal setup."""
+    _S = {
+        "body": "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background: #f4f4f4;",
+        "container": "max-width: 580px; margin: 32px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.08);",
+        "header": "background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 40px 36px 32px; text-align: center;",
+        "header_title": "color: #ffffff; font-size: 26px; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.5px;",
+        "header_sub": "color: #a0aec0; font-size: 15px; margin: 0;",
+        "body_pad": "padding: 36px;",
+        "greeting": "font-size: 20px; font-weight: 600; color: #1a1a2e; margin: 0 0 20px;",
+        "p": "font-size: 15px; line-height: 1.7; color: #4a5568; margin: 0 0 18px;",
+        "quote_box": "background: #f7fafc; border-left: 4px solid #667eea; border-radius: 0 8px 8px 0; padding: 18px 22px; margin: 24px 0;",
+        "quote_text": "font-size: 16px; font-style: italic; color: #2d3748; margin: 0 0 8px; line-height: 1.6;",
+        "quote_attr": "font-size: 13px; color: #718096; margin: 0;",
+        "bullets": "background: #f7fafc; border-radius: 8px; padding: 20px 24px; margin: 20px 0;",
+        "bullet": "font-size: 14px; color: #4a5568; line-height: 1.7; margin: 0 0 10px; padding-left: 4px;",
+        "cta_wrap": "text-align: center; margin: 32px 0 24px;",
+        "cta_btn": "display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; font-size: 16px; font-weight: 700; text-decoration: none; padding: 16px 40px; border-radius: 8px; letter-spacing: 0.3px;",
+        "time_note": "text-align: center; font-size: 13px; color: #a0aec0; margin: 0 0 28px;",
+        "footer": "background: #f7fafc; padding: 20px 36px; text-align: center; font-size: 12px; color: #a0aec0; border-top: 1px solid #e2e8f0;",
+    }
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Set Up Your Goals — Legacy Home Team</title></head>
+<body style="{_S['body']}">
+<div style="{_S['container']}">
+
+  <div style="{_S['header']}">
+    <p style="{_S['header_title']}">🏆 Legacy Home Team</p>
+    <p style="{_S['header_sub']}">Your Personal Goal System Is Ready</p>
+  </div>
+
+  <div style="{_S['body_pad']}">
+    <p style="{_S['greeting']}">Hey {first_name},</p>
+
+    <p style="{_S['p']}">
+      Welcome to the team. Before we talk leads, appointments, or numbers —
+      we want to know <strong>why you're here</strong>.
+    </p>
+
+    <p style="{_S['p']}">
+      The agents who earn the most on this team aren't necessarily the most talented.
+      They're the ones who know exactly what they're building toward —
+      and they have a system to get there every single day.
+    </p>
+
+    <div style="{_S['quote_box']}">
+      <p style="{_S['quote_text']}">"You don't have to be great to start,<br>but you have to start to be great."</p>
+      <p style="{_S['quote_attr']}">— Zig Ziglar</p>
+    </div>
+
+    <p style="{_S['p']}">
+      We've built you a personal dashboard that turns your income goal into
+      a daily system — calls, appointments, and closings — calculated around <em>your</em> why.
+      It takes about 5 minutes to set up. Here's what you get:
+    </p>
+
+    <div style="{_S['bullets']}">
+      <p style="{_S['bullet']}">🎯 <strong>Your number, made real</strong> — We calculate exactly how many calls to make each day to hit your income goal</p>
+      <p style="{_S['bullet']}">🔥 <strong>A streak to protect</strong> — Daily habit tracking with a "don't break the chain" calendar that keeps you accountable</p>
+      <p style="{_S['bullet']}">💬 <strong>Personalized nudges</strong> — Morning texts built around your why and your goals (not generic reminders)</p>
+      <p style="{_S['bullet']}">📊 <strong>Your own dashboard</strong> — See your pace toward your annual goal, updated daily</p>
+    </div>
+
+    <p style="{_S['p']}">
+      This only works if it's <em>yours</em>. The income target, the identity, the reason you wake up
+      and make calls — we built the form around that, not around a spreadsheet.
+    </p>
+
+    <div style="{_S['cta_wrap']}">
+      <a href="{setup_url}" style="{_S['cta_btn']}">Set Up My Goals →</a>
+    </div>
+    <p style="{_S['time_note']}">Takes about 5 minutes &nbsp;·&nbsp; Your link is personal and secure</p>
+
+    <p style="{_S['p']}">
+      If you have questions, reply here or reach out to Barry directly.
+      We're excited to have you and want to see you win.
+    </p>
+
+    <p style="{_S['p']}">— Barry &amp; The Legacy Home Team</p>
+  </div>
+
+  <div style="{_S['footer']}">
+    Legacy Home Team &nbsp;·&nbsp; This link is unique to you — don't share it
+  </div>
+
+</div>
+</body></html>"""
+
+
+def send_goal_onboarding_email(agent_name, first_name, email, setup_url):
+    """
+    Send the goal setup onboarding email to a new agent.
+    Triggered automatically by the FUB roster sync when a new agent is detected.
+    """
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    if not api_key:
+        print(f"[ONBOARDING EMAIL] SENDGRID_API_KEY not set — skipping for {agent_name}")
+        return False
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail, To
+    except ImportError:
+        print("[ONBOARDING EMAIL] sendgrid package not installed")
+        return False
+
+    html_body = build_goal_onboarding_email(first_name, setup_url)
+    subject = f"{first_name}, your goals are waiting — 5 minutes to set them up 🎯"
+
+    message = Mail(
+        from_email=config.EMAIL_FROM,
+        to_emails=[To(email)],
+        subject=subject,
+        html_content=html_body,
+    )
+
+    try:
+        sg = SendGridAPIClient(api_key)
+        sg.send(message)
+        print(f"[ONBOARDING EMAIL] ✅ Sent to {agent_name} <{email}>")
+        return True
+    except Exception as e:
+        print(f"[ONBOARDING EMAIL] ❌ Failed for {agent_name}: {e}")
+        return False
