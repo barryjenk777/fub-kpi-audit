@@ -2491,7 +2491,7 @@ This link is personal to you — please don't share it.
 
         try:
             import sendgrid as _sg
-            from sendgrid.helpers.mail import Mail as _Mail, Cc
+            from sendgrid.helpers.mail import Mail as _Mail, Email as _Email
             sg = _sg.SendGridAPIClient(sg_key)
             msg = _Mail(
                 from_email=config.EMAIL_FROM,
@@ -2501,7 +2501,7 @@ This link is personal to you — please don't share it.
                 plain_text_content=plain_body,
             )
             # CC Barry while monitoring agent onboarding
-            msg.cc = [Cc(config.EMAIL_FROM)]
+            msg.personalizations[0].add_cc(_Email(config.EMAIL_FROM))
             resp = sg.send(msg)
             sent.append({"agent_name": name, "email": email,
                          "status": "sent", "code": resp.status_code})
