@@ -4321,11 +4321,11 @@ def start_scheduler():
     try:
         import nudge_engine as _nudge
 
-        # Morning nudges: run every 30 min 7am–10am ET so we catch each agent's power-hour window
+        # Morning nudges: once daily at 8am ET — one email per agent, no repeats
         _scheduler.add_job(
             lambda: _nudge.run_morning_nudges(),
-            CronTrigger(hour="7,8,9,10", minute="0,30", timezone=ET),
-            id="nudge_morning", name="Morning nudges (every 30min 7-10am)",
+            CronTrigger(hour=8, minute=0, timezone=ET),
+            id="nudge_morning", name="Morning nudges (8am ET daily)",
             max_instances=1, coalesce=True,
         )
         # Missed-day check: 5pm ET

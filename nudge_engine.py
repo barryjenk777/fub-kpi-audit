@@ -183,10 +183,26 @@ MORNING_TEMPLATES = [
     "{first} — one hour of focused calls today = {daily_calls} chances to change your year.",
     "The compound effect is real. {daily_calls} calls today + every day = {gci_fmt}. Let's go.",
     "Doors open for {who} when you pick up the phone. {daily_calls} calls today, {first}.",
-    "{first}, your dashboard is waiting. Log your numbers. Keep the chain alive.",
     "You built this far one call at a time. Today's another brick. {daily_calls} calls, {first}.",
     "Remember why you started, {first}: {why_short}. That's worth {daily_calls} calls.",
     "No motivation today? Good. Motivation is overrated. {identity} shows up anyway. Call.",
+    # Inspirational — mindset
+    "Most agents will scroll their phone this morning. You're going to dial it. That's the difference, {first}.",
+    "{first}, the gap between where you are and {gci_fmt} is just reps. Start the reps today.",
+    "Somewhere in your pipeline right now is someone ready to buy or sell. They're waiting for your call. Make {daily_calls} today.",
+    "Real estate isn't hard — it just requires doing the uncomfortable thing (calling) every single day. You've got this, {first}.",
+    "The best time to call was yesterday. The second best time is right now. {daily_calls} calls, {first}. Go.",
+    "{first}, champions don't wait to feel ready. They make the call, then feel ready. {daily_calls} today.",
+    "One conversation can change everything. You need {daily_calls} chances to find it today. Pick up the phone.",
+    "You're not just making calls, {first}. You're building the life {who} deserves. {daily_calls} today.",
+    "Every top producer on this team started with one call. Then another. Then another. Your turn, {first}.",
+    "The market doesn't care about your mood. Your goals don't either. {daily_calls} calls. Let's build.",
+    # Streak-aware
+    "Streak: {streak} days. You're proving something to yourself every single morning, {first}. Keep proving it.",
+    "{first}, you've shown up {streak} days straight. Today is day {streak_plus}. Make it count.",
+    # Closer-to-goal feel
+    "Every dial today is a step toward '{what_happens}'. {daily_calls} steps, {first}. Start.",
+    "{first}, {gci_fmt} this year isn't a dream — it's a daily decision. Today's decision is {daily_calls} calls.",
 ]
 
 MISSED_DAY_TEMPLATES = [
@@ -252,6 +268,7 @@ def _pick(templates, ctx):
             why_short=why_short,
             identity=ctx["identity"],
             streak=ctx["streak"],
+            streak_plus=ctx["streak"] + 1,
             longest=ctx["longest"],
             daily_calls=ctx["daily_calls"],
             gci_fmt=ctx["gci_fmt"],
@@ -361,31 +378,19 @@ def nudge_agent(agent_name: str, nudge_type: str, email: str,
 
 def run_morning_nudges(dry_run: bool = False):
     """
-    Called each morning by APScheduler.
-    Checks each agent's power_hour_time — only sends within a 30-min window.
+    Called once daily at 8am ET by APScheduler.
+    Sends one inspirational morning email to every active agent.
+    The nudge_counts_today guard in nudge_agent() ensures no double-sends.
     """
-    profiles   = _db.get_agent_profiles(active_only=True)
-    identities = _db.get_all_agent_identities()
-    now_et     = _et_now()
-
+    profiles = _db.get_agent_profiles(active_only=True)
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
         email = p.get("email")
         if not email:
             continue
-        ident = identities.get(name, {})
-        power_hour = ident.get("power_hour_time", "08:30")
-        try:
-            ph_h, ph_m = [int(x) for x in str(power_hour)[:5].split(":")]
-        except Exception:
-            ph_h, ph_m = 8, 30
-        # Send if within 30 min of power hour
-        window_start = now_et.replace(hour=ph_h, minute=ph_m, second=0, microsecond=0)
-        diff = abs((now_et - window_start).total_seconds())
-        if diff <= 1800:  # within 30 min
-            if nudge_agent(name, "morning", email, dry_run=dry_run):
-                sent += 1
+        if nudge_agent(name, "morning", email, dry_run=dry_run):
+            sent += 1
     logger.info("run_morning_nudges: sent %d nudge emails", sent)
     return sent
 
