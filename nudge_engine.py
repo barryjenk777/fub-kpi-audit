@@ -453,17 +453,33 @@ def run_morning_nudges(dry_run: bool = False):
 
 def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
                          team_avg_calls, top_agent, day_name):
-    """Return (subject, plain_text_body) based on yesterday's team rank."""
-    first     = ctx["first"]
-    who       = ctx["who"]
-    gci_fmt   = ctx["gci_fmt"]
-    top_first = top_agent["name"].split()[0]
-    top_calls = top_agent["calls"]
-    top_appts = top_agent["appts"]
-    score     = calls + texts + (appts * 3)
-    is_zero   = score == 0
-    is_last   = rank == team_size
-    is_first  = rank == 1
+    """Return (subject, plain_text_body) based on yesterday's team rank.
+    Goals and motivation lead every email — rank is the accountability lens."""
+    first        = ctx["first"]
+    who          = ctx["who"]
+    what_happens = ctx.get("what_happens") or ""
+    why          = ctx.get("why") or ""
+    identity     = ctx.get("identity") or "a top producer"
+    gci_fmt      = ctx["gci_fmt"]
+    top_first    = top_agent["name"].split()[0]
+    top_calls    = top_agent["calls"]
+    top_appts    = top_agent["appts"]
+    score        = calls + texts + (appts * 3)
+    is_zero      = score == 0
+    is_last      = rank == team_size
+    is_first     = rank == 1
+
+    # Build the personal "why" opener — the goal context that leads every email
+    if why and who and what_happens:
+        why_hook = random.choice([
+            f"You told us you're building toward this: \"{what_happens[:80]}{'…' if len(what_happens) > 80 else ''}\" — for {who}.",
+            f"You said your why is {who}. You wrote: \"{why[:70]}{'…' if len(why) > 70 else ''}\". That doesn't happen without the work.",
+            f"You're chasing {gci_fmt} this year — not for a number on a spreadsheet, but because of what it means for {who}.",
+        ])
+    elif who and gci_fmt:
+        why_hook = f"You're after {gci_fmt} this year. That number means something real for {who} — and it only happens one conversation at a time."
+    else:
+        why_hook = f"You set a goal of {gci_fmt} this year. Every call is a brick in that building, {first}."
 
     # ── ZERO activity ──────────────────────────────────────────────────
     if is_zero:
@@ -475,9 +491,9 @@ def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
             f"Your leads called. FUB didn't see you pick up. 🤙",
         ])
         body = random.choice([
-            f"Haha kidding — but actually I'm not.\n\nFUB is showing zero conversations and zero appointments for you {day_name}. Which means either the servers went down (they didn't) or it was a full couch day.\n\nNo judgment. Today is a brand new shot. {who} is still counting on you. Get after it.",
-            f"Look, I'm not saying you watched six hours of TV {day_name}. I'm just saying FUB is showing me a big fat zero for you.\n\nThe rest of the team was out there making moves. Today is your turn, {first}. Let's go.",
-            f"I ran the numbers. Double-checked. Triple-checked.\n\nStill zero.\n\nEveryone has off days — the agents who win bounce back the next morning. That's today. {team_avg_calls} conversations. Build.",
+            f"{why_hook}\n\nHaha kidding about the Netflix — but actually I'm not.\n\nFUB is showing zero conversations and zero appointments for you {day_name}. Which means {day_name} wasn't a step toward any of that.\n\nToday is. {who.capitalize() if who else 'The people counting on you'} don't get a pause button. Get after it, {first}.",
+            f"{why_hook}\n\nSo imagine my surprise when FUB showed me a big fat zero for you {day_name}.\n\nThe rest of the team was out there grinding. Today is your turn. Every conversation moves the needle toward {gci_fmt}. Start now.",
+            f"{why_hook}\n\nI ran the numbers for {day_name}. Double-checked. Triple-checked.\n\nStill zero.\n\nEveryone has off days. The agents who win are the ones who bounce back the very next morning. That's today, {first}. Make {day_name} irrelevant by what you do right now.",
         ])
 
     # ── LAST PLACE but tried ───────────────────────────────────────────
@@ -485,11 +501,11 @@ def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
         subject = random.choice([
             f"Dead last on the team {day_name}. But at least you showed up 👏",
             f"While everyone called more than you... you did try a few, {first} 😅",
-            f"#{rank} of {team_size} yesterday. Technically still on the leaderboard.",
+            f"#{rank} of {team_size} {day_name}. Technically still on the leaderboard.",
         ])
         body = random.choice([
-            f"I'll be honest — everyone else on the team outworked you {day_name}.\n\nBut you logged {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. So I respect the effort.\n\n{top_first} led with {top_calls} calls{(' and ' + str(top_appts) + ' appts') if top_appts > 0 else ''}. The gap isn't that wide. Close it today, {first}.",
-            f"Bottom of the leaderboard {day_name}. But you showed up, which is more than a lot of people do.\n\n{calls} conversation{'s' if calls != 1 else ''} logged. Tomorrow you're going for {team_avg_calls + 5}. Deal?",
+            f"{why_hook}\n\nI'll be honest — everyone else on the team outworked you {day_name}. But you logged {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. So I respect the effort.\n\n{top_first} led with {top_calls} calls. The gap isn't that wide. Close it today — {who} is worth more than last place.",
+            f"{why_hook}\n\nBottom of the leaderboard {day_name}. But here's the thing — you showed up, which is more than a lot of people do.\n\n{calls} conversation{'s' if calls != 1 else ''} logged. {identity} doesn't stay at the bottom. Tomorrow you're going for {team_avg_calls + 5}. Deal?",
         ])
 
     # ── BOTTOM HALF ────────────────────────────────────────────────────
@@ -500,10 +516,12 @@ def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
             f"You blended in with the pack {day_name}. Stand out today 👊",
         ])
         body = (
+            f"{why_hook}\n\n"
             f"#{rank} out of {team_size} {day_name} — {calls} conversation{'s' if calls != 1 else ''}"
-            f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\n"
-            f"Team average: {team_avg_calls} calls. {top_first} led with {top_calls}.\n\n"
-            f"The difference between #{rank} and the top half is usually just one more focused hour. You've got that in you today, {first}. Make it count for {who}."
+            f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. "
+            f"Team average: {team_avg_calls}. {top_first} led with {top_calls}.\n\n"
+            f"{identity} doesn't finish in the bottom half. The difference between #{rank} and the top is one more focused hour. "
+            f"You've got that in you today — and {who} is the reason to use it."
         )
 
     # ── TOP 3 (not #1) ─────────────────────────────────────────────────
@@ -514,10 +532,12 @@ def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
             f"You were cooking {day_name}, {first}. Don't let up 🔥",
         ])
         body = (
-            f"Top {rank} on the team {day_name} — {calls} conversation{'s' if calls != 1 else ''}"
+            f"{why_hook}\n\n"
+            f"And {day_name}? You showed up — top {rank} on the team. "
+            f"{calls} conversation{'s' if calls != 1 else ''}"
             f"{(', ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\n"
-            f"{top_first} edged you out with {top_calls} calls. One more conversation today and that could flip.\n\n"
-            f"You're in the zone, {first}. {who} is watching the scoreboard. Stay there."
+            f"{top_first} edged you out with {top_calls} calls. One more conversation today and {gci_fmt} gets closer — and so does everything {who} is counting on. "
+            f"You're in the zone, {first}. Stay there."
         )
 
     # ── #1 ────────────────────────────────────────────────────────────
@@ -529,8 +549,8 @@ def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
             f"Barry might actually high-five you for {day_name}, {first} 🙌",
         ])
         body = random.choice([
-            f"#1 out of {team_size}. You led the entire team {day_name} with {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}.\n\nEveryone else is gunning for your spot today. Defend it, {first}.",
-            f"Top of the leaderboard. {calls} calls. {appts} appointments. That's what {gci_fmt} looks like when it's being built one day at a time.\n\n{who} is going to feel this year. Do it again today, {first}.",
+            f"{why_hook}\n\n{day_name} you proved it — #1 out of {team_size}. {calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''}. That's {identity} in action.\n\nEveryone else is gunning for your spot today. Defend it, {first}. {who.capitalize() if who else 'The people counting on you'} deserve that version of you every single day.",
+            f"{why_hook}\n\nTop of the leaderboard {day_name}. {calls} calls. {appts} appointments. That's what {gci_fmt} looks like when it's being built right.\n\nThe best agents don't coast after a big day — they stack another one on top of it. Do it again today, {first}.",
         ])
 
     return subject, body
