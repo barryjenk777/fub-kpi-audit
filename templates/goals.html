@@ -177,12 +177,15 @@
     <div>
       <div class="page-title">🎯 Agent Goals — <span id="year-label">2026</span></div>
       <div class="page-sub" id="week-label">Loading…</div>
+      <div style="font-size:.72rem;color:var(--muted);margin-top:.2rem">
+        Data refreshes automatically every Monday &amp; Thursday at 6am ET &nbsp;·&nbsp;
+        Last updated: <span id="cache-updated">checking…</span>
+      </div>
     </div>
     <div class="header-actions">
-      <button class="btn btn-ghost" onclick="syncDeals()">🔄 Sync FUB Deals</button>
       <button class="btn btn-ghost" onclick="openLogClosing()">+ Log Closing</button>
       <button class="btn btn-ghost" onclick="toggleEmailPanel()">📧 Send Setup Emails</button>
-      <button class="btn btn-gold"  onclick="loadScorecard()">↺ Refresh</button>
+      <button class="btn btn-ghost btn-sm" onclick="forceRefresh()" title="Trigger a live FUB sync now (takes ~60s)">🔄 Force Refresh</button>
     </div>
   </div>
 
@@ -325,6 +328,16 @@ async function loadScorecard() {
     document.getElementById('year-label').textContent = data.year || new Date().getFullYear();
     document.getElementById('week-label').textContent =
       `Week ${data.week_num} of 52 — ${Math.round(data.week_num/52*100)}% through the year`;
+    // Show cache freshness
+    const cu = document.getElementById('cache-updated');
+    if (data.cache_updated) {
+      const d = new Date(data.cache_updated);
+      cu.textContent = d.toLocaleDateString('en-US', {month:'short',day:'numeric'})
+        + ' ' + d.toLocaleTimeString('en-US', {hour:'numeric',minute:'2-digit'});
+    } else {
+      cu.textContent = 'never (click Force Refresh)';
+      cu.style.color = 'var(--yellow)';
+    }
   } catch(e) {
     tbody.innerHTML = `<tr><td colspan="9" class="empty-state">
       <h3>Could not load scorecard</h3>
@@ -537,6 +550,35 @@ async function syncDeals() {
     loadScorecard();
   } catch(e) {
     showToast('Sync failed: ' + e.message, 'err');
+  }
+}
+
+// ── Force refresh ─────────────────────────────────────────────────────
+async function forceRefresh() {
+  const btn = document.querySelector('[onclick="forceRefresh()"]');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Syncing…'; }
+  showToast('🔄 Pulling live data from FUB — this takes ~30s…', 'ok');
+  document.getElementById('cache-updated').textContent = 'syncing…';
+  try {
+    const resp = await fetch('/api/goals/scorecard?force_refresh=1');
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    _scorecard = data.scorecard || [];
+    renderScorecard(_scorecard);
+    updateSummary(_scorecard);
+    if (data.cache_updated) {
+      const d = new Date(data.cache_updated);
+      document.getElementById('cache-updated').textContent =
+        d.toLocaleDateString('en-US', {month:'short',day:'numeric'})
+        + ' ' + d.toLocaleTimeString('en-US', {hour:'numeric',minute:'2-digit'});
+      document.getElementById('cache-updated').style.color = '';
+    }
+    showToast('✅ Scorecard refreshed with live FUB data', 'ok');
+  } catch(e) {
+    showToast('Refresh failed: ' + e.message, 'err');
+    document.getElementById('cache-updated').textContent = 'error — try again';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Force Refresh'; }
   }
 }
 

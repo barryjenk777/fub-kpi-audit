@@ -157,6 +157,18 @@ CREATE TABLE IF NOT EXISTS deal_log (
 );
 CREATE INDEX IF NOT EXISTS idx_dl_agent_year ON deal_log (agent_name, year);
 CREATE INDEX IF NOT EXISTS idx_dl_stage      ON deal_log (stage, year);
+
+-- Cached YTD actuals per agent (refreshed by scheduled job Mon/Thu 6am ET)
+-- Avoids live FUB API calls on every scorecard page load
+CREATE TABLE IF NOT EXISTS agent_ytd_cache (
+    id           SERIAL PRIMARY KEY,
+    agent_name   TEXT    NOT NULL,
+    year         INTEGER NOT NULL,
+    calls_ytd    INTEGER NOT NULL DEFAULT 0,
+    appts_ytd    INTEGER NOT NULL DEFAULT 0,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (agent_name, year)
+);
 """
 
 
@@ -706,6 +718,78 @@ def get_deal_summary(agent_name=None, year=None):
     except Exception as e:
         logger.warning("get_deal_summary failed: %s", e)
         return {}
+
+
+# ---------------------------------------------------------------------------
+# YTD actuals cache
+# ---------------------------------------------------------------------------
+
+def upsert_ytd_cache(agent_name: str, year: int, calls_ytd: int, appts_ytd: int):
+    """Store pre-computed YTD call + appointment counts for an agent."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO agent_ytd_cache (agent_name, year, calls_ytd, appts_ytd, updated_at)
+                    VALUES (%s, %s, %s, %s, NOW())
+                    ON CONFLICT (agent_name, year) DO UPDATE SET
+                        calls_ytd  = EXCLUDED.calls_ytd,
+                        appts_ytd  = EXCLUDED.appts_ytd,
+                        updated_at = NOW()
+                """, (agent_name, year, calls_ytd, appts_ytd))
+        return True
+    except Exception as e:
+        logger.warning("upsert_ytd_cache failed: %s", e)
+        return False
+
+
+def get_ytd_cache(year: int = None) -> dict:
+    """
+    Return cached YTD actuals keyed by agent_name.
+    {agent_name: {calls_ytd, appts_ytd, updated_at}}
+    """
+    if not is_available():
+        return {}
+    if year is None:
+        year = datetime.now().year
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, calls_ytd, appts_ytd, updated_at
+                    FROM   agent_ytd_cache
+                    WHERE  year = %s
+                """, (year,))
+                rows = cur.fetchall()
+        return {
+            r[0]: {"calls_ytd": r[1], "appts_ytd": r[2],
+                   "updated_at": r[3].isoformat() if r[3] else None}
+            for r in rows
+        }
+    except Exception as e:
+        logger.warning("get_ytd_cache failed: %s", e)
+        return {}
+
+
+def get_cache_updated_at(year: int = None) -> str | None:
+    """Return the most recent updated_at timestamp across all agents' cache."""
+    if not is_available():
+        return None
+    if year is None:
+        year = datetime.now().year
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT MAX(updated_at) FROM agent_ytd_cache WHERE year = %s
+                """, (year,))
+                row = cur.fetchone()
+        return row[0].isoformat() if row and row[0] else None
+    except Exception as e:
+        logger.warning("get_cache_updated_at failed: %s", e)
+        return None
 
 
 # ---------------------------------------------------------------------------

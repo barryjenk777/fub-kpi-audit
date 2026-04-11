@@ -2334,67 +2334,44 @@ def api_goals_log_closing():
 def api_goals_scorecard():
     """
     Return full scorecard for all agents: goals + targets + YTD actuals + pace.
-    Pulls calls + appointments from FUB for YTD counts.
+
+    Reads entirely from DB (engagement cache + deal_log) — no live FUB calls.
+    Data is refreshed automatically Mon + Thu 6am ET by the goals_sync job.
+    Pass ?force_refresh=1 to trigger a live FUB pull right now (slow, admin use).
     """
     if not _db.is_available():
         return jsonify({"error": "Database not connected", "scorecard": []}), 503
 
     year = int(request.args.get("year", datetime.now().year))
-    all_goals = _db.get_all_goals(year=year)
-    deal_summaries = _db.get_deal_summary(year=year)  # {agent_name: {contracts, closings, gci_est}}
-    profiles = {p["agent_name"]: p for p in _db.get_agent_profiles()}
+    force_refresh = request.args.get("force_refresh") == "1"
+    all_goals     = _db.get_all_goals(year=year)
+    deal_summaries = _db.get_deal_summary(year=year)
+    profiles       = {p["agent_name"]: p for p in _db.get_agent_profiles()}
 
-    # Pull YTD calls + appointments from FUB for each agent
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    year_start = _dt(year, 1, 1, tzinfo=_tz.utc)
+    if force_refresh:
+        # Admin: pull live FUB data right now and repopulate cache
+        import threading
+        t = threading.Thread(target=scheduled_sync_goals_data, daemon=True)
+        t.start()
 
-    try:
-        client = FUBClient()
-        fub_users = {
-            f"{u.get('firstName','')} {u.get('lastName','')}".strip(): u.get("id")
-            for u in client.get_users()
-        }
-        ytd_calls = client.get_calls(since=year_start)
-        ytd_appts = client.get_appointments(since=year_start)
-    except Exception as e:
-        logger.warning("Scorecard FUB fetch failed: %s", e)
-        fub_users = {}
-        ytd_calls = []
-        ytd_appts = []
-
-    # Count calls per agent (outbound only)
-    calls_by_agent = {}
-    for call in ytd_calls:
-        if call.get("isIncoming"):
-            continue
-        uid = call.get("userId")
-        for name, fub_id in fub_users.items():
-            if fub_id == uid:
-                calls_by_agent[name] = calls_by_agent.get(name, 0) + 1
-                break
-
-    # Count appointments per agent
-    appts_by_agent = {}
-    for appt in ytd_appts:
-        uid = appt.get("assignedUserId") or appt.get("userId")
-        for name, fub_id in fub_users.items():
-            if fub_id == uid:
-                appts_by_agent[name] = appts_by_agent.get(name, 0) + 1
-                break
+    # Read from cache (populated by scheduled job)
+    ytd_cache   = _db.get_ytd_cache(year=year)
+    cache_updated = _db.get_cache_updated_at(year=year)
 
     scorecard = []
     for goal in all_goals:
-        agent = goal["agent_name"]
+        agent   = goal["agent_name"]
         targets = _db.compute_targets(goal)
         deals   = deal_summaries.get(agent, {"contracts": 0, "closings": 0, "gci_est": 0.0})
+        cached  = ytd_cache.get(agent, {"calls_ytd": 0, "appts_ytd": 0})
         actuals = {
-            "calls_ytd":     calls_by_agent.get(agent, 0),
-            "appts_ytd":     appts_by_agent.get(agent, 0),
+            "calls_ytd":     cached["calls_ytd"],
+            "appts_ytd":     cached["appts_ytd"],
             "contracts_ytd": deals["contracts"],
             "closings_ytd":  deals["closings"],
             "gci_ytd":       deals["gci_est"],
         }
-        pace = _db.compute_pace(goal, targets, actuals)
+        pace    = _db.compute_pace(goal, targets, actuals)
         profile = profiles.get(agent, {})
         scorecard.append({
             "agent_name": agent,
@@ -2409,8 +2386,17 @@ def api_goals_scorecard():
     order = {"red": 0, "yellow": 1, "green": 2}
     scorecard.sort(key=lambda x: order.get(x["pace"]["overall_status"], 3))
 
-    return jsonify({"scorecard": scorecard, "year": year,
-                    "week_num": datetime.now().isocalendar()[1]})
+    # Sort: red first, then yellow, then green, then no-goal
+    order = {"red": 0, "yellow": 1, "green": 2}
+    scorecard.sort(key=lambda x: order.get(x["pace"]["overall_status"], 3))
+
+    return jsonify({
+        "scorecard":     scorecard,
+        "year":          year,
+        "week_num":      datetime.now().isocalendar()[1],
+        "cache_updated": cache_updated,   # ISO timestamp of last Mon/Thu refresh
+        "force_refresh": force_refresh,
+    })
 
 
 # ---- LeadStream: Weekly Engagement Tracker ----
@@ -3342,6 +3328,122 @@ def scheduled_send_isa_email():
         print(f"[SCHEDULER] ISA email error: {e}")
 
 
+def scheduled_sync_goals_data():
+    """
+    Scheduled twice-weekly job (Mon + Thu, 6am ET):
+    1. Sync FUB Deals → deal_log (contracts + closings from Dotloop)
+    2. Compute YTD calls + appointments per agent → agent_ytd_cache
+
+    This keeps the manager scorecard fast (reads from DB, no live FUB calls)
+    and means the data is always fresh without anyone clicking a button.
+    """
+    if not _db.is_available():
+        print("[GOALS SYNC] DB not available — skipping")
+        return
+
+    year = datetime.now(timezone.utc).year
+    print(f"[GOALS SYNC] Starting goals data sync for {year}…")
+
+    # ── 1. Sync FUB Deals ──────────────────────────────────────────────
+    try:
+        client = FUBClient()
+        since = datetime(year, 1, 1, tzinfo=timezone.utc)
+        deals = client.get_deals(since=since)
+
+        all_goals = _db.get_all_goals(year=year)
+        comm_lookup = {g["agent_name"]: float(g["commission_pct"]) for g in all_goals}
+
+        # Build FUB user_id → agent_name map for accurate matching
+        profiles = _db.get_agent_profiles(active_only=False)
+        uid_to_name = {p["fub_user_id"]: p["agent_name"] for p in profiles if p["fub_user_id"]}
+
+        synced = skipped = 0
+        for deal in deals:
+            fub_deal_id = deal.get("id")
+            if not fub_deal_id:
+                continue
+
+            stage_raw = (deal.get("stage") or deal.get("stageName") or
+                         deal.get("stageLabel") or "")
+
+            # Prefer user-ID match; fall back to name string
+            agent_uid = deal.get("assignedUserId") or deal.get("userId")
+            agent_name = uid_to_name.get(agent_uid)
+            if not agent_name:
+                raw = deal.get("assignedTo") or ""
+                agent_name = raw if isinstance(raw, str) else (
+                    f"{raw.get('firstName','')} {raw.get('lastName','')}".strip()
+                    if isinstance(raw, dict) else ""
+                )
+
+            sale_price = deal.get("price") or deal.get("salePrice") or 0
+            deal_name  = deal.get("name") or deal.get("address") or f"Deal #{fub_deal_id}"
+
+            def _pd(val):
+                if not val:
+                    return None
+                try:
+                    from datetime import date as _d
+                    return _d.fromisoformat(str(val)[:10])
+                except Exception:
+                    return None
+
+            close_date    = _pd(deal.get("closedAt") or deal.get("closeDate"))
+            contract_date = _pd(deal.get("contractDate") or deal.get("created"))
+            comm_pct      = comm_lookup.get(agent_name)
+
+            result = _db.upsert_deal(fub_deal_id, agent_name, deal_name, sale_price,
+                                     stage_raw, contract_date, close_date, comm_pct)
+            if result:
+                synced += 1
+            else:
+                skipped += 1
+
+        print(f"[GOALS SYNC] Deals: {synced} synced, {skipped} skipped/unrecognised")
+    except Exception as e:
+        print(f"[GOALS SYNC] Deal sync error: {e}")
+
+    # ── 2. Cache YTD calls + appointments per agent ────────────────────
+    try:
+        year_start = datetime(year, 1, 1, tzinfo=timezone.utc)
+        ytd_calls = client.get_calls(since=year_start)
+        ytd_appts = client.get_appointments(since=year_start)
+
+        fub_users = {
+            f"{u.get('firstName','')} {u.get('lastName','')}".strip(): u.get("id")
+            for u in client.get_users()
+        }
+
+        calls_by_uid  = {}
+        for call in ytd_calls:
+            if call.get("isIncoming"):
+                continue
+            uid = call.get("userId")
+            if uid:
+                calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+
+        appts_by_uid = {}
+        for appt in ytd_appts:
+            uid = appt.get("assignedUserId") or appt.get("userId")
+            if uid:
+                appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
+
+        cached = 0
+        for agent_name, fub_uid in fub_users.items():
+            if agent_name in config.EXCLUDED_USERS:
+                continue
+            calls = calls_by_uid.get(fub_uid, 0)
+            appts = appts_by_uid.get(fub_uid, 0)
+            if _db.upsert_ytd_cache(agent_name, year, calls, appts):
+                cached += 1
+
+        print(f"[GOALS SYNC] YTD cache updated for {cached} agents")
+    except Exception as e:
+        print(f"[GOALS SYNC] YTD cache error: {e}")
+
+    print("[GOALS SYNC] Done.")
+
+
 def start_scheduler():
     """Start APScheduler with all scheduled jobs."""
     global _scheduler_started, _scheduler
@@ -3402,6 +3504,14 @@ def start_scheduler():
     # Appointment accountability email: Tuesday 9am ET
     _scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0, timezone=ET),
                        id="appt_email", name="Tuesday appointment email",
+                       max_instances=1, coalesce=True)
+
+    # Goals data sync: Monday + Thursday 6am ET
+    # Syncs FUB Deals (from Dotloop) and caches YTD call/appt counts per agent.
+    # Keeps the manager scorecard fast and current without manual clicking.
+    _scheduler.add_job(scheduled_sync_goals_data,
+                       CronTrigger(day_of_week="mon,thu", hour=6, minute=0, timezone=ET),
+                       id="goals_sync", name="Goals data sync (Mon+Thu 6am)",
                        max_instances=1, coalesce=True)
 
     _scheduler.start()
