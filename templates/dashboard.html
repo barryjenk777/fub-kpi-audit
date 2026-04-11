@@ -725,9 +725,8 @@ function toggleEmailPanel(){
 }
 
 async function generateLinks(){
-  document.getElementById('ep-list').innerHTML='<div class="loading-pane" style="padding:.8rem"><span class="spinner"></span> Scanning FUB for agents…</div>';
+  document.getElementById('ep-list').innerHTML='<div class="loading-pane" style="padding:.8rem"><span class="spinner"></span> Generating links…</div>';
   try{
-    await fetch('/api/goals/scan-agents',{method:'POST'});
     const r=await fetch('/api/goals/generate-links',{method:'POST'});
     const d=await r.json();
     if(!d.success)throw new Error(d.error);
@@ -760,7 +759,6 @@ async function sendSelectedEmails(){
 
 async function copyOneLink(agentName){
   try{
-    await fetch('/api/goals/scan-agents',{method:'POST'});
     const r=await fetch('/api/goals/generate-links',{method:'POST'});
     const d=await r.json();
     const link=(d.links||[]).find(l=>l.agent_name===agentName);
