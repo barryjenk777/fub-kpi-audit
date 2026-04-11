@@ -2340,9 +2340,10 @@ def api_goals_send_emails():
 
     <!-- Header bar -->
     <tr>
-      <td style="background:#0d1117;border-radius:12px 12px 0 0;padding:20px 32px;text-align:center">
-        <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#f5a623">Legacy Home Team</p>
-        <p style="margin:4px 0 0;font-size:22px;font-weight:800;color:#ffffff">{year} Income Goal Setting</p>
+      <td style="background:#0d1117;border-radius:12px 12px 0 0;padding:24px 32px;text-align:center">
+        <img src="https://web-production-3363cc.up.railway.app/static/logo-white.png"
+             alt="Legacy Home Team" width="160" style="display:block;margin:0 auto 10px;width:160px;height:auto">
+        <p style="margin:0;font-size:20px;font-weight:800;color:#ffffff">{year} Income Goal Setting</p>
       </td>
     </tr>
 

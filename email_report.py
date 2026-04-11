@@ -140,8 +140,11 @@ def build_html_report(results, period_start, period_end):
     </style></head>
     <body>
 
-    <h1>Weekly Team Update</h1>
-    <p style="color:#666; margin-top:0;">{period} &nbsp;|&nbsp; Thresholds: Calls &ge;{config.MIN_OUTBOUND_CALLS} &bull; Convos &ge;{config.MIN_CONVERSATIONS} &bull; OOC &le;{config.MAX_OUT_OF_COMPLIANCE}</p>
+    <div style="background:#0f172a;border-radius:10px;padding:20px 24px;margin-bottom:16px;text-align:center">
+      <img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">
+      <h1 style="margin:0;color:#ffffff;font-size:18px">Weekly Team Update</h1>
+      <p style="margin:4px 0 0;color:rgba(255,255,255,0.6);font-size:13px">{period} &nbsp;|&nbsp; Calls &ge;{config.MIN_OUTBOUND_CALLS} &bull; Convos &ge;{config.MIN_CONVERSATIONS} &bull; OOC &le;{config.MAX_OUT_OF_COMPLIANCE}</p>
+    </div>
     """
 
     # ---- Team Snapshot ----
@@ -409,8 +412,11 @@ def build_manager_email(manager_data, period_label):
     </style></head>
     <body>
 
-    <h1>{emoji} Monday Game Plan — {period_label}</h1>
-    <p style="color:#666;margin-top:0;">KPI Targets: Calls ≥{kpi['min_calls']} • Convos ≥{kpi['min_convos']} • OOC ≤{kpi['max_ooc']}</p>
+    <div style="background:#0f172a;border-radius:10px;padding:20px 24px;margin-bottom:16px;text-align:center">
+      <img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">
+      <h1 style="margin:0;color:#ffffff;font-size:18px">{emoji} Monday Game Plan — {period_label}</h1>
+      <p style="margin:4px 0 0;color:rgba(255,255,255,0.6);font-size:13px">Calls ≥{kpi['min_calls']} &bull; Convos ≥{kpi['min_convos']} &bull; OOC ≤{kpi['max_ooc']}</p>
+    </div>
 
     <div class="opener">
         <strong>Good morning, Joe.</strong><br><br>
@@ -681,7 +687,10 @@ def build_isa_email(isa_data):
     </style></head>
     <body>
 
-    <h1>{emoji} ISA Weekly Performance — {period}</h1>
+    <div style="background:#0f172a;border-radius:10px;padding:20px 24px;margin-bottom:16px;text-align:center">
+      <img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">
+      <h1 style="margin:0;color:#ffffff;font-size:18px">{emoji} ISA Weekly Performance — {period}</h1>
+    </div>
 
     <div class="opener">
         <strong>Fhalen,</strong><br><br>
@@ -800,6 +809,9 @@ def send_isa_email(isa_data):
 
 FUB_PERSON_URL = "https://yourfriendlyagent.followupboss.com/2/people/view/{person_id}"
 
+LOGO_WHITE_URL = "https://web-production-3363cc.up.railway.app/static/logo-white.png"
+LOGO_HEADER_IMG = f'<img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">'
+
 # Inline style constants — using inline styles on every element so formatting
 # survives forwarding (email clients strip <style> blocks on forward).
 _S = {
@@ -847,9 +859,10 @@ def build_appointment_email(appt_data):
 <html><head><meta charset="UTF-8"></head>
 <body style="{_S['body']}">
 
-<div style="{_S['header']}">
-  <h1 style="{_S['header_h1']}">&#128197; Appointment Accountability &mdash; {period}</h1>
-  <p style="{_S['header_p']}">Weekly outcome review &middot; Legacy Home Team</p>
+<div style="{_S['header']};text-align:center">
+  {LOGO_HEADER_IMG}
+  <h1 style="{_S['header_h1']};text-align:center">&#128197; Appointment Accountability &mdash; {period}</h1>
+  <p style="{_S['header_p']};text-align:center">Weekly outcome review &middot; Legacy Home Team</p>
 </div>
 """
 
@@ -970,9 +983,10 @@ def build_agent_appointment_email(appt_data, agent_name, agent_open):
 <html><head><meta charset="UTF-8"></head>
 <body style="{_S['body']}">
 
-<div style="{_S['header']}">
-  <h1 style="{_S['header_h1']}">&#128197; Appointment Outcomes Needed &mdash; {period}</h1>
-  <p style="{_S['header_p']}">Legacy Home Team &middot; Please update your appointments in Follow Up Boss</p>
+<div style="{_S['header']};text-align:center">
+  {LOGO_HEADER_IMG}
+  <h1 style="{_S['header_h1']};text-align:center">&#128197; Appointment Outcomes Needed &mdash; {period}</h1>
+  <p style="{_S['header_p']};text-align:center">Legacy Home Team &middot; Please update your appointments in Follow Up Boss</p>
 </div>
 
 <div style="{_S['card']}">
@@ -1148,9 +1162,9 @@ def build_goal_onboarding_email(first_name, setup_url):
 <body style="{_S['body']}">
 <div style="{_S['container']}">
 
-  <div style="{_S['header']}">
-    <p style="{_S['header_title']}">🏆 Legacy Home Team</p>
-    <p style="{_S['header_sub']}">Your Personal Goal System Is Ready</p>
+  <div style="{_S['header']};text-align:center">
+    <img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">
+    <p style="{_S['header_title']}">Your Personal Goal System Is Ready</p>
   </div>
 
   <div style="{_S['body_pad']}">
