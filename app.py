@@ -2491,7 +2491,7 @@ This link is personal to you — please don't share it.
 
         try:
             import sendgrid as _sg
-            from sendgrid.helpers.mail import Mail as _Mail
+            from sendgrid.helpers.mail import Mail as _Mail, Cc
             sg = _sg.SendGridAPIClient(sg_key)
             msg = _Mail(
                 from_email=config.EMAIL_FROM,
@@ -2500,11 +2500,15 @@ This link is personal to you — please don't share it.
                 html_content=html_body,
                 plain_text_content=plain_body,
             )
+            # CC Barry while monitoring agent onboarding
+            msg.cc = [Cc(config.EMAIL_FROM)]
             resp = sg.send(msg)
             sent.append({"agent_name": name, "email": email,
                          "status": "sent", "code": resp.status_code})
+            print(f"[GOAL EMAIL] Sent to {name} <{email}> — HTTP {resp.status_code}")
         except Exception as e:
             failed.append({"agent_name": name, "email": email, "error": str(e)})
+            print(f"[GOAL EMAIL] FAILED for {name} <{email}>: {e}")
 
     return jsonify({"success": True, "sent": sent, "failed": failed,
                     "test_mode": test_mode})
