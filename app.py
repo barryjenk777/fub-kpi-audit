@@ -2287,7 +2287,8 @@ def api_goals_generate_links():
 
     links = []
     for p in profiles:
-        token = _db.create_goal_token(p["agent_name"])
+        # Reuse existing valid token — don't rotate on every panel open (that breaks sent links)
+        token = _db.get_token_for_agent(p["agent_name"]) or _db.create_goal_token(p["agent_name"])
         if token:
             links.append({
                 "agent_name":   p["agent_name"],
