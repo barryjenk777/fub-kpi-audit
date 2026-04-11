@@ -624,16 +624,31 @@ def resolve_goal_token(token):
     """
     Validate a token and return the agent_name, or None if invalid/expired.
     Auto-renews for 90 days on every valid access so active agents are never locked out.
+    Also reactivates tokens expired within the last 60 days — covers accidental
+    rotation (e.g. opening the email panel re-created tokens, expiring sent links).
     """
     if not is_available():
         return None
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # First try the normal path (token still valid)
                 cur.execute("""
                     UPDATE goal_tokens
                     SET expires_at = GREATEST(expires_at, NOW() + INTERVAL '90 days')
                     WHERE token = %s AND expires_at > NOW()
+                    RETURNING agent_name
+                """, (token,))
+                row = cur.fetchone()
+                if row:
+                    return row[0]
+                # Fallback: reactivate if expired within the last 60 days
+                # (handles the case where tokens were rotated while emails were in-flight)
+                cur.execute("""
+                    UPDATE goal_tokens
+                    SET expires_at = NOW() + INTERVAL '90 days'
+                    WHERE token = %s
+                      AND expires_at > NOW() - INTERVAL '60 days'
                     RETURNING agent_name
                 """, (token,))
                 row = cur.fetchone()
