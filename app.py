@@ -2102,7 +2102,9 @@ def api_goals_setup_save(token):
 
 @app.route("/goals")
 def goals_dashboard():
-    return render_template("goals.html")
+    # Goals are now embedded in the main dashboard — redirect to /
+    from flask import redirect
+    return redirect("/")
 
 
 # ---- Scan FUB for agents and seed agent_profiles ----
