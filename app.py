@@ -2187,34 +2187,159 @@ def api_goals_send_emails():
         setup_url = a.get("setup_url", "")
         first     = name.split()[0] if name else "there"
 
-        html_body = f"""
-<div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#1a1a1a">
-  <h2 style="color:#f5a623">Legacy Home Team — {year} Goal Setting</h2>
-  <p>Hey {first},</p>
-  <p>Barry wants every agent on the team to set their business goals for {year}.
-     It only takes <strong>2 minutes</strong> — you enter your income goal and
-     the system automatically calculates the calls and appointments you need to
-     get there.</p>
-  <p style="margin:2rem 0">
-    <a href="{setup_url}"
-       style="background:#f5a623;color:#fff;padding:14px 28px;border-radius:8px;
-              text-decoration:none;font-weight:bold;font-size:16px">
-      Set My {year} Goals →
-    </a>
-  </p>
-  <p style="color:#666;font-size:13px">
-    This link is personal to you — don't share it.<br>
-    It works on your phone too.
-  </p>
-  <p>— Barry &amp; the Legacy Home Team</p>
-</div>"""
+        html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f0;padding:32px 16px">
+  <tr><td align="center">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px">
 
-        plain_body = (
-            f"Hey {first},\n\nBarry wants you to set your {year} business goals. "
-            f"It takes 2 minutes:\n\n{setup_url}\n\n"
-            f"Enter your income goal and we'll calculate the activity you need. "
-            f"Works on your phone.\n\n— Barry & Legacy Home Team"
-        )
+    <!-- Header bar -->
+    <tr>
+      <td style="background:#0d1117;border-radius:12px 12px 0 0;padding:20px 32px;text-align:center">
+        <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#f5a623">Legacy Home Team</p>
+        <p style="margin:4px 0 0;font-size:22px;font-weight:800;color:#ffffff">{year} Income Goal Setting</p>
+      </td>
+    </tr>
+
+    <!-- Body -->
+    <tr>
+      <td style="background:#ffffff;padding:36px 32px 28px;border-left:1px solid #e5e5e5;border-right:1px solid #e5e5e5">
+
+        <p style="margin:0 0 20px;font-size:16px;color:#111111">Hey {first},</p>
+
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#333333">
+          I have one question for you:
+          <strong style="color:#111111">What does your best year in real estate look like?</strong>
+        </p>
+
+        <p style="margin:0 0 24px;font-size:15px;line-height:1.65;color:#333333">
+          Not a vague "I want to do better" answer — an actual number.
+          Because the agents who hit big years aren't the ones with the most talent.
+          They're the ones who decided, in January, exactly what they were going after.
+        </p>
+
+        <!-- Quote block -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px">
+          <tr>
+            <td style="border-left:4px solid #f5a623;padding:14px 20px;background:#fffbf0;border-radius:0 8px 8px 0">
+              <p style="margin:0;font-size:15px;font-style:italic;color:#555555;line-height:1.6">
+                "A goal properly set is halfway reached."
+              </p>
+              <p style="margin:8px 0 0;font-size:12px;font-weight:700;color:#f5a623;letter-spacing:0.5px">— ZIG ZIGLAR</p>
+            </td>
+          </tr>
+        </table>
+
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#333333">
+          Here's what happens when you take 2 minutes to set your goal:
+        </p>
+
+        <!-- Benefit bullets -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px">
+          <tr>
+            <td style="padding:8px 0;font-size:14px;color:#333333;line-height:1.5">
+              <span style="color:#f5a623;font-weight:800;margin-right:10px">✓</span>
+              We calculate the exact number of calls and appointments you need — weekly, not yearly, so it never feels overwhelming.
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 0;font-size:14px;color:#333333;line-height:1.5">
+              <span style="color:#f5a623;font-weight:800;margin-right:10px">✓</span>
+              Your personal scorecard updates in real time — you can see your pace to goal every week, not just at year-end.
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 0;font-size:14px;color:#333333;line-height:1.5">
+              <span style="color:#f5a623;font-weight:800;margin-right:10px">✓</span>
+              I use your goal to prioritize lead routing, coaching conversations, and the support I put behind you this year.
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 0;font-size:14px;color:#333333;line-height:1.5">
+              <span style="color:#f5a623;font-weight:800;margin-right:10px">✓</span>
+              The agents on this team who set goals are the ones who actually hit them — and the ones I go to bat for when opportunities come up.
+            </td>
+          </tr>
+        </table>
+
+        <p style="margin:0 0 28px;font-size:15px;line-height:1.65;color:#333333">
+          This link is yours alone. It takes about 2 minutes — just your income goal, commission rate, and average sale price.
+          The math does the rest.
+        </p>
+
+        <!-- CTA button -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px">
+          <tr>
+            <td align="center">
+              <a href="{setup_url}"
+                 style="display:inline-block;background:#f5a623;color:#0d1117;padding:16px 36px;
+                        border-radius:8px;text-decoration:none;font-weight:800;font-size:16px;
+                        letter-spacing:0.3px">
+                Set My {year} Income Goal →
+              </a>
+            </td>
+          </tr>
+        </table>
+
+        <p style="margin:0 0 8px;font-size:15px;line-height:1.65;color:#333333">
+          {first}, the sooner you set this, the sooner the system starts working for you.
+          Don't leave this in your inbox — it'll take less time than a coffee run.
+        </p>
+
+        <p style="margin:24px 0 0;font-size:15px;color:#111111">
+          Let's make {year} your best year yet,<br>
+          <strong>Barry Jenkins</strong><br>
+          <span style="font-size:13px;color:#888888">Legacy Home Team</span>
+        </p>
+
+      </td>
+    </tr>
+
+    <!-- Footer -->
+    <tr>
+      <td style="background:#f4f4f0;border:1px solid #e5e5e5;border-top:none;border-radius:0 0 12px 12px;padding:16px 32px;text-align:center">
+        <p style="margin:0;font-size:12px;color:#999999;line-height:1.5">
+          This link is personal to you — please don't share it. Works on your phone.<br>
+          Legacy Home Team &middot; Charlotte, NC
+        </p>
+      </td>
+    </tr>
+
+  </table>
+  </td></tr>
+</table>
+</body>
+</html>"""
+
+        plain_body = f"""Hey {first},
+
+I have one question for you: what does your best year in real estate look like?
+
+Not a vague "I want to do better" — an actual number. Because the agents who hit big years aren't the ones with the most talent. They're the ones who decided in January exactly what they were going after.
+
+"A goal properly set is halfway reached." — Zig Ziglar
+
+Here's what happens when you take 2 minutes to set your goal:
+
+✓ We calculate the exact calls and appointments you need — weekly, so it never feels overwhelming.
+✓ Your personal scorecard updates in real time so you can see your pace every week.
+✓ I use your goal to prioritize lead routing, coaching, and the support I put behind you this year.
+✓ The agents who set goals are the ones who hit them — and the ones I go to bat for.
+
+Your personal setup link (takes 2 minutes, works on your phone):
+{setup_url}
+
+{first}, the sooner you set this, the sooner the system starts working for you.
+
+Let's make {year} your best year yet,
+Barry Jenkins
+Legacy Home Team
+
+---
+This link is personal to you — please don't share it.
+"""
 
         if test_mode:
             sent.append({"agent_name": name, "email": email, "status": "preview",
@@ -2228,7 +2353,7 @@ def api_goals_send_emails():
             msg = _Mail(
                 from_email=config.EMAIL_FROM,
                 to_emails=email,
-                subject=f"Set your {year} business goals — takes 2 min",
+                subject=f"{first}, what's your {year} income goal? (2 min)",
                 html_content=html_body,
                 plain_text_content=plain_body,
             )
