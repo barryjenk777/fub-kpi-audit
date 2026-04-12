@@ -421,6 +421,333 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
     }
 
 
+def _build_command_center(audit, manager, deal_summaries, goal_data):
+    """Mentor insight engine — synthesizes all team data into actionable guidance for Barry.
+
+    Team context:
+    - Started 1/1/2026 — building phase, not yet profitable
+    - Barry = owner + main trainer + 3 other businesses (limited time)
+    - Joe = accountability coach, not a sales/real estate expert
+    - Fhalen = ISA in Philippines
+    """
+    now = datetime.now(timezone.utc)
+    year_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    days_in = max((now - year_start).days, 1)
+    month_in = round(days_in / 30.4, 1)
+
+    agents = audit.get("agents", []) if audit else []
+    totals = audit.get("totals", {}) if audit else {}
+    period = audit.get("period", {}) if audit else {}
+    thresholds = audit.get("thresholds", {}) if audit else {}
+
+    min_calls = thresholds.get("min_calls", 30)
+    min_convos = thresholds.get("min_convos", 5)
+    agent_count = max(len(agents), 1)
+
+    passed_kpi = [a for a in agents if a["evaluation"]["overall_pass"]]
+    failed_kpi = [a for a in agents if not a["evaluation"]["overall_pass"]]
+
+    total_calls = totals.get("calls", 0)
+    total_convos = totals.get("convos", 0)
+    total_appts = totals.get("appts_set", 0)
+    total_appts_met = totals.get("appts_met", 0)
+
+    total_closings = sum(d.get("closings", 0) for d in deal_summaries.values())
+    total_contracts = sum(d.get("contracts", 0) for d in deal_summaries.values())
+
+    # Conversion rates
+    c2v = round(total_convos / max(total_calls, 1) * 100)
+    v2a = round(total_appts / max(total_convos, 1) * 100)
+
+    # Funnel bottleneck
+    funnel_bottleneck = None
+    if total_calls < agent_count * min_calls * 0.6:
+        funnel_bottleneck = "volume"
+    elif c2v < 8 and total_calls > 30:
+        funnel_bottleneck = "conversations"
+    elif v2a < 15 and total_convos > 10:
+        funnel_bottleneck = "appointments"
+    elif total_appts > 2 and total_appts_met == 0:
+        funnel_bottleneck = "outcomes"
+
+    # Annual pace
+    annual_pace = round(total_closings / days_in * 365) if total_closings > 0 else 0
+    pace_target = agent_count * 10  # 10 closings/agent/year for a new team building phase
+
+    funnel = {
+        "stages": [
+            {"label": "Calls", "value": total_calls,
+             "benchmark": agent_count * min_calls,
+             "status": "green" if total_calls >= agent_count * min_calls * 0.9 else "yellow" if total_calls >= agent_count * min_calls * 0.6 else "red"},
+            {"label": "Conversations", "value": total_convos,
+             "benchmark": agent_count * min_convos,
+             "status": "green" if total_convos >= agent_count * min_convos else "yellow" if total_convos >= agent_count * min_convos * 0.6 else "red"},
+            {"label": "Appts Set", "value": total_appts,
+             "benchmark": agent_count * 2,
+             "status": "green" if total_appts >= agent_count * 2 else "yellow" if total_appts >= agent_count else "red"},
+            {"label": "Appts Met", "value": total_appts_met,
+             "benchmark": total_appts,
+             "status": "green" if total_appts_met >= total_appts * 0.7 else "yellow" if total_appts_met > 0 else ("red" if total_appts > 0 else "muted")},
+            {"label": "Contracts", "value": total_contracts,
+             "benchmark": max(1, round(agent_count * month_in / 4)),
+             "status": "green" if total_contracts > 0 else "yellow"},
+            {"label": "Closings YTD", "value": total_closings,
+             "benchmark": max(1, round(agent_count * 10 * days_in / 365)),
+             "status": "green" if total_closings >= round(agent_count * 10 * days_in / 365) else "yellow" if total_closings > 0 else "red"},
+        ],
+        "conversion_rates": {"call_to_convo": c2v, "convo_to_appt": v2a},
+        "bottleneck": funnel_bottleneck,
+    }
+
+    # 4-week trend lookup (from manager tab data)
+    trend_map = {}
+    if manager:
+        for at in manager.get("agent_trends", []):
+            trend_map[at["name"]] = at
+
+    # Agent triage
+    agent_status = []
+    quick_wins = []
+    joe_playbook = []
+
+    for a in agents:
+        name = a["name"]
+        first = name.split()[0]
+        m = a["metrics"]
+        e = a["evaluation"]
+        calls = m["outbound_calls"]
+        convos = m["conversations"]
+        appts = m["appts_set"]
+        appts_met = m["appts_met"]
+        agent_c2v = round(convos / max(calls, 1) * 100)
+        agent_v2a = round(appts / max(convos, 1) * 100)
+        ds = deal_summaries.get(name, {})
+        closings = ds.get("closings", 0)
+        contracts = ds.get("contracts", 0)
+
+        if calls == 0:
+            status = "silent"
+            insight = f"Zero calls last week. Behavior problem, not a skill problem — Joe's domain."
+            joe_playbook.append(f"📵 **{first} — Zero calls.** Ask: 'What specifically got in the way this week?' Don't accept 'I was busy' — get a concrete answer. Help them schedule a specific call block before you hang up.")
+        elif calls < min_calls * 0.4:
+            status = "low_effort"
+            insight = f"Only {calls} calls — under 40% of target. Effort issue, not skill."
+            joe_playbook.append(f"📉 **{first} — Low effort ({calls}/{min_calls} calls).** Work with them to block call time on their calendar. Report back to you each day with their count — just the number, no narrative.")
+        elif calls >= min_calls * 0.75 and convos == 0:
+            status = "skill_gap"
+            insight = f"Making {calls} calls but 0 conversations — phone isn't connecting. Wrong call times, bad numbers, or opener isn't landing."
+            quick_wins.append({"action": f"Check {first}'s call window — they're dialing but no one picks up. Shift to 4–7pm calls if they're morning-heavy. Also confirm lead list isn't stale.", "who": "Barry", "urgency": "high"})
+        elif calls >= min_calls * 0.6 and agent_c2v < 7:
+            status = "skill_gap"
+            insight = f"{calls} calls, {agent_c2v}% call-to-convo rate (needs 10-15%). Opener or list isn't working."
+            quick_wins.append({"action": f"Do a 15-min call review with {first} — listen to their last 5 calls. Almost always the first 8 seconds is where people hang up. Fix the hook.", "who": "Barry", "urgency": "high"})
+        elif convos >= min_convos and appts == 0:
+            status = "skill_gap"
+            insight = f"Having {convos} conversations but 0 appointments booked — they're not asking for the meeting."
+            quick_wins.append({"action": f"Roleplay the appointment ask with {first}. Give them the exact phrase: 'Based on what you told me I think I can help — are you free Thursday at 6pm?' Practice until it sounds natural.", "who": "Barry", "urgency": "high"})
+        elif e["overall_pass"] and (closings > 0 or contracts > 0):
+            status = "producing"
+            insight = f"Hitting KPIs and has {closings} closing(s), {contracts} contract(s). This is your anchor — protect their momentum."
+        elif e["overall_pass"]:
+            status = "solid"
+            insight = f"Meeting activity KPIs with {calls} calls and {convos} convos. Converting at {agent_c2v}% call-to-convo. No closed deals yet — watch appointment conversions."
+        else:
+            status = "developing"
+            insight = f"{calls} calls, {convos} convos — missing KPIs but showing up. Consistency is the work right now."
+            if calls > 0 and not e["overall_pass"]:
+                joe_playbook.append(f"⚠️ **{first} — Missing KPIs but making effort.** Acknowledge the activity first, then coach the gap: 'I see you're making calls — here's what would push you over the line this week.'")
+
+        agent_status.append({
+            "name": name, "first": first, "status": status, "insight": insight,
+            "calls": calls, "convos": convos, "appts": appts, "appts_met": appts_met,
+            "closings_ytd": closings, "contracts": contracts,
+            "kpi_pass": e["overall_pass"], "c2v": agent_c2v, "v2a": agent_v2a,
+        })
+
+    # Sort worst-first so Barry sees critical items at top
+    status_order = {"silent": 0, "skill_gap": 1, "low_effort": 2, "developing": 3, "solid": 4, "producing": 5}
+    agent_status.sort(key=lambda x: status_order.get(x["status"], 3))
+
+    # Priority — THE one thing this week
+    silent_agents = [a for a in agent_status if a["status"] == "silent"]
+    skill_gaps = [a for a in agent_status if a["status"] == "skill_gap"]
+
+    if len(silent_agents) >= 2:
+        names = " and ".join(a["first"] for a in silent_agents[:2])
+        priority = {
+            "title": f"{names} went completely silent — 0 calls last week",
+            "body": f"Two agents going quiet at month {month_in} is a culture signal. If there's no consequence for silence, it becomes the norm. Joe needs to reach out today — not to discipline, but to diagnose. What's blocking them? The answer tells you if you have an effort problem or a life problem.",
+            "urgency": "high", "who": "Joe — today",
+        }
+    elif len(silent_agents) == 1:
+        a = silent_agents[0]
+        priority = {
+            "title": f"{a['first']} made zero calls last week",
+            "body": f"One missed week is a yellow flag. Two is a pattern. Joe should check in today with a single question: 'What got in the way this week?' Keep it curious, not accusatory. The goal is to find the real blocker — not to create shame.",
+            "urgency": "high", "who": "Joe — today",
+        }
+    elif len(skill_gaps) > 0:
+        a = skill_gaps[0]
+        priority = {
+            "title": f"{a['first']} is putting in the work but not converting — this is a training moment",
+            "body": f"{a['insight']} Joe can't coach this — it needs you. One focused 20-minute session this week will likely move their numbers more than another week of accountability check-ins.",
+            "urgency": "medium", "who": "Barry — this week",
+        }
+    elif len(failed_kpi) > len(passed_kpi):
+        priority = {
+            "title": f"More agents missing KPIs than hitting them ({len(failed_kpi)}/{agent_count})",
+            "body": f"At month {month_in}, having over half the team below target raises a key question: do they know what to do, or are they choosing not to do it? If it's knowledge — train. If it's choice — there need to be consequences. The answer changes your entire next move.",
+            "urgency": "medium", "who": "Barry",
+        }
+    else:
+        priority = {
+            "title": f"{len(passed_kpi)}/{agent_count} agents hitting KPIs — focus on conversion quality now",
+            "body": f"Activity targets are mostly being met. The next growth lever is converting more conversations to appointments. Your team's convo-to-appt rate is {v2a}% — moving it to 25% would generate {max(0, round(total_convos * 0.25) - total_appts)} more appointments this week without anyone dialing more.",
+            "urgency": "low", "who": "Barry",
+        }
+
+    # Prophecy
+    prophecy = []
+    if annual_pace > 0:
+        sustainability = "on track toward sustainability" if annual_pace >= pace_target else f"building toward the ~{pace_target} closings/year needed to sustain the team"
+        prophecy.append(f"At your current YTD pace ({total_closings} closings in {days_in} days), you're tracking toward approximately {annual_pace} closings this year — {sustainability}.")
+    if total_contracts > 0:
+        prophecy.append(f"You have {total_contracts} contract(s) in pipeline right now. Those represent real revenue in the next 30–45 days. Make sure each agent with a contract has a clear communication cadence — this is where deals die without follow-through.")
+    if c2v < 8 and total_calls > 50:
+        prophecy.append(f"Your team's call-to-conversation rate is {c2v}% against an industry benchmark of 10–15%. Closing that gap to 10% — without anyone making a single additional call — would generate {max(0, round(total_calls * 0.10) - total_convos)} more conversations this week. That's a coaching ROI most managers miss.")
+    if month_in > 3:
+        low_momentum = [a for a in agent_status if a["status"] in ("silent", "low_effort") and a["closings_ytd"] == 0]
+        if low_momentum:
+            names = ", ".join(a["first"] for a in low_momentum[:2])
+            prophecy.append(f"Month 3–6 is where teams separate. Agents who haven't hit 1–2 closings by month 6 often don't make it to month 12 — not because they're fired, but because they self-select out. {names} {'are' if len(low_momentum)>1 else 'is'} worth watching closely in the next 60 days.")
+    prophecy.append(f"With 3 other businesses competing for your attention, the highest-leverage move is building Joe into an effective daily feedback loop. If he knows what to watch for each day, you only need 2–3 focused hours per week with the team — not 10.")
+
+    # Joe's playbook defaults
+    if not joe_playbook:
+        joe_playbook.append("✅ **Team is mostly on track.** Have Joe open Monday check-ins with one question: 'What's your call focus today?' Not last week's report — this week's intention. It shifts from accountability to coaching.")
+    joe_playbook.append(f"💡 **This week's Joe mindset:** His job is to notice and name effort, not just outcomes. An agent who made {min_calls} calls and got 0 appointments is showing up — acknowledge that before coaching the skill gap. Barry is the skill coach. Joe is the habit coach.")
+
+    # Quick wins fill-in
+    if not quick_wins:
+        quick_wins.append({"action": "Block 90 minutes this week to do live call coaching with one agent — pick the one with the best effort but worst conversion", "who": "Barry", "urgency": "high"})
+    if len(quick_wins) < 3:
+        producing = [a for a in agent_status if a["status"] == "producing"]
+        if producing:
+            quick_wins.append({"action": f"Publicly recognize {producing[0]['first']} in your team channel — they're doing the work AND closing deals. It takes 30 seconds and signals what good looks like.", "who": "Barry", "urgency": "low"})
+        else:
+            solid = [a for a in agent_status if a["status"] == "solid"]
+            if solid:
+                quick_wins.append({"action": f"Recognize {solid[0]['first']} for hitting KPIs this week — small public wins build culture.", "who": "Barry", "urgency": "low"})
+    if len(quick_wins) < 3:
+        quick_wins.append({"action": "Set a 5-minute daily morning sync with Joe — share 1 agent name and 1 thing to watch for. This costs 25 mins/week and multiplies his effectiveness 10x.", "who": "Barry", "urgency": "medium"})
+    quick_wins = quick_wins[:4]
+
+    # Narrative
+    kpi_pct = round(len(passed_kpi) / agent_count * 100)
+    parts = [f"You're {month_in} months into building this team. Last week: {total_calls} calls, {total_convos} conversations, {total_appts} appointments set — {len(passed_kpi)}/{agent_count} agents hit KPIs ({kpi_pct}%)."]
+
+    if funnel_bottleneck == "volume":
+        parts.append(f"The primary issue is volume — the team averaged {round(total_calls/agent_count)} calls per agent against a {min_calls}-call target. This is an accountability and habit problem, not a skill problem. Joe owns this.")
+    elif funnel_bottleneck == "conversations":
+        parts.append(f"Volume isn't the constraint — conversion is. The team is dialing but only converting {c2v}% of calls to conversations (benchmark: 10–15%). This is a coaching moment, not an accountability moment. It needs you.")
+    elif funnel_bottleneck == "appointments":
+        parts.append(f"Conversations are happening but appointments aren't being booked ({v2a}% convo-to-appt vs. 20–30% benchmark). Your agents are getting people talking but not asking for the meeting — the most trainable gap in the funnel.")
+    elif funnel_bottleneck == "outcomes":
+        parts.append(f"Appointments are being set ({total_appts}) but none are logged as met. Either they're not happening or no one is updating FUB. You're flying blind on your most valuable leads — fix this first.")
+
+    if total_contracts > 0 or total_closings > 0:
+        parts.append(f"There's real pipeline: {total_contracts} contract(s) and {total_closings} closing(s) YTD. The system is working when agents engage with it — that's the proof point you need to anchor your coaching.")
+
+    parts.append(f"Given your bandwidth constraints, the play is: let Joe own daily accountability (behavior), and you own conversion coaching (skill). You probably need 2–3 high-quality hours with the team per week — not a daily presence.")
+
+    narrative = " ".join(parts)
+
+    # Team health score (0–100)
+    activity_score = min(round(len(passed_kpi) / agent_count * 100), 100)
+    conversion_score = min(round(c2v / 12 * 100), 100)
+    pipeline_score = min(round((total_contracts * 50 + total_closings * 100) / max(agent_count * 100, 1) * 100), 100)
+    consistency_score = min(round(len([a for a in agent_status if a["status"] not in ("silent", "low_effort")]) / agent_count * 100), 100)
+    health_score = round(activity_score * 0.3 + conversion_score * 0.3 + pipeline_score * 0.2 + consistency_score * 0.2)
+
+    return {
+        "month_in": month_in,
+        "days_in": days_in,
+        "agent_count": agent_count,
+        "passed_kpi_count": len(passed_kpi),
+        "failed_kpi_count": len(failed_kpi),
+        "period": period,
+        "priority": priority,
+        "narrative": narrative,
+        "funnel": funnel,
+        "agent_status": agent_status,
+        "quick_wins": quick_wins,
+        "prophecy": prophecy,
+        "joe_playbook": joe_playbook,
+        "team_health": health_score,
+        "team_health_breakdown": {
+            "activity": activity_score,
+            "conversion": conversion_score,
+            "pipeline": pipeline_score,
+            "consistency": consistency_score,
+        },
+        "total_closings_ytd": total_closings,
+        "total_contracts": total_contracts,
+        "annual_pace": annual_pace,
+        "pace_target": pace_target,
+        "conversion_rates": funnel["conversion_rates"],
+    }
+
+
+@app.route("/api/command-center")
+def api_command_center():
+    """Barry's mentor briefing — synthesizes all team data into actionable guidance."""
+    force = request.args.get("force", "false").lower() == "true"
+    try:
+        if not force:
+            cached = cache_get("command_center")
+            if cached:
+                cached["from_cache"] = True
+                return jsonify(cached)
+
+        # Use cached audit/manager data where possible to avoid double-fetching
+        audit = cache_get("audit")
+        if not audit:
+            try:
+                audit = run_audit_data()
+                cache_set("audit", audit)
+            except Exception as e:
+                logger.warning("command-center: audit fetch failed: %s", e)
+                audit = {"agents": [], "totals": {}, "period": {}, "thresholds": {}}
+
+        manager = cache_get("manager")  # nice-to-have for trend data; ok if None
+
+        # Deal summaries + goals from DB
+        deal_summaries = {}
+        goal_data = {}
+        for a in (audit.get("agents", []) if audit else []):
+            name = a["name"]
+            try:
+                deal_summaries[name] = _db.get_deal_summary(name, year=datetime.now(timezone.utc).year) or {}
+            except Exception:
+                deal_summaries[name] = {}
+            try:
+                g = _db.get_goal(name)
+                if g:
+                    goal_data[name] = g
+            except Exception:
+                pass
+
+        result = _build_command_center(audit, manager, deal_summaries, goal_data)
+        result["from_cache"] = False
+        result["cached_at"] = datetime.now(timezone.utc).isoformat()
+        cache_set("command_center", result)
+        return jsonify(result)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/")
 def dashboard():
     return render_template("dashboard.html")

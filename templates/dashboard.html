@@ -150,6 +150,83 @@ button{cursor:pointer;border:none;background:none;font-family:inherit;font-size:
 .kc-cw-stats{display:flex;gap:.6rem;font-size:.72rem;color:var(--text);margin-bottom:.3rem;flex-wrap:wrap}
 .kc-cw-stats span{font-weight:600}
 .kc-cw-footer{display:flex;justify-content:space-between;align-items:center;margin-top:.3rem;font-size:.68rem;color:var(--muted)}
+/* ── COMMAND CENTER ── */
+.nav-item-cc{background:linear-gradient(135deg,#1a1a3e,#0f2d4a);color:#e2c96e!important;font-weight:700;border-left:3px solid #e2c96e;margin-bottom:.4rem;border-radius:var(--r)}
+.nav-item-cc:hover,.nav-item-cc.active{background:linear-gradient(135deg,#252550,#143860)!important}
+.cc-hero{background:linear-gradient(135deg,#1a1a3e 0%,#0f2d4a 100%);border-radius:var(--r);padding:1.4rem 1.6rem;margin-bottom:1rem;position:relative;overflow:hidden}
+.cc-hero::before{content:'';position:absolute;top:0;left:0;right:0;height:4px;background:var(--gold)}
+.cc-hero.urgency-high::before{background:#ef4444}
+.cc-hero.urgency-medium::before{background:#f59e0b}
+.cc-hero.urgency-low::before{background:#22c55e}
+.cc-hero-label{font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:rgba(255,255,255,.45);margin-bottom:.4rem}
+.cc-hero-title{font-size:1.1rem;font-weight:800;color:#fff;line-height:1.3;margin-bottom:.6rem}
+.cc-hero-body{font-size:.82rem;color:rgba(255,255,255,.8);line-height:1.6}
+.cc-hero-who{display:inline-block;margin-top:.75rem;font-size:.7rem;font-weight:700;padding:.25rem .7rem;border-radius:20px;background:rgba(255,255,255,.12);color:rgba(255,255,255,.7)}
+.cc-stat-row{display:grid;grid-template-columns:repeat(5,1fr);gap:.6rem;margin-bottom:1rem}
+.cc-stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:.8rem 1rem;text-align:center}
+.cc-stat-val{font-size:1.5rem;font-weight:800;line-height:1}
+.cc-stat-label{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:.2rem}
+.cc-two{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-bottom:1rem}
+.cc-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem}
+.cc-panel-title{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:.8rem;display:flex;align-items:center;gap:.4rem}
+.cc-narrative{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.2rem 1.4rem;margin-bottom:1rem;font-size:.85rem;line-height:1.75;color:var(--text);border-left:4px solid var(--gold)}
+.cc-narrative p{margin:.4rem 0}
+.cc-win{display:flex;gap:.75rem;padding:.65rem 0;border-bottom:1px solid var(--border)}
+.cc-win:last-child{border-bottom:none;padding-bottom:0}
+.cc-win-icon{font-size:1rem;flex-shrink:0;margin-top:.1rem}
+.cc-win-body{flex:1}
+.cc-win-action{font-size:.82rem;font-weight:600;color:var(--text);line-height:1.4}
+.cc-win-meta{font-size:.68rem;color:var(--muted);margin-top:.2rem}
+.cc-win-who{display:inline-block;padding:.1rem .5rem;border-radius:10px;font-size:.62rem;font-weight:700}
+.cc-win-who.barry{background:#1e3a5f;color:#60a5fa}
+.cc-win-who.joe{background:#1a3320;color:#4ade80}
+.cc-funnel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.2rem 1.4rem;margin-bottom:1rem}
+.cc-funnel-stages{display:flex;align-items:stretch;gap:0;margin-top:.8rem;overflow:hidden;border-radius:8px}
+.cc-funnel-stage{flex:1;text-align:center;padding:.8rem .4rem;position:relative}
+.cc-funnel-stage.s-green{background:#14532d26;border-top:3px solid #22c55e}
+.cc-funnel-stage.s-yellow{background:#78350f26;border-top:3px solid #f59e0b}
+.cc-funnel-stage.s-red{background:#7f1d1d26;border-top:3px solid #ef4444}
+.cc-funnel-stage.s-muted{background:var(--hover);border-top:3px solid var(--border)}
+.cc-fs-val{font-size:1.3rem;font-weight:800}
+.cc-fs-label{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:.15rem}
+.cc-fs-arrow{position:absolute;right:-8px;top:50%;transform:translateY(-50%);color:var(--border);font-size:.9rem;z-index:1}
+.cc-conv-rate{font-size:.6rem;color:var(--muted);margin-top:.2rem}
+.cc-agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.6rem;margin-top:.6rem}
+.cc-agent{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:.9rem 1.1rem;border-left:3px solid var(--border)}
+.cc-agent.s-silent{border-left-color:#ef4444}
+.cc-agent.s-skill_gap{border-left-color:#f59e0b}
+.cc-agent.s-low_effort{border-left-color:#f97316}
+.cc-agent.s-developing{border-left-color:#3b82f6}
+.cc-agent.s-solid{border-left-color:#22c55e}
+.cc-agent.s-producing{border-left-color:#a855f7}
+.cc-agent-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem}
+.cc-agent-name{font-weight:700;font-size:.88rem}
+.cc-agent-badge{font-size:.65rem;padding:.15rem .5rem;border-radius:10px;font-weight:700}
+.badge-silent{background:#7f1d1d;color:#fca5a5}
+.badge-skill_gap{background:#78350f;color:#fcd34d}
+.badge-low_effort{background:#7c2d12;color:#fdba74}
+.badge-developing{background:#1e3a5f;color:#93c5fd}
+.badge-solid{background:#14532d;color:#86efac}
+.badge-producing{background:#3b0764;color:#d8b4fe}
+.cc-agent-stats{display:flex;gap:.8rem;font-size:.72rem;color:var(--muted);margin-bottom:.35rem}
+.cc-agent-stats span b{color:var(--text)}
+.cc-agent-insight{font-size:.75rem;color:var(--subtle);line-height:1.5}
+.cc-prophecy{background:linear-gradient(135deg,#0f172a,#1a1a3e);border-radius:var(--r);padding:1.2rem 1.4rem;margin-bottom:1rem}
+.cc-prophecy-title{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:rgba(255,255,255,.4);margin-bottom:.8rem}
+.cc-prophecy-item{display:flex;gap:.7rem;margin-bottom:.7rem;align-items:flex-start;font-size:.82rem;color:rgba(255,255,255,.8);line-height:1.6}
+.cc-prophecy-item:last-child{margin-bottom:0}
+.cc-joe{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.1rem 1.4rem;margin-bottom:1rem;border-left:4px solid #22c55e}
+.cc-joe-item{padding:.5rem 0;border-bottom:1px solid var(--border);font-size:.82rem;line-height:1.6;color:var(--text)}
+.cc-joe-item:last-child{border-bottom:none;padding-bottom:0}
+.cc-health-ring{display:flex;align-items:center;gap:1rem;margin-bottom:.8rem}
+.cc-health-score{font-size:2.8rem;font-weight:900;line-height:1}
+.cc-health-bars{flex:1;display:flex;flex-direction:column;gap:.35rem}
+.cc-health-bar-row{display:flex;align-items:center;gap:.5rem;font-size:.68rem}
+.cc-health-bar-label{width:70px;color:var(--muted);text-align:right}
+.cc-health-bar-track{flex:1;height:6px;background:var(--hover);border-radius:3px;overflow:hidden}
+.cc-health-bar-fill{height:100%;border-radius:3px;transition:width .4s}
+.cc-refresh{font-size:.68rem;color:var(--muted);margin-top:1rem;text-align:right}
+@media(max-width:700px){.cc-stat-row{grid-template-columns:repeat(3,1fr)}.cc-two{grid-template-columns:1fr}}
 
 /* ── BADGE ── */
 .badge{display:inline-flex;align-items:center;gap:.2rem;padding:.18rem .52rem;border-radius:20px;font-size:.65rem;font-weight:700;letter-spacing:.04em;white-space:nowrap}
@@ -289,6 +366,9 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
     </div>
   </div>
   <nav class="sidebar-nav">
+    <button class="nav-item nav-item-cc" data-tab="cc" onclick="switchTab('cc')">
+      <span class="nav-icon">🧠</span> Command Center
+    </button>
     <div class="nav-section">Performance</div>
     <button class="nav-item active" data-tab="goals" onclick="switchTab('goals')">
       <span class="nav-icon">🎯</span> Goals
@@ -332,6 +412,12 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
   </div>
 
   <div class="content">
+
+    <!-- ══════════════════════════════════════ COMMAND CENTER TAB -->
+    <div class="tab-pane" id="tab-cc">
+      <div id="loading-cc" class="loading-pane"><span class="spinner"></span> Building your briefing…</div>
+      <div id="dashboard-cc" style="display:none"></div>
+    </div>
 
     <!-- ══════════════════════════════════════ GOALS TAB -->
     <div class="tab-pane active" id="tab-goals">
@@ -498,17 +584,199 @@ function switchTab(name){
   const btn=document.querySelector(`.nav-item[data-tab="${name}"]`);
   if(btn) btn.classList.add('active');
 
-  const titles={goals:'🎯 Goals — '+new Date().getFullYear(),kpi:'📊 Team KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',isa:'📞 ISA — Fhalen'};
+  const titles={cc:'🧠 Command Center',goals:'🎯 Goals — '+new Date().getFullYear(),kpi:'📊 Team KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',isa:'📞 ISA — Fhalen'};
   document.getElementById('topbar-title').textContent=titles[name]||name;
 
   if(!_loaded[name]){
     _loaded[name]=true;
-    if(name==='goals')       loadGoals();
+    if(name==='cc')          loadCommandCenter();
+    else if(name==='goals')  loadGoals();
     else if(name==='kpi')    loadAgents();
     else if(name==='manager')     loadManager();
     else if(name==='appointments') loadAppointments();
     else if(name==='isa')         loadIsa();
   }
+}
+
+/* ════════════════════════════════════════════════
+   COMMAND CENTER
+════════════════════════════════════════════════ */
+async function loadCommandCenter(force){
+  const ld=document.getElementById('loading-cc'),db=document.getElementById('dashboard-cc');
+  ld.style.display='flex';db.style.display='none';
+  try{
+    const url=force?'/api/command-center?force=true':'/api/command-center';
+    const r=await fetch(url,{signal:AbortSignal.timeout(120000)});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    db.innerHTML=buildCommandCenter(d);
+  }catch(e){
+    db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not build briefing</div><div class="alert-body">${e.message}</div></div></div>`;
+    db.style.display='block';
+  }
+  ld.style.display='none';db.style.display='block';
+}
+
+function buildCommandCenter(d){
+  const STATUS_LABEL={silent:'Silent 🔴',skill_gap:'Skill Gap ⚠️',low_effort:'Low Effort 🟠',developing:'Developing 🔵',solid:'On Target ✅',producing:'Producing 🟣'};
+  const URGENCY_ICON={high:'🚨',medium:'⚡',low:'✅'};
+  const WIN_ICON={high:'🔥',medium:'⚡',low:'💡'};
+  let h='';
+
+  // ── Header stat strip ──
+  const closingsColor=d.total_closings_ytd>0?'c-green':'c-red';
+  const kpiColor=d.passed_kpi_count===d.agent_count?'c-green':d.passed_kpi_count>0?'c-yellow':'c-red';
+  const healthColor=d.team_health>=70?'c-green':d.team_health>=45?'c-yellow':'c-red';
+  h+=`<div class="cc-stat-row">
+    <div class="cc-stat"><div class="cc-stat-val c-gold">${d.month_in}</div><div class="cc-stat-label">Months In</div></div>
+    <div class="cc-stat"><div class="cc-stat-val">${d.agent_count}</div><div class="cc-stat-label">Agents</div></div>
+    <div class="cc-stat"><div class="cc-stat-val ${kpiColor}">${d.passed_kpi_count}/${d.agent_count}</div><div class="cc-stat-label">KPI Pass</div></div>
+    <div class="cc-stat"><div class="cc-stat-val ${closingsColor}">${d.total_closings_ytd}</div><div class="cc-stat-label">Closings YTD</div></div>
+    <div class="cc-stat"><div class="cc-stat-val ${healthColor}">${d.team_health}</div><div class="cc-stat-label">Team Health</div></div>
+  </div>`;
+
+  // ── Priority hero card ──
+  const p=d.priority||{};
+  h+=`<div class="cc-hero urgency-${p.urgency||'low'}">
+    <div class="cc-hero-label">${URGENCY_ICON[p.urgency||'low']} Priority — ${(d.period?.start||'')} – ${(d.period?.end||'')}</div>
+    <div class="cc-hero-title">${p.title||'Team is on track'}</div>
+    <div class="cc-hero-body">${p.body||''}</div>
+    ${p.who?`<div class="cc-hero-who">👤 ${p.who}</div>`:''}
+  </div>`;
+
+  // ── Narrative briefing ──
+  h+=`<div class="cc-narrative"><p>${(d.narrative||'').replace(/\. ([A-Z])/g,'.</p><p>$1')}</p></div>`;
+
+  // ── Two columns: Quick Wins + Joe's Playbook ──
+  const wins=d.quick_wins||[];
+  const joe=d.joe_playbook||[];
+  const urgencyOrder={high:0,medium:1,low:2};
+  const sortedWins=[...wins].sort((a,b)=>(urgencyOrder[a.urgency]||1)-(urgencyOrder[b.urgency]||1));
+
+  h+=`<div class="cc-two">
+    <div class="cc-panel">
+      <div class="cc-panel-title">⚡ Quick Wins This Week</div>`;
+  sortedWins.forEach(w=>{
+    const icon=WIN_ICON[w.urgency||'medium'];
+    const whoClass=(w.who||'').toLowerCase().includes('joe')?'joe':'barry';
+    h+=`<div class="cc-win">
+      <div class="cc-win-icon">${icon}</div>
+      <div class="cc-win-body">
+        <div class="cc-win-action">${w.action}</div>
+        <div class="cc-win-meta"><span class="cc-win-who ${whoClass}">→ ${w.who||'Barry'}</span></div>
+      </div>
+    </div>`;
+  });
+  h+=`</div>
+    <div class="cc-panel">
+      <div class="cc-panel-title">👔 Joe's Playbook This Week</div>`;
+  joe.forEach(j=>{
+    // Render **bold** markdown
+    const rendered=j.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>');
+    h+=`<div class="cc-joe-item">${rendered}</div>`;
+  });
+  h+=`</div>
+  </div>`;
+
+  // ── Funnel ──
+  const funnel=d.funnel||{};
+  const stages=funnel.stages||[];
+  const cr=funnel.conversion_rates||{};
+  const bottleneck=funnel.bottleneck;
+  h+=`<div class="cc-funnel">
+    <div class="cc-panel-title">📊 Activity Funnel${bottleneck?` — <span style="color:var(--yellow)">bottleneck: ${bottleneck}</span>`:''}</div>
+    <div style="display:flex;gap:.6rem;font-size:.72rem;color:var(--muted);margin-bottom:.6rem;flex-wrap:wrap">
+      <span>Call→Convo: <b style="color:var(--text)">${cr.call_to_convo||0}%</b> <span style="color:var(--muted)">(benchmark 10–15%)</span></span>
+      <span>·</span>
+      <span>Convo→Appt: <b style="color:var(--text)">${cr.convo_to_appt||0}%</b> <span style="color:var(--muted)">(benchmark 20–30%)</span></span>
+    </div>
+    <div class="cc-funnel-stages">`;
+  stages.forEach((s,i)=>{
+    const isLast=i===stages.length-1;
+    const pct=s.benchmark>0?Math.min(Math.round(s.value/s.benchmark*100),200):0;
+    h+=`<div class="cc-funnel-stage s-${s.status||'muted'}">
+      <div class="cc-fs-val">${s.value}</div>
+      <div class="cc-fs-label">${s.label}</div>
+      <div class="cc-conv-rate">${pct}% of target</div>
+      ${!isLast?'<div class="cc-fs-arrow">›</div>':''}
+    </div>`;
+  });
+  h+=`</div></div>`;
+
+  // ── Agent status grid ──
+  const agentStatus=d.agent_status||[];
+  h+=`<div class="cc-panel" style="margin-bottom:1rem">
+    <div class="cc-panel-title">👥 Agent Status — ${d.period?.start||''} – ${d.period?.end||''}</div>
+    <div class="cc-agent-grid">`;
+  agentStatus.forEach(a=>{
+    const label=STATUS_LABEL[a.status]||a.status;
+    h+=`<div class="cc-agent s-${a.status}">
+      <div class="cc-agent-head">
+        <div class="cc-agent-name">${a.name}</div>
+        <span class="cc-agent-badge badge-${a.status}">${label}</span>
+      </div>
+      <div class="cc-agent-stats">
+        <span><b>${a.calls}</b> calls</span>
+        <span><b>${a.convos}</b> convos</span>
+        <span><b>${a.appts}</b> appts</span>
+        ${a.closings_ytd>0?`<span><b>${a.closings_ytd}</b> closed</span>`:''}
+        ${a.contracts>0?`<span><b>${a.contracts}</b> under contract</span>`:''}
+      </div>
+      <div class="cc-agent-insight">${a.insight}</div>
+    </div>`;
+  });
+  h+=`</div></div>`;
+
+  // ── Team Health breakdown ──
+  const hb=d.team_health_breakdown||{};
+  const hScore=d.team_health||0;
+  const hColor=hScore>=70?'#22c55e':hScore>=45?'#f59e0b':'#ef4444';
+  const hBars=[
+    {label:'Activity',val:hb.activity||0,color:'#3b82f6'},
+    {label:'Conversion',val:hb.conversion||0,color:'#f59e0b'},
+    {label:'Pipeline',val:hb.pipeline||0,color:'#a855f7'},
+    {label:'Consistency',val:hb.consistency||0,color:'#22c55e'},
+  ];
+  h+=`<div class="cc-two">
+    <div class="cc-panel">
+      <div class="cc-panel-title">💪 Team Health Score</div>
+      <div class="cc-health-ring">
+        <div class="cc-health-score" style="color:${hColor}">${hScore}</div>
+        <div class="cc-health-bars">`;
+  hBars.forEach(b=>{
+    h+=`<div class="cc-health-bar-row">
+      <div class="cc-health-bar-label">${b.label}</div>
+      <div class="cc-health-bar-track"><div class="cc-health-bar-fill" style="width:${b.val}%;background:${b.color}"></div></div>
+      <span style="font-size:.68rem;color:var(--muted);width:28px">${b.val}</span>
+    </div>`;
+  });
+  h+=`</div></div>
+      <div style="font-size:.72rem;color:var(--muted);line-height:1.5">Activity × 30% · Conversion × 30% · Pipeline × 20% · Consistency × 20%</div>
+    </div>
+    <div class="cc-panel">
+      <div class="cc-panel-title">📈 YTD Pace</div>
+      ${d.annual_pace>0?`<div style="font-size:2rem;font-weight:800;color:var(--gold);margin-bottom:.4rem">~${d.annual_pace}</div><div style="font-size:.78rem;color:var(--muted)">projected closings this year</div>`:'<div style="font-size:.85rem;color:var(--muted)">No closings recorded yet — pace will appear once first deal closes.</div>'}
+      ${d.total_contracts>0?`<div style="margin-top:.8rem;font-size:.82rem"><b style="color:var(--text)">${d.total_contracts}</b> <span style="color:var(--muted)">contracts in pipeline</span></div>`:''}
+      ${d.annual_pace>0?`<div style="margin-top:.5rem;font-size:.75rem;color:var(--muted)">Target: ~${d.pace_target} closings/year for ${d.agent_count} agents</div>`:''}
+    </div>
+  </div>`;
+
+  // ── Prophecy ──
+  const prophecy=d.prophecy||[];
+  if(prophecy.length){
+    h+=`<div class="cc-prophecy">
+      <div class="cc-prophecy-title">🔮 What's Coming — Read This</div>`;
+    prophecy.forEach(p=>{
+      h+=`<div class="cc-prophecy-item"><span style="font-size:1.1rem;flex-shrink:0">›</span><span>${p}</span></div>`;
+    });
+    h+=`</div>`;
+  }
+
+  // ── Refresh footer ──
+  const ts=d.cached_at?new Date(d.cached_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'';
+  h+=`<div class="cc-refresh">Last updated ${ts} &nbsp;·&nbsp; <a href="#" onclick="loadCommandCenter(true);return false" style="color:var(--gold)">Force Refresh</a></div>`;
+
+  return h;
 }
 
 // ── HELPERS ──
