@@ -62,7 +62,7 @@ def _send_email(to_email: str, subject: str, text_body: str,
       <a href="{dashboard_url}"
          style="display:inline-block;background:#f5a623;color:#0d1117;padding:13px 32px;
                 border-radius:8px;text-decoration:none;font-weight:800;font-size:14px">
-        Log My Numbers →
+        View My Dashboard →
       </a>
     </div>"""
 
@@ -357,9 +357,9 @@ def nudge_agent(agent_name: str, nudge_type: str, email: str,
 
     subject = _subject(nudge_type, ctx)
 
-    # Include dashboard link button on actionable nudges
+    # Include dashboard link button whenever we have a URL
     dashboard_url = ctx.get("dashboard_url", "")
-    show_btn = nudge_type in ("missed_day", "streak_break")
+    show_btn = bool(dashboard_url)
 
     try:
         result = _send_email(
