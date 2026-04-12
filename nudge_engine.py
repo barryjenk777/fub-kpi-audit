@@ -401,9 +401,10 @@ def run_morning_nudges(dry_run: bool = False):
     ytd_cache = _db.get_ytd_cache(year=today.year)
 
     # For weekend reflections: pull Mon–yesterday of this week
+    # today.weekday(): Mon=0 … Sat=5, Sun=6 → subtracting weekday() always lands on Monday
     week_data = {}
     if is_weekend:
-        week_start = today - timedelta(days=today.weekday() + 1)  # last Monday
+        week_start = today - timedelta(days=today.weekday())  # this Monday
         week_data  = _db.get_team_activity_range(week_start, yesterday)
 
     # Build yesterday's leaderboard (calls + texts + appts*3)
@@ -782,6 +783,48 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
     top_calls    = weekly_top["calls"]
     is_top_week  = weekly_rank == 1
     is_bot_week  = weekly_rank == team_size
+
+    # ── No-goals path: push them to set goals + recap the week ───────────────
+    if not has_goals:
+        setup_url   = ctx.get("dashboard_url", "")
+        setup_line  = f"\n\nTakes 3 minutes: {setup_url}" if setup_url else ""
+        next_target = max(weekly_team_avg, 10) if weekly_calls == 0 else min(
+            weekly_calls + max(round(weekly_calls * 0.25), 3), top_calls + 5
+        )
+
+        if weekly_calls == 0:
+            week_recap = (
+                f"The team averaged {weekly_team_avg} calls this week. "
+                f"{top_first} led with {top_calls}. "
+                f"Your activity didn't make it into the system — but the week is done and Monday is almost here."
+            )
+        else:
+            week_recap = (
+                f"This week: {weekly_calls} call{'s' if weekly_calls != 1 else ''}"
+                f"{(', ' + str(weekly_appts) + ' appointment' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
+                f"#{weekly_rank} of {team_size} on the team. "
+                f"{top_first} led with {top_calls}. Team average: {weekly_team_avg}."
+            )
+
+        who_close = f"\n\n{who.capitalize()} is the whole reason the number matters. Set it." if who else ""
+
+        subject = random.choice([
+            f"Before Monday hits — one thing, {first}",
+            f"New week tomorrow. Your goals still aren't set, {first}.",
+            f"The team ran {weekly_team_avg} calls this week. Where are you headed, {first}?",
+        ])
+        body = (
+            f"{week_recap}\n\n"
+            f"Here's what I've seen in the agents who have their biggest years: "
+            f"they all had a specific number they were chasing. Not 'work harder' — an actual target. "
+            f"GCI goal, weekly call count, appointments per month. "
+            f"The agents without a number work hard but drift. "
+            f"Effort without direction feels like a lot for results that don't add up.\n\n"
+            f"You haven't set yours yet. Before Monday starts, take 3 minutes and do it.{setup_line}\n\n"
+            f"This week's anchor: {next_target} conversations. That's your only number. Go.{who_close}"
+        )
+        return subject, body
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Goal section (weekly version)
     goal_section = ""
