@@ -69,15 +69,6 @@ button{cursor:pointer;border:none;font-family:inherit}
 .log-circle.partial{border-color:var(--yellow);background:var(--yellow-bg)}
 .log-val{font-size:1.3rem;font-weight:800;line-height:1}
 .log-target{font-size:.62rem;color:var(--muted)}
-.log-input-row{display:flex;align-items:center;gap:.5rem;margin-top:.3rem}
-.log-input-row label{font-size:.72rem;color:var(--muted);white-space:nowrap}
-.log-number{width:64px;background:#0a0f1a;border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);font-size:.95rem;font-weight:700;padding:.4rem .5rem;text-align:center;outline:none;-moz-appearance:textfield}
-.log-number::-webkit-outer-spin-button,.log-number::-webkit-inner-spin-button{-webkit-appearance:none}
-.log-number:focus{border-color:var(--gold)}
-.btn-log{width:100%;background:var(--gold);color:#080c14;font-size:.9rem;font-weight:800;border-radius:var(--r-sm);padding:.75rem;transition:opacity .15s}
-.btn-log:hover{opacity:.9}
-.btn-log:disabled{opacity:.4;cursor:not-allowed}
-.log-saved{text-align:center;font-size:.8rem;color:var(--green);margin-top:.5rem;min-height:1.1rem}
 
 /* Streak card */
 .streak-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem;margin-bottom:.9rem;display:flex;align-items:center;justify-content:space-between}
@@ -173,12 +164,13 @@ button{cursor:pointer;border:none;font-family:inherit}
       <div class="streak-flame" id="streak-icon">🔥</div>
     </div>
 
-    <!-- Log today -->
+    <!-- Today's activity (read-only — synced from FUB) -->
     <div class="log-card">
       <div class="log-title">
-        Log Today's Activity
+        Today's Activity
         <span class="log-date" id="log-date"></span>
       </div>
+      <div style="font-size:.75rem;color:var(--muted);text-align:center;margin-bottom:.75rem">Synced from Follow Up Boss</div>
 
       <div class="log-grid">
         <div class="log-item">
@@ -187,18 +179,12 @@ button{cursor:pointer;border:none;font-family:inherit}
             <div class="log-val" id="circle-calls-val">0</div>
             <div class="log-target" id="circle-calls-target">/ 20</div>
           </div>
-          <div class="log-input-row">
-            <input class="log-number" type="number" id="inp-calls" min="0" value="0" oninput="updateCircles()">
-          </div>
         </div>
         <div class="log-item">
           <div class="log-label">💬 Texts</div>
           <div class="log-circle" id="circle-texts">
             <div class="log-val" id="circle-texts-val">0</div>
             <div class="log-target" id="circle-texts-target">/ 5</div>
-          </div>
-          <div class="log-input-row">
-            <input class="log-number" type="number" id="inp-texts" min="0" value="0" oninput="updateCircles()">
           </div>
         </div>
         <div class="log-item">
@@ -207,14 +193,8 @@ button{cursor:pointer;border:none;font-family:inherit}
             <div class="log-val" id="circle-appts-val">0</div>
             <div class="log-target" id="circle-appts-target">/ 1</div>
           </div>
-          <div class="log-input-row">
-            <input class="log-number" type="number" id="inp-appts" min="0" step="0.5" value="0" oninput="updateCircles()">
-          </div>
         </div>
       </div>
-
-      <button class="btn-log" id="btn-log" onclick="logActivity()">Save Today's Numbers</button>
-      <div class="log-saved" id="log-saved"></div>
     </div>
 
     <!-- Chain calendar -->
@@ -354,7 +334,7 @@ function renderStreak(streak) {
   if (cur > 0) document.getElementById('hdr-streak').style.display = 'flex';
 }
 
-// ── Today logging ─────────────────────────────────────────────────
+// ── Today activity (read-only, FUB-synced) ────────────────────────
 
 function renderTodayLog(today, ident) {
   const calls = today?.calls || 0;
@@ -364,80 +344,18 @@ function renderTodayLog(today, ident) {
   const textsT = ident?.daily_texts_target || 5;
   const apptsT = ident?.daily_appts_target || 1;
 
-  document.getElementById('inp-calls').value = calls;
-  document.getElementById('inp-texts').value = texts;
-  document.getElementById('inp-appts').value = appts;
-
   document.getElementById('circle-calls-target').textContent = '/ ' + callsT;
   document.getElementById('circle-texts-target').textContent = '/ ' + textsT;
   document.getElementById('circle-appts-target').textContent = '/ ' + apptsT;
 
-  const now = new Date();
-  document.getElementById('log-date').textContent = now.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
-
-  updateCircles();
-}
-
-function updateCircles() {
-  const callsT = _identity?.daily_calls_target || 20;
-  const textsT = _identity?.daily_texts_target || 5;
-  const apptsT = _identity?.daily_appts_target || 1;
-
-  [
-    ['calls', callsT],
-    ['texts', textsT],
-    ['appts', apptsT],
-  ].forEach(([key, target]) => {
-    const val = parseFloat(document.getElementById(`inp-${key}`)?.value) || 0;
+  [['calls', calls, callsT], ['texts', texts, textsT], ['appts', appts, apptsT]].forEach(([key, val, target]) => {
     document.getElementById(`circle-${key}-val`).textContent = val;
     const circle = document.getElementById(`circle-${key}`);
     circle.className = 'log-circle' + (val >= target ? ' hit' : val > 0 ? ' partial' : '');
   });
-}
 
-async function logActivity() {
-  const btn = document.getElementById('btn-log');
-  const saved = document.getElementById('log-saved');
-  btn.disabled = true;
-  btn.textContent = '⏳ Saving…';
-  const calls = parseFloat(document.getElementById('inp-calls').value) || 0;
-  const texts = parseFloat(document.getElementById('inp-texts').value) || 0;
-  const appts = parseFloat(document.getElementById('inp-appts').value) || 0;
-  try {
-    const res = await fetch(`/api/goals/my-goals/${TOKEN}/log`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({calls, texts, appts}),
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error('Failed to save');
-    saved.textContent = '✅ Saved!';
-    // Update streak live
-    if (data.streak) {
-      renderStreak(data.streak);
-      if (_data) _data.streak = data.streak;
-    }
-    // Refresh chain
-    if (_data) {
-      _data.today = {calls, texts, appts};
-      renderChain(_data.activity_log, _data.identity);
-    }
-    showToast(streakMessage(data.streak?.current_streak || 0, calls));
-    setTimeout(() => { saved.textContent = ''; }, 3000);
-  } catch(e) {
-    saved.textContent = '❌ Error saving. Try again.';
-    saved.style.color = 'var(--red)';
-  }
-  btn.disabled = false;
-  btn.textContent = 'Save Today\'s Numbers';
-}
-
-function streakMessage(streak, calls) {
-  if (streak >= 21) return `Day ${streak}. Science says that's a habit now. 🏆`;
-  if (streak >= 7)  return `${streak} days straight. You're building something real. 🔥`;
-  if (streak >= 3)  return `${streak} days in a row. Keep the chain going. ⚡`;
-  if (calls > 0)    return `Day 1 of a new streak. Every great run starts here.`;
-  return '✅ Activity logged.';
+  const now = new Date();
+  document.getElementById('log-date').textContent = now.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
 }
 
 // ── Chain calendar ────────────────────────────────────────────────
