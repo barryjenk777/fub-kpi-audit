@@ -351,6 +351,74 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
   .two-col{grid-template-columns:1fr}
   .kc-metrics{grid-template-columns:repeat(2,1fr)}
 }
+
+/* ── Command Center lean layout ─────────────────────────── */
+.cc-section-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #d4a843;
+  margin: 0 0 8px 0;
+}
+.cc-briefing {
+  background: rgba(255,255,255,0.04);
+  border-left: 3px solid #d4a843;
+  border-radius: 6px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+.cc-briefing-text {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: #e8e8e8;
+  margin: 0;
+}
+.cc-guidance {
+  background: rgba(212,168,67,0.08);
+  border: 1px solid rgba(212,168,67,0.3);
+  border-radius: 8px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+}
+.cc-guidance-action {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f0d080;
+  margin: 0 0 6px 0;
+}
+.cc-guidance-why {
+  font-size: 0.85rem;
+  color: #aaa;
+  margin: 0 0 8px 0;
+  line-height: 1.5;
+}
+.cc-block {
+  background: rgba(255,255,255,0.03);
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin-bottom: 18px;
+}
+.cc-insights-block {
+  border-left: 3px solid rgba(100,180,255,0.4);
+}
+.cc-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 0.875rem;
+  color: #d0d0d0;
+  line-height: 1.5;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.cc-list-item:last-child { border-bottom: none; }
+.cc-bullet {
+  font-size: 1rem;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.cc-bullet-gold { color: #d4a843; }
 </style>
 </head>
 <body>
@@ -618,164 +686,61 @@ async function loadCommandCenter(force){
 }
 
 function buildCommandCenter(d){
-  const STATUS_LABEL={silent:'Silent 🔴',skill_gap:'Skill Gap ⚠️',low_effort:'Low Effort 🟠',developing:'Developing 🔵',solid:'On Target ✅',producing:'Producing 🟣'};
-  const URGENCY_ICON={high:'🚨',medium:'⚡',low:'✅'};
-  const WIN_ICON={high:'🔥',medium:'⚡',low:'💡'};
+  const s=d.stats||{};
+  const kpiCol=s.passed===s.total?'c-green':s.passed>0?'c-yellow':'c-red';
+  const paceCol=s.annual_pace>=s.pace_target?'c-green':s.annual_pace>0?'c-yellow':'c-red';
   let h='';
 
-  // ── Header stat strip ──
-  const closingsColor=d.total_closings_ytd>0?'c-green':'c-red';
-  const kpiColor=d.passed_kpi_count===d.agent_count?'c-green':d.passed_kpi_count>0?'c-yellow':'c-red';
-  const healthColor=d.team_health>=70?'c-green':d.team_health>=45?'c-yellow':'c-red';
+  // ── 4 headline numbers ──────────────────────────────────────────────────────
   h+=`<div class="cc-stat-row">
-    <div class="cc-stat"><div class="cc-stat-val c-gold">${d.month_in}</div><div class="cc-stat-label">Months In</div></div>
-    <div class="cc-stat"><div class="cc-stat-val">${d.agent_count}</div><div class="cc-stat-label">Agents</div></div>
-    <div class="cc-stat"><div class="cc-stat-val ${kpiColor}">${d.passed_kpi_count}/${d.agent_count}</div><div class="cc-stat-label">KPI Pass</div></div>
-    <div class="cc-stat"><div class="cc-stat-val ${closingsColor}">${d.total_closings_ytd}</div><div class="cc-stat-label">Closings YTD</div></div>
-    <div class="cc-stat"><div class="cc-stat-val ${healthColor}">${d.team_health}</div><div class="cc-stat-label">Team Health</div></div>
+    <div class="cc-stat"><div class="cc-stat-val c-gold">${d.month_in}</div><div class="cc-stat-label">Month</div></div>
+    <div class="cc-stat"><div class="cc-stat-val ${kpiCol}">${s.passed}/${s.total}</div><div class="cc-stat-label">KPI Pass</div></div>
+    <div class="cc-stat"><div class="cc-stat-val">${s.c2v}%</div><div class="cc-stat-label">Call→Convo</div></div>
+    <div class="cc-stat"><div class="cc-stat-val ${s.closings_ytd>0?'c-green':'c-red'}">${s.closings_ytd}</div><div class="cc-stat-label">Closings YTD</div></div>
+    <div class="cc-stat"><div class="cc-stat-val ${paceCol}">${s.annual_pace||'—'}</div><div class="cc-stat-label">Proj. Closings</div></div>
   </div>`;
 
-  // ── Priority hero card ──
-  const p=d.priority||{};
-  h+=`<div class="cc-hero urgency-${p.urgency||'low'}">
-    <div class="cc-hero-label">${URGENCY_ICON[p.urgency||'low']} Priority — ${(d.period?.start||'')} – ${(d.period?.end||'')}</div>
-    <div class="cc-hero-title">${p.title||'Team is on track'}</div>
-    <div class="cc-hero-body">${p.body||''}</div>
-    ${p.who?`<div class="cc-hero-who">👤 ${p.who}</div>`:''}
+  // ── Briefing ────────────────────────────────────────────────────────────────
+  h+=`<div class="cc-briefing">
+    <div class="cc-section-label">📋 The Briefing &nbsp;<span style="font-weight:400;opacity:.55">${d.period?.start||''} – ${d.period?.end||''}</span></div>
+    <div class="cc-briefing-text">${d.briefing||''}</div>
   </div>`;
 
-  // ── Narrative briefing ──
-  h+=`<div class="cc-narrative"><p>${(d.narrative||'').replace(/\. ([A-Z])/g,'.</p><p>$1')}</p></div>`;
-
-  // ── Two columns: Quick Wins + Joe's Playbook ──
-  const wins=d.quick_wins||[];
-  const joe=d.joe_playbook||[];
-  const urgencyOrder={high:0,medium:1,low:2};
-  const sortedWins=[...wins].sort((a,b)=>(urgencyOrder[a.urgency]||1)-(urgencyOrder[b.urgency]||1));
-
-  h+=`<div class="cc-two">
-    <div class="cc-panel">
-      <div class="cc-panel-title">⚡ Quick Wins This Week</div>`;
-  sortedWins.forEach(w=>{
-    const icon=WIN_ICON[w.urgency||'medium'];
-    const whoClass=(w.who||'').toLowerCase().includes('joe')?'joe':'barry';
-    h+=`<div class="cc-win">
-      <div class="cc-win-icon">${icon}</div>
-      <div class="cc-win-body">
-        <div class="cc-win-action">${w.action}</div>
-        <div class="cc-win-meta"><span class="cc-win-who ${whoClass}">→ ${w.who||'Barry'}</span></div>
-      </div>
-    </div>`;
-  });
-  h+=`</div>
-    <div class="cc-panel">
-      <div class="cc-panel-title">👔 Joe's Playbook This Week</div>`;
-  joe.forEach(j=>{
-    // Render **bold** markdown
-    const rendered=j.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>');
-    h+=`<div class="cc-joe-item">${rendered}</div>`;
-  });
-  h+=`</div>
+  // ── Guidance ────────────────────────────────────────────────────────────────
+  const g=d.guidance||{};
+  const whoClass=(g.who||'').toLowerCase()==='joe'?'joe':'barry';
+  h+=`<div class="cc-guidance">
+    <div class="cc-section-label">🎯 Your Move This Week</div>
+    <div class="cc-guidance-action">${g.action||''}</div>
+    <div class="cc-guidance-why">${g.why||''}</div>
+    <div style="margin-top:.6rem"><span class="cc-win-who ${whoClass}">→ ${g.who||'Barry'}</span></div>
   </div>`;
 
-  // ── Funnel ──
-  const funnel=d.funnel||{};
-  const stages=funnel.stages||[];
-  const cr=funnel.conversion_rates||{};
-  const bottleneck=funnel.bottleneck;
-  h+=`<div class="cc-funnel">
-    <div class="cc-panel-title">📊 Activity Funnel${bottleneck?` — <span style="color:var(--yellow)">bottleneck: ${bottleneck}</span>`:''}</div>
-    <div style="display:flex;gap:.6rem;font-size:.72rem;color:var(--muted);margin-bottom:.6rem;flex-wrap:wrap">
-      <span>Call→Convo: <b style="color:var(--text)">${cr.call_to_convo||0}%</b> <span style="color:var(--muted)">(benchmark 10–15%)</span></span>
-      <span>·</span>
-      <span>Convo→Appt: <b style="color:var(--text)">${cr.convo_to_appt||0}%</b> <span style="color:var(--muted)">(benchmark 20–30%)</span></span>
-    </div>
-    <div class="cc-funnel-stages">`;
-  stages.forEach((s,i)=>{
-    const isLast=i===stages.length-1;
-    const pct=s.benchmark>0?Math.min(Math.round(s.value/s.benchmark*100),200):0;
-    h+=`<div class="cc-funnel-stage s-${s.status||'muted'}">
-      <div class="cc-fs-val">${s.value}</div>
-      <div class="cc-fs-label">${s.label}</div>
-      <div class="cc-conv-rate">${pct}% of target</div>
-      ${!isLast?'<div class="cc-fs-arrow">›</div>':''}
-    </div>`;
-  });
-  h+=`</div></div>`;
-
-  // ── Agent status grid ──
-  const agentStatus=d.agent_status||[];
-  h+=`<div class="cc-panel" style="margin-bottom:1rem">
-    <div class="cc-panel-title">👥 Agent Status — ${d.period?.start||''} – ${d.period?.end||''}</div>
-    <div class="cc-agent-grid">`;
-  agentStatus.forEach(a=>{
-    const label=STATUS_LABEL[a.status]||a.status;
-    h+=`<div class="cc-agent s-${a.status}">
-      <div class="cc-agent-head">
-        <div class="cc-agent-name">${a.name}</div>
-        <span class="cc-agent-badge badge-${a.status}">${label}</span>
-      </div>
-      <div class="cc-agent-stats">
-        <span><b>${a.calls}</b> calls</span>
-        <span><b>${a.convos}</b> convos</span>
-        <span><b>${a.appts}</b> appts</span>
-        ${a.closings_ytd>0?`<span><b>${a.closings_ytd}</b> closed</span>`:''}
-        ${a.contracts>0?`<span><b>${a.contracts}</b> under contract</span>`:''}
-      </div>
-      <div class="cc-agent-insight">${a.insight}</div>
-    </div>`;
-  });
-  h+=`</div></div>`;
-
-  // ── Team Health breakdown ──
-  const hb=d.team_health_breakdown||{};
-  const hScore=d.team_health||0;
-  const hColor=hScore>=70?'#22c55e':hScore>=45?'#f59e0b':'#ef4444';
-  const hBars=[
-    {label:'Activity',val:hb.activity||0,color:'#3b82f6'},
-    {label:'Conversion',val:hb.conversion||0,color:'#f59e0b'},
-    {label:'Pipeline',val:hb.pipeline||0,color:'#a855f7'},
-    {label:'Consistency',val:hb.consistency||0,color:'#22c55e'},
-  ];
-  h+=`<div class="cc-two">
-    <div class="cc-panel">
-      <div class="cc-panel-title">💪 Team Health Score</div>
-      <div class="cc-health-ring">
-        <div class="cc-health-score" style="color:${hColor}">${hScore}</div>
-        <div class="cc-health-bars">`;
-  hBars.forEach(b=>{
-    h+=`<div class="cc-health-bar-row">
-      <div class="cc-health-bar-label">${b.label}</div>
-      <div class="cc-health-bar-track"><div class="cc-health-bar-fill" style="width:${b.val}%;background:${b.color}"></div></div>
-      <span style="font-size:.68rem;color:var(--muted);width:28px">${b.val}</span>
-    </div>`;
-  });
-  h+=`</div></div>
-      <div style="font-size:.72rem;color:var(--muted);line-height:1.5">Activity × 30% · Conversion × 30% · Pipeline × 20% · Consistency × 20%</div>
-    </div>
-    <div class="cc-panel">
-      <div class="cc-panel-title">📈 YTD Pace</div>
-      ${d.annual_pace>0?`<div style="font-size:2rem;font-weight:800;color:var(--gold);margin-bottom:.4rem">~${d.annual_pace}</div><div style="font-size:.78rem;color:var(--muted)">projected closings this year</div>`:'<div style="font-size:.85rem;color:var(--muted)">No closings recorded yet — pace will appear once first deal closes.</div>'}
-      ${d.total_contracts>0?`<div style="margin-top:.8rem;font-size:.82rem"><b style="color:var(--text)">${d.total_contracts}</b> <span style="color:var(--muted)">contracts in pipeline</span></div>`:''}
-      ${d.annual_pace>0?`<div style="margin-top:.5rem;font-size:.75rem;color:var(--muted)">Target: ~${d.pace_target} closings/year for ${d.agent_count} agents</div>`:''}
-    </div>
-  </div>`;
-
-  // ── Prophecy ──
-  const prophecy=d.prophecy||[];
-  if(prophecy.length){
-    h+=`<div class="cc-prophecy">
-      <div class="cc-prophecy-title">🔮 What's Coming — Read This</div>`;
-    prophecy.forEach(p=>{
-      h+=`<div class="cc-prophecy-item"><span style="font-size:1.1rem;flex-shrink:0">›</span><span>${p}</span></div>`;
+  // ── Projections ─────────────────────────────────────────────────────────────
+  const proj=d.projections||[];
+  if(proj.length){
+    h+=`<div class="cc-block">
+      <div class="cc-section-label">📈 Projections</div>`;
+    proj.forEach(p=>{
+      h+=`<div class="cc-list-item"><span class="cc-bullet">›</span><span>${p}</span></div>`;
     });
     h+=`</div>`;
   }
 
-  // ── Refresh footer ──
+  // ── Insights ────────────────────────────────────────────────────────────────
+  const ins=d.insights||[];
+  if(ins.length){
+    h+=`<div class="cc-block cc-insights-block">
+      <div class="cc-section-label">💡 Insights</div>`;
+    ins.forEach(i=>{
+      h+=`<div class="cc-list-item"><span class="cc-bullet cc-bullet-gold">›</span><span>${i}</span></div>`;
+    });
+    h+=`</div>`;
+  }
+
+  // ── Refresh footer ──────────────────────────────────────────────────────────
   const ts=d.cached_at?new Date(d.cached_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'';
   h+=`<div class="cc-refresh">Last updated ${ts} &nbsp;·&nbsp; <a href="#" onclick="loadCommandCenter(true);return false" style="color:var(--gold)">Force Refresh</a></div>`;
-
   return h;
 }
 
