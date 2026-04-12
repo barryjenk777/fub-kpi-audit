@@ -1750,16 +1750,26 @@ def save_goal_with_history(agent_name, year, **kwargs):
 # Nudge Log
 # ---------------------------------------------------------------------------
 
-def log_nudge(agent_name, nudge_type, message_content, twilio_sid=None, status="sent"):
+def log_nudge(agent_name, nudge_type, message_content, twilio_sid=None, status="sent", arc=None):
+    """
+    Log a sent nudge. If `arc` is provided, prepend 'arc:ARCNAME|' to
+    message_content so get_recent_arcs() can reconstruct the arc history.
+    """
     if not is_available():
         return False
     try:
+        # Encode arc name into message_content so arc history is queryable
+        # without a schema change. Format: "arc:ARCNAME|original_content"
+        if arc:
+            stored_content = "arc:" + arc + "|" + (message_content or "")
+        else:
+            stored_content = message_content
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO nudge_log (agent_name, nudge_type, message_content, twilio_sid, status)
                     VALUES (%s,%s,%s,%s,%s)
-                """, (agent_name, nudge_type, message_content, twilio_sid, status))
+                """, (agent_name, nudge_type, stored_content, twilio_sid, status))
         return True
     except Exception as e:
         logger.warning("log_nudge failed: %s", e)
@@ -1883,3 +1893,144 @@ def mark_followup_sent(followup_id, days):
     except Exception as e:
         logger.warning("mark_followup_sent failed: %s", e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Arc Engine support functions (Phase 4)
+# ---------------------------------------------------------------------------
+
+def get_activity_trend(agent_name, days=7):
+    """
+    Compare the agent's last N days of call activity vs. the prior N days.
+    Returns 'improving', 'declining', 'stagnant', or 'unknown'.
+
+    improving  : recent avg > prior avg * 1.15
+    declining  : recent avg < prior avg * 0.85
+    stagnant   : everything else (including both zero)
+    unknown    : not enough data
+    """
+    if not is_available():
+        return "unknown"
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT activity_date, calls_logged
+                    FROM   daily_activity
+                    WHERE  agent_name = %s
+                      AND  activity_date >= CURRENT_DATE - INTERVAL '%s days'
+                    ORDER  BY activity_date DESC
+                """ % ("%s", days * 2), (agent_name,))
+                rows = cur.fetchall()
+
+        if not rows or len(rows) < days:
+            return "unknown"
+
+        # rows are newest-first; split into recent and prior windows
+        recent_rows = [r[1] for r in rows[:days]]
+        prior_rows  = [r[1] for r in rows[days:days * 2]]
+
+        if not prior_rows:
+            return "unknown"
+
+        recent_avg = sum(recent_rows) / len(recent_rows)
+        prior_avg  = sum(prior_rows)  / len(prior_rows)
+
+        # Both zero — no data to trend
+        if recent_avg == 0 and prior_avg == 0:
+            return "unknown"
+
+        # Prior was zero but recent has something — improving
+        if prior_avg == 0 and recent_avg > 0:
+            return "improving"
+
+        ratio = recent_avg / prior_avg
+        if ratio > 1.15:
+            return "improving"
+        if ratio < 0.85:
+            return "declining"
+        return "stagnant"
+
+    except Exception as e:
+        logger.warning("get_activity_trend failed for %s: %s", agent_name, e)
+        return "unknown"
+
+
+def get_recent_arcs(agent_name, days=7):
+    """
+    Return arc names used in the last N days for this agent, most recent first.
+
+    Reads from nudge_log where message_content starts with 'arc:ARCNAME|'.
+    This encoding is written by log_nudge() when arc= is provided.
+
+    Returns a list of arc name strings, e.g. ['scoreboard', 'identity', 'comeback'].
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT message_content, sent_at
+                    FROM   nudge_log
+                    WHERE  agent_name = %s
+                      AND  nudge_type = 'morning'
+                      AND  sent_at   >= NOW() - INTERVAL '%s days'
+                      AND  message_content LIKE 'arc:%%'
+                    ORDER  BY sent_at DESC
+                """ % ("%s", days), (agent_name,))
+                rows = cur.fetchall()
+
+        arcs = []
+        for (content, _sent_at) in rows:
+            # Format: "arc:ARCNAME|..."
+            if content and content.startswith("arc:"):
+                rest = content[4:]  # strip "arc:"
+                pipe_idx = rest.find("|")
+                arc_name = rest[:pipe_idx] if pipe_idx >= 0 else rest
+                if arc_name:
+                    arcs.append(arc_name)
+
+        return arcs
+
+    except Exception as e:
+        logger.warning("get_recent_arcs failed for %s: %s", agent_name, e)
+        return []
+
+
+def get_agent_recent_closings(agent_name, days=60):
+    """
+    Return recent closings from deal_log for an agent.
+
+    Returns list of dicts: [{deal_name, gci_estimated, close_date}, ...]
+    sorted by close_date descending. Used by run_closing_milestones() to
+    detect new closings that haven't yet received a milestone email.
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT deal_name, gci_estimated, close_date, id
+                    FROM   deal_log
+                    WHERE  agent_name = %s
+                      AND  stage      = 'closing'
+                      AND  close_date >= CURRENT_DATE - INTERVAL '%s days'
+                    ORDER  BY close_date DESC
+                """ % ("%s", days), (agent_name,))
+                rows = cur.fetchall()
+
+        result = []
+        for (deal_name, gci_estimated, close_date, deal_id) in rows:
+            result.append({
+                "deal_name":      deal_name or "",
+                "gci_estimated":  float(gci_estimated) if gci_estimated else 0.0,
+                "close_date":     close_date.isoformat() if close_date else None,
+                "deal_id":        deal_id,
+            })
+        return result
+
+    except Exception as e:
+        logger.warning("get_agent_recent_closings failed for %s: %s", agent_name, e)
+        return []

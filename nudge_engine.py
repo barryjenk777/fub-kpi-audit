@@ -24,6 +24,7 @@ import random
 from datetime import date, datetime, timezone, timedelta
 
 import db as _db
+import arc_engine as _arc
 
 logger = logging.getLogger(__name__)
 
@@ -451,6 +452,9 @@ def run_morning_nudges(dry_run: bool = False):
 
         worked_weekend = is_weekend and agent["score"] > 0
 
+        # Arc tracking — fetch before building email so we can avoid repeats
+        selected_arc = None
+
         if is_weekend and not worked_weekend:
             # Weekly reflection email — how was their week vs. the team
             weekly_rank = next(
@@ -477,12 +481,41 @@ def run_morning_nudges(dry_run: bool = False):
                 team_size=team_size,
             )
         else:
-            # Normal weekday email
-            subject, body_text = _sassy_morning_copy(
-                ctx=ctx, rank=rank, team_size=team_size,
-                calls=agent["calls"], appts=agent["appts"], texts=agent["texts"],
-                team_avg_calls=team_avg_calls, top_agent=top_agent, day_name=day_name,
+            # Normal weekday email — use the Arc Engine (Phase 4)
+            trend_data   = _db.get_activity_trend(name)
+            recent_arcs  = _db.get_recent_arcs(name, days=7)
+            deal_summary = _db.get_deal_summary(name, year=today.year) or {}
+            streak_data  = _db.get_streak(name) or {}
+
+            situation = _arc.detect_situation(
+                agent_ctx=ctx,
                 goal_ctx=goal_ctx,
+                deal_summary=deal_summary,
+                streak_data=streak_data,
+                rank=rank,
+                team_size=team_size,
+                calls=agent["calls"],
+                trend_data=trend_data,
+            )
+
+            selected_arc = _arc.select_arc(situation, recent_arcs)
+            tone         = random.choice(["funny", "serious"])
+
+            subject, body_text = _arc.build_arc_email(
+                arc=selected_arc,
+                ctx=ctx,
+                situation=situation,
+                goal_ctx=goal_ctx,
+                deal_summary=deal_summary,
+                tone=tone,
+                top_agent=top_agent,
+                team_avg=team_avg_calls,
+                day_name=day_name,
+            )
+
+            logger.info(
+                "Arc engine [%s/%s] %s → arc=%s tone=%s",
+                rank, team_size, name, selected_arc, tone,
             )
 
         html = _build_morning_html(body_text, leads, ctx.get("dashboard_url", ""))
@@ -498,15 +531,127 @@ def run_morning_nudges(dry_run: bool = False):
                 )
                 msg.personalizations[0].add_cc(_Email(EMAIL_FROM))
                 SendGridAPIClient(api_key).send(msg)
-            _db.log_nudge(name, "morning", subject, status="sent" if not dry_run else "dry_run")
+            send_status = "sent" if not dry_run else "dry_run"
+            _db.log_nudge(name, "morning", subject, status=send_status, arc=selected_arc)
             logger.info("Morning nudge [#%d/%d] → %s | %s", rank, team_size, name, subject[:60])
             sent += 1
         except Exception as e:
-            _db.log_nudge(name, "morning", subject, status="failed")
+            _db.log_nudge(name, "morning", subject, status="failed", arc=selected_arc)
             logger.warning("Morning nudge failed for %s: %s", name, e)
 
     logger.info("run_morning_nudges: sent %d emails", sent)
     return sent
+
+
+def run_closing_milestones(dry_run=False):
+    """
+    Called once daily (alongside morning nudges) to detect new closings
+    and send a closing celebration email for each one not yet nudged.
+
+    Checks nudge_log for existing 'milestone_closing' entries to avoid
+    double-sending. Uses arc_engine.build_closing_milestone_email() for copy.
+    """
+    today = date.today()
+    year  = today.year
+
+    # Pull all active agents with emails
+    profiles = _db.get_agent_profiles(active_only=True)
+    if not profiles:
+        return 0
+
+    all_goals  = {g["agent_name"]: g for g in _db.get_all_goals(year=year)}
+    ytd_cache  = _db.get_ytd_cache(year=year)
+
+    sent = 0
+
+    for profile in profiles:
+        name  = profile["agent_name"]
+        email = profile["email"]
+        if not email:
+            continue
+
+        # Get closings from last 60 days for this agent
+        recent_closings = _db.get_agent_recent_closings(name, days=60)
+        if not recent_closings:
+            continue
+
+        for deal in recent_closings:
+            deal_id   = deal.get("deal_id")
+            close_date = deal.get("close_date", "")
+
+            # Build a unique milestone key: "milestone_closing:DEAL_ID"
+            # Check nudge_log to see if we already celebrated this deal
+            milestone_key = "milestone_closing"
+            deal_marker   = str(deal_id) if deal_id else (deal.get("deal_name", "")[:40])
+            # We encode deal_id in the message_content check
+            counts = _db.get_nudge_counts_today(name)  # not used for milestone — check differently
+
+            already_sent = _check_milestone_sent(name, deal_marker)
+            if already_sent:
+                continue
+
+            # Build email
+            ctx          = _ctx(name)
+            deal_summary = _db.get_deal_summary(name, year=year) or {}
+            goal_ctx     = _build_goal_ctx(name, all_goals, ytd_cache, 0)
+
+            subject, body_text = _arc.build_closing_milestone_email(
+                ctx=ctx,
+                deal=deal,
+                deal_summary=deal_summary,
+                goal_ctx=goal_ctx,
+            )
+
+            html = _build_morning_html(body_text, [], ctx.get("dashboard_url", ""))
+            log_content = "milestone_deal:" + deal_marker + "|" + subject
+
+            try:
+                if not dry_run:
+                    api_key = os.environ.get("SENDGRID_API_KEY")
+                    from sendgrid import SendGridAPIClient
+                    from sendgrid.helpers.mail import Mail, Email as _Email
+                    msg = Mail(
+                        from_email=EMAIL_FROM, to_emails=email,
+                        subject=subject, plain_text_content=body_text, html_content=html,
+                    )
+                    msg.personalizations[0].add_cc(_Email(EMAIL_FROM))
+                    SendGridAPIClient(api_key).send(msg)
+                _db.log_nudge(name, milestone_key, log_content,
+                              status="sent" if not dry_run else "dry_run")
+                logger.info("Closing milestone → %s | %s | %s", name, deal_marker, subject[:60])
+                sent += 1
+            except Exception as e:
+                _db.log_nudge(name, milestone_key, log_content, status="failed")
+                logger.warning("Closing milestone failed for %s: %s", name, e)
+
+    logger.info("run_closing_milestones: sent %d emails", sent)
+    return sent
+
+
+def _check_milestone_sent(agent_name, deal_marker):
+    """
+    Return True if we've already sent a milestone_closing email for this deal.
+    Checks nudge_log for a message_content containing 'milestone_deal:DEAL_MARKER|'.
+    """
+    if not _db.is_available():
+        return False
+    try:
+        import db as db_mod
+        with db_mod.get_conn() as conn:
+            with conn.cursor() as cur:
+                search = "milestone_deal:" + deal_marker + "|%"
+                cur.execute("""
+                    SELECT COUNT(*) FROM nudge_log
+                    WHERE  agent_name   = %s
+                      AND  nudge_type   = 'milestone_closing'
+                      AND  message_content LIKE %s
+                      AND  status NOT IN ('failed')
+                """, (agent_name, search))
+                row = cur.fetchone()
+        return bool(row and row[0] > 0)
+    except Exception as e:
+        logger.warning("_check_milestone_sent failed: %s", e)
+        return False
 
 
 def _build_goal_ctx(agent_name, all_goals, ytd_cache, calls_yesterday):
