@@ -2813,25 +2813,7 @@ def api_agent_hero(token):
     return jsonify({"headline": headline, "subline": subline, "color": color, "emoji": emoji, "arc": last_arc})
 
 
-@app.route("/api/goals/my-goals/<token>/log", methods=["POST"])
-def api_agent_log_activity(token):
-    """Agent logs today's activity (calls, texts, appts)."""
-    agent_name = _db.resolve_goal_token(token)
-    if not agent_name:
-        return jsonify({"error": "Invalid token"}), 403
-    body = request.json or {}
-    from datetime import date as _date
-    ok = _db.log_daily_activity(
-        agent_name=agent_name,
-        activity_date=_date.today(),
-        calls=int(body.get("calls", 0)),
-        texts=int(body.get("texts", 0)),
-        appts=float(body.get("appts", 0)),
-    )
-    if ok:
-        _db.update_streak(agent_name)
-    streak = _db.get_streak(agent_name)
-    return jsonify({"success": ok, "streak": streak})
+    # Manual activity logging removed — numbers auto-sync from FUB nightly.
 
 
 # ---- Manager goals dashboard ----
