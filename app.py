@@ -3236,6 +3236,19 @@ def api_goals_nudge_context(agent_name):
     })
 
 
+@app.route("/api/admin/trigger-morning-nudges", methods=["POST"])
+def api_trigger_morning_nudges():
+    """One-time manual trigger for morning nudges (e.g. after a crash recovery)."""
+    try:
+        import nudge_engine as _nudge
+        sent_morning  = _nudge.run_morning_nudges()
+        sent_closing  = _nudge.run_closing_milestones()
+        return jsonify({"success": True, "morning_nudges": sent_morning, "closing_milestones": sent_closing})
+    except Exception as e:
+        logger.error("Manual nudge trigger failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/admin/nudge-audit")
 def api_admin_nudge_audit():
     """Full readiness audit: agents, goals, yesterday's activity, tokens, nudge log."""

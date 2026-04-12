@@ -90,6 +90,7 @@ def _send_email(to_email: str, subject: str, text_body: str,
 </div>
 </body></html>"""
 
+    from sendgrid.helpers.mail import Email as _Email
     msg = Mail(
         from_email=EMAIL_FROM,
         to_emails=to_email,
@@ -97,6 +98,8 @@ def _send_email(to_email: str, subject: str, text_body: str,
         plain_text_content=text_body,
         html_content=html_body,
     )
+    # Barry is always CC'd on every nudge so he sees exactly what agents receive
+    msg.personalizations[0].add_cc(_Email(EMAIL_FROM))
 
     sg = SendGridAPIClient(api_key)
     resp = sg.send(msg)
