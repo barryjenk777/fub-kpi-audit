@@ -2215,6 +2215,143 @@ def api_agent_dashboard(token):
     })
 
 
+@app.route("/api/goals/my-goals/<token>/hero")
+def api_agent_hero(token):
+    """
+    Return a dynamic hero banner message for the agent's personal dashboard.
+    Mirrors the arc/vibe of their most recent morning nudge, layered with
+    current streak, pace, and situation for maximum relevance.
+    """
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return jsonify({"error": "Invalid token"}), 403
+
+    import hashlib as _hashlib, random as _rng_mod
+    year       = datetime.now().year
+    goal       = _db.get_goal(agent_name, year=year)
+    streak_d   = _db.get_streak(agent_name) or {}
+    today_act  = _db.get_todays_activity(agent_name) or {}
+    recent_arcs = _db.get_recent_arcs(agent_name, days=3)
+    last_arc   = recent_arcs[0] if recent_arcs else None
+
+    # Pace calculation (mirrors api_agent_dashboard)
+    pace_status = "gray"
+    pace_pct    = 0.0
+    if goal:
+        ytd    = _db.get_ytd_cache(year=year)
+        a      = ytd.get(agent_name, {})
+        from db import get_closing_counts as _gcc
+        closing_counts = _gcc(agent_name, year=year)
+        actuals = {
+            "calls_ytd":    a.get("calls_ytd", 0),
+            "appts_ytd":    a.get("appts_ytd", 0),
+            "closings_ytd": closing_counts.get("closings", 0),
+        }
+        targets    = _db.compute_targets(goal)
+        pace       = _db.compute_pace(goal, targets, actuals)
+        pace_status = pace.get("overall_status", "gray")
+        pace_pct    = float(pace.get("overall_pct", 0))
+
+    current_streak = int(streak_d.get("current_streak", 0))
+
+    # Deterministic-per-day seed so the hero is stable if they reload
+    _seed = int(_hashlib.md5(
+        f"{agent_name}{datetime.now().date().isoformat()}".encode()
+    ).hexdigest(), 16) % 10_000_000
+    rng = _rng_mod.Random(_seed)
+
+    # ── Arc-specific hero copy (primary driver = today's email arc) ─────────
+    _arc_heroes = {
+        "identity": [
+            ("THIS IS WHO YOU ARE.",
+             "Show up. Do the work. Let the identity take care of the rest.",
+             "gold", "⚡"),
+            ("THE CONSISTENT ONE SHOWS UP.",
+             "Not sometimes. Not when motivated. Every single day.",
+             "gold", "💎"),
+        ],
+        "purpose": [
+            ("REMEMBER WHY YOU STARTED.",
+             "Your why is bigger than any bad week — and bigger than your best one.",
+             "purple", "🎯"),
+            ("THE WORK IS THE POINT.",
+             "Every call is a chance to change someone's life. Including yours.",
+             "purple", "🔑"),
+        ],
+        "scoreboard": [
+            ("THE BOARD DOESN'T LIE.",
+             "Here's where you stand. The agents above you aren't smarter. They just make more calls.",
+             "blue", "📊"),
+            ("YOUR RANK IS A CHOICE.",
+             "Every missed call is a vote for someone else's spot.",
+             "blue", "📈"),
+        ],
+        "compound": [
+            ("SMALL DAYS BUILD BIG YEARS.",
+             "20 calls today × 250 days = 5,000 conversations. You're not skipping a call. You're skipping 100 chances.",
+             "blue", "🧱"),
+            ("THE MATH WORKS IF YOU DO.",
+             "Consistency isn't exciting. It's just the only thing that actually works.",
+             "blue", "📐"),
+        ],
+        "comeback": [
+            ("EVERY CHAMPION HAS THIS CHAPTER.",
+             "The best agents on this team have all been here. The question is what you do next.",
+             "yellow", "🏆"),
+            ("THIS IS WHERE IT TURNS AROUND.",
+             "Not next week. Not Monday. Right now, with the next call you make.",
+             "yellow", "↩️"),
+        ],
+        "elite": [
+            ("TOP OF THE BOARD. DEFEND IT.",
+             "You've earned your spot. Now show everyone it wasn't an accident.",
+             "green", "🥇"),
+            ("ELITE ISN'T A TITLE. IT'S A DECISION.",
+             "Made daily. One call at a time.",
+             "green", "⚡"),
+        ],
+        "deal_math": [
+            ("THE MATH IS SIMPLE. THE DOING ISN'T.",
+             "Every call you skip is a pitch you let go by. You don't know how many you'll get. Swing.",
+             "gold", "⚾"),
+            ("KNOW YOUR NUMBER. HIT YOUR NUMBER.",
+             "The agents who close the most aren't smarter. They just tracked the math and did the work.",
+             "gold", "🔢"),
+        ],
+    }
+    _default_heroes = [
+        ("LET'S GET TO WORK.", "Your team is counting. So is that family that needs to sell their house.", "gold", "⚡"),
+        ("MAKE YOUR CALLS.", "The simplest instruction. The hardest habit. The only thing that changes the year.", "gold", "📞"),
+        ("THE WORK IS THE ANSWER.", "Every problem you're facing right now has the same solution: make the next call.", "gold", "💡"),
+    ]
+
+    if last_arc and last_arc in _arc_heroes:
+        headline, subline, color, emoji = rng.choice(_arc_heroes[last_arc])
+    else:
+        headline, subline, color, emoji = rng.choice(_default_heroes)
+
+    # ── Situational overlays (evaluated highest-priority-first) ─────────────
+    if current_streak >= 10:
+        headline = f"🔥 {current_streak} DAYS STRAIGHT."
+        subline  = "You're building something most agents only talk about. Don't stop now."
+        color = "gold"; emoji = "🔥"
+    elif current_streak >= 5:
+        headline = f"{current_streak} DAYS IN A ROW."
+        subline  = "Streak agents outsell everyone else — not because they're smarter, but because they show up."
+        color = "gold"; emoji = "🔥"
+
+    if pace_status == "green" and pace_pct >= 110:
+        headline = "AHEAD OF PACE."
+        subline  = "You're running hot. This is what a great year feels like. Stay locked in."
+        color = "green"; emoji = "✅"
+    elif pace_status == "red" and pace_pct < 60:
+        headline = "TIME TO CLOSE THE GAP."
+        subline  = "Behind pace, but the year isn't over. It closes today — one call at a time."
+        color = "red"; emoji = "🎯"
+
+    return jsonify({"headline": headline, "subline": subline, "color": color, "emoji": emoji, "arc": last_arc})
+
+
 @app.route("/api/goals/my-goals/<token>/log", methods=["POST"])
 def api_agent_log_activity(token):
     """Agent logs today's activity (calls, texts, appts)."""
@@ -2843,6 +2980,7 @@ def api_goals_scorecard():
     all_goals      = _db.get_all_goals(year=year)
     deal_summaries = _db.get_deal_summary(year=year)
     profiles       = {p["agent_name"]: p for p in _db.get_agent_profiles()}
+    base_url       = os.environ.get("BASE_URL", "").rstrip("/")
 
     # Read from cache (populated by scheduled job or the force_refresh above)
     ytd_cache     = _db.get_ytd_cache(year=year)
@@ -2865,16 +3003,20 @@ def api_goals_scorecard():
         goal    = goals_map.get(agent)
         profile = profiles.get(agent, {})
 
+        _token = _db.get_token_for_agent(agent)
+        _my_goals_url = f"{base_url}/my-goals/{_token}" if (base_url and _token) else ""
+
         if not goal:
             # Agent has a profile but hasn't set their goals yet
             scorecard.append({
-                "agent_name": agent,
-                "email":      profile.get("email", ""),
-                "goal":       None,
-                "targets":    {},
-                "actuals":    {"calls_ytd": 0, "appts_ytd": 0,
-                               "contracts_ytd": 0, "closings_ytd": 0, "gci_ytd": 0},
-                "pace":       _empty_pace,
+                "agent_name":   agent,
+                "email":        profile.get("email", ""),
+                "goal":         None,
+                "targets":      {},
+                "actuals":      {"calls_ytd": 0, "appts_ytd": 0,
+                                 "contracts_ytd": 0, "closings_ytd": 0, "gci_ytd": 0},
+                "pace":         _empty_pace,
+                "my_goals_url": _my_goals_url,
             })
             continue
 
@@ -2890,12 +3032,13 @@ def api_goals_scorecard():
         }
         pace = _db.compute_pace(goal, targets, actuals)
         scorecard.append({
-            "agent_name": agent,
-            "email":      profile.get("email", ""),
-            "goal":       goal,
-            "targets":    targets,
-            "actuals":    actuals,
-            "pace":       pace,
+            "agent_name":   agent,
+            "email":        profile.get("email", ""),
+            "goal":         goal,
+            "targets":      targets,
+            "actuals":      actuals,
+            "pace":         pace,
+            "my_goals_url": _my_goals_url,
         })
 
     # Sort: red → yellow → green → no-goal (gray)

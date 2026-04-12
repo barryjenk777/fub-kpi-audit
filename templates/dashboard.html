@@ -559,7 +559,7 @@ function renderGoalCards(rows){
 
   let html='';
   withGoal.forEach(row=>{
-    const {agent_name,email,goal,targets,actuals,pace}=row;
+    const {agent_name,email,goal,targets,actuals,pace,my_goals_url}=row;
     const st=pace.overall_status||'gray';
     const stLabel={green:'🟢 On Pace',yellow:'🟡 At Risk',red:'🔴 Off Track',gray:'⚫ No Data'}[st]||'';
     const badgeCls={green:'badge-green',yellow:'badge-yellow',red:'badge-red',gray:'badge-gray'}[st]||'badge-gray';
@@ -575,8 +575,11 @@ function renderGoalCards(rows){
     const lastActiveHtml=lastActive
       ?`<span style="font-size:.63rem;color:${inactiveFlag?'var(--red)':'var(--muted)'}">Last active: ${_daysAgoLabel(lastActive)}${inactiveFlag?' ⚠':''}</span>`
       :'';
+    const cardClick=my_goals_url?`onclick="if(!event.target.closest('button')){window.open('${my_goals_url}','_blank')}"`:'' ;
+    const cardStyle=my_goals_url?'cursor:pointer':'';
+    const viewHtml=my_goals_url?`<button class="btn btn-ghost btn-sm" style="flex:1;font-size:.68rem" onclick="window.open('${my_goals_url}','_blank');event.stopPropagation()">👤 View Page</button>`:'';
 
-    html+=`<div class="goal-card ${st}">
+    html+=`<div class="goal-card ${st}" style="${cardStyle}" ${cardClick}>
       <div class="gc-head">
         <div>
           <div class="gc-name">${agent_name}${streakHtml}</div>
@@ -609,8 +612,9 @@ function renderGoalCards(rows){
         </div>
       </div>
       <div style="margin-top:.75rem;display:flex;gap:.4rem">
-        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:.68rem" onclick="openNudgeModal('${agent_name}')">📱 Send Nudge</button>
-        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:.68rem" onclick="copyOneLink('${agent_name}')">🔗 Copy Link</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:.68rem" onclick="openNudgeModal('${agent_name}');event.stopPropagation()">📱 Send Nudge</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:.68rem" onclick="copyOneLink('${agent_name}');event.stopPropagation()">🔗 Copy Link</button>
+        ${viewHtml}
       </div>
     </div>`;
   });
@@ -618,14 +622,18 @@ function renderGoalCards(rows){
   noGoal.forEach(row=>{
     const streak=streakMap[row.agent_name]||{};
     const daysInactive=streak.last_activity_date?Math.floor((Date.now()-new Date(streak.last_activity_date).getTime())/86400000):null;
-    html+=`<div class="no-goal-card">
+    const ngUrl=row.my_goals_url||'';
+    const ngClick=ngUrl?`onclick="if(!event.target.closest('button')){window.open('${ngUrl}','_blank')}"`:'' ;
+    const ngStyle=ngUrl?'cursor:pointer':'';
+    html+=`<div class="no-goal-card" style="${ngStyle}" ${ngClick}>
       <div>
         <div class="no-goal-name">${row.agent_name}</div>
         <div class="no-goal-sub">${row.email||'No goals set yet'}${daysInactive&&daysInactive>=3?` · ⚠ inactive ${daysInactive}d`:''}</div>
       </div>
       <div style="display:flex;gap:.3rem">
-        <button class="btn btn-ghost btn-sm" onclick="openNudgeModal('${row.agent_name}')">📱</button>
-        <button class="btn btn-ghost btn-sm" onclick="copyOneLink('${row.agent_name}')">Send Link</button>
+        <button class="btn btn-ghost btn-sm" onclick="openNudgeModal('${row.agent_name}');event.stopPropagation()">📱</button>
+        <button class="btn btn-ghost btn-sm" onclick="copyOneLink('${row.agent_name}');event.stopPropagation()">Send Link</button>
+        ${ngUrl?`<button class="btn btn-ghost btn-sm" onclick="window.open('${ngUrl}','_blank');event.stopPropagation()">👤</button>`:''}
       </div>
     </div>`;
   });

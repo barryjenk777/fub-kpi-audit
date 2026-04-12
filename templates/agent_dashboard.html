@@ -120,6 +120,26 @@ button{cursor:pointer;border:none;font-family:inherit}
 /* Loading */
 .skeleton{background:linear-gradient(90deg,var(--surface2) 25%,var(--surface3) 50%,var(--surface2) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:8px}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* Hero banner */
+.hero-banner{padding:1.4rem 1.25rem 1.2rem;position:relative;overflow:hidden;border-bottom:1px solid var(--border)}
+.hero-banner::before{content:'';position:absolute;inset:0;opacity:.07;background:radial-gradient(ellipse at 20% 50%,#fff 0%,transparent 70%)}
+.hero-banner.color-gold{background:linear-gradient(135deg,rgba(245,166,35,.18) 0%,rgba(245,166,35,.06) 100%);border-left:4px solid var(--gold)}
+.hero-banner.color-green{background:linear-gradient(135deg,rgba(16,185,129,.18) 0%,rgba(16,185,129,.06) 100%);border-left:4px solid var(--green)}
+.hero-banner.color-red{background:linear-gradient(135deg,rgba(239,68,68,.18) 0%,rgba(239,68,68,.06) 100%);border-left:4px solid var(--red)}
+.hero-banner.color-yellow{background:linear-gradient(135deg,rgba(245,158,11,.18) 0%,rgba(245,158,11,.06) 100%);border-left:4px solid var(--yellow)}
+.hero-banner.color-blue{background:linear-gradient(135deg,rgba(59,130,246,.18) 0%,rgba(59,130,246,.06) 100%);border-left:4px solid var(--blue)}
+.hero-banner.color-purple{background:linear-gradient(135deg,rgba(139,92,246,.18) 0%,rgba(139,92,246,.06) 100%);border-left:4px solid var(--purple)}
+.hero-emoji{font-size:1.5rem;margin-bottom:.4rem;display:block}
+.hero-headline{font-size:1.35rem;font-weight:900;line-height:1.1;letter-spacing:.02em;color:var(--text);margin-bottom:.45rem;text-transform:uppercase}
+.hero-banner.color-gold .hero-headline{color:var(--gold)}
+.hero-banner.color-green .hero-headline{color:var(--green)}
+.hero-banner.color-red .hero-headline{color:var(--red)}
+.hero-banner.color-yellow .hero-headline{color:var(--yellow)}
+.hero-banner.color-blue .hero-headline{color:var(--blue)}
+.hero-banner.color-purple .hero-headline{color:var(--purple)}
+.hero-subline{font-size:.84rem;color:var(--text);opacity:.85;line-height:1.55;max-width:480px}
+.hero-loading{padding:1.2rem 1.25rem;border-bottom:1px solid var(--border)}
 </style>
 </head>
 <body>
@@ -141,6 +161,15 @@ button{cursor:pointer;border:none;font-family:inherit}
   <div class="view-tab active" onclick="switchView('daily')">Today</div>
   <div class="view-tab" onclick="switchView('weekly')">This Week</div>
   <div class="view-tab" onclick="switchView('annual')">Big Picture</div>
+</div>
+
+<!-- ── HERO BANNER ── -->
+<div id="hero-wrap" class="hero-loading" style="display:none">
+  <div class="hero-banner color-gold" id="hero-inner">
+    <span class="hero-emoji" id="hero-emoji">⚡</span>
+    <div class="hero-headline" id="hero-headline">Loading…</div>
+    <div class="hero-subline" id="hero-subline"></div>
+  </div>
 </div>
 
 <div class="container">
@@ -267,9 +296,30 @@ let _identity = {};
 
 // ── Init ──────────────────────────────────────────────────────────
 
+async function loadHero() {
+  try {
+    const res = await fetch(`/api/goals/my-goals/${TOKEN}/hero`);
+    if (!res.ok) return;
+    const h = await res.json();
+    const wrap = document.getElementById('hero-wrap');
+    const inner = document.getElementById('hero-inner');
+    document.getElementById('hero-emoji').textContent = h.emoji || '⚡';
+    document.getElementById('hero-headline').textContent = h.headline || '';
+    document.getElementById('hero-subline').textContent = h.subline || '';
+    // Apply color class
+    inner.className = `hero-banner color-${h.color || 'gold'}`;
+    wrap.style.display = 'block';
+  } catch(e) {
+    // Hero is enhancement-only — silent fail is fine
+  }
+}
+
 async function loadDashboard() {
   try {
-    const res = await fetch(`/api/goals/my-goals/${TOKEN}`);
+    const [res] = await Promise.all([
+      fetch(`/api/goals/my-goals/${TOKEN}`),
+      loadHero(),
+    ]);
     if (!res.ok) throw new Error('Failed to load');
     _data = await res.json();
     renderAll();
