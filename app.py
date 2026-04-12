@@ -517,7 +517,7 @@ def _build_command_center(audit, manager, deal_summaries, goal_data):
         names = " & ".join(a["name"].split()[0] for a in silent[:2])
         guidance = {
             "action": f"Have Joe call {names} today — not to discipline, to diagnose.",
-            "why": f"{'They've' if len(silent)>1 else 'They've'} gone completely quiet. "
+            "why": f"{'They have' if len(silent)>1 else 'They have'} gone completely quiet. "
                    f"One week of silence at month {month_in} is a yellow flag. "
                    f"Two in a row becomes a pattern the rest of the team notices.",
             "who": "Joe"
