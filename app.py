@@ -2676,6 +2676,55 @@ def api_goals_nudge_context(agent_name):
     })
 
 
+@app.route("/api/admin/nudge-audit")
+def api_admin_nudge_audit():
+    """Full readiness audit: agents, goals, yesterday's activity, tokens, nudge log."""
+    from datetime import date, timedelta
+    if not _db.is_available():
+        return jsonify({"error": "DB not available"}), 503
+
+    profiles  = _db.get_agent_profiles(active_only=True)
+    all_goals = {g["agent_name"]: g for g in _db.get_all_goals(year=date.today().year)}
+    team_data = _db.get_team_activity_yesterday()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    agents = []
+    for p in profiles:
+        name  = p["agent_name"]
+        g     = all_goals.get(name, {})
+        gci   = float(g.get("gci_goal", 0) or 0)
+        act   = team_data.get(name, {})
+        token = _db.get_goal_token(name) or ""
+        counts = _db.get_nudge_counts_today(name)
+        why   = _db.get_agent_why(name) or {}
+        agents.append({
+            "agent_name":    name,
+            "email":         p.get("email") or "",
+            "has_goal":      bool(gci),
+            "gci_goal":      gci,
+            "has_why":       bool(why.get("why_statement") or why.get("who_benefits")),
+            "has_token":     bool(token),
+            "yesterday_calls":  int(act.get("calls", 0) or 0),
+            "yesterday_texts":  int(act.get("texts", 0) or 0),
+            "yesterday_appts":  int(act.get("appts", 0) or 0),
+            "nudge_sent_today": counts.get("morning", 0) > 0,
+        })
+
+    import os as _os
+    return jsonify({
+        "audit_date":      date.today().isoformat(),
+        "yesterday":       yesterday,
+        "agent_count":     len(agents),
+        "goals_set":       sum(1 for a in agents if a["has_goal"]),
+        "emails_present":  sum(1 for a in agents if a["email"]),
+        "tokens_present":  sum(1 for a in agents if a["has_token"]),
+        "nudge_sent_today":sum(1 for a in agents if a["nudge_sent_today"]),
+        "sendgrid_key_present": bool(_os.environ.get("SENDGRID_API_KEY")),
+        "nudge_schedule":  "8:00am ET daily",
+        "agents":          agents,
+    })
+
+
 @app.route("/api/admin/update-phones", methods=["POST"])
 def api_admin_update_phones():
     """Batch-update agent phone numbers. Body: {phones: {agent_name: phone, ...}}"""
