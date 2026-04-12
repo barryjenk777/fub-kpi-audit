@@ -324,6 +324,73 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
     talk_m = (totals["talk_secs"] % 3600) // 60
     totals["talk_fmt"] = f"{talk_h}h {talk_m}m" if talk_h > 0 else f"{talk_m}m"
 
+    # ---- Current week (Mon → now) — "on track?" tracking ----
+    now = datetime.now(timezone.utc)
+    cw_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    cw_dow = cw_today.weekday()  # Mon=0 … Sun=6
+
+    if cw_dow == 6:
+        # Sunday — new Mon–Sat work week starts tomorrow; nothing to show yet
+        cw_since2 = cw_today + timedelta(days=1)
+        cw_until2 = cw_since2
+        cw_days_elapsed = 0
+        cw_label = f"Starts Mon {(cw_today + timedelta(days=1)).strftime('%b %-d')}"
+    else:
+        cw_since2 = cw_today - timedelta(days=cw_dow)  # This Monday 00:00
+        cw_until2 = now
+        cw_days_elapsed = cw_dow + 1  # Mon=1, Tue=2, …, Sat=6
+        cw_label = f"Mon {cw_since2.strftime('%b %-d')} – Today"
+
+    try:
+        cw_calls = client.get_calls(since=cw_since2, until=cw_until2) if cw_days_elapsed > 0 else []
+        cw_appts_raw = client.get_appointments(since=cw_since2, until=cw_until2) if cw_days_elapsed > 0 else []
+    except Exception:
+        cw_calls = []
+        cw_appts_raw = []
+
+    _min_c = config.MIN_OUTBOUND_CALLS
+    _min_v = config.MIN_CONVERSATIONS
+    cw_on_pace_count = 0
+    cw_agent_data = {}
+
+    for _name, _user in agent_map.items():
+        _uid = _user["id"]
+        _cw_out, _cw_convos, _ = count_calls_for_user(cw_calls, _uid) if cw_calls else (0, 0, 0)
+        _cw_as, _ = count_appointments_for_user(cw_appts_raw, _uid) if cw_appts_raw else (0, 0)
+
+        if cw_days_elapsed > 0:
+            _proj_calls = round(_cw_out / cw_days_elapsed * 6)
+            _proj_convos = round(_cw_convos / cw_days_elapsed * 6)
+        else:
+            _proj_calls = _proj_convos = 0
+
+        _on_pace = _proj_calls >= _min_c and _proj_convos >= _min_v
+        if _on_pace:
+            cw_on_pace_count += 1
+
+        _call_pct = min(round(_cw_out / max(_min_c, 1) * 100), 100)
+        _convo_pct = min(round(_cw_convos / max(_min_v, 1) * 100), 100)
+
+        if cw_days_elapsed == 0:
+            _pace = "upcoming"
+        elif _on_pace:
+            _pace = "on_pace"
+        elif _proj_calls >= _min_c * 0.7 and _proj_convos >= _min_v * 0.7:
+            _pace = "behind"
+        else:
+            _pace = "at_risk"
+
+        cw_agent_data[_name] = {
+            "calls": _cw_out,
+            "convos": _cw_convos,
+            "appts_set": _cw_as,
+            "projected_calls": _proj_calls,
+            "projected_convos": _proj_convos,
+            "call_pct": _call_pct,
+            "convo_pct": _convo_pct,
+            "pace_status": _pace,
+        }
+
     routing_week_start = until + timedelta(days=1)  # Monday after the measured Saturday
     routing_week_end = routing_week_start + timedelta(days=6)
     return {
@@ -341,6 +408,13 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
             "min_calls": config.MIN_OUTBOUND_CALLS,
             "min_convos": config.MIN_CONVERSATIONS,
             "max_ooc": config.MAX_OUT_OF_COMPLIANCE,
+        },
+        "current_week": {
+            "label": cw_label,
+            "days_elapsed": cw_days_elapsed,
+            "on_pace_count": cw_on_pace_count,
+            "total_agents": len(agent_map),
+            "agents": cw_agent_data,
         },
         "live_calls_admin": getattr(config, "LIVE_CALLS_ADMIN", "Admin"),
         "api_requests": client.request_count,

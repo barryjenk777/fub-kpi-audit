@@ -132,6 +132,24 @@ button{cursor:pointer;border:none;background:none;font-family:inherit;font-size:
 .kc-bar-fill{height:100%;border-radius:2px}
 .kc-bar-val{width:30px;text-align:right;font-weight:600}
 .kc-flags{display:flex;gap:.3rem;flex-wrap:wrap}
+/* ── ROUTING SPLIT PANEL ── */
+.routing-split{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-bottom:1rem}
+.routing-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem;position:relative;overflow:hidden}
+.routing-panel::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.routing-last::before{background:var(--muted)}
+.routing-current::before{background:var(--gold)}
+.routing-label{font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:.25rem}
+.routing-dates{font-size:.75rem;color:var(--text);font-weight:600;margin-bottom:.4rem}
+.routing-result{font-size:1.6rem;font-weight:800;line-height:1;margin-bottom:.2rem}
+.routing-result span{font-size:.75rem;font-weight:400;color:var(--muted);margin-left:.3rem}
+.routing-subtext{font-size:.68rem;color:var(--muted)}
+.routing-agents{display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.5rem}
+/* ── CURRENT WEEK SECTION ON CARD ── */
+.kc-current-week{border-top:1px solid var(--border);margin-top:.6rem;padding-top:.6rem}
+.kc-cw-label{font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.35rem}
+.kc-cw-stats{display:flex;gap:.6rem;font-size:.72rem;color:var(--text);margin-bottom:.3rem;flex-wrap:wrap}
+.kc-cw-stats span{font-weight:600}
+.kc-cw-footer{display:flex;justify-content:space-between;align-items:center;margin-top:.3rem;font-size:.68rem;color:var(--muted)}
 
 /* ── BADGE ── */
 .badge{display:inline-flex;align-items:center;gap:.2rem;padding:.18rem .52rem;border-radius:20px;font-size:.65rem;font-weight:700;letter-spacing:.04em;white-space:nowrap}
@@ -810,34 +828,81 @@ function buildAgents(d){
   const t=d.totals, agents=d.agents;
   const passed=agents.filter(a=>a.evaluation.overall_pass);
   const failed=agents.filter(a=>!a.evaluation.overall_pass);
+  const cw=d.current_week||{};
+  const cwAgents=cw.agents||{};
+  const cwOnPace=cw.on_pace_count??0;
+  const cwTotal=cw.total_agents??agents.length;
+  const minC=(d.thresholds?.min_calls)||30;
+  const minV=(d.thresholds?.min_convos)||5;
   let h='';
 
-  // Summary strip
+  // ── Routing Split: Last Week (locked) vs This Week (in progress) ──
+  const passedNames=passed.map(a=>`<span class="badge badge-green" style="font-size:.65rem">${a.name.split(' ')[0]}</span>`).join('');
+  const failedNames=failed.map(a=>`<span class="badge badge-red" style="font-size:.65rem">${a.name.split(' ')[0]}</span>`).join('');
+  const onPaceAgents=agents.filter(a=>(cwAgents[a.name]||{}).pace_status==='on_pace');
+  const behindAgents=agents.filter(a=>['behind','at_risk'].includes((cwAgents[a.name]||{}).pace_status));
+  const onPaceNames=onPaceAgents.map(a=>`<span class="badge badge-green" style="font-size:.65rem">${a.name.split(' ')[0]}</span>`).join('');
+  const behindNames=behindAgents.map(a=>`<span class="badge badge-red" style="font-size:.65rem">${a.name.split(' ')[0]}</span>`).join('');
+  const cwResultColor=cwOnPace===cwTotal?'c-green':cwOnPace>0?'c-yellow':'c-red';
+  const lastWeekResultColor=t.passed===t.total?'c-green':t.passed>0?'c-yellow':'c-red';
+
+  h+=`<div class="routing-split">
+    <div class="routing-panel routing-last">
+      <div class="routing-label">🗓 Last Week — Lead Routing</div>
+      <div class="routing-dates">${d.period?.start||''} – ${d.period?.end||''}</div>
+      <div class="routing-result ${lastWeekResultColor}">${t.passed}/${t.total} <span>passed KPIs</span></div>
+      <div class="routing-subtext">Routing set for ${d.period?.routing_week||'upcoming week'}</div>
+      <div class="routing-agents" style="margin-top:.5rem">
+        ${passedNames}${failedNames}
+      </div>
+    </div>
+    <div class="routing-panel routing-current">
+      <div class="routing-label">📊 This Week — Tracking</div>
+      <div class="routing-dates">${cw.label||'—'}</div>
+      <div class="routing-result ${cwResultColor}">${cwOnPace}/${cwTotal} <span>on pace</span></div>
+      <div class="routing-subtext">${cw.days_elapsed||0} of 6 work days in</div>
+      <div class="routing-agents" style="margin-top:.5rem">
+        ${onPaceNames}${behindNames}
+      </div>
+    </div>
+  </div>`;
+
+  // Stat strip (last week totals)
   h+=`<div class="stat-row">
-    <div class="stat-card"><div class="stat-label">Team Calls</div><div class="stat-value c-blue">${t.calls}</div><div class="stat-sub">${agents.length} agents this week</div></div>
+    <div class="stat-card"><div class="stat-label">Team Calls</div><div class="stat-value c-blue">${t.calls}</div><div class="stat-sub">${agents.length} agents</div></div>
     <div class="stat-card"><div class="stat-label">Conversations</div><div class="stat-value c-blue">${t.convos}</div><div class="stat-sub">≥ 2 min</div></div>
     <div class="stat-card"><div class="stat-label">Appts Set</div><div class="stat-value c-green">${t.appts_set}</div><div class="stat-sub">${t.appts_met} met</div></div>
     <div class="stat-card"><div class="stat-label">Talk Time</div><div class="stat-value">${t.talk_fmt}</div><div class="stat-sub">team total</div></div>
-    <div class="stat-card"><div class="stat-label">KPI Pass Rate</div><div class="stat-value ${t.passed===t.total?'c-green':t.passed>0?'c-yellow':'c-red'}">${t.passed}/${t.total}</div><div class="stat-sub">${Math.round(t.passed/t.total*100)||0}% of agents</div></div>
+    <div class="stat-card"><div class="stat-label">KPI Pass Rate</div><div class="stat-value ${lastWeekResultColor}">${t.passed}/${t.total}</div><div class="stat-sub">${Math.round(t.passed/t.total*100)||0}% of agents</div></div>
   </div>`;
 
-  // Alert if any failures
+  // Alert if any failures last week
   if(failed.length){
-    h+=`<div class="alert red"><span class="alert-icon">🚨</span><div><div class="alert-title">${failed.length} agent${failed.length>1?'s':''} not meeting KPIs this week</div><div class="alert-body">${failed.map(a=>a.name).join(', ')} — check cards below</div></div></div>`;
+    h+=`<div class="alert red"><span class="alert-icon">🚨</span><div><div class="alert-title">${failed.length} agent${failed.length>1?'s':''} did not meet KPIs last week (${d.period?.start||''} – ${d.period?.end||''})</div><div class="alert-body">${failed.map(a=>a.name).join(', ')} — removed from priority routing for ${d.period?.routing_week||'this week'}</div></div></div>`;
   }
 
-  // Action items (inbox)
-  h+=`<div class="alert" style="border-left-color:var(--gold)"><span class="alert-icon">📋</span><div><div class="alert-title">@${d.live_calls_admin} — Update Live Calls Inbox</div><div class="alert-body">
+  // Action items (routing instructions for Fhalen)
+  h+=`<div class="alert" style="border-left-color:var(--gold)"><span class="alert-icon">📋</span><div><div class="alert-title">@${d.live_calls_admin} — Update Live Calls &amp; Priority Group for ${d.period?.routing_week||'this week'}</div><div class="alert-body">
+    <span style="font-size:.7rem;color:var(--muted)">Based on ${d.period?.start||''} – ${d.period?.end||''} (last week)</span><br>
     <strong style="color:var(--green)">ADD:</strong> ${passed.length?passed.map(a=>a.name).join(', '):'(none)'} &nbsp;&nbsp;
     <strong style="color:var(--red)">REMOVE:</strong> ${failed.length?failed.map(a=>a.name).join(', '):'(none)'}
   </div></div></div>`;
 
-  // Agent KPI cards — fail first, then warn, then pass
-  h+=`<div class="sec-hdr"><div class="sec-title">👤 Agent Breakdown <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;margin-left:.4rem">${d.period?.start||''} – ${d.period?.end||''}</span></div></div>`;
+  // ── Agent KPI Cards ──
+  h+=`<div class="sec-hdr"><div class="sec-title">👤 Agent Detail</div></div>`;
   h+='<div class="card-grid">';
   const sorted=[...failed,...passed];
   const mxC=maxOf(agents,'outbound_calls')||1;
   const mxV=maxOf(agents,'conversations')||1;
+
+  // Pace status helpers
+  const PACE_MAP={
+    on_pace:{badge:'⚡ On Pace',color:'var(--green)',cls:'flag-pass'},
+    behind:{badge:'⚠️ Behind',color:'var(--yellow)',cls:'flag-warn'},
+    at_risk:{badge:'🔴 At Risk',color:'var(--red)',cls:'flag-fail'},
+    upcoming:{badge:'📅 Starts Mon',color:'var(--muted)',cls:''},
+  };
+
   sorted.forEach((a,i)=>{
     const m=a.metrics,e=a.evaluation;
     const status=e.overall_pass?'pass':'fail';
@@ -848,9 +913,42 @@ function buildAgents(d){
     const convColor=e.convos_pass?'var(--green)':'var(--red)';
     const rank=i<3?`<span class="${['medal-1','medal-2','medal-3'][i]}">${MEDALS[i]}</span>`:`#${i+1}`;
 
+    // Current week section
+    const cwa=cwAgents[a.name]||{};
+    const pace=PACE_MAP[cwa.pace_status||'upcoming'];
+    const cwCallPct=cwa.call_pct||0;
+    const cwConvPct=cwa.convo_pct||0;
+    const cwSection=`
+      <div class="kc-current-week">
+        <div class="kc-cw-label">📊 This Week${cw.days_elapsed>0?' ('+cw.label+')':''}</div>
+        <div class="kc-cw-stats">
+          <span>${cwa.calls||0} calls</span>
+          <span style="color:var(--muted)">·</span>
+          <span>${cwa.convos||0} convos</span>
+          ${(cwa.appts_set||0)>0?`<span style="color:var(--muted)">·</span><span>${cwa.appts_set} appt${cwa.appts_set>1?'s':''}</span>`:''}
+        </div>
+        <div class="kc-bar-row" style="margin-bottom:.2rem">
+          <div class="kc-bar-label">Calls</div>
+          <div class="kc-bar-track"><div class="kc-bar-fill" style="width:${cwCallPct}%;background:${pace.color}"></div></div>
+          <div class="kc-bar-val" style="color:${pace.color}">${cwa.calls||0}</div>
+        </div>
+        <div class="kc-bar-row">
+          <div class="kc-bar-label">Convos</div>
+          <div class="kc-bar-track"><div class="kc-bar-fill" style="width:${cwConvPct}%;background:${pace.color}"></div></div>
+          <div class="kc-bar-val" style="color:${pace.color}">${cwa.convos||0}</div>
+        </div>
+        <div class="kc-cw-footer">
+          <span>${cwCallPct}% to ${minC}-call goal${cwa.projected_calls>0?' · proj '+cwa.projected_calls:''}</span>
+          <span class="flag ${pace.cls}" style="font-size:.68rem">${pace.badge}</span>
+        </div>
+      </div>`;
+
     h+=`<div class="kpi-card ${status}">
       <div class="kc-head">
-        <div><div class="kc-name">${a.name}</div><div class="kc-rank">${rank} · ${a.talk_time_fmt} talk</div></div>
+        <div>
+          <div class="kc-name">${a.name}</div>
+          <div class="kc-rank">${rank} · ${a.talk_time_fmt} talk · <span style="font-size:.65rem;color:var(--muted)">last wk</span></div>
+        </div>
         ${statusBadge}
       </div>
       <div class="kc-metrics">
@@ -877,6 +975,7 @@ function buildAgents(d){
         ${m.appts_set>0?`<span class="flag flag-pass">${m.appts_set} appt${m.appts_set>1?'s':''} set</span>`:''}
         ${m.appts_met>0?`<span class="flag flag-pass">${m.appts_met} met</span>`:''}
       </div>
+      ${cwSection}
     </div>`;
   });
   h+='</div>';
