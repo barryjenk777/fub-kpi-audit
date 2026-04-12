@@ -5025,9 +5025,12 @@ def start_scheduler():
         )
         # Missed-day check: 5pm ET
         _scheduler.add_job(
-            lambda: _nudge.run_missed_day_check(),
+            # Afternoon push: send to all active agents regardless of activity
+            # (FUB only syncs yesterday's data at 3:30am, so we can't detect
+            # today's calls from the DB — removed the per-agent "logged?" check)
+            lambda: _nudge.run_afternoon_push(),
             CronTrigger(hour=17, minute=0, timezone=ET),
-            id="nudge_missed", name="Missed-day check (5pm ET)",
+            id="nudge_missed", name="Afternoon push (5pm ET)",
             max_instances=1, coalesce=True,
         )
         # Streak break + recalculate: 7:15am ET daily (before morning nudges)

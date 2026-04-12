@@ -183,7 +183,7 @@ MORNING_TEMPLATES = [
     "The agents who close 40+ deals this year aren't smarter. They just show up every day. Today's your day, {first}.",
     "Every call is a step toward: '{what_happens}'. Make {daily_calls} of them today, {first}.",
     "{first}, your power hour starts now. {daily_calls} dials. Everything else can wait.",
-    "What would {identity} do this morning? Make the calls. Log the numbers. Stack the day.",
+    "What would {identity} do this morning? Make the calls. Win the hour. Stack the day.",
     "{first} — one hour of focused calls today = {daily_calls} chances to change your year.",
     "The compound effect is real. {daily_calls} calls today + every day = {gci_fmt}. Let's go.",
     "Doors open for {who} when you pick up the phone. {daily_calls} calls today, {first}.",
@@ -210,11 +210,11 @@ MORNING_TEMPLATES = [
 ]
 
 MISSED_DAY_TEMPLATES = [
-    "{first}, haven't seen your numbers today. Even 5 calls keeps the chain alive. Under 30 seconds to log.",
-    "Quick check-in — your activity isn't in yet. One call. Log it. That's the two-minute version.",
-    "{first} — the day isn't over yet. {daily_calls} calls feels like a lot. Try 5. Then keep going.",
-    "Still time today, {first}. Open the app, make one call, log it. The streak is worth saving.",
-    "{first}, your streak is still alive until midnight. Don't let today be the day it ends.",
+    "{first}, afternoon push — still time to make calls today. Even 5 conversations keeps the momentum going.",
+    "Halfway through the day, {first}. Whatever the morning looked like, the afternoon is yours. Pick up the phone.",
+    "{first} — don't let today slip. One conversation can change a week. Go make it.",
+    "The agents who win the week find a way to make calls even late in the day. That's you, {first}. Go.",
+    "{first}, the day isn't over. Stack a few more conversations and sleep better tonight.",
 ]
 
 STREAK_BREAK_TEMPLATES = [
@@ -222,7 +222,7 @@ STREAK_BREAK_TEMPLATES = [
     "{first}, missed yesterday. That's done now. Today is day 1 of the next streak. {who} is still waiting.",
     "Every athlete misses a practice. What matters is the next one. That's today, {first}. Let's go.",
     "The valley of disappointment is real — effort builds before results show. Don't stop now, {first}. New streak today.",
-    "{first}, the chain broke. Rebuild it. One call. One log. Day 1.",
+    "{first}, the chain broke. Rebuild it. One call. Day 1.",
 ]
 
 WEEKLY_SUMMARY_TEMPLATES = [
@@ -244,7 +244,7 @@ MILESTONE_TEMPLATES = {
 # Subject lines per nudge type
 SUBJECTS = {
     "morning":        "Time to make your calls, {first} 🔥",
-    "missed_day":     "{first}, your streak is still alive — log before midnight",
+    "missed_day":     "{first}, afternoon push — still time to make calls today",
     "streak_break":   "{first} — reset, restart, go. Day 1 starts now.",
     "weekly_summary": "Your week in numbers, {first}",
     "plateau":        "The compound effect is building, {first}",
@@ -1293,10 +1293,13 @@ def _build_morning_html(body_text: str, leads: list, dashboard_url: str) -> str:
 </body></html>"""
 
 
-def run_missed_day_check(dry_run: bool = False):
+def run_afternoon_push(dry_run: bool = False):
     """
-    Called at 5pm ET. For any agent who hasn't logged activity today,
-    send a gentle missed-day nudge.
+    Called at 5pm ET. Sends a motivational afternoon push to all active agents.
+    Previously this checked whether an agent had 'logged' activity — removed
+    because FUB auto-syncs at 3:30am for yesterday only, so today's calls
+    are never in the DB at 5pm. Sends to everyone as an end-of-day push.
+    Skips agents who already received a 'missed_day' nudge today.
     """
     profiles = _db.get_agent_profiles(active_only=True)
     sent = 0
@@ -1305,10 +1308,8 @@ def run_missed_day_check(dry_run: bool = False):
         email = p.get("email")
         if not email:
             continue
-        act = _db.get_todays_activity(name)
-        if act["calls"] == 0 and act["texts"] == 0 and act["appts"] == 0:
-            if nudge_agent(name, "missed_day", email, dry_run=dry_run):
-                sent += 1
+        if nudge_agent(name, "missed_day", email, dry_run=dry_run):
+            sent += 1
     logger.info("run_missed_day_check: sent %d nudge emails", sent)
     return sent
 
