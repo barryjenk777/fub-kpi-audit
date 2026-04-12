@@ -14,7 +14,7 @@ Uses a 15-20 message template pool so emails never feel repetitive.
 
 Environment variables required:
   SENDGRID_API_KEY
-  EMAIL_FROM      (e.g. barry@legacyhometeam.com)
+  EMAIL_FROM      (e.g. barry@yourfriendlyagent.net)
   BASE_URL        (for dashboard links)
 """
 
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 BASE_URL  = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
 LOGO_URL  = f"{BASE_URL}/static/logo-white.png"
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "barry@legacyhometeam.com")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "barry@yourfriendlyagent.net")
 
 
 # ---------------------------------------------------------------------------
