@@ -171,6 +171,35 @@ def apply_saved_settings():
 apply_saved_settings()
 
 
+def _kpi_window(weeks_back=1):
+    """Return (since, until) for the KPI evaluation window.
+
+    Always Mon 00:00 UTC → Sun 00:00 UTC (exclusive) for the most recently
+    completed Mon–Sat work week, shifted back (weeks_back-1) additional weeks.
+
+    This ensures the KPI dashboard always evaluates the same fixed Mon–Sat block
+    used to set lead routing, rather than a rolling 7-day window that shifts daily.
+
+    Example (today = Sun Apr 13):
+        weeks_back=1 → Mon Apr 7 – Sat Apr 12  (since=Apr 7, until=Apr 13)
+        weeks_back=2 → Mon Mar 31 – Sat Apr 5
+    """
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # How many days ago was last Saturday? (Mon=0 … Sat=5 … Sun=6)
+    days_since_sat = (today.weekday() - 5) % 7
+    if days_since_sat == 0:
+        days_since_sat = 7  # today IS Saturday; step back to the previous full week
+    # Midnight of last Saturday
+    last_sat_start = today - timedelta(days=days_since_sat)
+    # Shift back for weeks_back > 1
+    week_offset = timedelta(days=(weeks_back - 1) * 7)
+    # until = Sunday 00:00 after the target Saturday (exclusive end — captures all of Sat)
+    until = last_sat_start + timedelta(days=1) - week_offset
+    # since = Monday 00:00 of that same work week (6 days before the Sunday boundary)
+    since = until - timedelta(days=6)
+    return since, until
+
+
 def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
     """Run the audit and return structured data for the dashboard."""
     # Apply overrides
@@ -182,9 +211,8 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
         config.MAX_OUT_OF_COMPLIANCE = max_ooc
 
     client = FUBClient()
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    until = today
-    since = today - timedelta(days=config.AUDIT_PERIOD_DAYS * weeks_back)
+    # KPI window: Mon–Sat of the most recently completed work week
+    since, until = _kpi_window(weeks_back)
 
     # Auto-detect agents
     agent_map = auto_detect_agents(client)
@@ -296,13 +324,19 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
     talk_m = (totals["talk_secs"] % 3600) // 60
     totals["talk_fmt"] = f"{talk_h}h {talk_m}m" if talk_h > 0 else f"{talk_m}m"
 
+    routing_week_start = until + timedelta(days=1)  # Monday after the measured Saturday
+    routing_week_end = routing_week_start + timedelta(days=6)
     return {
         "agents": agents,
         "totals": totals,
         "period": {
             "start": since.strftime("%b %d"),
-            "end": (until - timedelta(days=1)).strftime("%b %d, %Y"),
+            "end": (until - timedelta(days=1)).strftime("%b %d, %Y"),  # Saturday inclusive
+            "routing_week": f"{routing_week_start.strftime('%b %d')} – {routing_week_end.strftime('%b %d, %Y')}",
         },
+        # Raw datetimes as ISO strings so api_send_email can reconstruct them
+        "period_since_iso": since.isoformat(),
+        "period_until_iso": until.isoformat(),
         "thresholds": {
             "min_calls": config.MIN_OUTBOUND_CALLS,
             "min_convos": config.MIN_CONVERSATIONS,
@@ -428,8 +462,8 @@ def api_send_email():
             max_ooc=data.get("max_ooc") or s.get("max_ooc"),
         )
 
-        now = datetime.now(timezone.utc)
-        since = now - timedelta(days=config.AUDIT_PERIOD_DAYS)
+        # Use the same Mon–Sat window the audit was built on
+        since, until = _kpi_window(1)
 
         # Build results dict in the format email_report expects
         results = {}
@@ -440,7 +474,7 @@ def api_send_email():
                 "evaluation": a["evaluation"],
             }
 
-        success = _send(results, since, now)
+        success = _send(results, since, until)
         if success:
             return jsonify({"success": True, "recipients": config.EMAIL_RECIPIENTS})
         else:
@@ -482,15 +516,14 @@ def api_manager():
         weeks_data = []
         agent_map = auto_detect_agents(client)
 
-        # Single fetch covering full 4-week range
-        full_since = today - timedelta(days=28)
+        # Single fetch covering full 4-week range (35d covers worst-case Mon–Sat window)
+        full_since = today - timedelta(days=35)
         all_calls_4w = client.get_calls(since=full_since, until=today)
         all_appts_4w = client.get_appointments(since=full_since, until=today)
 
-        # Split into weekly buckets
+        # Split into Mon–Sat weekly buckets (matches the KPI evaluation window)
         for week_num in range(4):
-            until = today - timedelta(days=7 * week_num)
-            since = until - timedelta(days=7)
+            since, until = _kpi_window(week_num + 1)
             since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
             until_str = until.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -4306,7 +4339,8 @@ def scheduled_sync_goals_data():
             comm_pct      = comm_lookup.get(agent_name)
 
             result = _db.upsert_deal(fub_deal_id, agent_name, deal_name, sale_price,
-                                     stage_raw, contract_date, close_date, comm_pct)
+                                     stage_raw, contract_date, close_date,
+                                     commission_pct=comm_pct)
             if result:
                 synced += 1
             else:
@@ -4455,6 +4489,19 @@ def scheduled_gone_dark_alert():
         _db.release_job_lock("gone_dark_alert")
 
 
+def _run_morning_jobs():
+    """Run morning nudges then closing milestones independently so a crash in
+    the first job does not prevent the second from running."""
+    try:
+        _nudge.run_morning_nudges()
+    except Exception as e:
+        logger.error("run_morning_nudges crashed: %s", e)
+    try:
+        _nudge.run_closing_milestones()
+    except Exception as e:
+        logger.error("run_closing_milestones crashed: %s", e)
+
+
 def start_scheduler():
     """Start APScheduler with all scheduled jobs."""
     global _scheduler_started, _scheduler
@@ -4513,7 +4560,7 @@ def start_scheduler():
 
         # Morning nudges + closing milestones: once daily at 8am ET
         _scheduler.add_job(
-            lambda: (_nudge.run_morning_nudges(), _nudge.run_closing_milestones()),
+            _run_morning_jobs,
             CronTrigger(hour=8, minute=0, timezone=ET),
             id="nudge_morning", name="Morning nudges + closing milestones (8am ET daily)",
             max_instances=1, coalesce=True,

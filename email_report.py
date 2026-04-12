@@ -8,7 +8,7 @@ Requires: pip install sendgrid
 
 import os
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
 
@@ -143,7 +143,7 @@ def build_html_report(results, period_start, period_end):
     <div style="background:#0f172a;border-radius:10px;padding:20px 24px;margin-bottom:16px;text-align:center">
       <img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">
       <h1 style="margin:0;color:#ffffff;font-size:18px">Weekly Team Update</h1>
-      <p style="margin:4px 0 0;color:rgba(255,255,255,0.6);font-size:13px">{period} &nbsp;|&nbsp; Calls &ge;{config.MIN_OUTBOUND_CALLS} &bull; Convos &ge;{config.MIN_CONVERSATIONS} &bull; OOC &le;{config.MAX_OUT_OF_COMPLIANCE}</p>
+      <p style="margin:4px 0 0;color:rgba(255,255,255,0.6);font-size:13px">KPI Window: {period} &nbsp;|&nbsp; Calls &ge;{config.MIN_OUTBOUND_CALLS} &bull; Convos &ge;{config.MIN_CONVERSATIONS} &bull; OOC &le;{config.MAX_OUT_OF_COMPLIANCE}</p>
     </div>
     """
 
@@ -159,21 +159,38 @@ def build_html_report(results, period_start, period_end):
     html += "</div>"
 
     # ---- Action Items (top of email for quick scanning) ----
+    # Compute the routing week (Mon after measured Saturday → following Sunday)
+    routing_week_start = period_end + timedelta(days=1)  # Monday after the Sun boundary
+    routing_week_end   = routing_week_start + timedelta(days=6)
+    measured_label = (
+        f"{period_start.strftime('%a %b %-d')} – "
+        f"{(period_end - timedelta(days=1)).strftime('%a %b %-d, %Y')}"
+    )
+    routing_label = (
+        f"{routing_week_start.strftime('%b %-d')} – "
+        f"{routing_week_end.strftime('%b %-d, %Y')}"
+    )
+
     html += '<h2>Action Items This Week</h2>'
 
-    # Live Calls inbox
+    # Live Calls inbox — with explicit calendar context for Fhalen
     html += f"""
     <div class="action-box">
-        <strong>@{admin}:</strong> Please update the <strong>Live Calls</strong> inbox in Follow Up Boss:<br><br>
+        <strong>@{admin}:</strong> Please update the <strong>Live Calls</strong> inbox and Priority Group in Follow Up Boss.<br>
+        <div style="margin:8px 0 12px;padding:8px 12px;background:#fff8e1;border-left:4px solid #f59e0b;border-radius:4px;font-size:13px">
+            📅 <strong>Routing calendar block:</strong> Activity measured
+            <strong>{measured_label}</strong> (Mon–Sat work week)<br>
+            🗓 <strong>This routing applies for the week of {routing_label}</strong>
+        </div>
     """
     if passed:
-        html += "<strong>ADD</strong> these agents:<br>"
+        html += "<strong>ADD</strong> these agents to Live Calls &amp; Priority Group:<br>"
         for name in passed:
             html += f'&nbsp;&nbsp;&nbsp;&nbsp;&#9989; {name}<br>'
     if failed:
         if passed:
             html += "<br>"
-        html += "<strong>REMOVE</strong> these agents:<br>"
+        html += "<strong>REMOVE</strong> these agents from Live Calls &amp; Priority Group:<br>"
         for name in failed:
             html += f'&nbsp;&nbsp;&nbsp;&nbsp;&#10060; {name}<br>'
     html += "</div>"
@@ -182,13 +199,13 @@ def build_html_report(results, period_start, period_end):
     if passed:
         html += f"""
         <div class="action-box green">
-            <strong>Priority Agents Group</strong> (auto-updated when run with --update-group):<br>
+            <strong>Priority Agents Group — Week of {routing_label}:</strong><br>
             {', '.join(passed)}
         </div>"""
     else:
-        html += """
+        html += f"""
         <div class="action-box red">
-            <strong>Priority Agents Group:</strong> No agents qualified this week. All new leads go to the pond.
+            <strong>Priority Agents Group — Week of {routing_label}:</strong> No agents qualified. All new leads go to the pond.
         </div>"""
 
     # OOC action items
