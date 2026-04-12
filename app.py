@@ -2191,12 +2191,11 @@ def api_agent_dashboard(token):
     if goal:
         ytd = _db.get_ytd_cache(year=year)
         a   = ytd.get(agent_name, {})
-        from db import get_closing_counts
-        closing_counts = get_closing_counts(agent_name, year=year)
+        deal_summary = _db.get_deal_summary(agent_name, year=year)
         actuals = {
             "calls_ytd": a.get("calls_ytd", 0),
             "appts_ytd": a.get("appts_ytd", 0),
-            "closings_ytd": closing_counts.get("closings", 0),
+            "closings_ytd": deal_summary.get("closings", 0),
         }
     pace = _db.compute_pace(goal, targets, actuals) if goal else {}
 
@@ -2240,12 +2239,11 @@ def api_agent_hero(token):
     if goal:
         ytd    = _db.get_ytd_cache(year=year)
         a      = ytd.get(agent_name, {})
-        from db import get_closing_counts as _gcc
-        closing_counts = _gcc(agent_name, year=year)
+        deal_sum = _db.get_deal_summary(agent_name, year=year)
         actuals = {
             "calls_ytd":    a.get("calls_ytd", 0),
             "appts_ytd":    a.get("appts_ytd", 0),
-            "closings_ytd": closing_counts.get("closings", 0),
+            "closings_ytd": deal_sum.get("closings", 0),
         }
         targets    = _db.compute_targets(goal)
         pace       = _db.compute_pace(goal, targets, actuals)

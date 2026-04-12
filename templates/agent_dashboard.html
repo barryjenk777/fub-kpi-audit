@@ -315,16 +315,18 @@ async function loadHero() {
 }
 
 async function loadDashboard() {
+  loadHero(); // fire-and-forget — fully independent, errors are silent
   try {
-    const [res] = await Promise.all([
-      fetch(`/api/goals/my-goals/${TOKEN}`),
-      loadHero(),
-    ]);
-    if (!res.ok) throw new Error('Failed to load');
+    const res = await fetch(`/api/goals/my-goals/${TOKEN}`);
+    if (!res.ok) {
+      let errMsg = `Server error ${res.status}`;
+      try { const body = await res.json(); if (body.error) errMsg = body.error; } catch {}
+      throw new Error(errMsg);
+    }
     _data = await res.json();
     renderAll();
   } catch(e) {
-    showToast('Failed to load dashboard', true);
+    showToast('Dashboard error: ' + e.message, true);
   }
 }
 
