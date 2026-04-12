@@ -2580,6 +2580,44 @@ def api_goals_setup_save(token):
                 phone=phone or None,
                 email=email or None,
             )
+        # ── Notify Barry ───────────────────────────────────────────────
+        try:
+            is_first = not (existing and float(existing.get("gci_goal", 0)) > 0)
+            action   = "set their goals for the first time" if is_first else "updated their goals"
+            gci_fmt  = f"${float(body['gci_goal']):,.0f}"
+            why_stmt = (body.get("why") or {}).get("why_statement", "")
+            who_ben  = (body.get("why") or {}).get("who_benefits", "")
+            first    = agent_name.split()[0]
+            lines    = [f"{agent_name} just {action}.", f"", f"GCI Goal: {gci_fmt}"]
+            if why_stmt:
+                lines.append(f"Why: {why_stmt}")
+            if who_ben:
+                lines.append(f"Who they're doing it for: {who_ben}")
+            if quality_flags:
+                lines.append(f"")
+                lines.append(f"⚠️ Flags: {'; '.join(quality_flags)}")
+            lines += ["", f"— Legacy Home Team Dashboard"]
+            notify_body = "\n".join(lines)
+            notify_html = notify_body.replace("\n", "<br>")
+            subj = f"🎯 {first} {'set their goals' if is_first else 'updated their goals'} — {gci_fmt}"
+
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail
+            sg_key = os.environ.get("SENDGRID_API_KEY")
+            if sg_key:
+                _msg = Mail(
+                    from_email=config.EMAIL_FROM,
+                    to_emails=config.EMAIL_FROM,
+                    subject=subj,
+                    plain_text_content=notify_body,
+                    html_content=f"<div style='font-family:sans-serif;font-size:15px;line-height:1.7;color:#222;max-width:500px;margin:24px auto'>{notify_html}</div>",
+                )
+                SendGridAPIClient(sg_key).send(_msg)
+                print(f"[GOAL NOTIFY] Sent Barry notification for {agent_name} goal {'set' if is_first else 'update'}")
+        except Exception as _ne:
+            print(f"[GOAL NOTIFY] Failed to notify Barry: {_ne}")
+        # ───────────────────────────────────────────────────────────────
+
         return jsonify({"success": True, "goal": goal})
     except (KeyError, ValueError) as e:
         return jsonify({"error": f"Bad input: {e}"}), 400
