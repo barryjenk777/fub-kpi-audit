@@ -379,12 +379,16 @@ def nudge_agent(agent_name: str, nudge_type: str, email: str,
 def run_morning_nudges(dry_run: bool = False):
     """
     Called once daily at 8am ET.
-    Pulls yesterday's FUB-synced activity for all agents, ranks the team,
-    then sends each agent a personalized sassy email with their rank,
-    team context, and top 3 LeadStream leads.
+    Weekday: ranks yesterday's activity, sends sassy peer-comparison email.
+    Weekend (Sat/Sun): if agent worked yesterday → weekend warrior congrats;
+                       otherwise → reflective weekly recap + next-week nudge.
     """
-    yesterday = date.today() - timedelta(days=1)
+    today     = date.today()
+    yesterday = today - timedelta(days=1)
     day_name  = yesterday.strftime("%A")
+
+    # Saturday (today.weekday==5) or Sunday (today.weekday==6) = weekend send
+    is_weekend = today.weekday() in (5, 6)
 
     # Pull all data in bulk — one query each, no N+1 loops
     team_data = _db.get_team_activity_yesterday()
@@ -392,10 +396,16 @@ def run_morning_nudges(dry_run: bool = False):
         logger.warning("run_morning_nudges: no team data found")
         return 0
 
-    all_goals    = {g["agent_name"]: g for g in _db.get_all_goals(year=date.today().year)}
-    ytd_cache    = _db.get_ytd_cache(year=date.today().year)
+    all_goals = {g["agent_name"]: g for g in _db.get_all_goals(year=today.year)}
+    ytd_cache = _db.get_ytd_cache(year=today.year)
 
-    # Build leaderboard (calls + texts + appts*3)
+    # For weekend reflections: pull Mon–yesterday of this week
+    week_data = {}
+    if is_weekend:
+        week_start = today - timedelta(days=today.weekday() + 1)  # last Monday
+        week_data  = _db.get_team_activity_range(week_start, yesterday)
+
+    # Build yesterday's leaderboard (calls + texts + appts*3)
     leaderboard = []
     for name, d in team_data.items():
         calls = int(d.get("calls", 0) or 0)
@@ -412,6 +422,20 @@ def run_morning_nudges(dry_run: bool = False):
     team_avg_calls = round(sum(a["calls"] for a in leaderboard) / max(team_size, 1))
     top_agent      = leaderboard[0]
 
+    # Build weekly leaderboard for weekend reflection emails
+    weekly_leaderboard = []
+    if week_data:
+        for name, d in week_data.items():
+            calls = int(d.get("calls", 0) or 0)
+            appts = int(d.get("appts", 0) or 0)
+            texts = int(d.get("texts", 0) or 0)
+            score = calls + texts + (appts * 3)
+            weekly_leaderboard.append({
+                "name": name, "calls": calls, "appts": appts,
+                "texts": texts, "score": score,
+            })
+        weekly_leaderboard.sort(key=lambda x: x["score"], reverse=True)
+
     sent = 0
     for rank, agent in enumerate(leaderboard, 1):
         name  = agent["name"]
@@ -423,16 +447,44 @@ def run_morning_nudges(dry_run: bool = False):
 
         ctx   = _ctx(name)
         leads = _db.get_leadstream_top_leads(name, limit=3)
-
-        # Build goal-pace context if agent has goals set
         goal_ctx = _build_goal_ctx(name, all_goals, ytd_cache, agent["calls"])
 
-        subject, body_text = _sassy_morning_copy(
-            ctx=ctx, rank=rank, team_size=team_size,
-            calls=agent["calls"], appts=agent["appts"], texts=agent["texts"],
-            team_avg_calls=team_avg_calls, top_agent=top_agent, day_name=day_name,
-            goal_ctx=goal_ctx,
-        )
+        worked_weekend = is_weekend and agent["score"] > 0
+
+        if is_weekend and not worked_weekend:
+            # Weekly reflection email — how was their week vs. the team
+            weekly_rank = next(
+                (i + 1 for i, a in enumerate(weekly_leaderboard) if a["name"] == name),
+                rank
+            )
+            weekly_agent = next((a for a in weekly_leaderboard if a["name"] == name), agent)
+            weekly_top   = weekly_leaderboard[0] if weekly_leaderboard else top_agent
+            weekly_team_avg = round(
+                sum(a["calls"] for a in weekly_leaderboard) / max(len(weekly_leaderboard), 1)
+            )
+            subject, body_text = _weekly_reflection_copy(
+                ctx=ctx,
+                weekly_rank=weekly_rank, team_size=team_size,
+                weekly_calls=weekly_agent["calls"], weekly_appts=weekly_agent["appts"],
+                weekly_team_avg=weekly_team_avg, weekly_top=weekly_top,
+                day_name=day_name, goal_ctx=goal_ctx,
+            )
+        elif is_weekend and worked_weekend:
+            # Weekend warrior — they actually prospected on a Saturday or Sunday
+            subject, body_text = _weekend_warrior_copy(
+                ctx=ctx, calls=agent["calls"], appts=agent["appts"],
+                texts=agent["texts"], day_name=day_name, goal_ctx=goal_ctx,
+                team_size=team_size,
+            )
+        else:
+            # Normal weekday email
+            subject, body_text = _sassy_morning_copy(
+                ctx=ctx, rank=rank, team_size=team_size,
+                calls=agent["calls"], appts=agent["appts"], texts=agent["texts"],
+                team_avg_calls=team_avg_calls, top_agent=top_agent, day_name=day_name,
+                goal_ctx=goal_ctx,
+            )
+
         html = _build_morning_html(body_text, leads, ctx.get("dashboard_url", ""))
 
         try:
@@ -444,7 +496,6 @@ def run_morning_nudges(dry_run: bool = False):
                     from_email=EMAIL_FROM, to_emails=email,
                     subject=subject, plain_text_content=body_text, html_content=html,
                 )
-                # CC Barry so he can watch the nudges go out
                 msg.personalizations[0].add_cc(_Email(EMAIL_FROM))
                 SendGridAPIClient(api_key).send(msg)
             _db.log_nudge(name, "morning", subject, status="sent" if not dry_run else "dry_run")
@@ -498,6 +549,237 @@ def _build_goal_ctx(agent_name, all_goals, ytd_cache, calls_yesterday):
     except Exception as e:
         logger.warning("_build_goal_ctx failed for %s: %s", agent_name, e)
         return None
+
+
+def _weekend_warrior_copy(ctx, calls, appts, texts, day_name, goal_ctx, team_size):
+    """
+    They actually prospected on a Saturday or Sunday.
+    Pure celebration — this is rare, acknowledge it loudly.
+    Still picks a tone (funny/serious) and prepends goal section if goals exist.
+    """
+    first    = ctx["first"]
+    who      = ctx["who"]
+    gci_fmt  = ctx["gci_fmt"]
+    identity = ctx.get("identity") or "a top producer"
+    has_goals = goal_ctx is not None
+    tone      = random.choice(["funny", "serious"])
+
+    goal_section = ""
+    if has_goals:
+        daily_target   = goal_ctx["daily_target"]
+        calls_pace_pct = goal_ctx["calls_pace_pct"]
+        gci_goal_fmt   = goal_ctx["gci_fmt"]
+        gap            = goal_ctx["gap_yesterday"]
+        gap_desc       = (f"{gap} above target" if gap > 0
+                          else ("right on target" if gap == 0
+                                else f"{abs(gap)} short of {daily_target}"))
+        if tone == "funny":
+            goal_section = random.choice([
+                f"Real quick — your {gci_goal_fmt} goal check: {daily_target} calls/day needed, you logged {calls} on a {day_name} ({gap_desc}). YTD pace: {calls_pace_pct}%. {'Carry on. Seriously.' if calls_pace_pct >= 85 else 'But that gap is closing every time you do this.'}",
+                f"Scoreboard check on {gci_goal_fmt}: {calls} calls on a {day_name} ({gap_desc}). YTD pace {calls_pace_pct}%. {'You might actually do this.' if calls_pace_pct >= 85 else 'Every weekend call counts double toward the math.'}",
+            ])
+        else:
+            goal_section = random.choice([
+                f"Your {gci_goal_fmt} goal needs {daily_target} conversations a day. On a {day_name} you logged {calls} — {gap_desc}. YTD pace: {calls_pace_pct}%. Every day like this compounds.",
+                f"To reach {gci_goal_fmt} this year, the daily target is {daily_target} calls. You hit {calls} on a {day_name}. That's the kind of consistency that makes the year-end number real.",
+            ])
+
+    goal_prefix = f"{goal_section}\n\n" if has_goals else ""
+
+    if who and not has_goals:
+        why_open = random.choice([
+            f"You know what {who} won't remember? The Saturday you stayed home.\n\nYou know what they will? The year you made it happen.\n\n",
+            f"While most agents were sleeping in, you were building the life {who} deserves.\n\n",
+        ])
+    else:
+        why_open = ""
+
+    if tone == "funny":
+        subject = random.choice([
+            f"You prospected on a {day_name}?! 👀 Different breed, {first}.",
+            f"The rest of the team is eating brunch. You're closing. 👑",
+            f"FUB shows activity on a {day_name}. Barry just stood up and clapped.",
+            f"Actual {day_name} prospecting from {first}. In this economy. 📈",
+            f"{calls} calls on a {day_name}. The team will hear about this. 😤",
+        ])
+        body = random.choice([
+            f"{goal_prefix}{calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''} on a {day_name}. Most of your competition didn't even open their laptop. You were out there doing the thing.\n\nThis is the gap. Not talent. Not luck. Just showing up when nobody else does.\n\nNow go enjoy the rest of your weekend. You've earned it. 🏆",
+            f"{goal_prefix}FUB is showing {calls} calls on a {day_name}. I double-checked. It's real.\n\nOut of {team_size} agents on this team, you are clearly not built the same. James Clear would say you just cast the most important vote of the week — the one nobody asked you to cast.\n\nSavage. Now go relax.",
+        ])
+    else:
+        subject = random.choice([
+            f"{first}, you prospected on a {day_name}. That's the whole story.",
+            f"Weekend work, {first}. {gci_fmt} doesn't take days off — and neither do you.",
+            f"The agents who hit big years work when others don't. That's you, {first}.",
+        ])
+        body = random.choice([
+            f"{goal_prefix}{why_open}{calls} conversation{'s' if calls != 1 else ''} on a {day_name}. That's not hustle culture — that's a decision about what kind of year you want to have.\n\nThe compounding effect is invisible until suddenly it isn't. You're building something real, {first}. Enjoy the rest of the weekend.",
+            f"{goal_prefix}{why_open}Most of the real estate industry took {day_name} off. You didn't.\n\n{calls} calls. {appts} appointments. That's {identity} in action — not because someone told you to, but because you decided to.\n\nGo enjoy the day. You've earned it.",
+        ])
+
+    return subject, body
+
+
+def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_appts,
+                             weekly_team_avg, weekly_top, day_name, goal_ctx):
+    """
+    Weekend email when the agent didn't work yesterday.
+    Looks back at the full week: how they ranked, what the numbers were,
+    and what to do differently next week. Forward-looking, not punishing.
+    """
+    first        = ctx["first"]
+    who          = ctx["who"]
+    gci_fmt      = ctx["gci_fmt"]
+    identity     = ctx.get("identity") or "a top producer"
+    has_goals    = goal_ctx is not None
+    tone         = random.choice(["funny", "serious"])
+    top_first    = weekly_top["name"].split()[0]
+    top_calls    = weekly_top["calls"]
+    is_top_week  = weekly_rank == 1
+    is_bot_week  = weekly_rank == team_size
+
+    # Goal section (weekly version)
+    goal_section = ""
+    if has_goals:
+        calls_pace_pct = goal_ctx["calls_pace_pct"]
+        gci_goal_fmt   = goal_ctx["gci_fmt"]
+        daily_target   = goal_ctx["daily_target"]
+        week_target    = daily_target * 5
+        on_track_w = "Still in the green. Don't coast." if calls_pace_pct >= 85 else "Next week is where you close that gap."
+        on_track_w2 = "You're doing it." if calls_pace_pct >= 85 else "You know what fixes this? Monday morning. That's literally it."
+        if tone == "funny":
+            goal_section = random.choice([
+                f"The {gci_goal_fmt} scoreboard: you needed ~{week_target} conversations this week, you had {weekly_calls}. YTD pace: {calls_pace_pct}%. {on_track_w}",
+                f"Quick {gci_goal_fmt} math: ~{week_target} calls needed this week, {weekly_calls} logged. Pace: {calls_pace_pct}%. {on_track_w2}",
+            ])
+        else:
+            goal_section = random.choice([
+                f"Your {gci_goal_fmt} goal needs roughly {week_target} conversations a week. This week you logged {weekly_calls}. YTD pace sits at {calls_pace_pct}% — {'on track' if calls_pace_pct >= 85 else 'behind where it needs to be'}. Next week is the correction.",
+                f"To hit {gci_goal_fmt} this year, the weekly call target is around {week_target}. You had {weekly_calls} this week, putting YTD pace at {calls_pace_pct}%. {'The foundation is solid.' if calls_pace_pct >= 85 else 'Each week is a chance to tighten the gap.'}",
+            ])
+
+    goal_prefix    = f"{goal_section}\n\n" if has_goals else ""
+    serious_opener = goal_prefix if has_goals else ""
+
+    # Next-week commitment line
+    if weekly_rank == 1:
+        next_week_target = weekly_calls + 5
+        next_week_line   = f"Next week: defend the top spot. Go for {next_week_target} conversations."
+    elif weekly_calls == 0:
+        next_week_target = max(weekly_team_avg, 10)
+        next_week_line   = f"Next week: one goal — {next_week_target} conversations. That's it. Just that."
+    else:
+        next_week_target = min(weekly_calls + round(weekly_calls * 0.25) + 3, top_calls)
+        next_week_line   = f"Next week: aim for {next_week_target} conversations. That moves you up the board."
+
+    # Tone-specific who anchor
+    if who and tone == "funny":
+        who_kicker = random.choice([
+            f"(Your {who} are rooting for Monday-you. Don't let weekend-you win every week.)",
+            f"P.S. {who.capitalize()} don't care about last week. Next week is the one.",
+        ])
+    elif who and tone == "serious":
+        who_kicker = f"\n\nThis week's results don't define the year — your response next week does. {who.capitalize()} are watching the pattern, not the scoreboard."
+    else:
+        who_kicker = ""
+
+    # ── Subject and body by rank and tone ──
+    if tone == "funny":
+        if is_top_week:
+            subject = random.choice([
+                f"You ran the team this week, {first}. Now don't get comfortable. 👀",
+                f"#1 for the week. Bow down. Now do it again. 🏆",
+                f"Team leaderboard: {first} first. Everyone else: planning their revenge.",
+            ])
+            body = (
+                f"{goal_prefix}"
+                f"#1 for the week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}"
+                f"{(', ' + str(weekly_appts) + ' appt' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
+                f"You ran laps around the team. The team has had the weekend to stew about it.\n\n"
+                f"Which means Monday, everyone's coming for your spot. Stay ready.\n\n"
+                f"{next_week_line}\n\n{who_kicker}"
+            )
+        elif is_bot_week:
+            subject = random.choice([
+                f"Last on the team this week. Comeback arc starts Monday, {first} 💪",
+                f"This week: last place. Next week: the comeback story. Let's go.",
+                f"The board didn't go your way this week. That changes Monday.",
+            ])
+            body = (
+                f"{goal_prefix}"
+                f"Last on the team this week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}. "
+                f"{top_first} led with {top_calls}. I know, I know.\n\n"
+                f"Here's the thing about last place: it's actually the best starting position for a comeback. "
+                f"You've got zero direction to go but up, a full week of data on what didn't work, and Monday morning sitting right there waiting for you.\n\n"
+                f"{next_week_line}\n\n{who_kicker}"
+            )
+        else:
+            subject = random.choice([
+                f"Week {weekly_rank} of {team_size} — respectable. Now let's level up, {first}.",
+                f"#{weekly_rank} for the week. {top_first}'s lead isn't that big. 👀",
+                f"Solid week, {first}. Now let's make next week better.",
+            ])
+            body = (
+                f"{goal_prefix}"
+                f"#{weekly_rank} of {team_size} this week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}"
+                f"{(', ' + str(weekly_appts) + ' appt' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
+                f"Team average: {weekly_team_avg}. {top_first} topped the board with {top_calls}.\n\n"
+                f"Not bad. Not great. Exactly the kind of week that gets fixed by one better Monday.\n\n"
+                f"{next_week_line}\n\n{who_kicker}"
+            )
+    else:  # serious
+        why_hook = ""
+        if not has_goals and who:
+            why_hook = random.choice([
+                f"Take a minute this weekend to reconnect with why you started. {who.capitalize()} — that's the whole reason.\n\n",
+                f"The weekend is a good time to zoom out. {who.capitalize()} is the reason the weekly scoreboard matters.\n\n",
+            ])
+        if is_top_week:
+            subject = random.choice([
+                f"You led the team this week, {first}. {gci_fmt} is getting closer.",
+                f"#1 for the week, {first}. That's {identity} in action.",
+                f"Best week on the team, {first}. Now stack another one.",
+            ])
+            body = (
+                f"{serious_opener}{why_hook}"
+                f"#1 on the team this week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}"
+                f"{(', ' + str(weekly_appts) + ' appt' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
+                f"That's {identity} showing up.\n\n"
+                f"The agents who hit their big years don't just have one good week — they string them together. "
+                f"This weekend, rest. Monday, go again.\n\n"
+                f"{next_week_line}{who_kicker}"
+            )
+        elif is_bot_week:
+            subject = random.choice([
+                f"Tough week, {first}. Monday is the reset — and it's almost here.",
+                f"#{weekly_rank} of {team_size} this week. {identity} bounces back. Monday is the proof.",
+                f"The week didn't go the way you wanted, {first}. Here's the path forward.",
+            ])
+            body = (
+                f"{serious_opener}{why_hook}"
+                f"This week: #{weekly_rank} of {team_size}. {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}. "
+                f"{top_first} led with {top_calls}.\n\n"
+                f"One week doesn't define a career. What defines it is what you do next — and that starts Monday. "
+                f"{identity} doesn't stay at the bottom. This weekend, reset. Monday, show up differently.\n\n"
+                f"{next_week_line}{who_kicker}"
+            )
+        else:
+            subject = random.choice([
+                f"#{weekly_rank} for the week, {first}. Let's talk about next week.",
+                f"Week in review, {first}: #{weekly_rank} of {team_size}. Here's what next week looks like.",
+                f"Solid foundation this week, {first}. Next week builds on it.",
+            ])
+            body = (
+                f"{serious_opener}{why_hook}"
+                f"#{weekly_rank} of {team_size} this week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}"
+                f"{(', ' + str(weekly_appts) + ' appt' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
+                f"Team average: {weekly_team_avg}. {top_first} led with {top_calls}.\n\n"
+                f"There's a clear path from #{weekly_rank} to the top half: consistency in the first hour of each day. "
+                f"That's not a secret — it's a decision.\n\n"
+                f"{next_week_line}{who_kicker}"
+            )
+
+    return subject, body
 
 
 def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,

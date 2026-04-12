@@ -1574,6 +1574,40 @@ def get_team_activity_yesterday():
         return {}
 
 
+def get_team_activity_range(start_date, end_date):
+    """
+    Return summed FUB activity for every active agent over a date range (inclusive).
+    Used by weekend nudges for weekly reflection emails.
+    Returns dict: { agent_name: {calls, texts, appts, email} }
+    """
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ap.agent_name, ap.email,
+                           COALESCE(SUM(da.calls_logged), 0) AS calls,
+                           COALESCE(SUM(da.texts_logged), 0) AS texts,
+                           COALESCE(SUM(da.appts_logged), 0) AS appts
+                    FROM   agent_profiles ap
+                    LEFT   JOIN daily_activity da
+                           ON  da.agent_name = ap.agent_name
+                           AND da.activity_date BETWEEN %s AND %s
+                    WHERE  ap.is_active = TRUE AND ap.email IS NOT NULL
+                    GROUP  BY ap.agent_name, ap.email
+                """, (start_date, end_date))
+                rows = cur.fetchall()
+        return {
+            r[0]: {"email": r[1], "calls": int(r[2] or 0),
+                   "texts": int(r[3] or 0), "appts": float(r[4] or 0)}
+            for r in rows
+        }
+    except Exception as e:
+        logger.warning("get_team_activity_range failed: %s", e)
+        return {}
+
+
 def get_leadstream_top_leads(agent_name, limit=3):
     """
     Return the top N LeadStream leads for an agent from the latest manifest.
