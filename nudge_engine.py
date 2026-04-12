@@ -791,7 +791,8 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
     if not has_goals:
         setup_url   = ctx.get("dashboard_url", "")
         setup_line  = f"\n\nTakes 3 minutes: {setup_url}" if setup_url else ""
-        next_target = max(weekly_team_avg, 10) if weekly_calls == 0 else min(
+        from config import MIN_CONVERSATIONS
+        next_target = max(weekly_team_avg, MIN_CONVERSATIONS) if weekly_calls == 0 else min(
             weekly_calls + max(round(weekly_calls * 0.25), 3), top_calls + 5
         )
 

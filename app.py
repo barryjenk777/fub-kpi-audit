@@ -3238,12 +3238,19 @@ def api_goals_nudge_context(agent_name):
 
 @app.route("/api/admin/trigger-morning-nudges", methods=["POST"])
 def api_trigger_morning_nudges():
-    """One-time manual trigger for morning nudges (e.g. after a crash recovery)."""
+    """One-time manual trigger for morning nudges (e.g. after a crash recovery).
+    On Sunday, backfills Mon–Sat activity from FUB first so weekly totals are accurate."""
     try:
+        from datetime import date as _date
         import nudge_engine as _nudge
-        sent_morning  = _nudge.run_morning_nudges()
-        sent_closing  = _nudge.run_closing_milestones()
-        return jsonify({"success": True, "morning_nudges": sent_morning, "closing_milestones": sent_closing})
+        synced_days = 0
+        if _date.today().weekday() == 6:   # Sunday
+            sync_week_activity_from_fub()
+            synced_days = _date.today().weekday()  # 6 days (Mon–Sat)
+        sent_morning = _nudge.run_morning_nudges()
+        sent_closing = _nudge.run_closing_milestones()
+        return jsonify({"success": True, "morning_nudges": sent_morning,
+                        "closing_milestones": sent_closing, "week_days_synced": synced_days})
     except Exception as e:
         logger.error("Manual nudge trigger failed: %s", e)
         return jsonify({"error": str(e)}), 500
@@ -4597,36 +4604,35 @@ def scheduled_sync_fub_roster():
         _db.release_job_lock("roster_sync")
 
 
-def sync_daily_activity_from_fub():
+def sync_daily_activity_from_fub(target_date=None):
     """
-    Nightly job (3:30am ET): pull yesterday's call and appointment counts from
-    FUB and upsert into daily_activity using GREATEST so manual entries that
-    are higher are never overwritten.
+    Pull call and appointment counts from FUB for a single date and upsert
+    into daily_activity using GREATEST (manual entries that are higher are
+    never overwritten).
 
-    This means agents who forget to log manually still see their numbers
-    in the dashboard by morning — sourced directly from FUB.
+    target_date: a datetime.date object, defaults to yesterday ET.
     """
     if not _db.is_available():
         print("[ACTIVITY SYNC] DB not available — skipping")
         return
 
-    # Compute yesterday in ET (handles DST via manual offset same as rest of codebase)
     _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
     ET = timezone(timedelta(hours=_et_h))
-    now_et    = datetime.now(ET)
-    yesterday = (now_et - timedelta(days=1)).date()
 
-    print(f"[ACTIVITY SYNC] Syncing FUB activity for {yesterday}…")
+    if target_date is None:
+        now_et      = datetime.now(ET)
+        target_date = (now_et - timedelta(days=1)).date()
+
+    print(f"[ACTIVITY SYNC] Syncing FUB activity for {target_date}…")
 
     try:
         fub = FUBClient()
 
-        # Yesterday in UTC bounds for FUB API
-        y_start_utc = datetime.combine(yesterday, datetime.min.time()).replace(tzinfo=ET).astimezone(timezone.utc)
-        y_end_utc   = datetime.combine(yesterday, datetime.max.time()).replace(tzinfo=ET).astimezone(timezone.utc)
+        d_start_utc = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=ET).astimezone(timezone.utc)
+        d_end_utc   = datetime.combine(target_date, datetime.max.time()).replace(tzinfo=ET).astimezone(timezone.utc)
 
         # ── Calls ──────────────────────────────────────────────────────
-        all_calls = fub.get_calls(since=y_start_utc, until=y_end_utc)
+        all_calls = fub.get_calls(since=d_start_utc, until=d_end_utc)
         calls_by_uid = {}
         for c in all_calls:
             uid = c.get("userId")
@@ -4634,7 +4640,7 @@ def sync_daily_activity_from_fub():
                 calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
 
         # ── Appointments ───────────────────────────────────────────────
-        all_appts = fub.get_appointments(since=y_start_utc, until=y_end_utc)
+        all_appts = fub.get_appointments(since=d_start_utc, until=d_end_utc)
         appts_by_uid = {}
         for a in all_appts:
             uid = a.get("userId") or a.get("assignedUserId")
@@ -4650,15 +4656,34 @@ def sync_daily_activity_from_fub():
                 continue
             calls = calls_by_uid.get(fub_uid, 0)
             appts = appts_by_uid.get(fub_uid, 0)
-            # Only write rows where FUB reported something (don't create empty rows)
             if calls > 0 or appts > 0:
-                _db.upsert_daily_activity_fub(agent["agent_name"], yesterday, calls, appts)
+                _db.upsert_daily_activity_fub(agent["agent_name"], target_date, calls, appts)
                 updated += 1
 
-        print(f"[ACTIVITY SYNC] Done — {updated} agents updated for {yesterday} "
+        print(f"[ACTIVITY SYNC] Done — {updated} agents updated for {target_date} "
               f"(calls pool: {len(calls_by_uid)}, appts pool: {len(appts_by_uid)})")
     except Exception as e:
-        print(f"[ACTIVITY SYNC] Error: {e}")
+        print(f"[ACTIVITY SYNC] Error for {target_date}: {e}")
+
+
+def sync_week_activity_from_fub():
+    """
+    Backfill Mon–yesterday for the current work week from FUB.
+    Called before Sunday morning nudges so weekly totals are accurate
+    even if any nightly syncs were missed (e.g. after a crash/redeploy).
+    """
+    from datetime import date as _date
+    today      = _date.today()
+    # today.weekday(): Mon=0 … Sun=6 → days back to Monday
+    days_back  = today.weekday()   # 6 on Sunday → Mon is 6 days ago
+    week_start = today - timedelta(days=days_back)
+    week_end   = today - timedelta(days=1)       # yesterday (Sat)
+
+    print(f"[ACTIVITY SYNC] Week backfill {week_start} → {week_end}")
+    d = week_start
+    while d <= week_end:
+        sync_daily_activity_from_fub(target_date=d)
+        d += timedelta(days=1)
 
 
 def scheduled_sync_daily_activity():
@@ -4897,6 +4922,14 @@ def scheduled_gone_dark_alert():
 def _run_morning_jobs():
     """Run morning nudges then closing milestones independently so a crash in
     the first job does not prevent the second from running."""
+    from datetime import date as _date
+    # On Sunday: backfill the full Mon–Sat week from FUB before building the
+    # leaderboard, so weekly totals are accurate even after crash-recovery gaps.
+    if _date.today().weekday() == 6:
+        try:
+            sync_week_activity_from_fub()
+        except Exception as e:
+            logger.error("sync_week_activity_from_fub crashed: %s", e)
     try:
         _nudge.run_morning_nudges()
     except Exception as e:
