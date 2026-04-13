@@ -2542,7 +2542,7 @@ def api_goals_setup_save(token):
             soi_closings_expected=int(body.get("soi_closings_expected", 0)),
             soi_gci_expected=float(body.get("soi_gci_expected", 0)),
             sphere_touch_monthly=int(body.get("sphere_touch_monthly", 2)),
-            call_to_appt_rate=float(body.get("call_to_appt_rate", 0.10)),
+            call_to_appt_rate=float(body.get("call_to_appt_rate", 0.06)),
             appt_to_contract_rate=float(body.get("appt_to_contract_rate", 0.30)),
             contract_to_close_rate=float(body.get("contract_to_close_rate", 0.80)),
             set_by="agent",
@@ -3273,6 +3273,23 @@ def api_trigger_morning_nudges():
                         "closing_milestones": sent_closing, "week_days_synced": synced_days})
     except Exception as e:
         logger.error("Manual nudge trigger failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/admin/fix-c2a-rate", methods=["POST"])
+def api_fix_c2a_rate():
+    """One-time: update all agent_goals call_to_appt_rate to 0.06 (6%)."""
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT agent_name, call_to_appt_rate FROM agent_goals ORDER BY agent_name")
+                before = [(r[0], float(r[1])) for r in cur.fetchall()]
+                cur.execute("UPDATE agent_goals SET call_to_appt_rate = 0.06")
+                updated = cur.rowcount
+        return jsonify({"success": True, "updated": updated,
+                        "before": {n: f"{r*100:.1f}%" for n, r in before},
+                        "after": "6.0% for all agents"})
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 

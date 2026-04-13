@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS goals (
     sphere_touch_monthly    INTEGER NOT NULL DEFAULT 2,
 
     -- Conversion rates (defaults = industry average for competent agent)
-    call_to_appt_rate       NUMERIC(5,4)  NOT NULL DEFAULT 0.10,
+    call_to_appt_rate       NUMERIC(5,4)  NOT NULL DEFAULT 0.06,
     appt_to_contract_rate   NUMERIC(5,4)  NOT NULL DEFAULT 0.30,
     contract_to_close_rate  NUMERIC(5,4)  NOT NULL DEFAULT 0.80,
 
@@ -699,7 +699,7 @@ def _goal_row_to_dict(row, cols):
 
 def upsert_goal(agent_name, year, gci_goal, avg_sale_price, commission_pct,
                 soi_closings_expected=0, soi_gci_expected=0, sphere_touch_monthly=2,
-                call_to_appt_rate=0.10, appt_to_contract_rate=0.30,
+                call_to_appt_rate=0.06, appt_to_contract_rate=0.30,
                 contract_to_close_rate=0.80, set_by='manager', notes=None):
     if not is_available():
         return None
@@ -784,7 +784,7 @@ def compute_targets(goal: dict) -> dict:
     comm_pct     = float(goal.get("commission_pct", 0.025))
     soi_close    = int(goal.get("soi_closings_expected", 0))
     soi_gci      = float(goal.get("soi_gci_expected", 0))
-    c2a          = float(goal.get("call_to_appt_rate", 0.10))
+    c2a          = float(goal.get("call_to_appt_rate", 0.06))
     a2c          = float(goal.get("appt_to_contract_rate", 0.30))
     c2cl         = float(goal.get("contract_to_close_rate", 0.80))
 
@@ -1530,7 +1530,7 @@ def get_all_streaks():
         return {
             r[0]: {
                 "current_streak": r[1], "longest_streak": r[2],
-                "last_activity_date": r[2].isoformat() if r[2] else None,
+                "last_activity_date": r[3].isoformat() if r[3] else None,
                 "updated_at": r[4].isoformat() if r[4] else None,
             }
             for r in rows

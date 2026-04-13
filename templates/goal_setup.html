@@ -501,7 +501,7 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
             <label>Calls → Appt</label>
             <div class="input-wrap has-suffix">
               <input type="number" id="call_to_appt" min="1" max="100" step="1"
-                     value="{{ '%.0f' | format((goal.call_to_appt_rate | float) * 100) if goal and goal.call_to_appt_rate else '10' }}"
+                     value="{{ '%.0f' | format((goal.call_to_appt_rate | float) * 100) if goal and goal.call_to_appt_rate else '6' }}"
                      oninput="recalc()">
               <span class="input-suffix">%</span>
             </div>
@@ -754,7 +754,7 @@ function recalc() {
   const avgPrice = v('avg_sale_price');
   const commPct  = v('commission_pct') / 100;
   const soiClose = v('soi_closings');
-  const c2a      = v('call_to_appt')      / 100 || 0.10;
+  const c2a      = v('call_to_appt')      / 100 || 0.06;
   const a2c      = v('appt_to_contract')  / 100 || 0.30;
   const c2cl     = v('contract_to_close') / 100 || 0.80;
 
