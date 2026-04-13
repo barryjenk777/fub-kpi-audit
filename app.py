@@ -3276,22 +3276,6 @@ def api_trigger_morning_nudges():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/admin/fix-c2a-rate", methods=["POST"])
-def api_fix_c2a_rate():
-    """One-time: update all agent_goals call_to_appt_rate to 0.06 (6%)."""
-    try:
-        with _db.get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT agent_name, call_to_appt_rate FROM goals ORDER BY agent_name")
-                before = [(r[0], float(r[1])) for r in cur.fetchall()]
-                cur.execute("UPDATE goals SET call_to_appt_rate = 0.06")
-                updated = cur.rowcount
-        return jsonify({"success": True, "updated": updated,
-                        "before": {n: f"{r*100:.1f}%" for n, r in before},
-                        "after": "6.0% for all agents"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 
 @app.route("/api/admin/nudge-audit")
 def api_admin_nudge_audit():
