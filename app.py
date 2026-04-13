@@ -3282,9 +3282,9 @@ def api_fix_c2a_rate():
     try:
         with _db.get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT agent_name, call_to_appt_rate FROM agent_goals ORDER BY agent_name")
+                cur.execute("SELECT agent_name, call_to_appt_rate FROM goals ORDER BY agent_name")
                 before = [(r[0], float(r[1])) for r in cur.fetchall()]
-                cur.execute("UPDATE agent_goals SET call_to_appt_rate = 0.06")
+                cur.execute("UPDATE goals SET call_to_appt_rate = 0.06")
                 updated = cur.rowcount
         return jsonify({"success": True, "updated": updated,
                         "before": {n: f"{r*100:.1f}%" for n, r in before},
