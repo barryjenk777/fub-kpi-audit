@@ -4846,14 +4846,38 @@ def scheduled_sync_goals_data():
 
 def scheduled_onboarding_escalation():
     """
-    Daily job: send follow-up to agents who received the onboarding email
-    3 or 7 days ago but still haven't completed goal setup.
-    Day 3 = gentle reminder email
-    Day 7 = text + email if phone available
+    Daily job (8am ET):
+    1. Send initial onboarding email to any active agent whose onboarding_sent_at is NULL
+       (catches pre-existing agents and anyone missed by roster sync).
+    2. Send Day 3 reminder to agents who got the email 3 days ago but haven't set goals.
+    3. Send Day 7 reminder to agents who got the email 7 days ago but haven't set goals.
     """
     if not _db.try_acquire_job_lock("onboarding_escalation"):
         return
     try:
+        base_url = os.environ.get("BASE_URL", "").rstrip("/")
+
+        # ── Step 1: send initial email to anyone who never got it ──────────
+        unsent = _db.get_agents_needing_onboarding()
+        for agent in unsent:
+            name  = agent["agent_name"]
+            first = name.split()[0]
+            email = agent.get("email")
+            token = _db.get_token_for_agent(name)
+            setup_url     = f"{base_url}/goals/setup/{token}" if base_url and token else ""
+            dashboard_url = f"{base_url}/my-goals/{token}"   if base_url and token else ""
+            if not email or not setup_url:
+                continue
+            try:
+                from email_report import send_goal_onboarding_email
+                send_goal_onboarding_email(name, first, email, setup_url,
+                                           dashboard_url=dashboard_url)
+                _db.mark_onboarding_sent(name)
+                print(f"[ONBOARDING] Initial email sent to {name}")
+            except Exception as e:
+                print(f"[ONBOARDING] Initial email failed for {name}: {e}")
+
+        # ── Step 2 & 3: Day 3 / Day 7 follow-ups ──────────────────────────
         agents_needed = _db.get_agents_no_goal_setup()
         today = datetime.now(timezone.utc).date()
 
@@ -4943,20 +4967,22 @@ def scheduled_gone_dark_alert():
 def _run_morning_jobs():
     """Run morning nudges then closing milestones independently so a crash in
     the first job does not prevent the second from running."""
+    import nudge_engine as _nudge_local   # explicit local import — avoids NameError
     from datetime import date as _date
-    # On Sunday: backfill the full Mon–Sat week from FUB before building the
-    # leaderboard, so weekly totals are accurate even after crash-recovery gaps.
+
+    # Sunday: backfill Mon–Sat from FUB before building leaderboard
     if _date.today().weekday() == 6:
         try:
             sync_week_activity_from_fub()
         except Exception as e:
             logger.error("sync_week_activity_from_fub crashed: %s", e)
+
     try:
-        _nudge.run_morning_nudges()
+        _nudge_local.run_morning_nudges()
     except Exception as e:
         logger.error("run_morning_nudges crashed: %s", e)
     try:
-        _nudge.run_closing_milestones()
+        _nudge_local.run_closing_milestones()
     except Exception as e:
         logger.error("run_closing_milestones crashed: %s", e)
 
