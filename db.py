@@ -1975,14 +1975,15 @@ def get_recent_arcs(agent_name, days=7):
                     FROM   nudge_log
                     WHERE  agent_name = %s
                       AND  nudge_type = 'morning'
-                      AND  sent_at   >= NOW() - INTERVAL '%s days'
+                      AND  sent_at   >= NOW() - (%s * INTERVAL '1 day')
                       AND  message_content LIKE 'arc:%%'
                     ORDER  BY sent_at DESC
-                """ % ("%s", days), (agent_name,))
+                """, (agent_name, days))
                 rows = cur.fetchall()
 
         arcs = []
-        for (content, _sent_at) in rows:
+        for row in rows:
+            content = row[0] if row else None
             # Format: "arc:ARCNAME|..."
             if content and content.startswith("arc:"):
                 rest = content[4:]  # strip "arc:"

@@ -5050,16 +5050,8 @@ def start_scheduler():
             id="nudge_morning", name="Morning nudges + closing milestones (8am ET daily)",
             max_instances=1, coalesce=True,
         )
-        # Missed-day check: 5pm ET
-        _scheduler.add_job(
-            # Afternoon push: send to all active agents regardless of activity
-            # (FUB only syncs yesterday's data at 3:30am, so we can't detect
-            # today's calls from the DB — removed the per-agent "logged?" check)
-            lambda: _nudge.run_afternoon_push(),
-            CronTrigger(hour=17, minute=0, timezone=ET),
-            id="nudge_missed", name="Afternoon push (5pm ET)",
-            max_instances=1, coalesce=True,
-        )
+        # 5pm afternoon push removed — Arc engine 8am email handles all scenarios.
+        # Generic templates don't represent the system we built.
         # Streak break + recalculate: 7:15am ET daily (before morning nudges)
         _scheduler.add_job(
             lambda: (_nudge.run_streak_break_check(), _recalc_all_streaks()),
