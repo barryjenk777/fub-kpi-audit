@@ -172,32 +172,38 @@ apply_saved_settings()
 
 
 def _kpi_window(weeks_back=1):
-    """Return (since, until) for the KPI evaluation window.
+    """Return (since, until) as UTC datetimes for the KPI evaluation window.
 
-    Always Mon 00:00 UTC → Sun 00:00 UTC (exclusive) for the most recently
+    Window: Mon 00:00 ET → Sun 00:00 ET (exclusive) for the most recently
     completed Mon–Sat work week, shifted back (weeks_back-1) additional weeks.
 
-    This ensures the KPI dashboard always evaluates the same fixed Mon–Sat block
-    used to set lead routing, rather than a rolling 7-day window that shifts daily.
+    Uses ET (not UTC) midnight boundaries so:
+      - Sunday-evening calls (8pm–midnight ET = midnight–4am UTC Mon) are NOT
+        counted toward the next week's Monday tally.
+      - Saturday-evening calls (8pm–midnight ET = midnight–4am UTC Sun) ARE
+        included in the correct week (they fall before Sun 00:00 ET).
 
-    Example (today = Sun Apr 13):
-        weeks_back=1 → Mon Apr 7 – Sat Apr 12  (since=Apr 7, until=Apr 13)
-        weeks_back=2 → Mon Mar 31 – Sat Apr 5
+    Example (today ET = Sun Apr 13):
+        weeks_back=1 → Mon Apr 7 00:00 ET – Sun Apr 13 00:00 ET
+        weeks_back=2 → Mon Mar 31 00:00 ET – Sun Apr 6 00:00 ET
     """
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+    ET = timezone(timedelta(hours=_et_h))
+    today_et = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0)
     # How many days ago was last Saturday? (Mon=0 … Sat=5 … Sun=6)
-    days_since_sat = (today.weekday() - 5) % 7
+    days_since_sat = (today_et.weekday() - 5) % 7
     if days_since_sat == 0:
         days_since_sat = 7  # today IS Saturday; step back to the previous full week
-    # Midnight of last Saturday
-    last_sat_start = today - timedelta(days=days_since_sat)
+    # Midnight ET of last Saturday
+    last_sat_start = today_et - timedelta(days=days_since_sat)
     # Shift back for weeks_back > 1
     week_offset = timedelta(days=(weeks_back - 1) * 7)
-    # until = Sunday 00:00 after the target Saturday (exclusive end — captures all of Sat)
-    until = last_sat_start + timedelta(days=1) - week_offset
-    # since = Monday 00:00 of that same work week (6 days before the Sunday boundary)
-    since = until - timedelta(days=6)
-    return since, until
+    # until = Sunday 00:00 ET after the target Saturday (exclusive — captures all of Sat ET)
+    until_et = last_sat_start + timedelta(days=1) - week_offset
+    # since = Monday 00:00 ET of that same work week (6 days before the Sunday boundary)
+    since_et = until_et - timedelta(days=6)
+    # Return as UTC for FUB API calls
+    return since_et.astimezone(timezone.utc), until_et.astimezone(timezone.utc)
 
 
 def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
@@ -3277,6 +3283,19 @@ def api_trigger_morning_nudges():
 
 
 
+@app.route("/api/admin/fub-uid-check")
+def api_fub_uid_check():
+    """Diagnostic: show fub_user_id for all agent profiles."""
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT agent_name, fub_user_id, email FROM agent_profiles ORDER BY agent_name")
+                rows = cur.fetchall()
+        return jsonify([{"agent_name": r[0], "fub_user_id": r[1], "email": r[2]} for r in rows])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/admin/nudge-audit")
 def api_admin_nudge_audit():
     """Full readiness audit: agents, goals, yesterday's activity, tokens, nudge log."""
@@ -4740,108 +4759,110 @@ def scheduled_sync_goals_data():
     year = datetime.now(timezone.utc).year
     print(f"[GOALS SYNC] Starting goals data sync for {year}…")
 
-    # ── 1. Sync FUB Deals ──────────────────────────────────────────────
     try:
-        client = FUBClient()
-        since = datetime(year, 1, 1, tzinfo=timezone.utc)
-        deals = client.get_deals(since=since)
+        # ── 1. Sync FUB Deals ──────────────────────────────────────────────
+        try:
+            client = FUBClient()
+            since = datetime(year, 1, 1, tzinfo=timezone.utc)
+            deals = client.get_deals(since=since)
 
-        all_goals = _db.get_all_goals(year=year)
-        comm_lookup = {g["agent_name"]: float(g["commission_pct"]) for g in all_goals}
+            all_goals = _db.get_all_goals(year=year)
+            comm_lookup = {g["agent_name"]: float(g["commission_pct"]) for g in all_goals}
 
-        # Build FUB user_id → agent_name map for accurate matching
-        profiles = _db.get_agent_profiles(active_only=False)
-        uid_to_name = {p["fub_user_id"]: p["agent_name"] for p in profiles if p["fub_user_id"]}
+            # Build FUB user_id → agent_name map for accurate matching
+            profiles = _db.get_agent_profiles(active_only=False)
+            uid_to_name = {p["fub_user_id"]: p["agent_name"] for p in profiles if p["fub_user_id"]}
 
-        def _pd(val):
-            """Parse an ISO date string or None — defined once, used per deal."""
-            if not val:
-                return None
-            try:
-                from datetime import date as _d
-                return _d.fromisoformat(str(val)[:10])
-            except Exception:
-                return None
+            def _pd(val):
+                """Parse an ISO date string or None — defined once, used per deal."""
+                if not val:
+                    return None
+                try:
+                    from datetime import date as _d
+                    return _d.fromisoformat(str(val)[:10])
+                except Exception:
+                    return None
 
-        synced = skipped = 0
-        for deal in deals:
-            fub_deal_id = deal.get("id")
-            if not fub_deal_id:
-                continue
+            synced = skipped = 0
+            for deal in deals:
+                fub_deal_id = deal.get("id")
+                if not fub_deal_id:
+                    continue
 
-            stage_raw = (deal.get("stage") or deal.get("stageName") or
-                         deal.get("stageLabel") or "")
+                stage_raw = (deal.get("stage") or deal.get("stageName") or
+                             deal.get("stageLabel") or "")
 
-            # Prefer user-ID match; fall back to name string
-            agent_uid = deal.get("assignedUserId") or deal.get("userId")
-            agent_name = uid_to_name.get(agent_uid)
-            if not agent_name:
-                raw = deal.get("assignedTo") or ""
-                agent_name = raw if isinstance(raw, str) else (
-                    f"{raw.get('firstName','')} {raw.get('lastName','')}".strip()
-                    if isinstance(raw, dict) else ""
-                )
+                # Prefer user-ID match; fall back to name string
+                agent_uid = deal.get("assignedUserId") or deal.get("userId")
+                agent_name = uid_to_name.get(agent_uid)
+                if not agent_name:
+                    raw = deal.get("assignedTo") or ""
+                    agent_name = raw if isinstance(raw, str) else (
+                        f"{raw.get('firstName','')} {raw.get('lastName','')}".strip()
+                        if isinstance(raw, dict) else ""
+                    )
 
-            sale_price = deal.get("price") or deal.get("salePrice") or 0
-            deal_name  = deal.get("name") or deal.get("address") or f"Deal #{fub_deal_id}"
+                sale_price = deal.get("price") or deal.get("salePrice") or 0
+                deal_name  = deal.get("name") or deal.get("address") or f"Deal #{fub_deal_id}"
 
-            close_date    = _pd(deal.get("closedAt") or deal.get("closeDate"))
-            contract_date = _pd(deal.get("contractDate") or deal.get("created"))
-            comm_pct      = comm_lookup.get(agent_name)
+                close_date    = _pd(deal.get("closedAt") or deal.get("closeDate"))
+                contract_date = _pd(deal.get("contractDate") or deal.get("created"))
+                comm_pct      = comm_lookup.get(agent_name)
 
-            result = _db.upsert_deal(fub_deal_id, agent_name, deal_name, sale_price,
-                                     stage_raw, contract_date, close_date,
-                                     commission_pct=comm_pct)
-            if result:
-                synced += 1
-            else:
-                skipped += 1
+                result = _db.upsert_deal(fub_deal_id, agent_name, deal_name, sale_price,
+                                         stage_raw, contract_date, close_date,
+                                         commission_pct=comm_pct)
+                if result:
+                    synced += 1
+                else:
+                    skipped += 1
 
-        print(f"[GOALS SYNC] Deals: {synced} synced, {skipped} skipped/unrecognised")
-    except Exception as e:
-        print(f"[GOALS SYNC] Deal sync error: {e}")
+            print(f"[GOALS SYNC] Deals: {synced} synced, {skipped} skipped/unrecognised")
+        except Exception as e:
+            print(f"[GOALS SYNC] Deal sync error: {e}")
 
-    # ── 2. Cache YTD calls + appointments per agent ────────────────────
-    try:
-        year_start = datetime(year, 1, 1, tzinfo=timezone.utc)
-        ytd_calls = client.get_calls(since=year_start)
-        ytd_appts = client.get_appointments(since=year_start)
+        # ── 2. Cache YTD calls + appointments per agent ────────────────────
+        try:
+            year_start = datetime(year, 1, 1, tzinfo=timezone.utc)
+            ytd_calls = client.get_calls(since=year_start)
+            ytd_appts = client.get_appointments(since=year_start)
 
-        fub_users = {
-            f"{u.get('firstName','')} {u.get('lastName','')}".strip(): u.get("id")
-            for u in client.get_users()
-        }
+            fub_users = {
+                f"{u.get('firstName','')} {u.get('lastName','')}".strip(): u.get("id")
+                for u in client.get_users()
+            }
 
-        calls_by_uid  = {}
-        for call in ytd_calls:
-            if call.get("isIncoming"):
-                continue
-            uid = call.get("userId")
-            if uid:
-                calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+            calls_by_uid  = {}
+            for call in ytd_calls:
+                if call.get("isIncoming"):
+                    continue
+                uid = call.get("userId")
+                if uid:
+                    calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
 
-        appts_by_uid = {}
-        for appt in ytd_appts:
-            uid = appt.get("assignedUserId") or appt.get("userId")
-            if uid:
-                appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
+            appts_by_uid = {}
+            for appt in ytd_appts:
+                uid = appt.get("assignedUserId") or appt.get("userId")
+                if uid:
+                    appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
 
-        cached = 0
-        for agent_name, fub_uid in fub_users.items():
-            if agent_name in config.EXCLUDED_USERS:
-                continue
-            calls = calls_by_uid.get(fub_uid, 0)
-            appts = appts_by_uid.get(fub_uid, 0)
-            if _db.upsert_ytd_cache(agent_name, year, calls, appts):
-                cached += 1
+            cached = 0
+            for agent_name, fub_uid in fub_users.items():
+                if agent_name in config.EXCLUDED_USERS:
+                    continue
+                calls = calls_by_uid.get(fub_uid, 0)
+                appts = appts_by_uid.get(fub_uid, 0)
+                if _db.upsert_ytd_cache(agent_name, year, calls, appts):
+                    cached += 1
 
-        print(f"[GOALS SYNC] YTD cache updated for {cached} agents")
-    except Exception as e:
-        print(f"[GOALS SYNC] YTD cache error: {e}")
-        _alert_on_job_failure("goals_data_sync", str(e))
+            print(f"[GOALS SYNC] YTD cache updated for {cached} agents")
+        except Exception as e:
+            print(f"[GOALS SYNC] YTD cache error: {e}")
+            _alert_on_job_failure("goals_data_sync", str(e))
 
-    print("[GOALS SYNC] Done.")
-    _db.release_job_lock("goals_data_sync")
+        print("[GOALS SYNC] Done.")
+    finally:
+        _db.release_job_lock("goals_data_sync")
 
 
 def scheduled_onboarding_escalation():

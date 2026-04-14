@@ -218,7 +218,8 @@ def select_arc(situation, recent_arcs):
 
     # Freshness: never same arc 2 days in a row, diminishing returns after that
     if recent_arcs:
-        weights[recent_arcs[0]] = 0  # hard block: yesterday
+        if recent_arcs[0] in weights:
+            weights[recent_arcs[0]] = 0  # hard block: yesterday
         if len(recent_arcs) > 1 and recent_arcs[1] in weights:
             weights[recent_arcs[1]] = weights[recent_arcs[1]] // 2
         if len(recent_arcs) > 2 and recent_arcs[2] in weights:
@@ -1037,7 +1038,7 @@ def _arc_deal_math(ctx, situation, goal_ctx, deal_summary, tone, top_agent, team
     if has_goals:
         gci_goal     = float(goal_ctx["gci_goal"])
         gci_goal_fmt = goal_ctx["gci_fmt"]
-        avg_price    = float(ctx.get("gci_goal", 0)) or 400000  # fallback
+        avg_price    = float(goal_ctx.get("avg_sale_price", 0)) or 400000  # fallback
         # Derive avg commission from deal summary if we have closings
         if closings_ytd > 0 and gci_ytd > 0:
             avg_commission = round(gci_ytd / closings_ytd)
@@ -1051,7 +1052,7 @@ def _arc_deal_math(ctx, situation, goal_ctx, deal_summary, tone, top_agent, team
         gci_goal_fmt       = _fmt_gci(ctx.get("gci_goal", 0))
         avg_commission     = 9600
         closings_needed_total = 14
-        closings_remaining    = 14 - closings_ytd
+        closings_remaining    = max(0, 14 - closings_ytd)
         gci_remaining         = 0.0
 
     avg_commission_fmt = _fmt_gci(avg_commission)
