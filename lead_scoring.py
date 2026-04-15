@@ -84,6 +84,8 @@ class LeadScorer:
         self.now = datetime.now(timezone.utc)
         # Pre-built map of personId → most recent site visit datetime
         self._visit_map = None
+        # Cache personId → calls so each lead is only fetched once per run
+        self._person_call_cache = {}
 
     # ------------------------------------------------------------------
     # Scoring
@@ -116,23 +118,63 @@ class LeadScorer:
             return 0, "EXCLUDED_STAGE", [f"stage '{stage}' excluded — lead parked by agent"]
 
         # --- 1. Ylopo signal tags (use highest, add multi-signal bonus) ---
+        # Important: Ylopo NEVER removes these tags after setting them — they persist
+        # on leads indefinitely even after the agent has already followed up.
+        # We apply signal aging: if the agent has made ANY outbound call attempt to
+        # this lead within the last 7 days, the signal score is cut to 20 (one call
+        # made, outcome unknown or brief) or 0 if the call was a real conversation
+        # (2+ min). This prevents a 2-month-old AI signal from overriding contact
+        # history and keeps worked leads from dominating the queue.
         signal_scores = []
         for tag, points in LEADSTREAM_SIGNAL_TAGS.items():
             if tag in tags:
                 signal_scores.append((tag, points))
 
         if signal_scores:
-            # Use highest signal
             best_tag, best_points = max(signal_scores, key=lambda x: x[1])
-            score += best_points
-            tier = best_tag
-            breakdown.append(f"{best_tag}: +{best_points}")
 
-            # Multi-signal bonus
-            if len(signal_scores) > 1:
-                score += LEADSTREAM_MULTI_SIGNAL_BONUS
-                other_tags = [t for t, _ in signal_scores if t != best_tag]
-                breakdown.append(f"multi-signal ({', '.join(other_tags)}): +{LEADSTREAM_MULTI_SIGNAL_BONUS}")
+            # Check whether agent has already attempted this lead recently.
+            # Uses personId-targeted call lookup so high-volume agents (33k+ calls)
+            # don't cause their older per-person calls to fall off the bulk fetch.
+            recent_attempt_hours = self._hours_since_last_attempt_by_person(
+                person_id, agent_calls
+            )
+            recent_convo = self._had_recent_conversation_by_person(
+                person_id, agent_calls, within_hours=504  # 21 days — generous buffer past re-engage window
+            )
+
+            if recent_convo:
+                # Agent spoke to them (2+ min call) since the AI signal fired.
+                # Signal is resolved — don't score it at all. Fall through to
+                # contact-history / aging tiers below.
+                breakdown.append(
+                    f"{best_tag} present but agent had 2+ min call — signal resolved"
+                )
+                signal_scores = []  # clear so we fall through to stale/aging tiers
+            elif recent_attempt_hours is not None and recent_attempt_hours <= 504:
+                # Agent attempted contact within 7 days but didn't reach them.
+                # Score the signal at 20 (not full points) — still worth a retry
+                # but shouldn't dominate above leads that have never been worked.
+                aged_points = 20
+                score += aged_points
+                tier = best_tag
+                breakdown.append(
+                    f"{best_tag}: attempted {recent_attempt_hours:.0f}h ago, aged to +{aged_points}"
+                )
+                signal_scores = []  # skip multi-signal bonus on aged signals
+            else:
+                # No recent contact — score at full strength
+                score += best_points
+                tier = best_tag
+                breakdown.append(f"{best_tag}: +{best_points}")
+
+                # Multi-signal bonus
+                if len(signal_scores) > 1:
+                    score += LEADSTREAM_MULTI_SIGNAL_BONUS
+                    other_tags = [t for t, _ in signal_scores if t != best_tag]
+                    breakdown.append(
+                        f"multi-signal ({', '.join(other_tags)}): +{LEADSTREAM_MULTI_SIGNAL_BONUS}"
+                    )
 
         # --- 2. IDX site visit recency (from Events API) ---
         last_visit = self._get_last_visit(person.get("id"))
@@ -251,10 +293,36 @@ class LeadScorer:
         self._build_visit_map()
         return self._visit_map.get(person_id)
 
+    def _get_person_calls(self, person_id):
+        """Fetch calls for a specific person, using cache to avoid repeat API calls.
+
+        Uses personId-targeted query so it works correctly even for agents with
+        tens of thousands of calls (e.g. 33k+ calls = bulk fetch misses older items).
+
+        Lookback is 21 days — 50% beyond the 14-day re-engage window — so a call
+        made at 8am on the boundary day isn't excluded by the exact-time cutoff.
+        """
+        if person_id not in self._person_call_cache:
+            since = self.now - timedelta(days=21)  # generous buffer past reengage window
+            try:
+                self._person_call_cache[person_id] = self.client.get_calls(
+                    person_id=person_id, since=since
+                )
+            except Exception as e:
+                logger.warning("Could not fetch calls for person %s: %s", person_id, e)
+                self._person_call_cache[person_id] = []
+        return self._person_call_cache[person_id]
+
     def _hours_since_last_contact(self, person_id, calls, texts):
-        """Hours since last outbound call or text to this person."""
+        """Hours since last outbound call or text to this person.
+
+        First checks the pre-fetched agent bulk calls list (fast). If no match
+        found there, falls back to a personId-targeted API call (accurate for
+        high-volume agents whose older calls fall outside the bulk fetch window).
+        """
         latest = None
 
+        # Search bulk call list first
         if calls:
             for call in calls:
                 if call.get("personId") == person_id and not call.get("isIncoming"):
@@ -269,15 +337,42 @@ class LeadScorer:
                     if dt and (latest is None or dt > latest):
                         latest = dt
 
+        # If bulk list had nothing, fall back to targeted personId lookup
+        if latest is None:
+            person_calls = self._get_person_calls(person_id)
+            for call in person_calls:
+                if not call.get("isIncoming"):
+                    dt = parse_dt(call.get("created"))
+                    if dt and (latest is None or dt > latest):
+                        latest = dt
+
         return hours_ago(latest, self.now)
 
     def _hours_since_last_attempt(self, person_id, calls, texts):
         """Hours since last outbound attempt (call or text) to this person."""
-        # Same as _hours_since_last_contact for now
         return self._hours_since_last_contact(person_id, calls, texts)
 
+    def _hours_since_last_attempt_by_person(self, person_id, agent_calls):
+        """Hours since last outbound call to this person, using personId-targeted lookup.
+
+        Used specifically for signal aging — bypasses bulk call pagination limits.
+        """
+        person_calls = self._get_person_calls(person_id)
+        # Also check agent bulk calls in case they're more recent
+        all_relevant = list(person_calls)
+        if agent_calls:
+            all_relevant += [c for c in agent_calls if c.get("personId") == person_id]
+
+        latest = None
+        for call in all_relevant:
+            if not call.get("isIncoming"):
+                dt = parse_dt(call.get("created"))
+                if dt and (latest is None or dt > latest):
+                    latest = dt
+        return hours_ago(latest, self.now)
+
     def _had_recent_conversation(self, person_id, calls, within_hours):
-        """Check if there was a 2+ min call with this person recently."""
+        """Check if there was a 2+ min call with this person recently (bulk list)."""
         if not calls:
             return False
         cutoff = self.now - timedelta(hours=within_hours)
@@ -285,6 +380,24 @@ class LeadScorer:
             if call.get("personId") == person_id:
                 dt = parse_dt(call.get("created"))
                 duration = call.get("duration", 0)
+                if dt and dt >= cutoff and duration >= 120:
+                    return True
+        return False
+
+    def _had_recent_conversation_by_person(self, person_id, agent_calls, within_hours):
+        """Check for a 2+ min call using personId-targeted lookup + bulk list.
+
+        Accurate for high-volume agents — personId query bypasses the bulk
+        pagination cap so older calls are not missed.
+        """
+        cutoff = self.now - timedelta(hours=within_hours)
+        all_calls = list(self._get_person_calls(person_id))
+        if agent_calls:
+            all_calls += [c for c in agent_calls if c.get("personId") == person_id]
+        for call in all_calls:
+            if not call.get("isIncoming"):
+                dt = parse_dt(call.get("created"))
+                duration = call.get("duration", 0) or 0
                 if dt and dt >= cutoff and duration >= 120:
                     return True
         return False

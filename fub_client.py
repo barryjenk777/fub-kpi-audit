@@ -193,24 +193,54 @@ class FUBClient:
 
     # ---- Calls ----
 
-    def get_calls(self, user_id=None, since=None, until=None):
+    def get_calls(self, user_id=None, person_id=None, since=None, until=None):
         """
         Get calls within a date range.
 
-        FUB's date filters and cursor pagination are unreliable, so we
-        paginate newest-first using offsets and stop once we pass the
-        `since` boundary.  Results are deduplicated and date-filtered
-        client-side.
+        When person_id is supplied, queries by personId directly — accurate
+        regardless of how many calls the agent has (bypasses the 2000-offset
+        pagination cap that would miss older calls for high-volume agents).
+
+        Without person_id, paginates newest-first by userId and stops once
+        past the `since` boundary (capped at offset 2000).
         """
         limit = 100
         offset = 0
-        max_offset = 2000
         since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None
         until_str = until.strftime("%Y-%m-%dT%H:%M:%SZ") if until else None
 
         all_calls = []
         seen_ids = set()
 
+        # personId filter: FUB returns ALL calls for this person — no agent-volume
+        # pagination issue. Date filtering is still done client-side.
+        if person_id:
+            params = {"personId": person_id, "limit": limit, "sort": "-created"}
+            offset = 0
+            while offset < 500:  # safety cap — no person will have 500+ calls
+                params["offset"] = offset
+                data = self._request("GET", "calls", params=params)
+                items = data.get("calls", [])
+                if not items:
+                    break
+                for call in items:
+                    cid = call.get("id")
+                    if cid in seen_ids:
+                        continue
+                    seen_ids.add(cid)
+                    created = call.get("created", "")
+                    if since_str and created < since_str:
+                        continue
+                    if until_str and created > until_str:
+                        continue
+                    all_calls.append(call)
+                if len(items) < limit:
+                    break
+                offset += limit
+            return all_calls
+
+        # Bulk userId path: paginate newest-first, stop at since boundary
+        max_offset = 2000
         while offset < max_offset:
             params = {"limit": limit, "offset": offset, "sort": "-created"}
             if user_id:
@@ -227,17 +257,14 @@ class FUBClient:
                 cid = call.get("id")
                 created = call.get("created", "")
 
-                # Skip duplicates
                 if cid in seen_ids:
                     continue
                 seen_ids.add(cid)
 
-                # Stop if we've passed the since boundary
                 if since_str and created < since_str:
                     past_range = True
                     break
 
-                # Skip calls after until
                 if until_str and created > until_str:
                     continue
 
