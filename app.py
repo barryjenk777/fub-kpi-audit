@@ -3283,15 +3283,25 @@ def api_trigger_morning_nudges():
 
 
 
-@app.route("/api/admin/fub-uid-check")
-def api_fub_uid_check():
-    """Diagnostic: show fub_user_id for all agent profiles."""
+@app.route("/api/admin/nudge-log-today")
+def api_nudge_log_today():
+    """Diagnostic: show today's nudge log entries with status."""
     try:
         with _db.get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT agent_name, fub_user_id, email FROM agent_profiles ORDER BY agent_name")
+                cur.execute("""
+                    SELECT agent_name, nudge_type, status, arc,
+                           sent_at AT TIME ZONE 'America/New_York' AS sent_et,
+                           LEFT(message_content, 80) AS subject_preview
+                    FROM nudge_log
+                    WHERE sent_at >= NOW() - INTERVAL '24 hours'
+                    ORDER BY sent_at DESC
+                """)
                 rows = cur.fetchall()
-        return jsonify([{"agent_name": r[0], "fub_user_id": r[1], "email": r[2]} for r in rows])
+        return jsonify([{
+            "agent_name": r[0], "nudge_type": r[1], "status": r[2],
+            "arc": r[3], "sent_et": str(r[4]), "subject_preview": r[5]
+        } for r in rows])
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
