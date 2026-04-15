@@ -135,40 +135,50 @@ class LeadScorer:
         if signal_scores:
             best_tag, best_points = max(signal_scores, key=lambda x: x[1])
 
-            # Check whether agent has already attempted this lead recently.
-            # Uses personId-targeted call lookup so high-volume agents (33k+ calls)
-            # don't cause their older per-person calls to fall off the bulk fetch.
-            recent_attempt_hours = self._hours_since_last_attempt_by_person(
-                person_id, agent_calls
-            )
-            recent_convo = self._had_recent_conversation_by_person(
-                person_id, agent_calls, within_hours=504  # 21 days — generous buffer past re-engage window
-            )
-
-            if recent_convo:
-                # Agent spoke to them (2+ min call) since the AI signal fired.
-                # Signal is resolved — don't score it at all. Fall through to
-                # contact-history / aging tiers below.
-                breakdown.append(
-                    f"{best_tag} present but agent had 2+ min call — signal resolved"
-                )
-                signal_scores = []  # clear so we fall through to stale/aging tiers
-            elif recent_attempt_hours is not None and recent_attempt_hours <= 504:
-                # Agent attempted contact within 7 days but didn't reach them.
-                # Score the signal at 20 (not full points) — still worth a retry
-                # but shouldn't dominate above leads that have never been worked.
-                aged_points = 20
-                score += aged_points
-                tier = best_tag
-                breakdown.append(
-                    f"{best_tag}: attempted {recent_attempt_hours:.0f}h ago, aged to +{aged_points}"
-                )
-                signal_scores = []  # skip multi-signal bonus on aged signals
-            else:
-                # No recent contact — score at full strength
+            if skip_suppression:
+                # Pond mode: skip per-lead personId API calls entirely.
+                # Recently-contacted pond leads are already filtered upstream by
+                # the 2-hour contacted_ids set in score_pond_leads(). Any lead
+                # that makes it here hasn't been worked in 2+ hours — score at
+                # full strength. Per-lead API lookups for 2000+ leads = timeout.
                 score += best_points
                 tier = best_tag
-                breakdown.append(f"{best_tag}: +{best_points}")
+                breakdown.append(f"{best_tag}: +{best_points} (pond, no aging check)")
+            else:
+                # Check whether agent has already attempted this lead recently.
+                # Uses personId-targeted call lookup so high-volume agents (33k+ calls)
+                # don't cause their older per-person calls to fall off the bulk fetch.
+                recent_attempt_hours = self._hours_since_last_attempt_by_person(
+                    person_id, agent_calls
+                )
+                recent_convo = self._had_recent_conversation_by_person(
+                    person_id, agent_calls, within_hours=504  # 21 days — generous buffer past re-engage window
+                )
+
+                if recent_convo:
+                    # Agent spoke to them (2+ min call) since the AI signal fired.
+                    # Signal is resolved — don't score it at all. Fall through to
+                    # contact-history / aging tiers below.
+                    breakdown.append(
+                        f"{best_tag} present but agent had 2+ min call — signal resolved"
+                    )
+                    signal_scores = []  # clear so we fall through to stale/aging tiers
+                elif recent_attempt_hours is not None and recent_attempt_hours <= 504:
+                    # Agent attempted contact within 7 days but didn't reach them.
+                    # Score the signal at 20 (not full points) — still worth a retry
+                    # but shouldn't dominate above leads that have never been worked.
+                    aged_points = 20
+                    score += aged_points
+                    tier = best_tag
+                    breakdown.append(
+                        f"{best_tag}: attempted {recent_attempt_hours:.0f}h ago, aged to +{aged_points}"
+                    )
+                    signal_scores = []  # skip multi-signal bonus on aged signals
+                else:
+                    # No recent contact — score at full strength
+                    score += best_points
+                    tier = best_tag
+                    breakdown.append(f"{best_tag}: +{best_points}")
 
                 # Multi-signal bonus
                 if len(signal_scores) > 1:
@@ -192,9 +202,17 @@ class LeadScorer:
 
         # --- 3. Stale hot: had signal tag + no agent contact in 3+ days ---
         if not signal_scores:
-            last_contact_hours = self._hours_since_last_contact(
-                person_id, agent_calls, agent_texts
-            )
+            # Pond mode: skip per-lead personId API calls for contact history.
+            # Pond leads don't have an assigned agent, so agent-specific call
+            # history lookup doesn't apply. Recently-worked pond leads are
+            # already suppressed by the 2-hour contacted_ids pre-filter.
+            # Score by lead age / site visits only.
+            if skip_suppression:
+                last_contact_hours = None
+            else:
+                last_contact_hours = self._hours_since_last_contact(
+                    person_id, agent_calls, agent_texts
+                )
             created = parse_dt(person.get("created"))
             created_hours = hours_ago(created, self.now) if created else None
 
