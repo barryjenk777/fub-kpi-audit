@@ -92,7 +92,8 @@ class LeadScorer:
     # Scoring
     # ------------------------------------------------------------------
 
-    def score_lead(self, person, agent_calls=None, agent_texts=None):
+    def score_lead(self, person, agent_calls=None, agent_texts=None,
+                   skip_suppression=False):
         """
         Score a single lead. Returns (score, tier_label, breakdown).
 
@@ -239,19 +240,21 @@ class LeadScorer:
             breakdown.append(f"seller lead: +{LEADSTREAM_SELLER_BONUS}")
 
         # --- 6. Suppression check ---
-        suppress_hours = LEADSTREAM_SUPPRESS_HOURS
-        last_attempt_hours = self._hours_since_last_attempt(
-            person_id, agent_calls, agent_texts
-        )
-        if last_attempt_hours is not None and last_attempt_hours < suppress_hours:
-            # Check if there was a real conversation (2+ min call)
-            had_conversation = self._had_recent_conversation(
-                person_id, agent_calls, suppress_hours
+        # Skipped for pond leads — they use a 2-hour contacted_ids pre-filter
+        # in score_pond_leads instead. Doing per-lead personId API calls for
+        # 2000+ pond leads would take 13+ minutes (800+ API requests).
+        if not skip_suppression:
+            suppress_hours = LEADSTREAM_SUPPRESS_HOURS
+            last_attempt_hours = self._hours_since_last_attempt(
+                person_id, agent_calls, agent_texts
             )
-            if not had_conversation:
-                # Attempted but no conversation — suppress
-                breakdown.append(f"attempted {last_attempt_hours:.0f}h ago, suppressed")
-                return 0, "SUPPRESSED", breakdown
+            if last_attempt_hours is not None and last_attempt_hours < suppress_hours:
+                had_conversation = self._had_recent_conversation(
+                    person_id, agent_calls, suppress_hours
+                )
+                if not had_conversation:
+                    breakdown.append(f"attempted {last_attempt_hours:.0f}h ago, suppressed")
+                    return 0, "SUPPRESSED", breakdown
 
         return score, tier, breakdown
 
@@ -505,7 +508,12 @@ class LeadScorer:
                 if pid in contacted_ids:
                     continue
 
-                score, tier, breakdown = self.score_lead(person)
+                # skip_suppression=True: pond leads use 2h contacted_ids pre-filter
+                # above. Skipping the per-lead 48h suppression API call avoids
+                # making 2000+ personId API requests (would take 13+ minutes).
+                score, tier, breakdown = self.score_lead(
+                    person, skip_suppression=True
+                )
                 if score > 0:
                     scored.append((person, score, tier, breakdown))
 
