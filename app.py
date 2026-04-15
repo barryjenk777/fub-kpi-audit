@@ -3290,7 +3290,7 @@ def api_nudge_log_today():
         with _db.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT agent_name, nudge_type, status, arc,
+                    SELECT agent_name, nudge_type, status,
                            sent_at AT TIME ZONE 'America/New_York' AS sent_et,
                            LEFT(message_content, 80) AS subject_preview
                     FROM nudge_log
@@ -3300,7 +3300,7 @@ def api_nudge_log_today():
                 rows = cur.fetchall()
         return jsonify([{
             "agent_name": r[0], "nudge_type": r[1], "status": r[2],
-            "arc": r[3], "sent_et": str(r[4]), "subject_preview": r[5]
+            "sent_et": str(r[3]), "subject_preview": r[4]
         } for r in rows])
     except Exception as e:
         return jsonify({"error": str(e)}), 500
