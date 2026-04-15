@@ -465,7 +465,12 @@ class LeadScorer:
 
     def score_pond_leads(self, limit=None):
         """
-        Score pond (shark tank) leads from LEADSTREAM_ALLOWED_POND_IDS only.
+        Score pond leads from LEADSTREAM_ALLOWED_POND_IDS only.
+
+        Queries each allowed pond directly by assignedPondId rather than
+        relying on updated_since — pond leads often sit unworked for weeks
+        so a 7-day recency filter would miss most of the pool.
+
         Uses site visits, signal tags, and lead recency to prioritize.
         Suppresses leads that any agent has already called/texted recently.
         Returns sorted list of (person, score, tier, breakdown) tuples.
@@ -483,36 +488,29 @@ class LeadScorer:
         # so we can suppress pond leads that have already been worked
         contacted_ids = self._get_recently_contacted_pond_ids()
 
-        # Fetch recently updated leads and filter to allowed ponds client-side
-        since = self.now - timedelta(days=7)
-        recent_people = self.client.get_people(updated_since=since)
+        # Query each allowed pond directly — gets ALL leads regardless of
+        # when they were last "updated" in FUB (resolves the 88/2303 problem
+        # where only recently-updated pond leads showed up in the scoring pool)
+        for pond_id in sorted(LEADSTREAM_ALLOWED_POND_IDS):
+            pond_people = self.client.get_people(pond_id=pond_id)
+            logger.info("Pond %d: %d leads to score", pond_id, len(pond_people))
 
-        skipped_ponds = {}
-        for person in recent_people:
-            pid = person.get("id")
-            if pid in seen_ids:
-                continue
-            seen_ids.add(pid)
+            for person in pond_people:
+                pid = person.get("id")
+                if pid in seen_ids:
+                    continue
+                seen_ids.add(pid)
 
-            # Skip leads not in an allowed working pond
-            pond_id = person.get("assignedPondId")
-            if not pond_id:
-                continue
-            if not self._is_pond_lead(person):
-                skipped_ponds[pond_id] = skipped_ponds.get(pond_id, 0) + 1
-                continue
+                # Suppress if any agent already contacted this lead recently
+                if pid in contacted_ids:
+                    continue
 
-            # Suppress if any agent already contacted this lead recently
-            if pid in contacted_ids:
-                continue
+                score, tier, breakdown = self.score_lead(person)
+                if score > 0:
+                    scored.append((person, score, tier, breakdown))
 
-            score, tier, breakdown = self.score_lead(person)
-            if score > 0:
-                scored.append((person, score, tier, breakdown))
-
-        if skipped_ponds:
-            logger.info("Pond scoring: skipped %d leads in non-allowed ponds %s",
-                        sum(skipped_ponds.values()), skipped_ponds)
+        logger.info("Pond scoring complete: %d leads scored > 0 across %d allowed ponds",
+                    len(scored), len(LEADSTREAM_ALLOWED_POND_IDS))
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:limit]

@@ -280,7 +280,7 @@ class FUBClient:
     # ---- People ----
 
     def get_people(self, assigned_user_id=None, tag=None, updated_since=None,
-                   created_since=None, limit=100):
+                   created_since=None, pond_id=None, limit=100):
         """Get people (leads) with optional filters."""
         params = {"limit": limit}
         if assigned_user_id:
@@ -291,6 +291,8 @@ class FUBClient:
             params["updatedSince"] = updated_since.strftime("%Y-%m-%dT%H:%M:%S")
         if created_since:
             params["createdSince"] = created_since.strftime("%Y-%m-%dT%H:%M:%S")
+        if pond_id is not None:
+            params["assignedPondId"] = pond_id
         return self._get_paginated("people", params)
 
     # ---- Groups ----
