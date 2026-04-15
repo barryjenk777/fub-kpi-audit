@@ -1799,7 +1799,11 @@ def get_last_nudge(agent_name, nudge_type):
 
 
 def get_nudge_counts_today(agent_name):
-    """How many nudges sent today per type — prevents double-sending."""
+    """How many nudges sent today (ET calendar date) per type — prevents double-sending.
+
+    Uses ET midnight as the day boundary so a manual trigger or late-evening
+    send on Monday never blocks Tuesday morning's scheduled run.
+    """
     if not is_available():
         return {}
     try:
@@ -1807,7 +1811,9 @@ def get_nudge_counts_today(agent_name):
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT nudge_type, COUNT(*) FROM nudge_log
-                    WHERE  agent_name = %s AND sent_at >= NOW() - INTERVAL '24 hours'
+                    WHERE  agent_name = %s
+                      AND  sent_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'America/New_York')
+                                       AT TIME ZONE 'America/New_York'
                     GROUP  BY nudge_type
                 """, (agent_name,))
                 rows = cur.fetchall()
