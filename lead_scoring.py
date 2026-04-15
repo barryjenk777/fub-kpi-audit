@@ -31,6 +31,7 @@ logger = logging.getLogger("leadstream")
 from config import (
     EXCLUDED_USERS,
     LEADSTREAM_AGING_NEW_POINTS,
+    LEADSTREAM_ALLOWED_POND_IDS,
     LEADSTREAM_API_KEY_ENV,
     LEADSTREAM_EXCLUDED_SOURCES,
     LEADSTREAM_EXCLUDED_STAGES,
@@ -449,17 +450,22 @@ class LeadScorer:
 
     @staticmethod
     def _is_pond_lead(person):
-        """Check if a lead is in the pond (shark tank).
+        """Check if a lead is in an allowed pond.
 
-        FUB pond leads have an assignedPondId set. They may still have an
-        assignedUserId (e.g., ISA), but the pondId indicates they're in the
-        shared pool waiting to be claimed by an agent.
+        Only scores leads in LEADSTREAM_ALLOWED_POND_IDS — the active agent
+        working ponds (Shark Tank, Engaged Seller Prospecting). Skips ponds
+        with separate workflows: Probate (id=1), Storage/parked (id=6),
+        MYPlus pre-foreclosure investor leads (id=9), Recruiting (id=8).
+
+        This prevents the 80-lead pond limit from being consumed by leads
+        that agents never work from their daily call smart list.
         """
-        return bool(person.get("assignedPondId"))
+        pond_id = person.get("assignedPondId")
+        return bool(pond_id and pond_id in LEADSTREAM_ALLOWED_POND_IDS)
 
     def score_pond_leads(self, limit=None):
         """
-        Score pond (shark tank) leads. Pond leads have an assignedPondId.
+        Score pond (shark tank) leads from LEADSTREAM_ALLOWED_POND_IDS only.
         Uses site visits, signal tags, and lead recency to prioritize.
         Suppresses leads that any agent has already called/texted recently.
         Returns sorted list of (person, score, tier, breakdown) tuples.
@@ -477,18 +483,23 @@ class LeadScorer:
         # so we can suppress pond leads that have already been worked
         contacted_ids = self._get_recently_contacted_pond_ids()
 
-        # Fetch recently updated leads and filter to pond leads client-side
+        # Fetch recently updated leads and filter to allowed ponds client-side
         since = self.now - timedelta(days=7)
         recent_people = self.client.get_people(updated_since=since)
 
+        skipped_ponds = {}
         for person in recent_people:
             pid = person.get("id")
             if pid in seen_ids:
                 continue
             seen_ids.add(pid)
 
-            # Only include pond leads
+            # Skip leads not in an allowed working pond
+            pond_id = person.get("assignedPondId")
+            if not pond_id:
+                continue
             if not self._is_pond_lead(person):
+                skipped_ponds[pond_id] = skipped_ponds.get(pond_id, 0) + 1
                 continue
 
             # Suppress if any agent already contacted this lead recently
@@ -498,6 +509,10 @@ class LeadScorer:
             score, tier, breakdown = self.score_lead(person)
             if score > 0:
                 scored.append((person, score, tier, breakdown))
+
+        if skipped_ponds:
+            logger.info("Pond scoring: skipped %d leads in non-allowed ponds %s",
+                        sum(skipped_ponds.values()), skipped_ponds)
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:limit]

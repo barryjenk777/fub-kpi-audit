@@ -265,6 +265,21 @@ LEADSTREAM_EXCLUDED_STAGES = [
     "Future - 2+ Years",
 ]
 
+# FUB pond IDs that LeadStream should score for the pond queue.
+# Ponds NOT in this list are skipped entirely — they have different workflows
+# (probate, off-market investor, recruiting) that don't belong in the agent
+# daily call list alongside Ylopo inbound leads.
+#
+# Current pond map:
+#   1 = Probate Pond      → separate workflow, skip
+#   4 = Shark Tank 🦈     → main agent working pond ✓
+#   5 = Seller Test       → skip
+#   6 = Storage Pond      → parked/cold, skip
+#   7 = Engaged Seller    → active seller prospecting ✓
+#   8 = Recruiting Agents → skip
+#   9 = MYPlus            → pre-foreclosure investor leads, skip
+LEADSTREAM_ALLOWED_POND_IDS = {4, 7}
+
 # Stale hot threshold: days since last agent contact to qualify
 LEADSTREAM_STALE_DAYS = 3
 
