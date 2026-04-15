@@ -33,6 +33,7 @@ from config import (
     LEADSTREAM_AGING_NEW_POINTS,
     LEADSTREAM_API_KEY_ENV,
     LEADSTREAM_EXCLUDED_SOURCES,
+    LEADSTREAM_EXCLUDED_STAGES,
     LEADSTREAM_LIMIT,
     LEADSTREAM_MULTI_SIGNAL_BONUS,
     LEADSTREAM_NEW_LEAD_24H_BONUS,
@@ -105,6 +106,14 @@ class LeadScorer:
         source = person.get("source", "")
         if source in LEADSTREAM_EXCLUDED_SOURCES:
             return 0, "EXCLUDED_SOURCE", [f"source '{source}' excluded"]
+
+        # --- 0b. Stage exclusion — agent has already resolved/deferred this lead ---
+        # Cold/parked stages score 0 regardless of any Ylopo signal tags still present.
+        # This prevents AI_NEEDS_FOLLOW_UP from re-surfacing a lead the agent has
+        # already worked and qualified as "not ready" (e.g. "not selling till 2027").
+        stage = person.get("stage") or ""
+        if stage in LEADSTREAM_EXCLUDED_STAGES:
+            return 0, "EXCLUDED_STAGE", [f"stage '{stage}' excluded — lead parked by agent"]
 
         # --- 1. Ylopo signal tags (use highest, add multi-signal bonus) ---
         signal_scores = []

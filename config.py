@@ -249,6 +249,22 @@ LEADSTREAM_EXCLUDED_SOURCES = [
     "Courted.io",
 ]
 
+# FUB stages that mean the agent has already resolved/deferred this lead.
+# Leads in these stages score 0 regardless of Ylopo signal tags.
+# This prevents "AI_NEEDS_FOLLOW_UP" from re-surfacing a lead the agent has
+# already worked and parked (e.g., "not selling till 2027", family situation).
+LEADSTREAM_EXCLUDED_STAGES = [
+    "C - Cold 6+ Months",
+    "C - Cold 3-6 Months",
+    "Cold",
+    "Not Interested",
+    "Closed - Lost",
+    "Unqualified",
+    "Do Not Contact",
+    "Future - 1 Year+",
+    "Future - 2+ Years",
+]
+
 # Stale hot threshold: days since last agent contact to qualify
 LEADSTREAM_STALE_DAYS = 3
 
