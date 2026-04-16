@@ -3380,10 +3380,66 @@ def api_sync_fub_roster():
 
 @app.route("/api/goals/sync-activity", methods=["POST"])
 def api_sync_daily_activity():
-    """Manually trigger yesterday's FUB activity sync into daily_activity table."""
+    """Manually trigger FUB activity sync (yesterday + today) into daily_activity table."""
     try:
-        sync_daily_activity_from_fub()
-        return jsonify({"ok": True, "message": "Activity sync complete"})
+        _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+        ET_tz = timezone(timedelta(hours=_et_h))
+        today_et     = datetime.now(ET_tz).date()
+        yesterday_et = today_et - timedelta(days=1)
+        sync_daily_activity_from_fub(target_date=yesterday_et)
+        sync_daily_activity_from_fub(target_date=today_et)
+        return jsonify({"ok": True, "message": "Activity sync complete (yesterday + today)"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/goals/sync-ytd-cache", methods=["POST"])
+def api_sync_ytd_cache():
+    """Rebuild the YTD calls + appointments cache for all agents from FUB."""
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+    try:
+        year = datetime.now(timezone.utc).year
+        client = FUBClient()
+        year_start = datetime(year, 1, 1, tzinfo=timezone.utc)
+        ytd_calls = client.get_calls(since=year_start)
+        ytd_appts = client.get_appointments(since=year_start)
+
+        fub_users = {
+            f"{u.get('firstName','')} {u.get('lastName','')}".strip(): u.get("id")
+            for u in client.get_users()
+        }
+        calls_by_uid = {}
+        for call in ytd_calls:
+            if call.get("isIncoming"):
+                continue
+            uid = call.get("userId")
+            if uid:
+                calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+
+        appts_by_uid = {}
+        for appt in ytd_appts:
+            invitees = appt.get("invitees") or []
+            has_lead = any(inv.get("personId") for inv in invitees)
+            if not has_lead:
+                continue
+            for inv in invitees:
+                uid = inv.get("userId")
+                if uid:
+                    appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
+
+        cached = 0
+        details = {}
+        for agent_name, fub_uid in fub_users.items():
+            if agent_name in config.EXCLUDED_USERS:
+                continue
+            calls = calls_by_uid.get(fub_uid, 0)
+            appts = appts_by_uid.get(fub_uid, 0)
+            if _db.upsert_ytd_cache(agent_name, year, calls, appts):
+                cached += 1
+                details[agent_name] = {"calls_ytd": calls, "appts_ytd": appts}
+
+        return jsonify({"ok": True, "agents_updated": cached, "year": year, "details": details})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
