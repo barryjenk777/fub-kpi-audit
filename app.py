@@ -4691,11 +4691,18 @@ def sync_daily_activity_from_fub(target_date=None):
 
         # ── Appointments ───────────────────────────────────────────────
         all_appts = fub.get_appointments(since=d_start_utc, until=d_end_utc)
+        # FUB does NOT reliably expose userId at the appointment root.
+        # Must use invitees array, same as count_appointments_for_user.
         appts_by_uid = {}
         for a in all_appts:
-            uid = a.get("userId") or a.get("assignedUserId")
-            if uid:
-                appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
+            invitees = a.get("invitees") or []
+            has_lead = any(inv.get("personId") for inv in invitees)
+            if not has_lead:
+                continue
+            for inv in invitees:
+                uid = inv.get("userId")
+                if uid:
+                    appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
 
         # ── Upsert per agent ───────────────────────────────────────────
         agents  = _db.get_agent_profiles(active_only=True)
@@ -4737,11 +4744,21 @@ def sync_week_activity_from_fub():
 
 
 def scheduled_sync_daily_activity():
-    """Scheduler wrapper for sync_daily_activity_from_fub()."""
+    """Scheduler wrapper for sync_daily_activity_from_fub().
+
+    Syncs both yesterday (complete day) and today (partial — so agents
+    see their current-day appointments and calls on the dashboard).
+    """
     if not _db.try_acquire_job_lock("activity_sync"):
         return  # Another worker is already running this job
     try:
-        sync_daily_activity_from_fub()
+        _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+        ET = timezone(timedelta(hours=_et_h))
+        today_et = datetime.now(ET).date()
+        yesterday_et = today_et - timedelta(days=1)
+
+        sync_daily_activity_from_fub(target_date=yesterday_et)  # complete day
+        sync_daily_activity_from_fub(target_date=today_et)      # partial — current day
     except Exception as e:
         _alert_on_job_failure("activity_sync", str(e))
         print(f"[ACTIVITY SYNC] Unhandled error in scheduled run: {e}")
@@ -4850,11 +4867,19 @@ def scheduled_sync_goals_data():
                 if uid:
                     calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
 
+            # FUB does NOT reliably expose userId at the appointment root.
+            # Must check invitees array — same logic as count_appointments_for_user
+            # in kpi_audit.py. Only count if a lead (personId) is attached.
             appts_by_uid = {}
             for appt in ytd_appts:
-                uid = appt.get("assignedUserId") or appt.get("userId")
-                if uid:
-                    appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
+                invitees = appt.get("invitees") or []
+                has_lead = any(inv.get("personId") for inv in invitees)
+                if not has_lead:
+                    continue
+                for inv in invitees:
+                    uid = inv.get("userId")
+                    if uid:
+                        appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
 
             cached = 0
             for agent_name, fub_uid in fub_users.items():
@@ -5141,13 +5166,14 @@ def start_scheduler():
                        id="roster_sync", name="FUB roster sync (every 4h)",
                        max_instances=1, coalesce=True)
 
-    # Daily activity sync: 3:30am ET nightly
-    # Pulls yesterday's calls + appointments from FUB → daily_activity table.
-    # Agents who forget to log manually still see their numbers by morning.
+    # Daily activity sync: 3:30am + every 2 hours 7am–9pm ET
+    # 3:30am: syncs yesterday (complete day) + today (starts fresh)
+    # Intraday: updates today's partial counts so agents see live numbers
+    # on their dashboard without waiting until tomorrow morning.
     # Uses GREATEST so manual entries that are higher are never overwritten.
     _scheduler.add_job(scheduled_sync_daily_activity,
-                       CronTrigger(hour=3, minute=30, timezone=ET),
-                       id="activity_sync", name="FUB daily activity sync (3:30am)",
+                       CronTrigger(hour="3,7,9,11,13,15,17,19,21", minute=30, timezone=ET),
+                       id="activity_sync", name="FUB daily activity sync (3:30am + intraday)",
                        max_instances=1, coalesce=True)
 
     # Onboarding escalation: daily 8am ET (Day 3 + Day 7 follow-ups)
