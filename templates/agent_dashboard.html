@@ -57,6 +57,25 @@ button{cursor:pointer;border:none;font-family:inherit}
 .why-text{font-size:.88rem;color:var(--text);line-height:1.55;font-style:italic}
 .why-for{font-size:.72rem;color:var(--muted);margin-top:.35rem}
 
+/* Daily Number card */
+.dn-card{background:linear-gradient(135deg,rgba(245,166,35,.1),rgba(245,166,35,.02));border:1px solid rgba(245,166,35,.25);border-top:3px solid var(--gold);border-radius:var(--r);padding:1.3rem 1.2rem 1rem;margin-bottom:.9rem;text-align:center}
+.dn-eyebrow{font-size:.58rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);margin-bottom:.6rem}
+.dn-number-wrap{display:flex;align-items:baseline;justify-content:center;gap:.35rem;margin-bottom:.15rem}
+.dn-big{font-size:4.5rem;font-weight:900;color:var(--gold);line-height:1;letter-spacing:-.02em}
+.dn-unit{font-size:.9rem;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.05em;align-self:flex-end;padding-bottom:.55rem}
+.dn-context{font-size:.82rem;color:var(--muted);line-height:1.55;margin:.65rem 0 .85rem}
+.dn-context strong{color:var(--text)}
+.dn-progress-wrap{margin:.5rem 0 .9rem}
+.dn-progress-dots{display:flex;justify-content:center;gap:.4rem;flex-wrap:wrap}
+.dn-dot{width:18px;height:18px;border-radius:50%;background:var(--gold);flex-shrink:0}
+.dn-dot.empty{background:transparent;border:2px solid var(--subtle)}
+.dn-progress-text{font-size:.82rem;color:var(--muted)}
+.dn-progress-text .dn-done{color:var(--gold);font-weight:700}
+.dn-chain{font-size:.68rem;color:var(--subtle);line-height:1.8;border-top:1px solid var(--border);padding-top:.7rem;margin-top:.15rem}
+.dn-chain-item{display:inline}
+.dn-chain-sep{color:var(--subtle);margin:0 .2rem}
+.dn-goal-met{font-size:.88rem;color:var(--green);font-weight:700;margin:.5rem 0}
+
 /* Daily logging */
 .log-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.1rem 1.2rem;margin-bottom:.9rem}
 .log-title{font-size:.65rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:1rem;display:flex;align-items:center;justify-content:space-between}
@@ -181,6 +200,21 @@ button{cursor:pointer;border:none;font-family:inherit}
       <div class="why-eyebrow">Your Why</div>
       <div class="why-text" id="daily-why-text"></div>
       <div class="why-for" id="daily-why-for"></div>
+    </div>
+
+    <!-- Daily Number -->
+    <div class="dn-card" id="dn-card" style="display:none">
+      <div class="dn-eyebrow">Your Number Today</div>
+      <div id="dn-goal-met" class="dn-goal-met" style="display:none">🎉 You've hit your closing goal for the year. Keep going.</div>
+      <div id="dn-main">
+        <div class="dn-number-wrap">
+          <div class="dn-big" id="dn-big">—</div>
+          <div class="dn-unit">conversations</div>
+        </div>
+        <div class="dn-context" id="dn-context"></div>
+        <div class="dn-progress-wrap" id="dn-progress-wrap"></div>
+        <div class="dn-chain" id="dn-chain"></div>
+      </div>
     </div>
 
     <!-- Streak -->
@@ -347,11 +381,127 @@ function renderAll() {
   }
 
   renderWhyCards(d.why);
+  renderDailyNumber(d.goal, d.actuals, d.today);
   renderStreak(d.streak);
   renderTodayLog(d.today, d.identity);
   renderChain(d.activity_log, d.identity);
   renderWeekly(d.activity_log, d.identity);
   renderAnnual(d.goal, d.pace, d.actuals, d.targets, d.why);
+}
+
+// ── Daily Number ──────────────────────────────────────────────────
+
+function renderDailyNumber(goal, actuals, today) {
+  const card = document.getElementById('dn-card');
+  if (!goal || !goal.gci_goal) return;
+
+  const gci      = parseFloat(goal.gci_goal || 0);
+  const soiGci   = parseFloat(goal.soi_gci_expected || 0);
+  const leadGci  = Math.max(gci - soiGci, 0);
+  const avgPrice = parseFloat(goal.avg_sale_price || 400000);
+  const commPct  = parseFloat(goal.commission_pct || 0.025);
+  const perDeal  = avgPrice * commPct;
+  const a2c      = parseFloat(goal.appt_to_contract_rate || 0.30);
+  const c2cl     = parseFloat(goal.contract_to_close_rate || 0.80);
+
+  // 1 in 4 conversations → appointment (industry standard; reflects call→convo→appt chain)
+  const CONVO_TO_APPT = 0.25;
+
+  const closingsYtd    = actuals?.closings_ytd || 0;
+  const closingsNeeded = perDeal > 0 ? gci / perDeal : 0;
+  const closingsLeft   = Math.max(closingsNeeded - closingsYtd, 0);
+
+  // Goal already hit?
+  if (closingsLeft < 0.5) {
+    document.getElementById('dn-goal-met').style.display = 'block';
+    document.getElementById('dn-main').style.display = 'none';
+    card.style.display = 'block';
+    return;
+  }
+
+  const contractsLeft = c2cl > 0 ? closingsLeft / c2cl : 0;
+  const apptsLeft     = a2c > 0 ? contractsLeft / a2c : 0;
+  const convosLeft    = CONVO_TO_APPT > 0 ? apptsLeft / CONVO_TO_APPT : 0;
+
+  // Working days remaining in year (Mon–Fri, today inclusive)
+  const now     = new Date();
+  const yearEnd = new Date(now.getFullYear(), 11, 31);
+  let workDays  = 0;
+  const cur     = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  while (cur <= yearEnd) {
+    const dow = cur.getDay();
+    if (dow !== 0 && dow !== 6) workDays++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  workDays = Math.max(workDays, 1);
+
+  const convosPerDay = Math.max(Math.ceil(convosLeft / workDays), 1);
+
+  // Format helpers
+  const fmt = (n) => {
+    if (n >= 1000000) return '$' + (n/1000000).toFixed(1) + 'M';
+    if (n >= 1000)    return '$' + Math.round(n/1000) + 'K';
+    return '$' + Math.round(n).toLocaleString();
+  };
+
+  document.getElementById('dn-big').textContent = convosPerDay;
+
+  // Context sentence — personal, goal-connected
+  const ctxEl = document.getElementById('dn-context');
+  const plural = convosPerDay !== 1;
+  if (soiGci > 0 && leadGci > 0) {
+    ctxEl.innerHTML =
+      `You wanted <strong>${fmt(gci)}</strong> this year — <strong>${fmt(Math.round(leadGci))}</strong> of that comes from lead calls. ` +
+      `${plural ? convosPerDay + ' real conversations' : 'One real conversation'} a day keeps the math on your side.`;
+  } else {
+    ctxEl.innerHTML =
+      `You set a goal of <strong>${fmt(gci)}</strong> this year. ` +
+      `${plural ? convosPerDay + ' real conversations' : 'One real conversation'} a day gets you there.`;
+  }
+
+  // Progress toward today's conversation target
+  // We estimate from calls: ~1 in 5 calls is a real conversation (≥2 min)
+  const callsToday  = today?.calls || 0;
+  const convoEst    = Math.round(callsToday * 0.20);  // rough estimate from calls
+  const progEl      = document.getElementById('dn-progress-wrap');
+
+  if (convosPerDay <= 8) {
+    // Dot visualization
+    let dots = '<div class="dn-progress-dots">';
+    for (let i = 0; i < convosPerDay; i++) {
+      dots += `<div class="dn-dot${i < convoEst ? '' : ' empty'}"></div>`;
+    }
+    dots += '</div>';
+    if (callsToday > 0) {
+      const remaining = Math.max(convosPerDay - convoEst, 0);
+      dots += `<div class="dn-progress-text" style="margin-top:.5rem">` +
+        (convoEst >= convosPerDay
+          ? `<span class="dn-done">✓ Today's conversations done.</span>`
+          : `~<span class="dn-done">${convoEst}</span> of ${convosPerDay} today (est. from ${callsToday} calls)`) +
+        `</div>`;
+    }
+    progEl.innerHTML = dots;
+  } else {
+    // Text version for large numbers
+    progEl.innerHTML = callsToday > 0
+      ? `<div class="dn-progress-text">~<span class="dn-done">${convoEst}</span> of ${convosPerDay} today (est. from ${callsToday} calls)</div>`
+      : '';
+  }
+
+  // Math chain — shows the work
+  const chainEl = document.getElementById('dn-chain');
+  chainEl.innerHTML =
+    `<span class="dn-chain-item">${fmt(gci)} goal</span>` +
+    `<span class="dn-chain-sep">→</span>` +
+    `<span class="dn-chain-item">${Math.round(closingsLeft)} closing${Math.round(closingsLeft)!==1?'s':''} left</span>` +
+    `<span class="dn-chain-sep">→</span>` +
+    `<span class="dn-chain-item">${Math.round(apptsLeft)} appts to set</span>` +
+    `<span class="dn-chain-sep">→</span>` +
+    `<span class="dn-chain-item">${Math.round(convosLeft)} conversations this year</span>` +
+    `<span class="dn-chain-sep">÷</span>` +
+    `<span class="dn-chain-item">${workDays} working days left</span>`;
+
+  card.style.display = 'block';
 }
 
 // ── Why cards ─────────────────────────────────────────────────────
