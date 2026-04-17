@@ -79,7 +79,7 @@ SELL_BEFORE_BUY_TAGS = {
     "sell_before_buy=Yes",
 }
 
-LOGO_URL = "https://i.postimg.cc/wMttBBmb/legacy-logo.png"
+LOGO_URL = "https://web-production-3363cc.up.railway.app/static/logo-blue.png"
 PHYSICAL_ADDRESS = "LPT Realty · 1545 Crossways Blvd Chesapeake, VA 23320"
 FROM_EMAIL = "barry@yourfriendlyagent.net"
 FROM_NAME  = "Barry Jenkins | Legacy Home Team"
