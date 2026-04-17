@@ -892,10 +892,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
             logger.error("Send failed for %s: %s", name, e)
             continue
 
-        # Log
+        # Log — use 'or 0' so None prices format safely
+        price_min = behavior.get('price_min') or 0
+        price_max = behavior.get('price_max') or 0
         behavior_summary = (
             f"Views:{behavior['view_count']} Saves:{behavior['save_count']} "
-            f"Price:${behavior.get('price_min',0):,}-${behavior.get('price_max',0):,} "
+            f"Price:${price_min:,}-${price_max:,} "
             f"Cities:{','.join(behavior['cities'])}"
         )
         _db.log_pond_email(
