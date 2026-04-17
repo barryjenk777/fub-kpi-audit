@@ -482,18 +482,19 @@ Each subject line must feel like you wrote it only for this one person."""
     data = json.loads(raw)
     subject_options = data.get("subject_options", [])
     subject = subject_options[0] if subject_options else f"Following up — {first_name}"
-    body_text = data.get("body", "")
+    claude_body = data.get("body", "")
 
-    # Append signature
-    body_text = body_text + "\n\n" + SIGN_OFF
+    # Plain text: append the full sign-off (email clients that strip HTML see this)
+    body_text = claude_body + "\n\n" + SIGN_OFF
 
-    # Render HTML
-    body_html = _render_html(body_text)
+    # HTML: render Claude body only — the HTML template has its own signature footer
+    # so we do NOT include SIGN_OFF here, which would create a double signature.
+    body_html = _render_html(claude_body)
 
     return {
-        "subject":     subject,
-        "body_text":   body_text,
-        "body_html":   body_html,
+        "subject":      subject,
+        "body_text":    body_text,
+        "body_html":    body_html,
         "all_subjects": subject_options,
     }
 
