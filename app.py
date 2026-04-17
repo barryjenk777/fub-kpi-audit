@@ -4709,7 +4709,7 @@ def api_pond_mailer_dashboard():
     """
     cache_key = "pond_mailer_dashboard"
     cached = _cache.get(cache_key)
-    if cached and (time.time() - cached["ts"]) < 300:
+    if cached and (datetime.now().timestamp() - cached["ts"]) < 300:
         return jsonify(cached["data"])
 
     try:
@@ -4803,7 +4803,7 @@ def api_pond_mailer_dashboard():
             })
 
         result = {**base, "routed_leads": enriched}
-        _cache[cache_key] = {"ts": time.time(), "data": result}
+        _cache[cache_key] = {"ts": datetime.now().timestamp(), "data": result}
         return jsonify(result)
 
     except Exception as e:
