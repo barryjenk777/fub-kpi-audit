@@ -563,6 +563,28 @@ class FUBClient:
             params["since"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
         return self._get_paginated("events", params, max_pages=max_pages)
 
+    def get_events_for_person(self, person_id, days=30, limit=50):
+        """Get all IDX events for a specific lead.
+
+        Returns property views, saves, and search page visits for the lead.
+        Uses personId filter directly — returns all events regardless of
+        agent or volume constraints.
+
+        Each 'Viewed Property' and 'Property Saved' event includes a full
+        property object: street, city, state, code (zip), price, bedrooms,
+        bathrooms, area (sqft), mlsNumber, url.
+        """
+        from datetime import datetime, timedelta, timezone
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        params = {
+            "personId": person_id,
+            "limit": limit,
+            "sort": "-created",
+            "since": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        data = self._request("GET", "events", params=params)
+        return data.get("events", [])
+
     @property
     def request_count(self):
         return self._request_count

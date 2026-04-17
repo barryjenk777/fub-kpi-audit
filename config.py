@@ -210,10 +210,18 @@ LEADSTREAM_POND_LIMIT = 80
 
 # Ylopo signal tags and their base point values (highest tier first)
 LEADSTREAM_SIGNAL_TAGS = {
-    "AI_NEEDS_FOLLOW_UP": 100,       # rAIya text converted — call NOW
-    "AI_VOICE_NEEDS_FOLLOW_UP": 95,  # AI voice converted
-    "HANDRAISER": 80,                # Lead asking for help
-    "YPRIORITY": 50,                 # Property saves/shares
+    "AI_NEEDS_FOLLOW_UP":       100,  # rAIya text converted — call NOW
+    "AI_VOICE_NEEDS_FOLLOW_UP":  95,  # AI voice converted
+    "HANDRAISER":                80,  # Lead asking for help
+    "YPRIORITY":                 50,  # Ylopo top-priority buyer signal
+    # Behavioral intent tags — set by Ylopo based on IDX activity
+    "Y_HOME_3_VIEW":             45,  # Viewed same home 3+ times — strong attachment
+    "HVB":                       35,  # High-value buyer flag
+    "Y_SHARED_LISTING":          30,  # Shared a listing (likely with partner/spouse)
+    "RETURNED":                  25,  # Came back after going quiet
+    "Y_REMARKETING_ENGAGED":     20,  # Re-engaged via remarketing ads
+    "Y_SELLER_REPORT_VIEWED":    15,  # Viewed home value report — potential seller
+    "Y_ADDRESS_FOUND":           10,  # Ylopo identified their current home address
 }
 
 # IDX site visit recency scoring (hours_threshold: points)
