@@ -404,15 +404,45 @@ def generate_email(person, behavior, strategy, leadstream_tier,
     prompt = f"""You are writing a short, personal real estate email for Barry Jenkins,
 Realtor at LPT Realty in Virginia Beach/Hampton Roads, VA.
 
+HAMPTON ROADS MARKET CONTEXT (use naturally when relevant):
+- Hampton Roads = Virginia Beach, Norfolk, Chesapeake, Suffolk, Hampton, Newport News,
+  Portsmouth, and surrounding military communities
+- Virginia has specific real estate laws: buyer must sign representation agreement before
+  touring; dual agency is allowed but disclosure required; no mandatory seller disclosures
+  beyond known material defects — keep any legal references general and positive
+- Local lifestyle angles (use sparingly, only if it fits the lead's search):
+  → Beach access, waterfront/water-view properties, military relocation (strong VA market)
+  → No state income tax on military pay; proximity to bases (Oceana, Little Creek, Norfolk Naval)
+  → Strong appreciation markets: Chesapeake, Virginia Beach north of 264, Great Neck area
+  → Community culture: outdoorsy, neighborhood-centric, school-district aware
+
 VOICE GUIDE (mandatory):
-- Conversational, like a smart friend who happens to know real estate
+- Conversational, like a smart friend who happens to know Hampton Roads
 - Teaching, never pushing — give insight before asking for anything
 - Never shame, never pressure, never use "just checking in"
-- Story-first: open with what you noticed, not with a pitch
+- Story-first: open with what you noticed or a local market observation
 - One clear, low-friction ask at the end
-- Always include a P.S. — specific and curiosity-driven
-- Tone: warm, direct, confident — not salesy
-- Never use: "dream home", "perfect fit", "hot market", "I hope this finds you well"
+- Always include a P.S. — specific and curiosity-driven, ideally local intel
+- Tone: warm, direct, confident — not salesy, never corporate
+- Never use: "dream home", "perfect fit", "hot market", "I hope this finds you well", "reach out"
+
+ADVANCED EMAIL MARKETING RULES (apply all of these):
+Subject lines:
+  - Use the lead's specific data (street name, neighborhood, city, price point)
+  - Pattern that converts: "[specific observation]" or a question or a number
+  - No ALL CAPS, no emojis in subject, no "RE:" unless you mean it
+  - 6-9 words max, should read like it came from a person texting not a campaign
+  - Generate 3 distinct subject options (different hooks — curiosity, specificity, question)
+
+Body structure (proven high-reply formula):
+  1. Open: a specific observation about what they did (not "I noticed you…", lead with the observation itself)
+  2. Middle: one useful insight, local stat, or market nuance relevant to their search
+  3. Close: one soft ask — a question they can answer in under 10 seconds
+  4. P.S.: one line of local insider info that makes them want to reply
+
+Click-bait (ethical): If they viewed or saved a specific property, create slight urgency
+around that property's market (days on market, comparable actives) without fabricating data.
+Say "in that price range" or "in that zip" rather than inventing specific numbers.
 
 SEQUENCE POSITION — read carefully:
 {seq_guide}
@@ -428,8 +458,9 @@ OUTPUT FORMAT (JSON only, no markdown):
   "body": "The full email body text. Real line breaks. First line addresses them by first name. Stop before the sign-off — do not include a closing or signature."
 }}
 
-Reference specific property addresses, prices, or neighborhoods when available.
-Each subject line should feel like it came from a person, not a campaign."""
+Hyper-personalize every subject line and the first sentence to THIS lead's specific data.
+If they viewed a home in Hampton, reference Hampton specifically — not just "the area."
+Each subject line must feel like you wrote it only for this one person."""
 
     response = client.messages.create(
         model="claude-opus-4-5",
