@@ -5722,11 +5722,16 @@ def start_scheduler():
                        id="gone_dark", name="Gone dark alert (Mon 7am)",
                        max_instances=1, coalesce=True)
 
-    # Pond mailer: daily at 9am ET (Mon–Fri only — weekend sends hurt deliverability)
-    _scheduler.add_job(scheduled_pond_mailer,
-                       CronTrigger(day_of_week="mon-fri", hour=9, minute=15, timezone=ET),
-                       id="pond_mailer", name="Pond mailer (Mon-Fri 9:15am)",
-                       max_instances=1, coalesce=True)
+    # Pond mailer: 3x daily Mon–Fri (10am, 2pm, 6pm ET)
+    # 9 leads per run × 3 runs = 27/day max — safe for a warmed domain.
+    # Running 3x catches leads within ~1-2 hours of their IDX activity.
+    for _pm_hour, _pm_min, _pm_label in [(10, 0, "10am"), (14, 0, "2pm"), (18, 0, "6pm")]:
+        _scheduler.add_job(scheduled_pond_mailer,
+                           CronTrigger(day_of_week="mon-fri", hour=_pm_hour,
+                                       minute=_pm_min, timezone=ET),
+                           id=f"pond_mailer_{_pm_hour}",
+                           name=f"Pond mailer (Mon-Fri {_pm_label} ET)",
+                           max_instances=1, coalesce=True)
 
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")

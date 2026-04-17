@@ -2100,6 +2100,63 @@ def log_pond_email(person_id, person_name, email_address, subject,
         logger.warning("log_pond_email failed for person %s: %s", person_id, e)
 
 
+def get_lead_email_history(person_id):
+    """
+    Return email sequence info for a pond lead.
+    Used to enforce the 3-touch max and pass sequence number to Claude.
+
+    Returns:
+        emails_sent    — count of live (non-dry-run) emails sent
+        has_replied    — True if any entry in pond_reply_log
+        sequence_num   — which email to send next (1, 2, or 3)
+        suppressed     — True if max emails hit with no reply (or in 30d quiet)
+    """
+    if not is_available():
+        return {"emails_sent": 0, "has_replied": False, "sequence_num": 1, "suppressed": False}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*), MAX(sent_at)
+                    FROM pond_email_log
+                    WHERE person_id = %s AND dry_run = FALSE
+                """, (person_id,))
+                row = cur.fetchone()
+                emails_sent = row[0] if row else 0
+                last_sent   = row[1] if row else None
+
+                cur.execute("""
+                    SELECT COUNT(*) FROM pond_reply_log WHERE person_id = %s
+                """, (person_id,))
+                row = cur.fetchone()
+                has_replied = (row[0] > 0) if row else False
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+
+        # Suppressed if max sequence hit with no reply AND still in quiet period
+        suppressed = False
+        if emails_sent >= 3 and not has_replied:
+            if last_sent:
+                last_sent_aware = last_sent.replace(tzinfo=timezone.utc)
+                days_since = (now - last_sent_aware).days
+                suppressed = days_since < 30  # quiet period expires after 30 days
+            else:
+                suppressed = True
+
+        sequence_num = min(emails_sent + 1, 3)
+
+        return {
+            "emails_sent":   emails_sent,
+            "has_replied":   has_replied,
+            "sequence_num":  sequence_num,
+            "suppressed":    suppressed,
+        }
+    except Exception as e:
+        logger.warning("get_lead_email_history failed for person %s: %s", person_id, e)
+        return {"emails_sent": 0, "has_replied": False, "sequence_num": 1, "suppressed": False}
+
+
 def days_since_last_pond_email(person_id):
     """Return days since last email to this lead, or None if never emailed."""
     if not is_available():

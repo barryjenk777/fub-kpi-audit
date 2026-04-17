@@ -39,14 +39,24 @@ logger = logging.getLogger("pond_mailer")
 # ---------------------------------------------------------------------------
 
 # How many days between emails to the same lead
-EMAIL_COOLDOWN_DAYS = 5
+# 3 days = Day 1 → Day 4 → Day 7 cadence
+EMAIL_COOLDOWN_DAYS = 3
 
 # Minimum IDX events needed to write a meaningful email
 MIN_EVENTS_TO_EMAIL = 2
 
-# Max leads to email per run — keeps it personal, not a blast
-# Top N by behavioral urgency priority score
-MAX_PER_RUN = 10
+# Max leads to email per run
+# Scheduler runs 3x/day (10am, 2pm, 6pm ET) → 27 max/day
+# Keeps us well inside the safe zone for a warmed domain
+MAX_PER_RUN = 9
+
+# Maximum emails to send to a single lead without a reply.
+# After 3 touches (Day 1, 4, 7) with no engagement, stop for 30 days.
+# More than 3 = spam risk and diminishing returns.
+MAX_EMAILS_PER_LEAD = 3
+
+# Days to suppress a lead after hitting the max sequence (no reply)
+SEQUENCE_COOLDOWN_DAYS = 30
 
 # Ylopo tags that indicate behavioral intent (scored separately from LeadStream)
 YLOPO_INTENT_TAGS = {
@@ -69,7 +79,7 @@ SELL_BEFORE_BUY_TAGS = {
 }
 
 LOGO_URL = "https://i.postimg.cc/wMttBBmb/legacy-logo.png"
-PHYSICAL_ADDRESS = "Legacy Home Team · Virginia Beach, VA"
+PHYSICAL_ADDRESS = "LPT Realty · 1545 Crossways Blvd Chesapeake, VA 23320"
 FROM_EMAIL = "barry@yourfriendlyagent.net"
 FROM_NAME  = "Barry Jenkins | Legacy Home Team"
 
@@ -319,10 +329,40 @@ def select_strategy(behavior, leadstream_tier, tags):
 # Claude Email Generator
 # ---------------------------------------------------------------------------
 
-def generate_email(person, behavior, strategy, leadstream_tier, dry_run=False):
+SIGN_OFF = (
+    "To your success,\n\n\n"
+    "Barry Jenkins, Realtor\n"
+    "LPT Realty\n"
+    "1545 Crossways Blvd Chesapeake, VA 23320"
+)
+
+# Sequence-specific angle instructions fed to Claude
+_SEQUENCE_GUIDE = {
+    1: """This is the FIRST email in a 3-touch sequence.
+Lead with what you noticed about their specific browsing behavior — make it feel like you
+were personally watching the market for them. One clear, low-friction ask at the end.
+P.S. should create curiosity about something specific to their search.""",
+
+    2: """This is the SECOND email (day 4 follow-up). They didn't reply to the first.
+DO NOT re-introduce yourself or reference the prior email. Start fresh with a different angle:
+lead with a market insight, a data point, or an observation specific to the neighborhoods/price
+range they're searching. Keep it even shorter than email 1. End with an easy yes/no question.
+P.S. should offer a piece of inside knowledge — something they can only get by replying.""",
+
+    3: """This is the THIRD and FINAL email in the sequence. Keep it under 80 words.
+Different hook entirely — try a short story, a surprising local market fact, or a genuine
+curiosity question. Do NOT mention that it's your last email or sound desperate.
+End by giving them a graceful out: "If the timing's off, no worries — I'll be here when it
+makes sense." P.S. should be one line that makes them want to respond just to know the answer.""",
+}
+
+
+def generate_email(person, behavior, strategy, leadstream_tier,
+                   sequence_num=1, dry_run=False):
     """
     Generate a personalized email using Claude.
 
+    sequence_num: 1, 2, or 3 — controls tone and angle (different each touch)
     Returns {subject, body_text, body_html} or raises on failure.
     """
     first_name = person.get("firstName") or "there"
@@ -330,13 +370,15 @@ def generate_email(person, behavior, strategy, leadstream_tier, dry_run=False):
 
     # Build the behavioral brief for Claude
     brief = _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags)
+    seq_guide = _SEQUENCE_GUIDE.get(sequence_num, _SEQUENCE_GUIDE[1])
 
     if dry_run:
-        logger.info("[DRY RUN] Would call Claude for %s (strategy: %s)", first_name, strategy)
+        logger.info("[DRY RUN] Would call Claude for %s (strategy: %s, seq: %s)",
+                    first_name, strategy, sequence_num)
         return {
-            "subject": f"[DRY RUN] {strategy} email for {first_name}",
-            "body_text": f"[DRY RUN]\n\n{brief[:300]}...",
-            "body_html": f"<p>[DRY RUN]</p><pre>{brief[:300]}</pre>",
+            "subject": f"[DRY RUN] #{sequence_num} {strategy} email for {first_name}",
+            "body_text": f"[DRY RUN seq={sequence_num}]\n\n{brief[:300]}...",
+            "body_html": f"<p>[DRY RUN seq={sequence_num}]</p><pre>{brief[:300]}</pre>",
         }
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -350,18 +392,23 @@ def generate_email(person, behavior, strategy, leadstream_tier, dry_run=False):
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    prompt = f"""You are writing a short, personal real estate follow-up email for Barry Jenkins,
-team leader of Legacy Home Team in Virginia Beach/Hampton Roads, VA.
+    prompt = f"""You are writing a short, personal real estate email for Barry Jenkins,
+Realtor at LPT Realty in Virginia Beach/Hampton Roads, VA.
 
 VOICE GUIDE (mandatory):
 - Conversational, like a smart friend who happens to know real estate
 - Teaching, never pushing — give insight before asking for anything
 - Never shame, never pressure, never use "just checking in"
 - Story-first: open with what you noticed, not with a pitch
-- Short: under 130 words in the body (not counting subject/PS)
 - One clear, low-friction ask at the end
-- Always include a P.S. with a second curiosity hook
+- Always include a P.S. — specific and curiosity-driven
 - Tone: warm, direct, confident — not salesy
+- Never use: "dream home", "perfect fit", "hot market", "I hope this finds you well"
+
+SEQUENCE POSITION — read carefully:
+{seq_guide}
+
+Word count: email 1 & 2 under 130 words in the body; email 3 under 80 words.
 
 LEAD BEHAVIORAL BRIEF:
 {brief}
@@ -369,36 +416,31 @@ LEAD BEHAVIORAL BRIEF:
 OUTPUT FORMAT (JSON only, no markdown):
 {{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "The full email body text. Use real line breaks. First line addresses them by first name. No sign-off — just the body and P.S."
+  "body": "The full email body text. Real line breaks. First line addresses them by first name. Stop before the sign-off — do not include a closing or signature."
 }}
 
-Pick the subject that feels most personal and specific to their actual behavior.
-Do not use generic real estate phrases like "dream home", "perfect fit", "hot market".
 Reference specific property addresses, prices, or neighborhoods when available.
-The P.S. should reference something specific that creates curiosity — make them want to reply."""
+Each subject line should feel like it came from a person, not a campaign."""
 
     response = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=600,
+        max_tokens=700,
         messages=[{"role": "user", "content": prompt}],
     )
 
     raw = response.content[0].text.strip()
 
-    # Parse JSON response
     import json, re
-    # Strip markdown code fences if present
     raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
     raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
 
     data = json.loads(raw)
     subject_options = data.get("subject_options", [])
-    # Pick first subject (can A/B test later)
     subject = subject_options[0] if subject_options else f"Following up — {first_name}"
     body_text = data.get("body", "")
 
-    # Add sign-off
-    body_text = body_text + "\n\n— Barry\nLegacy Home Team"
+    # Append signature
+    body_text = body_text + "\n\n" + SIGN_OFF
 
     # Render HTML
     body_html = _render_html(body_text)
@@ -654,7 +696,21 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
             skipped_cooldown += 1
             continue
 
-        # Cooldown check
+        # Sequence check — max 3 emails without a reply, then 30-day quiet period
+        history = _db.get_lead_email_history(pid)
+        if history["suppressed"]:
+            logger.debug("Skipping %s — sequence complete (%d emails, no reply, in quiet period)",
+                         name, history["emails_sent"])
+            skipped_cooldown += 1
+            continue
+        if history["has_replied"]:
+            logger.debug("Skipping %s — replied, agent handling", name)
+            skipped_cooldown += 1
+            continue
+
+        sequence_num = history["sequence_num"]
+
+        # Cooldown check — respect gap between touches
         days_ago = _db.days_since_last_pond_email(pid)
         if days_ago is not None and days_ago < EMAIL_COOLDOWN_DAYS:
             logger.debug("Skipping %s — emailed %.1f days ago", name, days_ago)
@@ -694,7 +750,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
             continue
 
         # Log what we found
-        print(f"\n  [{strategy.upper()}] {name} (ID: {pid})")
+        print(f"\n  [{strategy.upper()}] {name} (ID: {pid}) — Email #{sequence_num}/3")
         print(f"    Email: {to_email}")
         print(f"    Tier: {leadstream_tier} | Views: {behavior['view_count']} | Saves: {behavior['save_count']}")
         if behavior["most_viewed"]:
@@ -708,7 +764,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
 
         # Generate email with Claude
         try:
-            email_data = generate_email(person, behavior, strategy, leadstream_tier, dry_run=dry_run)
+            email_data = generate_email(person, behavior, strategy, leadstream_tier,
+                                        sequence_num=sequence_num, dry_run=dry_run)
         except Exception as e:
             logger.error("Claude generation failed for %s: %s", name, e)
             continue
