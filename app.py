@@ -4714,7 +4714,6 @@ def api_pond_mailer_dashboard():
 
     try:
         from fub_client import FUBClient
-        from datetime import datetime, timezone
 
         base = _db.get_pond_dashboard_data(days=30)
         if not base:
