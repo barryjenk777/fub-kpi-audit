@@ -812,6 +812,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
         sent += 1
         print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'}")
 
+        # Brief pause between leads to stay friendly to FUB rate limits
+        import time as _t; _t.sleep(1.5)
+
     print(f"\n{'='*60}")
     print(f"  Done: {sent} {'would send' if dry_run else 'sent'} | "
           f"Cooldown: {skipped_cooldown} | No activity: {skipped_no_activity} | "

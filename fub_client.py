@@ -32,16 +32,24 @@ class FUBClient:
         self._request_count = 0
 
     def _request(self, method, endpoint, params=None, json_data=None):
-        """Make a rate-limited request to the FUB API."""
+        """Make a rate-limited request to the FUB API with 429 retry backoff."""
         url = f"{self.BASE_URL}/{endpoint}"
         time.sleep(self.RATE_LIMIT_DELAY)
         self._request_count += 1
 
-        response = self.session.request(
-            method, url, params=params, json=json_data
-        )
+        for attempt in range(5):  # up to 5 attempts
+            response = self.session.request(
+                method, url, params=params, json=json_data
+            )
+            if response.status_code == 429:
+                wait = (2 ** attempt) * 2  # 2s, 4s, 8s, 16s, 32s
+                time.sleep(wait)
+                continue
+            response.raise_for_status()
+            return response.json()
+
+        # All retries exhausted — raise the last 429
         response.raise_for_status()
-        return response.json()
 
     def _get_paginated(self, endpoint, params=None, max_pages=300):
         """Fetch all pages of a paginated endpoint.
