@@ -826,7 +826,7 @@ CLOSING_STAGES = {
 }
 
 
-def classify_stage(stage_raw: str) -> str | None:
+def classify_stage(stage_raw: str) -> "str | None":
     """Map a raw FUB stage string to 'contract', 'closing', or None."""
     if not stage_raw:
         return None
@@ -1030,7 +1030,7 @@ def get_ytd_cache(year: int = None) -> dict:
         return {}
 
 
-def get_cache_updated_at(year: int = None) -> str | None:
+def get_cache_updated_at(year: int = None) -> "str | None":
     """Return the most recent updated_at timestamp across all agents' cache."""
     if not is_available():
         return None
@@ -2041,3 +2041,224 @@ def get_agent_recent_closings(agent_name, days=60):
     except Exception as e:
         logger.warning("get_agent_recent_closings failed for %s: %s", agent_name, e)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Pond Email Log  (LeadStream email marketing)
+# ---------------------------------------------------------------------------
+
+def ensure_pond_email_log_table():
+    """Create pond_email_log table if it doesn't exist."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pond_email_log (
+                        id              SERIAL PRIMARY KEY,
+                        person_id       INTEGER NOT NULL,
+                        person_name     VARCHAR(255),
+                        email_address   VARCHAR(255),
+                        subject         TEXT,
+                        strategy        VARCHAR(100),
+                        leadstream_tier VARCHAR(50),
+                        behavior_summary TEXT,
+                        sent_at         TIMESTAMP DEFAULT NOW(),
+                        dry_run         BOOLEAN DEFAULT FALSE,
+                        sg_message_id   VARCHAR(255),
+                        UNIQUE(person_id, sent_at)
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_pond_email_person
+                    ON pond_email_log(person_id, sent_at DESC)
+                """)
+    except Exception as e:
+        logger.warning("ensure_pond_email_log_table failed: %s", e)
+
+
+def log_pond_email(person_id, person_name, email_address, subject,
+                   strategy, leadstream_tier, behavior_summary="",
+                   dry_run=False, sg_message_id=None):
+    """Record a sent pond email."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO pond_email_log
+                        (person_id, person_name, email_address, subject,
+                         strategy, leadstream_tier, behavior_summary,
+                         dry_run, sg_message_id)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (person_id, person_name, email_address, subject,
+                      strategy, leadstream_tier, behavior_summary,
+                      dry_run, sg_message_id))
+    except Exception as e:
+        logger.warning("log_pond_email failed for person %s: %s", person_id, e)
+
+
+def days_since_last_pond_email(person_id):
+    """Return days since last email to this lead, or None if never emailed."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT MAX(sent_at) FROM pond_email_log
+                    WHERE person_id = %s AND dry_run = FALSE
+                """, (person_id,))
+                row = cur.fetchone()
+        if row and row[0]:
+            from datetime import datetime, timezone
+            last = row[0].replace(tzinfo=timezone.utc)
+            delta = datetime.now(timezone.utc) - last
+            return delta.total_seconds() / 86400
+        return None
+    except Exception as e:
+        logger.warning("days_since_last_pond_email failed: %s", e)
+        return None
+
+
+def ensure_pond_reply_log_table():
+    """Create pond_reply_log table if it doesn't exist."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pond_reply_log (
+                        id              SERIAL PRIMARY KEY,
+                        person_id       INTEGER,
+                        person_name     VARCHAR(255),
+                        reply_from      VARCHAR(255),
+                        reply_text      TEXT,
+                        sentiment       VARCHAR(20),
+                        sentiment_score FLOAT,
+                        routed          BOOLEAN DEFAULT FALSE,
+                        fub_task_id     INTEGER,
+                        received_at     TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_pond_reply_person
+                    ON pond_reply_log(person_id, received_at DESC)
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_pond_reply_from
+                    ON pond_reply_log(reply_from)
+                """)
+    except Exception as e:
+        logger.warning("ensure_pond_reply_log_table failed: %s", e)
+
+
+def get_pond_email_person_by_email(email_address):
+    """Find the most recently emailed pond lead matching this email address.
+    Returns (person_id, person_name) or (None, None).
+    """
+    if not is_available():
+        return None, None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, person_name
+                    FROM pond_email_log
+                    WHERE LOWER(email_address) = LOWER(%s)
+                      AND dry_run = FALSE
+                    ORDER BY sent_at DESC
+                    LIMIT 1
+                """, (email_address,))
+                row = cur.fetchone()
+        if row:
+            return row[0], row[1]
+        return None, None
+    except Exception as e:
+        logger.warning("get_pond_email_person_by_email failed: %s", e)
+        return None, None
+
+
+def log_pond_reply(person_id, person_name, reply_from, reply_text,
+                   sentiment, sentiment_score, routed=False, fub_task_id=None):
+    """Record an inbound reply to a pond email."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO pond_reply_log
+                        (person_id, person_name, reply_from, reply_text,
+                         sentiment, sentiment_score, routed, fub_task_id)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (person_id, person_name, reply_from, reply_text,
+                      sentiment, sentiment_score, routed, fub_task_id))
+    except Exception as e:
+        logger.warning("log_pond_reply failed for person %s: %s", person_id, e)
+
+
+def get_pond_reply_stats(days=30):
+    """Reply stats for monitoring — how many replies, how many converted."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*)                                     AS total_replies,
+                        COUNT(*) FILTER (WHERE sentiment='positive') AS positive,
+                        COUNT(*) FILTER (WHERE sentiment='neutral')  AS neutral,
+                        COUNT(*) FILTER (WHERE sentiment='negative') AS negative,
+                        COUNT(*) FILTER (WHERE routed=TRUE)          AS routed
+                    FROM pond_reply_log
+                    WHERE received_at >= NOW() - INTERVAL '%s days'
+                """ % days)
+                row = cur.fetchone()
+        if row:
+            return {
+                "total_replies": row[0],
+                "positive":      row[1],
+                "neutral":       row[2],
+                "negative":      row[3],
+                "routed":        row[4],
+            }
+        return {}
+    except Exception as e:
+        logger.warning("get_pond_reply_stats failed: %s", e)
+        return {}
+
+
+def get_pond_email_stats(days=30):
+    """Summary stats for the email log — for dashboard/monitoring."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE NOT dry_run)           AS total_sent,
+                        COUNT(DISTINCT person_id) FILTER (WHERE NOT dry_run) AS unique_leads,
+                        strategy,
+                        COUNT(*) AS cnt
+                    FROM pond_email_log
+                    WHERE sent_at >= NOW() - INTERVAL '%s days'
+                    GROUP BY strategy
+                    ORDER BY cnt DESC
+                """ % days)
+                rows = cur.fetchall()
+        return {
+            "by_strategy": [
+                {"strategy": r[2], "count": r[3]} for r in rows
+            ],
+            "total_sent": rows[0][0] if rows else 0,
+            "unique_leads": rows[0][1] if rows else 0,
+        }
+    except Exception as e:
+        logger.warning("get_pond_email_stats failed: %s", e)
+        return {}

@@ -4361,6 +4361,290 @@ def api_leadstream_status():
         return jsonify({"error": str(e)}), 500
 
 
+# ---- Pond Mailer: LeadStream email marketing ----
+
+@app.route("/api/pond-mailer/run", methods=["POST"])
+def api_pond_mailer_run():
+    """
+    Trigger the pond mailer. Generates and sends personalized emails to
+    LeadStream-tagged pond leads based on their IDX behavior.
+
+    Body (all optional):
+        dry_run  (bool, default true)  — preview without sending
+        person   (int)                 — single FUB person ID for testing
+        limit    (int)                 — max leads to process this run
+    """
+    import threading, uuid
+    data     = request.json or {}
+    dry_run  = data.get("dry_run", True)
+    person   = data.get("person")
+    limit    = data.get("limit")
+
+    job_id = str(uuid.uuid4())[:8]
+
+    def _bg():
+        try:
+            from pond_mailer import run_pond_mailer
+            result = run_pond_mailer(dry_run=dry_run, person_id=person, limit=limit)
+            _pond_mailer_jobs[job_id] = {"status": "complete", **result}
+        except Exception as e:
+            logger.error("Pond mailer error: %s", e)
+            _pond_mailer_jobs[job_id] = {"status": "error", "error": str(e)}
+
+    _pond_mailer_jobs[job_id] = {"status": "running", "dry_run": dry_run}
+    threading.Thread(target=_bg, daemon=True).start()
+
+    return jsonify({"job_id": job_id, "status": "running", "dry_run": dry_run})
+
+
+@app.route("/api/pond-mailer/status/<job_id>")
+def api_pond_mailer_status(job_id):
+    job = _pond_mailer_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "job not found"}), 404
+    return jsonify(job)
+
+
+@app.route("/api/pond-mailer/stats")
+def api_pond_mailer_stats():
+    """Email send history and performance stats."""
+    try:
+        stats = _db.get_pond_email_stats(days=30)
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+_pond_mailer_jobs = {}  # in-memory job tracker
+
+
+@app.route("/api/pond-mailer/reply", methods=["POST"])
+def api_pond_mailer_reply():
+    """
+    SendGrid Inbound Parse webhook — receives email replies from pond leads.
+
+    SendGrid POSTs multipart/form-data to this endpoint when a lead hits
+    Reply on one of Barry's outreach emails. We:
+      1. Extract the from address and body
+      2. Look up the lead in pond_email_log by email address
+      3. Analyze sentiment with Claude (haiku — cheap and fast)
+      4. If positive: create a FUB task for the assigned agent + add a note
+      5. If negative (opt-out): tag PondMailer_Unsubscribed to suppress future sends
+      6. Log everything to pond_reply_log
+
+    Always returns 200 — SendGrid will retry on non-2xx and we don't want
+    that for unrecoverable failures (unmatched address, API errors, etc.).
+    """
+    try:
+        # SendGrid Inbound Parse sends multipart/form-data
+        from_raw  = request.form.get("from", "")
+        subject   = request.form.get("subject", "")
+        body_text = request.form.get("text", "") or ""
+        # Fall back to HTML if no plain text (strip tags crudely)
+        if not body_text.strip():
+            import re as _re2
+            html_body = request.form.get("html", "")
+            body_text = _re2.sub(r"<[^>]+>", " ", html_body).strip()
+
+        # Parse "Name <email>" → "email"
+        import re
+        m = re.search(r"<([^>]+)>", from_raw)
+        clean_from = m.group(1).strip() if m else from_raw.strip()
+
+        logger.info("Pond reply webhook: from=%s | subject=%s", clean_from, subject[:80])
+
+        if not clean_from or "@" not in clean_from:
+            logger.warning("Pond reply: unparseable from address: %s", from_raw)
+            return jsonify({"status": "ok", "action": "bad_from"}), 200
+
+        # Match reply to a pond lead by their email address
+        person_id, person_name = _db.get_pond_email_person_by_email(clean_from)
+
+        if not person_id:
+            logger.info("Pond reply: no matching pond lead for %s", clean_from)
+            return jsonify({"status": "ok", "action": "unmatched"}), 200
+
+        logger.info("Pond reply matched: %s (ID: %s)", person_name, person_id)
+
+        # Analyze sentiment
+        sentiment, sentiment_score, sentiment_reason = _pond_analyze_sentiment(
+            body_text, person_name
+        )
+        logger.info("Sentiment: %s (%.2f) — %s", sentiment, sentiment_score, sentiment_reason)
+
+        routed   = False
+        task_id  = None
+
+        if sentiment == "positive":
+            try:
+                from fub_client import FUBClient
+                from config import MANAGER_USER_ID
+                fub = FUBClient()
+
+                # Find the lead's assigned agent; fall back to manager
+                person = fub.get_person(person_id)
+                assigned_uid = (
+                    person.get("assignedUserId")
+                    or person.get("ownerId")
+                    or MANAGER_USER_ID
+                )
+
+                from datetime import date as _date
+                tomorrow = (_date.today() + timedelta(days=1)).isoformat()
+
+                task_name = f"\U0001f525 Pond lead replied — {person_name or clean_from}"
+                task_desc = (
+                    f"This lead replied to Barry's outreach email with POSITIVE sentiment.\n\n"
+                    f"Their reply:\n{body_text.strip()[:600]}\n\n"
+                    f"Original subject: {subject}\n"
+                    f"Analysis: {sentiment_reason}"
+                )
+
+                task_result = fub.create_task(
+                    person_id=person_id,
+                    assigned_user_id=assigned_uid,
+                    name=task_name,
+                    due_date=tomorrow,
+                    description=task_desc,
+                )
+                task_id = (task_result or {}).get("id")
+                routed = True
+                logger.info("FUB task %s created for user %s", task_id, assigned_uid)
+
+                # Add note with the reply text
+                _pond_add_fub_note(fub, person_id, body_text, sentiment_reason, subject)
+
+            except Exception as e:
+                logger.error("FUB routing failed for %s (ID %s): %s", person_name, person_id, e)
+
+        elif sentiment == "negative":
+            # Tag lead to suppress from future pond sends
+            try:
+                from fub_client import FUBClient
+                fub = FUBClient()
+                fub.add_tag(person_id, "PondMailer_Unsubscribed")
+                logger.info("Tagged %s as PondMailer_Unsubscribed", person_name)
+            except Exception as e:
+                logger.warning("Could not tag unsubscribe for %s: %s", person_name, e)
+
+        # Log the reply
+        _db.log_pond_reply(
+            person_id=person_id,
+            person_name=person_name,
+            reply_from=clean_from,
+            reply_text=body_text[:2000],
+            sentiment=sentiment,
+            sentiment_score=sentiment_score,
+            routed=routed,
+            fub_task_id=task_id,
+        )
+
+        return jsonify({
+            "status":      "ok",
+            "person_id":   person_id,
+            "person_name": person_name,
+            "sentiment":   sentiment,
+            "routed":      routed,
+            "task_id":     task_id,
+        }), 200
+
+    except Exception as e:
+        logger.error("Pond reply webhook unhandled error: %s", e, exc_info=True)
+        # Always 200 — we don't want SendGrid to retry unrecoverable errors
+        return jsonify({"status": "ok", "error": str(e)}), 200
+
+
+def _pond_analyze_sentiment(reply_text, person_name=""):
+    """
+    Use Claude Haiku to classify a reply as positive / neutral / negative.
+    Falls back to keyword detection if the API key isn't set.
+    Returns (sentiment, score, reason).
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+    if not api_key:
+        # Keyword fallback
+        lower = reply_text.lower()
+        OPT_OUT = ["unsubscribe", "stop", "remove me", "don't contact",
+                   "do not contact", "not interested", "leave me alone",
+                   "opt out", "opt-out", "take me off"]
+        POSITIVE = ["yes", "interested", "show me", "tell me", "love to",
+                    "would love", "can we", "let's", "when can", "available",
+                    "sounds good", "that's great", "want to", "looking to buy",
+                    "ready to", "schedule", "appointment", "call me"]
+        if any(w in lower for w in OPT_OUT):
+            return "negative", 0.9, "Opt-out keywords detected"
+        if any(w in lower for w in POSITIVE):
+            return "positive", 0.7, "Interest keywords detected"
+        return "neutral", 0.5, "No clear signal (keyword fallback — no ANTHROPIC_API_KEY)"
+
+    try:
+        import anthropic, json as _json, re
+        client = anthropic.Anthropic(api_key=api_key)
+
+        prompt = f"""Analyze this email reply from a real estate prospect named {person_name or "a lead"}.
+
+They received an outreach email from Barry Jenkins (Legacy Home Team, Virginia Beach VA)
+referencing homes they browsed on our site. Classify their reply sentiment:
+
+REPLY:
+{reply_text[:1200]}
+
+Classify as:
+- positive: Shows genuine interest, asks questions, wants to see homes or talk, or any meaningful engagement
+- neutral: Polite but non-committal, unclear intent, vague acknowledgment
+- negative: Unsubscribe/opt-out, "not interested", "stop emailing me", angry or firm rejection
+
+Return JSON only (no markdown):
+{{"sentiment":"positive"|"neutral"|"negative","score":0.0-1.0,"reason":"one sentence"}}"""
+
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=120,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        raw = response.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
+        raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
+        data = _json.loads(raw)
+
+        return (
+            data.get("sentiment", "neutral"),
+            float(data.get("score", 0.5)),
+            data.get("reason", ""),
+        )
+    except Exception as e:
+        logger.warning("Sentiment analysis failed: %s", e)
+        return "neutral", 0.5, f"Analysis error: {e}"
+
+
+def _pond_add_fub_note(fub, person_id, reply_text, sentiment_reason, original_subject):
+    """Add a note to the FUB lead with the reply content."""
+    try:
+        note_body = (
+            f"[Pond Mailer] Lead replied to: \"{original_subject}\"\n"
+            f"Sentiment: POSITIVE — {sentiment_reason}\n\n"
+            f"Reply:\n{reply_text.strip()[:800]}"
+        )
+        fub._request("POST", "notes", json_data={
+            "personId": person_id,
+            "body":     note_body,
+        })
+    except Exception as e:
+        logger.warning("Could not add FUB note for reply (person %s): %s", person_id, e)
+
+
+@app.route("/api/pond-mailer/replies")
+def api_pond_mailer_reply_stats():
+    """Reply stats — how many leads replied, sentiment breakdown, routing rate."""
+    try:
+        stats = _db.get_pond_reply_stats(days=30)
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ---- Scheduler: cache warming + email delivery ----
 _scheduler_started = False
 _scheduler = None          # global ref so health endpoint can inspect jobs
@@ -5076,6 +5360,25 @@ def scheduled_gone_dark_alert():
         _db.release_job_lock("gone_dark_alert")
 
 
+def scheduled_pond_mailer():
+    """
+    Daily job (Mon-Fri 9:15am ET): send up to 10 personalized emails to
+    Shark Tank pond leads based on their IDX browsing behavior.
+    Emails are written by Claude, sent via SendGrid.
+    """
+    if not _db.try_acquire_job_lock("pond_mailer"):
+        return
+    try:
+        from pond_mailer import run_pond_mailer
+        result = run_pond_mailer(dry_run=False)
+        sent = result.get("sent", 0)
+        print(f"[POND MAILER] Run complete — {sent} emails sent")
+    except Exception as e:
+        _alert_on_job_failure("pond_mailer", str(e))
+    finally:
+        _db.release_job_lock("pond_mailer")
+
+
 def _run_morning_jobs():
     """Run morning nudges then closing milestones independently so a crash in
     the first job does not prevent the second from running."""
@@ -5244,6 +5547,12 @@ def start_scheduler():
                        id="gone_dark", name="Gone dark alert (Mon 7am)",
                        max_instances=1, coalesce=True)
 
+    # Pond mailer: daily at 9am ET (Mon–Fri only — weekend sends hurt deliverability)
+    _scheduler.add_job(scheduled_pond_mailer,
+                       CronTrigger(day_of_week="mon-fri", hour=9, minute=15, timezone=ET),
+                       id="pond_mailer", name="Pond mailer (Mon-Fri 9:15am)",
+                       max_instances=1, coalesce=True)
+
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
     for job in _scheduler.get_jobs():
@@ -5262,3 +5571,6 @@ else:
     _load_cooldown_state()
     warmup_cache()
     start_scheduler()
+    # Ensure pond email/reply log tables exist
+    _db.ensure_pond_email_log_table()
+    _db.ensure_pond_reply_log_table()
