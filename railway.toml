@@ -1,0 +1,7 @@
+[deploy]
+# Keep the old container alive until the new one passes this check.
+# This gives us zero-downtime deploys — no more 503s during code pushes.
+healthcheckPath = "/api/health"
+healthcheckTimeout = 300   # seconds to wait before declaring failure
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
