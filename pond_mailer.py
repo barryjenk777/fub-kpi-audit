@@ -728,6 +728,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
     skipped_no_email = 0
     skipped_no_activity = 0
     skipped_no_strategy = 0
+    skipped_generation_error = 0
     max_to_process = limit or MAX_PER_RUN
 
     # Hard cap on how many leads we'll check per run — prevents runaway loops
@@ -843,6 +844,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
                                         sequence_num=sequence_num, dry_run=dry_run)
         except Exception as e:
             logger.error("Claude generation failed for %s: %s", name, e)
+            skipped_generation_error += 1
             continue
 
         print(f"    Subject: {email_data['subject']}")
@@ -891,15 +893,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
     print(f"\n{'='*60}")
     print(f"  Done: {sent} {'would send' if dry_run else 'sent'} | "
           f"Cooldown: {skipped_cooldown} | No activity: {skipped_no_activity} | "
-          f"No email: {skipped_no_email} | No strategy: {skipped_no_strategy}")
+          f"No email: {skipped_no_email} | No strategy: {skipped_no_strategy} | "
+          f"Generation error: {skipped_generation_error}")
     print(f"{'='*60}\n")
 
     return {
         "sent":                 sent,
-        "skipped_cooldown":     skipped_cooldown,
-        "skipped_no_email":     skipped_no_email,
-        "skipped_no_activity":  skipped_no_activity,
-        "skipped_no_strategy":  skipped_no_strategy,
+        "skipped_cooldown":          skipped_cooldown,
+        "skipped_no_email":          skipped_no_email,
+        "skipped_no_activity":       skipped_no_activity,
+        "skipped_no_strategy":       skipped_no_strategy,
+        "skipped_generation_error":  skipped_generation_error,
         "dry_run":              dry_run,
     }
 
