@@ -553,8 +553,9 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
         plain_text_content=body_text,
         html_content=body_html,
     )
-    # Set reply-to so replies come back to Barry
-    msg.reply_to = SgEmail(FROM_EMAIL, FROM_NAME)
+    # Set reply-to to the inbound parse subdomain so SendGrid intercepts replies
+    # and routes them to /api/pond-mailer/reply for sentiment analysis + FUB routing
+    msg.reply_to = SgEmail("reply@inbound.yourfriendlyagent.net", FROM_NAME)
 
     sg = SendGridAPIClient(api_key)
     resp = sg.send(msg)
