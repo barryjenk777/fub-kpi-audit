@@ -43,7 +43,8 @@ logger = logging.getLogger("pond_mailer")
 EMAIL_COOLDOWN_DAYS = 3
 
 # Minimum IDX events needed to write a meaningful email
-MIN_EVENTS_TO_EMAIL = 2
+# Counts ALL event types (page views, property views, saves, registration)
+MIN_EVENTS_TO_EMAIL = 1
 
 # Max leads to email per run
 # Scheduler runs 3x/day (10am, 2pm, 6pm ET) → 27 max/day
@@ -318,9 +319,17 @@ def select_strategy(behavior, leadstream_tier, tags):
     if b["view_count"] >= 3:
         return "general_activity", 40
 
+    # Browsed search pages — we have their price/bed filters from URL params
+    if b["search_filters"]:
+        return "search_browse", 35
+
     # Registered but minimal activity
     if b["registration_prop"]:
         return "registration_followup", 30
+
+    # Any IDX activity at all — use as a light touch
+    if b["session_count"] >= 1:
+        return "any_activity", 25
 
     return "none", 0
 
@@ -456,9 +465,17 @@ Each subject line should feel like it came from a person, not a campaign."""
 def _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags):
     """Build a clear behavioral summary to feed Claude."""
     b = behavior
+    strategy_notes = {
+        "search_browse":   "Lead browsed search pages but didn't click into specific listings. Write from their search filters (price range, beds, location). Reference what the market looks like for what they're searching.",
+        "any_activity":    "Lead registered or visited the site but minimal data. Keep it light — acknowledge you noticed them, offer something useful, low-friction ask.",
+        "registration_followup": "Lead registered on a specific property. Reference that home as the hook.",
+    }
+
     lines = [f"LEAD: {first_name}"]
     lines.append(f"LEADSTREAM TIER: {leadstream_tier}")
     lines.append(f"EMAIL STRATEGY: {strategy}")
+    if strategy in strategy_notes:
+        lines.append(f"STRATEGY NOTE: {strategy_notes[strategy]}")
 
     # Properties viewed
     if b["views"]:
@@ -719,16 +736,16 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
             skipped_cooldown += 1
             continue
 
-        # Pull IDX events
-        events = client.get_events_for_person(pid, days=30)
-        property_events = [
-            e for e in events
-            if e.get("type") in ("Viewed Property", "Property Saved", "Registration")
-            and e.get("property")
-        ]
+        # Pull IDX events — extend to 60 days to catch less-frequent browsers
+        events = client.get_events_for_person(pid, days=60, limit=100)
 
-        if len(property_events) < MIN_EVENTS_TO_EMAIL:
-            logger.debug("Skipping %s — only %d property events", name, len(property_events))
+        # Any IDX event counts for qualification (Viewed Page, Viewed Property,
+        # Property Saved, Registration). We write from search filters if no
+        # specific property views exist.
+        idx_events = [e for e in events if e.get("type")]
+
+        if len(idx_events) < MIN_EVENTS_TO_EMAIL:
+            logger.debug("Skipping %s — only %d IDX events", name, len(idx_events))
             skipped_no_activity += 1
             continue
 
@@ -746,7 +763,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
         # Select strategy
         strategy, priority = select_strategy(behavior, leadstream_tier, tags)
 
-        if strategy == "none" or priority < 30:
+        if strategy == "none" or priority < 20:
             logger.debug("Skipping %s — no compelling email strategy (score %d)", name, priority)
             skipped_no_strategy += 1
             continue
