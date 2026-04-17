@@ -4478,26 +4478,38 @@ def api_pond_mailer_reply():
         if sentiment == "positive":
             try:
                 from fub_client import FUBClient
-                from config import MANAGER_USER_ID
+                from config import MANAGER_USER_ID, PRIORITY_GROUP_ID
                 fub = FUBClient()
 
-                # Find the lead's assigned agent; fall back to manager
-                person = fub.get_person(person_id)
-                assigned_uid = (
-                    person.get("assignedUserId")
-                    or person.get("ownerId")
-                    or MANAGER_USER_ID
-                )
+                # Pull Priority Agents group and pick one agent (deterministic round-robin by person_id)
+                group = fub.get_group(PRIORITY_GROUP_ID)
+                group_users = [u.get("id") for u in (group.get("users") or []) if u.get("id")]
+                if group_users:
+                    assigned_uid = group_users[person_id % len(group_users)]
+                else:
+                    person_data = fub.get_person(person_id)
+                    assigned_uid = (
+                        person_data.get("assignedUserId")
+                        or person_data.get("ownerId")
+                        or MANAGER_USER_ID
+                    )
+
+                # Assign lead to the chosen Priority Agent (moves them out of pond)
+                fub._request("PUT", f"people/{person_id}", json_data={
+                    "assignedUserId": assigned_uid,
+                })
+                logger.info("Lead %s assigned to Priority Agent user %s", person_id, assigned_uid)
 
                 from datetime import date as _date
                 tomorrow = (_date.today() + timedelta(days=1)).isoformat()
 
-                task_name = f"\U0001f525 Pond lead replied — {person_name or clean_from}"
+                task_name = f"\U0001f525 Pond lead replied — call {person_name or clean_from} NOW"
                 task_desc = (
-                    f"This lead replied to Barry's outreach email with POSITIVE sentiment.\n\n"
-                    f"Their reply:\n{body_text.strip()[:600]}\n\n"
+                    f"This lead replied to Barry's AI outreach email with POSITIVE interest.\n\n"
+                    f"Reply preview:\n{body_text.strip()[:500]}\n\n"
                     f"Original subject: {subject}\n"
-                    f"Analysis: {sentiment_reason}"
+                    f"AI read: {sentiment_reason}\n\n"
+                    f"They've been assigned to you from the Shark Tank pond. Call them today."
                 )
 
                 task_result = fub.create_task(
@@ -4511,8 +4523,8 @@ def api_pond_mailer_reply():
                 routed = True
                 logger.info("FUB task %s created for user %s", task_id, assigned_uid)
 
-                # Add note with the reply text
-                _pond_add_fub_note(fub, person_id, body_text, sentiment_reason, subject)
+                # Generate and add an engaging Claude-written note
+                _pond_add_fub_note(fub, person_id, person_name, body_text, subject, sentiment_reason)
 
             except Exception as e:
                 logger.error("FUB routing failed for %s (ID %s): %s", person_name, person_id, e)
@@ -4619,18 +4631,68 @@ Return JSON only (no markdown):
         return "neutral", 0.5, f"Analysis error: {e}"
 
 
-def _pond_add_fub_note(fub, person_id, reply_text, sentiment_reason, original_subject):
-    """Add a note to the FUB lead with the reply content."""
+def _pond_add_fub_note(fub, person_id, person_name, reply_text, original_subject, sentiment_reason):
+    """
+    Generate an engaging FUB note using Claude and post it to the lead.
+    The note clearly flags this as an AI email reply, summarizes what the
+    lead said, and gives the agent a concrete recommended action.
+    Falls back to a plain template if Claude is unavailable.
+    """
     try:
-        note_body = (
-            f"[Pond Mailer] Lead replied to: \"{original_subject}\"\n"
-            f"Sentiment: POSITIVE — {sentiment_reason}\n\n"
-            f"Reply:\n{reply_text.strip()[:800]}"
-        )
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        note_body = None
+
+        if api_key:
+            try:
+                import anthropic, json as _json, re
+                client = anthropic.Anthropic(api_key=api_key)
+
+                prompt = f"""Write a short internal CRM note for a real estate agent.
+
+Context:
+- Lead name: {person_name or "this lead"}
+- They received a personalized AI-written email from Barry Jenkins (Legacy Home Team)
+- Subject line of Barry's email: "{original_subject}"
+- The lead REPLIED with positive interest
+- Their reply: {reply_text.strip()[:800]}
+- AI sentiment read: {sentiment_reason}
+
+Write the note AS IF you're Barry briefing the agent who just got this lead assigned to them.
+Make it:
+- Energetic and direct — this is a hot hand-off
+- Clear that the lead responded to an AI-written outreach email (not a cold call)
+- A 2-3 sentence gist of what the lead actually said in their reply
+- One specific recommended action step the agent should take on the phone call
+- Under 200 words total
+- No fluff, no "I hope this finds you well" — get to the point
+
+Output plain text only. No JSON, no markdown headers."""
+
+                response = client.messages.create(
+                    model="claude-haiku-4-5",
+                    max_tokens=300,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                note_body = response.content[0].text.strip()
+            except Exception as e:
+                logger.warning("Claude note generation failed: %s", e)
+
+        # Fallback if Claude unavailable or fails
+        if not note_body:
+            note_body = (
+                f"🔥 HOT HAND-OFF — {person_name or 'Lead'} replied to Barry's AI outreach email.\n\n"
+                f"Email subject: \"{original_subject}\"\n\n"
+                f"What they said:\n{reply_text.strip()[:600]}\n\n"
+                f"AI read: {sentiment_reason}\n\n"
+                f"Recommended action: Call them today. Open with: "
+                f"\"Hey, I saw you replied to Barry's email — I wanted to reach out personally.\""
+            )
+
         fub._request("POST", "notes", json_data={
             "personId": person_id,
             "body":     note_body,
         })
+        logger.info("FUB note added for person %s", person_id)
     except Exception as e:
         logger.warning("Could not add FUB note for reply (person %s): %s", person_id, e)
 
