@@ -455,10 +455,15 @@ LEAD BEHAVIORAL BRIEF:
 OUTPUT FORMAT (JSON only, no markdown):
 {{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "The full email body text. Real line breaks. First line addresses them by first name. Stop before the sign-off — do not include a closing or signature."
+  "body": "START with just the first name followed by a comma on its own line (e.g. 'Taylor,'), then a blank line, then the body. Do NOT write 'Hi Taylor' or 'Hello Taylor' — just 'Taylor,' alone on line 1. Stop before the sign-off — do not include any closing or signature."
 }}
 
-Hyper-personalize every subject line and the first sentence to THIS lead's specific data.
+GREETING FORMAT EXAMPLE (mandatory):
+Taylor,
+
+Three things I noticed about your search that most agents would miss...
+
+Hyper-personalize every subject line and first observation to THIS lead's specific data.
 If they viewed a home in Hampton, reference Hampton specifically — not just "the area."
 Each subject line must feel like you wrote it only for this one person."""
 
@@ -578,43 +583,64 @@ def _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tag
 
 
 def _render_html(body_text):
-    """Convert plain text email body to clean HTML for SendGrid."""
+    """
+    Render a personal-email style HTML — NOT a marketing template.
+
+    Looks like a real email from a person: clean white background, plain
+    readable font, no colored header blocks. Logo lives in the signature
+    footer only — subtle brand presence without screaming 'campaign'.
+
+    This format consistently outperforms marketing templates for:
+    - Primary inbox placement (fewer HTML signals = lower spam score)
+    - Reply rates (feels like a real person wrote it)
+    - Open rates for cold/warm outreach
+    """
     paragraphs = body_text.strip().split("\n\n")
     html_parts = []
     for para in paragraphs:
-        # P.S. gets a distinct style
-        if para.strip().startswith("P.S"):
+        stripped = para.strip()
+        if stripped.startswith("P.S"):
+            # P.S. gets a subtle separator
             html_parts.append(
-                f'<p style="font-size:14px;color:#4a5568;border-top:1px solid #e2e8f0;'
-                f'padding-top:12px;margin-top:16px">{para.replace(chr(10), "<br>")}</p>'
+                f'<p style="margin:20px 0 0;padding-top:16px;border-top:1px solid #e8e8e8;'
+                f'font-size:14px;color:#555;line-height:1.7">'
+                f'{stripped.replace(chr(10), "<br>")}</p>'
             )
         else:
             html_parts.append(
-                f'<p style="font-size:16px;line-height:1.75;color:#2d3748;margin:0 0 14px">'
-                f'{para.replace(chr(10), "<br>")}</p>'
+                f'<p style="margin:0 0 16px;font-size:15px;line-height:1.8;color:#222">'
+                f'{stripped.replace(chr(10), "<br>")}</p>'
             )
 
     body_html_inner = "\n".join(html_parts)
 
     return f"""<!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
-<div style="max-width:520px;margin:24px auto;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
-  <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:20px 32px;text-align:center">
-    <img src="{LOGO_URL}" alt="Legacy Home Team" width="110" style="display:block;margin:0 auto;height:auto">
-  </div>
-  <div style="padding:28px 32px 20px">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<div style="max-width:560px;margin:0 auto;padding:32px 24px">
+
+  <!-- Email body — plain personal style -->
+  <div style="color:#222;font-size:15px;line-height:1.8">
     {body_html_inner}
   </div>
-  <div style="background:#f7fafc;padding:14px 32px;text-align:center;border-top:1px solid #e2e8f0">
-    <p style="margin:0;font-size:11px;color:#a0aec0;line-height:1.6">
-      {PHYSICAL_ADDRESS}<br>
-      <a href="https://legacyhometeam.com" style="color:#a0aec0">legacyhometeam.com</a>
-      &nbsp;&middot;&nbsp;
-      <a href="mailto:{FROM_EMAIL}?subject=Unsubscribe" style="color:#a0aec0">Unsubscribe</a>
+
+  <!-- Signature divider -->
+  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
+    <!-- Logo — small, signature-style, not a marketing banner -->
+    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
+         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
+    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
+      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
+      1545 Crossways Blvd, Chesapeake, VA 23320<br>
+      <a href="mailto:{FROM_EMAIL}?subject=Unsubscribe"
+         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
     </p>
   </div>
+
 </div>
 </body></html>"""
 
