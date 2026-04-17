@@ -2424,24 +2424,32 @@ def get_pond_email_stats(days=30):
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # True totals — no GROUP BY so we get the real aggregate
                 cur.execute("""
                     SELECT
-                        COUNT(*) FILTER (WHERE NOT dry_run)           AS total_sent,
-                        COUNT(DISTINCT person_id) FILTER (WHERE NOT dry_run) AS unique_leads,
-                        strategy,
-                        COUNT(*) AS cnt
+                        COUNT(*) FILTER (WHERE NOT dry_run)                    AS total_sent,
+                        COUNT(DISTINCT person_id) FILTER (WHERE NOT dry_run)   AS unique_leads
+                    FROM pond_email_log
+                    WHERE sent_at >= NOW() - INTERVAL '%s days'
+                """ % days)
+                totals = cur.fetchone() or (0, 0)
+
+                # Per-strategy breakdown
+                cur.execute("""
+                    SELECT strategy, COUNT(*) AS cnt
                     FROM pond_email_log
                     WHERE sent_at >= NOW() - INTERVAL '%s days'
                     GROUP BY strategy
                     ORDER BY cnt DESC
                 """ % days)
                 rows = cur.fetchall()
+
         return {
             "by_strategy": [
-                {"strategy": r[2], "count": r[3]} for r in rows
+                {"strategy": r[0], "count": r[1]} for r in rows
             ],
-            "total_sent": rows[0][0] if rows else 0,
-            "unique_leads": rows[0][1] if rows else 0,
+            "total_sent": totals[0],
+            "unique_leads": totals[1],
         }
     except Exception as e:
         logger.warning("get_pond_email_stats failed: %s", e)
