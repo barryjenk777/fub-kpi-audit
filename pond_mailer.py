@@ -586,7 +586,7 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
         raise RuntimeError("SENDGRID_API_KEY not set")
 
     from sendgrid import SendGridAPIClient
-    from sendgrid.helpers.mail import Mail, Email as SgEmail
+    from sendgrid.helpers.mail import Mail, Email as SgEmail, Bcc
 
     msg = Mail(
         from_email=SgEmail(FROM_EMAIL, FROM_NAME),
@@ -595,9 +595,11 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
         plain_text_content=body_text,
         html_content=body_html,
     )
-    # Set reply-to to the inbound parse subdomain so SendGrid intercepts replies
-    # and routes them to /api/pond-mailer/reply for sentiment analysis + FUB routing
+    # Reply-to: SendGrid inbound parse intercepts replies for sentiment routing
     msg.reply_to = SgEmail("reply@inbound.yourfriendlyagent.net", FROM_NAME)
+
+    # BCC Barry on every email so he can see exactly what's going out
+    msg.add_bcc(Bcc(FROM_EMAIL))
 
     sg = SendGridAPIClient(api_key)
     resp = sg.send(msg)
