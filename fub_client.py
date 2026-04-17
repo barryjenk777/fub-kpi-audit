@@ -303,6 +303,40 @@ class FUBClient:
             params["assignedPondId"] = pond_id
         return self._get_paginated("people", params)
 
+    def get_people_recent(self, pond_id, limit=200):
+        """Fetch the most recently-active leads from a pond, capped at `limit`.
+
+        Sorted by lastActivity descending — surfaces highest-engagement leads
+        first, which mirrors LeadStream score ordering without needing the
+        full paginated pull of 2000+ records.
+        """
+        params = {
+            "assignedPondId": pond_id,
+            "limit": 100,           # page size
+            "sort": "-lastActivity", # newest activity first
+            "offset": 0,
+        }
+        all_leads = []
+        seen_ids = set()
+
+        while len(all_leads) < limit:
+            data = self._request("GET", "people", params=params)
+            items = data.get("people", []) if isinstance(data, dict) else []
+            if not items:
+                break
+            for p in items:
+                pid = p.get("id")
+                if pid and pid not in seen_ids:
+                    seen_ids.add(pid)
+                    all_leads.append(p)
+                    if len(all_leads) >= limit:
+                        break
+            if len(items) < 100:
+                break  # last page
+            params["offset"] += 100
+
+        return all_leads
+
     # ---- Groups ----
 
     def get_groups(self):

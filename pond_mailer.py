@@ -658,24 +658,28 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
     print(f"  {now.strftime('%Y-%m-%d %H:%M UTC')}")
     print(f"{'='*60}\n")
 
-    # Pull ALL leads from allowed ponds — don't rely on LeadStream_Pond tag
-    # since scoring jobs clear and rewrite it constantly.
-    # We do our own qualification via select_strategy().
-    import random
+    # Pull recent leads from allowed ponds sorted by LeadStream-equivalent signal:
+    # most recently active leads first (same intent as LeadStream score ordering).
+    # We limit to the first POND_FETCH_LIMIT leads per pond — enough candidates
+    # to fill our run without paginating 2000+ records at 0.35s/request.
+    POND_FETCH_LIMIT = 200  # candidates per pond; covers 9 sends easily
     all_pond_leads = []
     seen_ids = set()
     for pond_id in sorted(LEADSTREAM_ALLOWED_POND_IDS):
-        leads = client.get_people(pond_id=pond_id)
+        leads = client.get_people_recent(pond_id=pond_id, limit=POND_FETCH_LIMIT)
         for lead in leads:
             lid = lead.get("id")
             if lid and lid not in seen_ids:
                 seen_ids.add(lid)
                 all_pond_leads.append(lead)
 
-    # Shuffle so every run samples from different parts of the pond —
-    # avoids always processing the same leads first and distributes emails fairly.
+    # Sort by lastActivity descending — mirrors LeadStream score ordering.
+    # Most-recently-active leads are highest priority for outreach.
     if not person_id:
-        random.shuffle(all_pond_leads)
+        all_pond_leads.sort(
+            key=lambda p: p.get("lastActivity") or "0000-00-00",
+            reverse=True
+        )
 
     # Filter to single person if specified
     if person_id:
