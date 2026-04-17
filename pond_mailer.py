@@ -661,6 +661,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
     # Pull ALL leads from allowed ponds — don't rely on LeadStream_Pond tag
     # since scoring jobs clear and rewrite it constantly.
     # We do our own qualification via select_strategy().
+    import random
     all_pond_leads = []
     seen_ids = set()
     for pond_id in sorted(LEADSTREAM_ALLOWED_POND_IDS):
@@ -670,6 +671,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
             if lid and lid not in seen_ids:
                 seen_ids.add(lid)
                 all_pond_leads.append(lead)
+
+    # Shuffle so every run samples from different parts of the pond —
+    # avoids always processing the same leads first and distributes emails fairly.
+    if not person_id:
+        random.shuffle(all_pond_leads)
 
     # Filter to single person if specified
     if person_id:
@@ -689,9 +695,18 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
     skipped_no_strategy = 0
     max_to_process = limit or MAX_PER_RUN
 
+    # Hard cap on how many leads we'll check per run — prevents runaway loops
+    # on large ponds (each event fetch = 1 API call at 0.35s rate limit).
+    # Check at most 100 leads per run; we only need MAX_PER_RUN emails.
+    MAX_CANDIDATES = 100
+    candidates_checked = 0
+
     for person in all_pond_leads:
         if sent >= max_to_process:
             logger.info("Reached max per run (%d)", max_to_process)
+            break
+        if not person_id and candidates_checked >= MAX_CANDIDATES:
+            logger.info("Checked %d candidates — stopping to stay fast", MAX_CANDIDATES)
             break
 
         pid   = person.get("id")
@@ -741,7 +756,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
             skipped_cooldown += 1
             continue
 
-        # Pull IDX events — extend to 60 days to catch less-frequent browsers
+        # Pull IDX events — each fetch = 1 FUB API call, so count against cap
+        candidates_checked += 1
         events = client.get_events_for_person(pid, days=60, limit=100)
 
         # Any IDX event counts for qualification (Viewed Page, Viewed Property,
