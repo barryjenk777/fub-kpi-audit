@@ -2446,3 +2446,93 @@ def get_pond_email_stats(days=30):
     except Exception as e:
         logger.warning("get_pond_email_stats failed: %s", e)
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Pond Mailer Job Tracking (DB-backed so jobs survive Railway redeploys)
+# ---------------------------------------------------------------------------
+
+def ensure_pond_mailer_jobs_table():
+    """Create pond_mailer_jobs table if it doesn't exist."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pond_mailer_jobs (
+                        job_id      VARCHAR(16) PRIMARY KEY,
+                        status      VARCHAR(20) NOT NULL DEFAULT 'running',
+                        dry_run     BOOLEAN NOT NULL DEFAULT FALSE,
+                        result      JSONB,
+                        error       TEXT,
+                        started_at  TIMESTAMP DEFAULT NOW(),
+                        finished_at TIMESTAMP
+                    )
+                """)
+            conn.commit()
+    except Exception as e:
+        logger.warning("ensure_pond_mailer_jobs_table failed: %s", e)
+
+
+def create_pond_mailer_job(job_id, dry_run=False):
+    """Insert a new running job record."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO pond_mailer_jobs (job_id, status, dry_run)
+                    VALUES (%s, 'running', %s)
+                    ON CONFLICT (job_id) DO NOTHING
+                """, (job_id, dry_run))
+            conn.commit()
+    except Exception as e:
+        logger.warning("create_pond_mailer_job failed: %s", e)
+
+
+def finish_pond_mailer_job(job_id, result=None, error=None):
+    """Mark a job complete or errored, storing its result."""
+    if not is_available():
+        return
+    import json as _json
+    status = "error" if error else "complete"
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE pond_mailer_jobs
+                    SET status = %s, result = %s, error = %s, finished_at = NOW()
+                    WHERE job_id = %s
+                """, (status, _json.dumps(result) if result else None, error, job_id))
+            conn.commit()
+    except Exception as e:
+        logger.warning("finish_pond_mailer_job failed: %s", e)
+
+
+def get_pond_mailer_job(job_id):
+    """Fetch job status and result by ID. Returns None if not found."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT job_id, status, dry_run, result, error, started_at, finished_at
+                    FROM pond_mailer_jobs
+                    WHERE job_id = %s
+                """, (job_id,))
+                row = cur.fetchone()
+        if not row:
+            return None
+        job_id_, status, dry_run, result, error, started_at, finished_at = row
+        out = {"job_id": job_id_, "status": status, "dry_run": dry_run}
+        if result:
+            out.update(result if isinstance(result, dict) else {})
+        if error:
+            out["error"] = error
+        return out
+    except Exception as e:
+        logger.warning("get_pond_mailer_job failed: %s", e)
+        return None

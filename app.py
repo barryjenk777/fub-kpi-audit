@@ -4383,16 +4383,20 @@ def api_pond_mailer_run():
 
     job_id = str(uuid.uuid4())[:8]
 
+    # Persist job to DB so it survives Railway redeploys
+    _db.ensure_pond_mailer_jobs_table()
+    _db.create_pond_mailer_job(job_id, dry_run=dry_run)
+
     def _bg():
         try:
             from pond_mailer import run_pond_mailer
             result = run_pond_mailer(dry_run=dry_run, person_id=person, limit=limit)
-            _pond_mailer_jobs[job_id] = {"status": "complete", **result}
+            _db.finish_pond_mailer_job(job_id, result=result)
         except Exception as e:
             logger.error("Pond mailer error: %s", e)
-            _pond_mailer_jobs[job_id] = {"status": "error", "error": str(e)}
+            import traceback
+            _db.finish_pond_mailer_job(job_id, error=f"{e}\n{traceback.format_exc()}")
 
-    _pond_mailer_jobs[job_id] = {"status": "running", "dry_run": dry_run}
     threading.Thread(target=_bg, daemon=True).start()
 
     return jsonify({"job_id": job_id, "status": "running", "dry_run": dry_run})
@@ -4400,7 +4404,7 @@ def api_pond_mailer_run():
 
 @app.route("/api/pond-mailer/status/<job_id>")
 def api_pond_mailer_status(job_id):
-    job = _pond_mailer_jobs.get(job_id)
+    job = _db.get_pond_mailer_job(job_id)
     if not job:
         return jsonify({"error": "job not found"}), 404
     return jsonify(job)
@@ -4414,9 +4418,6 @@ def api_pond_mailer_stats():
         return jsonify(stats)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-_pond_mailer_jobs = {}  # in-memory job tracker
 
 
 @app.route("/api/pond-mailer/reply", methods=["POST"])
