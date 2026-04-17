@@ -646,7 +646,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
 
     import db as _db
     from fub_client import FUBClient
-    from config import LEADSTREAM_ALLOWED_POND_IDS, LEADSTREAM_POND_TAG
+    from config import LEADSTREAM_ALLOWED_POND_IDS
 
     _db.ensure_pond_email_log_table()
 
@@ -658,24 +658,29 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
     print(f"  {now.strftime('%Y-%m-%d %H:%M UTC')}")
     print(f"{'='*60}\n")
 
-    # Get pond leads that have the LeadStream_Pond tag
+    # Pull ALL leads from allowed ponds — don't rely on LeadStream_Pond tag
+    # since scoring jobs clear and rewrite it constantly.
+    # We do our own qualification via select_strategy().
     all_pond_leads = []
+    seen_ids = set()
     for pond_id in sorted(LEADSTREAM_ALLOWED_POND_IDS):
         leads = client.get_people(pond_id=pond_id)
         for lead in leads:
-            if LEADSTREAM_POND_TAG in (lead.get("tags") or []):
+            lid = lead.get("id")
+            if lid and lid not in seen_ids:
+                seen_ids.add(lid)
                 all_pond_leads.append(lead)
 
     # Filter to single person if specified
     if person_id:
         all_pond_leads = [p for p in all_pond_leads if p.get("id") == person_id]
         if not all_pond_leads:
-            # Try fetching directly
             person = client.get_person(person_id)
             if person:
                 all_pond_leads = [person]
 
-    logger.info("Found %d tagged pond leads to evaluate", len(all_pond_leads))
+    logger.info("Found %d pond leads to evaluate (ponds %s)",
+                len(all_pond_leads), sorted(LEADSTREAM_ALLOWED_POND_IDS))
 
     sent = 0
     skipped_cooldown = 0
