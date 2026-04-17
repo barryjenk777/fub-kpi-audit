@@ -135,7 +135,7 @@ def analyze_behavior(events, tags):
         if e_type == "Registration" and prop.get("street"):
             registration_prop = prop
 
-        if e_type in ("Viewed Property", "Property Saved") and prop.get("street"):
+        if e_type in ("Viewed Property", "Property Saved", "Saved Property") and prop.get("street"):
             addr  = f"{prop['street']}, {prop.get('city','')} {prop.get('code','')}"
             price = _safe_int(prop.get("price"))
 
@@ -151,7 +151,7 @@ def analyze_behavior(events, tags):
                     except Exception:
                         pass
 
-            elif e_type == "Property Saved":
+            elif e_type in ("Property Saved", "Saved Property"):
                 prop_saves[addr] = prop
 
     # Most-viewed property
