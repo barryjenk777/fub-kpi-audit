@@ -2233,6 +2233,133 @@ def get_pond_reply_stats(days=30):
         return {}
 
 
+def get_pond_dashboard_data(days=30):
+    """All data needed for the AI Outreach dashboard tab."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+
+                # ── Funnel ──────────────────────────────────────────────────
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE NOT dry_run)                     AS sent,
+                        COUNT(DISTINCT person_id) FILTER (WHERE NOT dry_run)    AS unique_leads
+                    FROM pond_email_log
+                    WHERE sent_at >= NOW() - INTERVAL '%s days'
+                """ % days)
+                row = cur.fetchone()
+                sent         = row[0] if row else 0
+                unique_leads = row[1] if row else 0
+
+                cur.execute("""
+                    SELECT
+                        COUNT(*)                                     AS replies,
+                        COUNT(*) FILTER (WHERE sentiment='positive') AS positive,
+                        COUNT(*) FILTER (WHERE sentiment='neutral')  AS neutral,
+                        COUNT(*) FILTER (WHERE sentiment='negative') AS negative,
+                        COUNT(*) FILTER (WHERE routed=TRUE)          AS routed
+                    FROM pond_reply_log
+                    WHERE received_at >= NOW() - INTERVAL '%s days'
+                """ % days)
+                row = cur.fetchone()
+                replies  = row[0] if row else 0
+                positive = row[1] if row else 0
+                neutral  = row[2] if row else 0
+                negative = row[3] if row else 0
+                routed   = row[4] if row else 0
+
+                # ── Daily sends — last 14 days ───────────────────────────
+                cur.execute("""
+                    SELECT DATE(sent_at AT TIME ZONE 'America/New_York') AS day,
+                           COUNT(*) AS cnt
+                    FROM pond_email_log
+                    WHERE NOT dry_run
+                      AND sent_at >= NOW() - INTERVAL '14 days'
+                    GROUP BY 1 ORDER BY 1
+                """)
+                daily_map = {str(r[0]): r[1] for r in cur.fetchall()}
+
+                # ── Routed leads (enriched by caller) ────────────────────
+                cur.execute("""
+                    SELECT person_id, person_name, reply_from,
+                           reply_text, sentiment, received_at, fub_task_id
+                    FROM pond_reply_log
+                    WHERE routed = TRUE
+                      AND received_at >= NOW() - INTERVAL '%s days'
+                    ORDER BY received_at DESC
+                    LIMIT 40
+                """ % days)
+                routed_rows = cur.fetchall()
+
+                # ── Recent replies feed ───────────────────────────────────
+                cur.execute("""
+                    SELECT person_id, person_name, reply_from,
+                           reply_text, sentiment, received_at, routed
+                    FROM pond_reply_log
+                    WHERE received_at >= NOW() - INTERVAL '%s days'
+                    ORDER BY received_at DESC
+                    LIMIT 25
+                """ % days)
+                reply_rows = cur.fetchall()
+
+        # ── Build daily chart (fill gaps with 0) ─────────────────────────
+        today = date.today()
+        daily_chart = []
+        for i in range(13, -1, -1):
+            d = today - timedelta(days=i)
+            daily_chart.append({
+                "date":  str(d),
+                "label": d.strftime("%-m/%-d"),
+                "count": daily_map.get(str(d), 0),
+            })
+
+        routed_leads = [
+            {
+                "person_id":   r[0],
+                "person_name": r[1] or r[2] or "Unknown",
+                "reply_from":  r[2],
+                "reply_text":  (r[3] or "")[:280],
+                "sentiment":   r[4],
+                "received_at": r[5].isoformat() if r[5] else None,
+                "received_ts": r[5].timestamp() if r[5] else 0,
+                "fub_task_id": r[6],
+            }
+            for r in routed_rows
+        ]
+
+        recent_replies = [
+            {
+                "person_id":   r[0],
+                "person_name": r[1] or r[2] or "Unknown",
+                "reply_text":  (r[3] or "")[:200],
+                "sentiment":   r[4],
+                "received_at": r[5].isoformat() if r[5] else None,
+                "routed":      r[6],
+            }
+            for r in reply_rows
+        ]
+
+        return {
+            "funnel": {
+                "sent":     sent,
+                "unique":   unique_leads,
+                "replied":  replies,
+                "positive": positive,
+                "neutral":  neutral,
+                "negative": negative,
+                "routed":   routed,
+            },
+            "daily_chart":    daily_chart,
+            "routed_leads":   routed_leads,
+            "recent_replies": recent_replies,
+        }
+    except Exception as e:
+        logger.warning("get_pond_dashboard_data failed: %s", e)
+        return {}
+
+
 def get_pond_email_stats(days=30):
     """Summary stats for the email log — for dashboard/monitoring."""
     if not is_available():

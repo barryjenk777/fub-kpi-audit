@@ -456,6 +456,9 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
       <span class="nav-icon">⚡</span> LeadStream
       <span class="nav-ext">↗</span>
     </a>
+    <button class="nav-item" data-tab="outreach" onclick="switchTab('outreach')">
+      <span class="nav-icon">✉️</span> AI Outreach
+    </button>
     <div class="nav-section">Coaching</div>
     <button class="nav-item" data-tab="isa" onclick="switchTab('isa')">
       <span class="nav-icon">📞</span> ISA — Fhalen
@@ -567,6 +570,16 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
       <div id="dashboard-appointments" style="display:none"></div>
     </div>
 
+    <!-- ══════════════════════════════════════ AI OUTREACH TAB -->
+    <div class="tab-pane" id="tab-outreach">
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem">
+        <button class="btn btn-ghost" onclick="runPondMailer()">▶ Run Now (Live)</button>
+        <button class="btn btn-ghost" onclick="loadOutreach(true)">🔄 Refresh</button>
+      </div>
+      <div id="loading-outreach" class="loading-pane"><span class="spinner"></span> Loading AI Outreach data…</div>
+      <div id="dashboard-outreach" style="display:none"></div>
+    </div>
+
     <!-- ══════════════════════════════════════ ISA TAB -->
     <div class="tab-pane" id="tab-isa">
       <div id="loading-isa" class="loading-pane"><span class="spinner"></span> Loading Fhalen's data… (takes ~30s first load)</div>
@@ -652,7 +665,7 @@ function switchTab(name){
   const btn=document.querySelector(`.nav-item[data-tab="${name}"]`);
   if(btn) btn.classList.add('active');
 
-  const titles={cc:'🧠 Command Center',goals:'🎯 Goals — '+new Date().getFullYear(),kpi:'📊 Team KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',isa:'📞 ISA — Fhalen'};
+  const titles={cc:'🧠 Command Center',goals:'🎯 Goals — '+new Date().getFullYear(),kpi:'📊 Team KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
   document.getElementById('topbar-title').textContent=titles[name]||name;
 
   if(!_loaded[name]){
@@ -663,6 +676,7 @@ function switchTab(name){
     else if(name==='manager')     loadManager();
     else if(name==='appointments') loadAppointments();
     else if(name==='isa')         loadIsa();
+    else if(name==='outreach')    loadOutreach();
   }
 }
 
@@ -1379,6 +1393,161 @@ async function sendManagerEmail(){const btn=document.getElementById('btnManagerE
 async function saveSettings(){const btn=document.querySelector('[onclick="saveSettings()"]');const orig=btn.textContent;btn.disabled=true;btn.textContent='Saving…';try{const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_calls:+document.getElementById('minCalls').value,min_convos:+document.getElementById('minConvos').value,max_ooc:+document.getElementById('maxOoc').value})});const d=await r.json();showToast(d.success?'✅ Settings saved!':'Save failed',d.success?'ok':'err');}catch(e){showToast('Error: '+e.message,'err');}btn.textContent=orig;btn.disabled=false;}
 async function updateGroup(){if(!agentData)return;const btn=document.getElementById('btnUpdateGroup');btn.disabled=true;btn.textContent='Updating…';const ids=agentData.agents.filter(a=>a.evaluation.overall_pass).map(a=>a.user_id);try{const r=await fetch('/api/update-group',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_ids:ids})});const d=await r.json();showToast(d.success?`✅ Group updated (${d.count} agents)`:'Update failed','ok');}catch(e){showToast('Error: '+e.message,'err');}btn.textContent='🔄 Update Priority Group';btn.disabled=false;}
 async function sendEmail(){const btn=document.getElementById('btnSendEmail');btn.disabled=true;btn.textContent='Sending…';try{const r=await fetch('/api/send-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_calls:+document.getElementById('minCalls').value,min_convos:+document.getElementById('minConvos').value,max_ooc:+document.getElementById('maxOoc').value})});const d=await r.json();showToast(d.success?'✅ KPI email sent!':'Send failed','ok');}catch(e){showToast('Error: '+e.message,'err');}btn.textContent='📧 Email Report';btn.disabled=false;}
+
+/* ════════════════════════════════════════════════
+   AI OUTREACH TAB
+════════════════════════════════════════════════ */
+async function loadOutreach(force){
+  const ld=document.getElementById('loading-outreach');
+  const db=document.getElementById('dashboard-outreach');
+  ld.style.display='flex'; db.style.display='none';
+  try{
+    const r=await fetch('/api/pond-mailer/dashboard'+(force?'?force=1':''),{signal:AbortSignal.timeout(60000)});
+    const d=await r.json();
+    if(d.error){db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Error</div><div class="alert-body">${d.error}</div></div></div>`;}
+    else{db.innerHTML=buildOutreach(d);}
+  }catch(e){db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not load</div><div class="alert-body">${e.message}<br><button class="btn btn-ghost btn-sm" style="margin-top:.5rem" onclick="loadOutreach(true)">↻ Retry</button></div></div></div>`;}
+  ld.style.display='none'; db.style.display='block';
+}
+
+function buildOutreach(d){
+  const f=d.funnel||{};
+  const sent=f.sent||0, replied=f.replied||0, positive=f.positive||0, routed=f.routed||0;
+  const replyRate=sent>0?Math.round(replied/sent*100):0;
+  const interestRate=replied>0?Math.round(positive/replied*100):0;
+  const routeRate=positive>0?Math.round(routed/positive*100):0;
+  const chart=d.daily_chart||[];
+  const maxChart=Math.max(...chart.map(c=>c.count),1);
+  const leads=d.routed_leads||[];
+  const replies=d.recent_replies||[];
+
+  let h='';
+
+  // ── Funnel ──────────────────────────────────────────────────────────
+  h+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-bottom:1.4rem;border:1px solid var(--border);border-radius:var(--r);overflow:hidden">`;
+  const fsteps=[
+    {label:'Emails Sent',val:sent,sub:'last 30 days',color:'var(--text)'},
+    {label:'Replied',val:replied,sub:replyRate+'% reply rate',color:replied>0?'var(--gold)':'var(--muted)'},
+    {label:'Interested',val:positive,sub:interestRate+'% of replies',color:positive>0?'var(--green)':'var(--muted)'},
+    {label:'Routed to Agent',val:routed,sub:routeRate+'% converted',color:routed>0?'var(--green)':'var(--muted)'},
+  ];
+  fsteps.forEach((s,i)=>{
+    h+=`<div style="background:var(--surface);padding:1.1rem 1rem;text-align:center;${i>0?'border-left:1px solid var(--border)':''}position:relative">`;
+    if(i>0)h+=`<div style="position:absolute;left:-10px;top:50%;transform:translateY(-50%);font-size:1.2rem;color:var(--muted);z-index:1">›</div>`;
+    h+=`<div style="font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem">${s.label}</div>`;
+    h+=`<div style="font-size:2.2rem;font-weight:800;color:${s.color};line-height:1;margin-bottom:.25rem">${s.val}</div>`;
+    h+=`<div style="font-size:.65rem;color:var(--subtle)">${s.sub}</div>`;
+    h+='</div>';
+  });
+  h+='</div>';
+
+  // ── Two-column: chart + sentiment breakdown ──────────────────────────
+  h+=`<div style="display:grid;grid-template-columns:2fr 1fr;gap:.75rem;margin-bottom:1.4rem">`;
+
+  // 14-day send chart
+  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem">`;
+  h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.9rem">Emails Sent — Last 14 Days</div>`;
+  h+=`<div style="display:flex;align-items:flex-end;gap:3px;height:64px">`;
+  chart.forEach(c=>{
+    const ht=c.count>0?Math.max(6,Math.round(c.count/maxChart*60)):2;
+    const bg=c.count>0?'var(--gold)':'var(--surface3)';
+    h+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:2px" title="${c.date}: ${c.count} emails">`;
+    h+=`<div style="width:100%;height:${ht}px;background:${bg};border-radius:2px 2px 0 0;transition:.2s"></div>`;
+    h+=`<div style="font-size:.5rem;color:var(--subtle);transform:rotate(-35deg);transform-origin:top right;white-space:nowrap">${c.label}</div>`;
+    h+='</div>';
+  });
+  h+='</div></div>';
+
+  // Sentiment breakdown
+  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem">`;
+  h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.9rem">Reply Sentiment</div>`;
+  [{label:'Interested',val:f.positive||0,color:'var(--green)'},{label:'Neutral',val:f.neutral||0,color:'var(--gold)'},{label:'Opted Out',val:f.negative||0,color:'var(--red)'}].forEach(s=>{
+    h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">`;
+    h+=`<span style="font-size:.72rem;color:var(--muted)">${s.label}</span>`;
+    h+=`<span style="font-size:1.4rem;font-weight:800;color:${s.color}">${s.val}</span>`;
+    h+='</div>';
+  });
+  h+='</div>';
+  h+='</div>'; // end 2-col
+
+  // ── Routed Leads — agent accountability ─────────────────────────────
+  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1rem">`;
+  h+=`<div style="padding:.85rem 1.2rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">`;
+  h+=`<span style="font-weight:700;font-size:.85rem">🎯 Routed Leads — Agent Follow-Up Accountability</span>`;
+  const dropped=leads.filter(l=>l.status==='dropped').length;
+  if(dropped>0)h+=`<span style="background:rgba(239,68,68,.15);color:var(--red);font-size:.68rem;font-weight:700;padding:.2rem .6rem;border-radius:99px">${dropped} dropped</span>`;
+  h+='</div>';
+
+  if(leads.length===0){
+    h+=`<div style="padding:2rem;text-align:center;color:var(--muted);font-size:.8rem">No leads routed yet — pond mailer runs Mon–Fri at 9:15am ET</div>`;
+  } else {
+    h+='<div class="tbl-wrap"><table><thead><tr><th>Lead</th><th>Replied</th><th>Agent</th><th>Stage</th><th>Calls Since</th><th>Status</th></tr></thead><tbody>';
+    leads.forEach(l=>{
+      const dt=l.received_at?new Date(l.received_at):null;
+      const dateStr=dt?dt.toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+      const statusCfg={
+        contacted:{bg:'rgba(16,185,129,.15)',color:'var(--green)',label:'✓ Called'},
+        pending:  {bg:'rgba(245,166,35,.15)', color:'var(--gold)', label:'⏳ Pending'},
+        dropped:  {bg:'rgba(239,68,68,.15)',  color:'var(--red)',  label:'🔴 No Contact'},
+      }[l.status]||{bg:'',color:'var(--muted)',label:l.status};
+      const callsDisplay=l.calls_since>0
+        ?`<span style="color:var(--green);font-weight:700">${l.calls_since} call${l.calls_since!==1?'s':''}</span>`
+        :`<span style="color:var(--muted)">—</span>`;
+      // Reply snippet tooltip
+      const snippet=(l.reply_text||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+      h+=`<tr>`;
+      h+=`<td style="font-weight:600" title="${snippet}">${l.person_name}</td>`;
+      h+=`<td style="font-size:.72rem;color:var(--muted)">${dateStr}</td>`;
+      h+=`<td style="font-size:.78rem">${l.agent_name}</td>`;
+      h+=`<td style="font-size:.72rem;color:var(--muted)">${l.stage}</td>`;
+      h+=`<td>${callsDisplay}</td>`;
+      h+=`<td><span style="background:${statusCfg.bg};color:${statusCfg.color};font-size:.65rem;font-weight:700;padding:.2rem .55rem;border-radius:99px;white-space:nowrap">${statusCfg.label}</span></td>`;
+      h+='</tr>';
+      // Reply preview row
+      if(l.reply_text){
+        h+=`<tr><td colspan="6" style="padding:.3rem 1rem .6rem;font-size:.7rem;color:var(--muted);font-style:italic;border-top:none">"${(l.reply_text||'').slice(0,180)}${l.reply_text.length>180?'…':''}"</td></tr>`;
+      }
+    });
+    h+='</tbody></table></div>';
+  }
+  h+='</div>';
+
+  // ── Recent Replies feed (collapsible) ───────────────────────────────
+  if(replies.length>0){
+    h+=`<div class="panel"><div class="panel-hdr" onclick="this.parentElement.classList.toggle('open')"><span class="panel-title">💬 All Recent Replies (${replies.length})</span><span class="panel-chevron">▼</span></div>`;
+    h+=`<div class="panel-body">`;
+    replies.forEach(r=>{
+      const sentCfg={
+        positive:{bg:'rgba(16,185,129,.12)', color:'var(--green)', icon:'✅'},
+        neutral: {bg:'rgba(245,166,35,.1)',   color:'var(--gold)',  icon:'➡️'},
+        negative:{bg:'rgba(239,68,68,.1)',    color:'var(--red)',   icon:'🚫'},
+      }[r.sentiment]||{bg:'',color:'var(--muted)',icon:'?'};
+      const dt=r.received_at?new Date(r.received_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';;
+      h+=`<div style="background:${sentCfg.bg};border-radius:8px;padding:.65rem .9rem;margin-bottom:.5rem;display:flex;gap:.8rem;align-items:flex-start">`;
+      h+=`<span style="font-size:1rem;margin-top:.1rem">${sentCfg.icon}</span>`;
+      h+=`<div style="flex:1;min-width:0">`;
+      h+=`<div style="display:flex;justify-content:space-between;margin-bottom:.2rem">`;
+      h+=`<span style="font-weight:700;font-size:.78rem">${r.person_name}</span>`;
+      h+=`<span style="font-size:.65rem;color:var(--muted)">${dt}${r.routed?' · <span style="color:var(--green)">routed</span>':''}</span>`;
+      h+='</div>';
+      h+=`<div style="font-size:.72rem;color:var(--muted);font-style:italic">"${(r.reply_text||'').slice(0,160)}${(r.reply_text||'').length>160?'…':''}"</div>`;
+      h+='</div></div>';
+    });
+    h+='</div></div>';
+  }
+
+  return h;
+}
+
+async function runPondMailer(){
+  if(!confirm('Send up to 10 live emails to pond leads now?\n\nThis uses your real SendGrid account.'))return;
+  showToast('Starting pond mailer…','ok');
+  try{
+    const r=await fetch('/api/pond-mailer/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dry_run:false,limit:10})});
+    const d=await r.json();
+    showToast(`Pond mailer running (job ${d.job_id}). Refresh in ~60s.`,'ok');
+  }catch(e){showToast('Error: '+e.message,'err');}
+}
 
 // ── INIT ── load Goals first (it's the home tab)
 loadGoals();

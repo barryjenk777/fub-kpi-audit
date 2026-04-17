@@ -4697,6 +4697,119 @@ Output plain text only. No JSON, no markdown headers."""
         logger.warning("Could not add FUB note for reply (person %s): %s", person_id, e)
 
 
+@app.route("/api/pond-mailer/dashboard")
+def api_pond_mailer_dashboard():
+    """
+    Full AI Outreach dashboard data.
+    Pulls funnel stats + routed leads from DB, then enriches each routed lead
+    with live FUB data: current stage, assigned agent name, and call count
+    since the reply date so Barry can see who followed up and who dropped the ball.
+    Cached 5 minutes — enrichment makes ~2 FUB API calls per routed lead.
+    """
+    cache_key = "pond_mailer_dashboard"
+    cached = _cache.get(cache_key)
+    if cached and (time.time() - cached["ts"]) < 300:
+        return jsonify(cached["data"])
+
+    try:
+        from fub_client import FUBClient
+        from datetime import datetime, timezone
+
+        base = _db.get_pond_dashboard_data(days=30)
+        if not base:
+            return jsonify({"error": "Database not available"}), 503
+
+        fub = FUBClient()
+
+        # Enrich each routed lead with live FUB data
+        enriched = []
+        for lead in base.get("routed_leads", []):
+            pid          = lead["person_id"]
+            routing_ts   = lead.get("received_ts", 0)
+            routing_dt   = datetime.fromtimestamp(routing_ts, tz=timezone.utc) if routing_ts else None
+
+            agent_name   = "Unassigned"
+            stage        = "Unknown"
+            calls_since  = 0
+            last_call_dt = None
+
+            try:
+                person = fub.get_person(pid)
+                stage  = person.get("stage") or person.get("stageName") or "Unknown"
+
+                # Assigned agent name
+                uid = person.get("assignedUserId") or person.get("ownerId")
+                if uid:
+                    # Try agent_profiles table first (fast)
+                    from db import get_conn as _get_conn, is_available as _db_avail
+                    if _db_avail():
+                        try:
+                            with _get_conn() as conn:
+                                with conn.cursor() as cur:
+                                    cur.execute(
+                                        "SELECT agent_name FROM agent_profiles WHERE fub_user_id=%s LIMIT 1",
+                                        (uid,)
+                                    )
+                                    row = cur.fetchone()
+                            if row:
+                                agent_name = row[0]
+                        except Exception:
+                            pass
+                    if agent_name == "Unassigned":
+                        # Fall back to FUB user lookup
+                        try:
+                            user = fub._request("GET", f"users/{uid}")
+                            agent_name = (
+                                f"{user.get('firstName','')} {user.get('lastName','')}".strip()
+                                or f"User {uid}"
+                            )
+                        except Exception:
+                            agent_name = f"Agent #{uid}"
+
+                # Calls since routing date
+                if routing_dt:
+                    calls = fub.get_calls(person_id=pid, since=routing_dt)
+                    calls_since = len(calls)
+                    if calls:
+                        last_call_dt = max(
+                            (c.get("created", "") for c in calls),
+                            default=None
+                        )
+
+            except Exception as e:
+                logger.warning("FUB enrichment failed for lead %s: %s", pid, e)
+
+            # Status: green=called, yellow=task pending, red=dropped
+            hours_since = (
+                (datetime.now(timezone.utc) - routing_dt).total_seconds() / 3600
+                if routing_dt else 0
+            )
+            if calls_since > 0:
+                status = "contacted"
+            elif hours_since < 24:
+                status = "pending"
+            else:
+                status = "dropped"
+
+            enriched.append({
+                **lead,
+                "agent_name":   agent_name,
+                "stage":        stage,
+                "calls_since":  calls_since,
+                "last_call_dt": last_call_dt,
+                "hours_since":  round(hours_since, 1),
+                "status":       status,
+            })
+
+        result = {**base, "routed_leads": enriched}
+        _cache[cache_key] = {"ts": time.time(), "data": result}
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error("Pond mailer dashboard error: %s", e, exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/pond-mailer/replies")
 def api_pond_mailer_reply_stats():
     """Reply stats — how many leads replied, sentiment breakdown, routing rate."""
