@@ -37,18 +37,18 @@ class FUBClient:
         time.sleep(self.RATE_LIMIT_DELAY)
         self._request_count += 1
 
-        for attempt in range(5):  # up to 5 attempts
+        for attempt in range(3):  # max 3 attempts
             response = self.session.request(
                 method, url, params=params, json=json_data
             )
             if response.status_code == 429:
-                wait = (2 ** attempt) * 2  # 2s, 4s, 8s, 16s, 32s
+                wait = 3 * (attempt + 1)  # 3s, 6s, 9s — max 18s total
                 time.sleep(wait)
                 continue
             response.raise_for_status()
             return response.json()
 
-        # All retries exhausted — raise the last 429
+        # All retries exhausted — raise the last response
         response.raise_for_status()
 
     def _get_paginated(self, endpoint, params=None, max_pages=300):
