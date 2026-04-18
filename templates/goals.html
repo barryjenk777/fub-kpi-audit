@@ -253,7 +253,7 @@
           <th>Agent</th>
           <th>GCI Goal</th>
           <th>Overall Pace</th>
-          <th>Calls YTD</th>
+          <th>Dials YTD</th>
           <th>Appts YTD</th>
           <th>Contracts</th>
           <th>Closings</th>
@@ -379,6 +379,7 @@ function renderScorecard(rows) {
       <td>
         <div class="agent-name">${agent_name}</div>
         <div class="agent-sub">${email || ''}</div>
+        ${targets.dials_per_week ? `<div class="agent-sub" style="margin-top:.15rem">📞 ${targets.dials_per_week} dials/wk · 💬 ${targets.convos_per_week} convos/wk</div>` : ''}
         ${pace.needs_conversation ? '<div class="flag-convo">⚠ Needs conversation</div>' : ''}
       </td>
       <td>

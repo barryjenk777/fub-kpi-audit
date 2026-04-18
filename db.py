@@ -110,6 +110,19 @@ DO $$ BEGIN
   ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS onboarding_sent_at TIMESTAMPTZ;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+-- contact_rate: % of dials that reach a live person (dial → conversation).
+-- Added 2026-04 to split the old call_to_appt_rate into two meaningful layers:
+--   contact_rate (dials → conversations) × conversation_to_appt_rate (convos → appts)
+-- The old call_to_appt_rate column is kept and reinterpreted as conversation_to_appt_rate.
+-- Default 0.15 = 15% of dials connect for inbound warm leads (Ylopo/IDX).
+DO $$ BEGIN
+  ALTER TABLE goals ADD COLUMN IF NOT EXISTS contact_rate NUMERIC(5,4) DEFAULT 0.15;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+DO $$ BEGIN
+  ALTER TABLE goal_history ADD COLUMN IF NOT EXISTS contact_rate NUMERIC(5,4) DEFAULT 0.15;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 -- Secure tokens for agent self-service goal setup links
 CREATE TABLE IF NOT EXISTS goal_tokens (
@@ -699,8 +712,9 @@ def _goal_row_to_dict(row, cols):
 
 def upsert_goal(agent_name, year, gci_goal, avg_sale_price, commission_pct,
                 soi_closings_expected=0, soi_gci_expected=0, sphere_touch_monthly=2,
-                call_to_appt_rate=0.06, appt_to_contract_rate=0.30,
-                contract_to_close_rate=0.80, set_by='manager', notes=None):
+                call_to_appt_rate=0.10, appt_to_contract_rate=0.30,
+                contract_to_close_rate=0.80, contact_rate=0.15,
+                set_by='manager', notes=None):
     if not is_available():
         return None
     try:
@@ -711,8 +725,8 @@ def upsert_goal(agent_name, year, gci_goal, avg_sale_price, commission_pct,
                         agent_name, year, gci_goal, avg_sale_price, commission_pct,
                         soi_closings_expected, soi_gci_expected, sphere_touch_monthly,
                         call_to_appt_rate, appt_to_contract_rate, contract_to_close_rate,
-                        set_by, notes, updated_at
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                        contact_rate, set_by, notes, updated_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                     ON CONFLICT (agent_name, year) DO UPDATE SET
                         gci_goal               = EXCLUDED.gci_goal,
                         avg_sale_price         = EXCLUDED.avg_sale_price,
@@ -723,6 +737,7 @@ def upsert_goal(agent_name, year, gci_goal, avg_sale_price, commission_pct,
                         call_to_appt_rate      = EXCLUDED.call_to_appt_rate,
                         appt_to_contract_rate  = EXCLUDED.appt_to_contract_rate,
                         contract_to_close_rate = EXCLUDED.contract_to_close_rate,
+                        contact_rate           = EXCLUDED.contact_rate,
                         set_by                 = EXCLUDED.set_by,
                         notes                  = EXCLUDED.notes,
                         updated_at             = NOW()
@@ -730,7 +745,7 @@ def upsert_goal(agent_name, year, gci_goal, avg_sale_price, commission_pct,
                 """, (agent_name, year, gci_goal, avg_sale_price, commission_pct,
                       soi_closings_expected, soi_gci_expected, sphere_touch_monthly,
                       call_to_appt_rate, appt_to_contract_rate, contract_to_close_rate,
-                      set_by, notes))
+                      contact_rate, set_by, notes))
                 row = cur.fetchone()
                 cols = [d[0] for d in cur.description]
         return _goal_row_to_dict(row, cols) if row else None
@@ -777,6 +792,15 @@ def get_all_goals(year=None):
 def compute_targets(goal: dict) -> dict:
     """
     From a goal record, calculate the weekly activity targets an agent needs.
+
+    Two-layer call model:
+      Dials → Conversations  (contact_rate:           % of dials that reach a live person)
+      Conversations → Appts  (call_to_appt_rate:      % of conversations that book an appt)
+
+    call_to_appt_rate was historically mislabeled as a dial-to-appointment rate (6% default).
+    It is now correctly treated as conversation-to-appointment rate (10% default).
+    contact_rate = 15% is a realistic default for inbound warm leads (Ylopo/IDX).
+
     Returns a dict of derived targets (not stored in DB).
     """
     gci          = float(goal.get("gci_goal", 0))
@@ -784,19 +808,25 @@ def compute_targets(goal: dict) -> dict:
     comm_pct     = float(goal.get("commission_pct", 0.025))
     soi_close    = int(goal.get("soi_closings_expected", 0))
     soi_gci      = float(goal.get("soi_gci_expected", 0))
-    c2a          = float(goal.get("call_to_appt_rate", 0.06))
+    # conversation → appointment rate (was call_to_appt_rate, default updated 0.06 → 0.10)
+    c2a          = float(goal.get("call_to_appt_rate", 0.10))
     a2c          = float(goal.get("appt_to_contract_rate", 0.30))
     c2cl         = float(goal.get("contract_to_close_rate", 0.80))
+    # contact_rate: % of dials that become live conversations (new field, default 0.15)
+    contact_r    = float(goal.get("contact_rate", 0.15))
 
     avg_commission   = avg_price * comm_pct
-    prospecting_gci  = max(gci - soi_gci, 0)
     closings_needed  = round(gci / avg_commission, 1) if avg_commission > 0 else 0
     prospect_close   = max(closings_needed - soi_close, 0)
     contracts_needed = round(prospect_close / c2cl, 1) if c2cl > 0 else 0
     appts_needed_yr  = round(contracts_needed / a2c, 1) if a2c > 0 else 0
-    calls_needed_yr  = round(appts_needed_yr / c2a, 1) if c2a > 0 else 0
+    # Two-layer: appts → convos → dials
+    convos_needed_yr = round(appts_needed_yr / c2a, 1) if c2a > 0 else 0
+    dials_needed_yr  = round(convos_needed_yr / contact_r, 1) if contact_r > 0 else 0
+
     appts_per_week   = round(appts_needed_yr / 50, 1)
-    calls_per_week   = round(calls_needed_yr / 50, 1)
+    convos_per_week  = round(convos_needed_yr / 50, 1)
+    dials_per_week   = round(dials_needed_yr / 50, 1)
 
     return {
         "avg_commission":    round(avg_commission, 0),
@@ -805,9 +835,14 @@ def compute_targets(goal: dict) -> dict:
         "prospect_closings": prospect_close,
         "contracts_needed":  contracts_needed,
         "appts_needed_yr":   appts_needed_yr,
-        "calls_needed_yr":   calls_needed_yr,
+        "convos_needed_yr":  convos_needed_yr,
+        "dials_needed_yr":   dials_needed_yr,
         "appts_per_week":    appts_per_week,
-        "calls_per_week":    calls_per_week,
+        "convos_per_week":   convos_per_week,
+        "dials_per_week":    dials_per_week,
+        # Backward-compat aliases so existing callers don't break
+        "calls_needed_yr":   dials_needed_yr,
+        "calls_per_week":    dials_per_week,
     }
 
 
@@ -1733,11 +1768,11 @@ def save_goal_with_history(agent_name, year, **kwargs):
                     INSERT INTO goal_history (agent_name, year, gci_goal, avg_sale_price,
                         commission_pct, soi_closings_expected, soi_gci_expected,
                         sphere_touch_monthly, call_to_appt_rate, appt_to_contract_rate,
-                        contract_to_close_rate, set_by, notes, archived_at)
+                        contract_to_close_rate, contact_rate, set_by, notes, archived_at)
                     SELECT agent_name, year, gci_goal, avg_sale_price, commission_pct,
                            soi_closings_expected, soi_gci_expected, sphere_touch_monthly,
                            call_to_appt_rate, appt_to_contract_rate, contract_to_close_rate,
-                           set_by, notes, NOW()
+                           COALESCE(contact_rate, 0.15), set_by, notes, NOW()
                     FROM   goals
                     WHERE  agent_name = %s AND year = %s
                 """, (agent_name, year))

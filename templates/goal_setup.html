@@ -442,14 +442,19 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
         </div>
         <hr class="result-divider">
         <div class="result-item">
+          <div class="result-label">Conversations / week</div>
+          <div class="result-value" id="r-convos-wk">—</div>
+          <div class="result-unit">live contacts needed</div>
+        </div>
+        <div class="result-item">
+          <div class="result-label">Dials / week</div>
+          <div class="result-value" id="r-calls-wk">—</div>
+          <div class="result-unit">total call attempts</div>
+        </div>
+        <div class="result-item full">
           <div class="result-label">Appointments / week</div>
           <div class="result-value" id="r-appts-wk">—</div>
           <div class="result-unit">from prospecting</div>
-        </div>
-        <div class="result-item">
-          <div class="result-label">Calls / week</div>
-          <div class="result-value" id="r-calls-wk">—</div>
-          <div class="result-unit">contacts to make</div>
         </div>
       </div>
     </div>
@@ -496,16 +501,30 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
         <span style="font-size:.68rem;color:var(--subtle);margin-left:auto">defaults = industry average</span>
       </div>
       <div id="adv-fields">
-        <div class="rate-grid" style="margin-top:.8rem">
+        <div style="font-size:.72rem;color:var(--muted);margin:.8rem 0 .5rem;line-height:1.5">
+          Not every dial reaches a live person. <strong style="color:var(--text)">Contact rate</strong> = % of dials answered.
+          <strong style="color:var(--text)">Convos → Appt</strong> = % of live conversations that book a meeting.
+        </div>
+        <div class="rate-grid" style="margin-top:.4rem;grid-template-columns:repeat(4,1fr)">
           <div class="field">
-            <label>Calls → Appt</label>
+            <label>Contact rate</label>
             <div class="input-wrap has-suffix">
-              <input type="number" id="call_to_appt" min="1" max="100" step="1"
-                     value="{{ '%.0f' | format((goal.call_to_appt_rate | float) * 100) if goal and goal.call_to_appt_rate else '6' }}"
+              <input type="number" id="contact_rate" min="1" max="100" step="1"
+                     value="{{ '%.0f' | format((goal.contact_rate | float) * 100) if goal and goal.contact_rate else '15' }}"
                      oninput="recalc()">
               <span class="input-suffix">%</span>
             </div>
-            <div class="helper">avg 10%</div>
+            <div class="helper">dials answered (avg 15%)</div>
+          </div>
+          <div class="field">
+            <label>Convos → Appt</label>
+            <div class="input-wrap has-suffix">
+              <input type="number" id="call_to_appt" min="1" max="100" step="1"
+                     value="{{ '%.0f' | format((goal.call_to_appt_rate | float) * 100) if goal and goal.call_to_appt_rate and (goal.call_to_appt_rate | float) >= 0.07 else '10' }}"
+                     oninput="recalc()">
+              <span class="input-suffix">%</span>
+            </div>
+            <div class="helper">of convos booked (avg 10%)</div>
           </div>
           <div class="field">
             <label>Appt → Contract</label>
@@ -750,13 +769,14 @@ function fmt(n) {
 function set(id, val) { const el = document.getElementById(id); if(el) el.textContent = val; }
 
 function recalc() {
-  const gci      = v('gci_goal');
-  const avgPrice = v('avg_sale_price');
-  const commPct  = v('commission_pct') / 100;
-  const soiClose = v('soi_closings');
-  const c2a      = v('call_to_appt')      / 100 || 0.06;
-  const a2c      = v('appt_to_contract')  / 100 || 0.30;
-  const c2cl     = v('contract_to_close') / 100 || 0.80;
+  const gci        = v('gci_goal');
+  const avgPrice   = v('avg_sale_price');
+  const commPct    = v('commission_pct') / 100;
+  const soiClose   = v('soi_closings');
+  const contactR   = v('contact_rate')     / 100 || 0.15;  // dials → live conversation
+  const c2a        = v('call_to_appt')     / 100 || 0.10;  // convos → appointment
+  const a2c        = v('appt_to_contract') / 100 || 0.30;
+  const c2cl       = v('contract_to_close')/ 100 || 0.80;
 
   const perDeal        = avgPrice * commPct;
   const closingsNeeded = perDeal > 0 ? gci / perDeal : 0;
@@ -764,8 +784,11 @@ function recalc() {
   const prospectClose  = Math.max(closingsNeeded - soiClose, 0);
   const contractsNeeded= c2cl > 0 ? prospectClose / c2cl : 0;
   const apptsYr        = a2c  > 0 ? contractsNeeded / a2c : 0;
-  const callsYr        = c2a  > 0 ? apptsYr / c2a : 0;
+  // Two-layer: appts → convos → dials
+  const convosYr       = c2a     > 0 ? apptsYr / c2a : 0;
+  const callsYr        = contactR > 0 ? convosYr / contactR : 0;
   const apptsWk        = apptsYr / 50;
+  const convosWk       = convosYr / 50;
   const callsWk        = callsYr / 50;
 
   // Per-deal helper
@@ -783,17 +806,18 @@ function recalc() {
   }
 
   // Section 6 results
-  set('r-closings', gci > 0 ? Math.ceil(closingsNeeded) : '—');
-  set('r-prospect',  gci > 0 ? Math.ceil(prospectClose) : '—');
+  set('r-closings',  gci > 0 ? Math.ceil(closingsNeeded) : '—');
+  set('r-prospect',  gci > 0 ? Math.ceil(prospectClose)  : '—');
   set('r-soi',       soiClose || '—');
-  set('r-appts-wk',  gci > 0 ? apptsWk.toFixed(1) : '—');
-  set('r-calls-wk',  gci > 0 ? Math.ceil(callsWk) : '—');
+  set('r-convos-wk', gci > 0 ? Math.ceil(convosWk) : '—');
+  set('r-calls-wk',  gci > 0 ? Math.ceil(callsWk)  : '—');
+  set('r-appts-wk',  gci > 0 ? apptsWk.toFixed(1)  : '—');
 
-  // Equation
+  // Equation — dials drive the projection, accounting for contact rate
   const dailyCalls = v('daily_calls') || Math.ceil(callsWk / 5);
   const dailyAppts = v('daily_appts') || (apptsWk / 5).toFixed(1);
   const annualClosingsFromDaily = perDeal > 0
-    ? Math.round(dailyCalls * 5 * 50 * c2a * a2c * c2cl)
+    ? Math.round(dailyCalls * 5 * 50 * contactR * c2a * a2c * c2cl)
     : 0;
   const gciFromDaily = annualClosingsFromDaily * perDeal;
   set('eq-closings', annualClosingsFromDaily || '—');
@@ -861,6 +885,7 @@ async function saveAll() {
     soi_closings_expected:   Math.round(v('soi_closings')),
     soi_gci_expected:        Math.round(v('soi_closings')) * v('avg_sale_price') * (v('commission_pct') / 100),
     sphere_touch_monthly:    Math.round(v('sphere_touch')),
+    contact_rate:            v('contact_rate')      / 100,
     call_to_appt_rate:       v('call_to_appt')      / 100,
     appt_to_contract_rate:   v('appt_to_contract')  / 100,
     contract_to_close_rate:  v('contract_to_close') / 100,
