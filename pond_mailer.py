@@ -379,6 +379,173 @@ SIGN_OFF = (
     "www.legacyhomesearch.com"
 )
 
+# ---------------------------------------------------------------------------
+# Z-Buyer sequence guide — for cash-offer leads (ZLEAD / Z_BUYER / YLOPO_Z_BUYER)
+# These are homeowners who requested a cash offer, not buyers searching for homes.
+# Tone: calm, competent, educational. Barry's edge = cash AND licensed agent = both options.
+# No listing-drop emails — Z-buyers are sellers, no IDX links apply.
+# ---------------------------------------------------------------------------
+_Z_BUYER_SEQUENCE_GUIDE = {
+
+    1: """EMAIL 1 — Already handled by the new_lead_immediate mailer ("caught at the computer").
+If this runs, treat it as a re-introduction: got their cash offer request, can do cash or list, want to run both numbers?
+3 sentences max. Direct. No hype.""",
+
+    2: """EMAIL 2 — The Net Sheet.
+
+Most sellers make one mistake: they compare OFFER PRICES instead of NET PROCEEDS.
+Barry's job here: flip the frame. The number on the contract isn't what you walk away with.
+
+What eats into the listing number:
+- Agent commissions (typically 5-6%)
+- Repairs sellers are usually asked to make after inspection
+- Carrying costs during the 30-45 day closing period (mortgage, taxes, insurance)
+- Risk: financed buyers fall through — appraisal issues, loan denials, cold feet
+
+A cash offer at a slightly lower price can net MORE in total. Barry can show them that math.
+
+Rules:
+- Don't make it a lecture. Make it a "here's something most people don't realize."
+- One key insight: net proceeds ≠ offer price
+- The CTA is the net sheet: "Want me to put together a side-by-side for your place?"
+- 60-80 words. Teaching voice, not sales voice.
+- No urgency language. No pressure.
+""",
+
+    3: """EMAIL 3 — The Timeline Check.
+
+Z-buyers had urgency when they submitted. Either:
+  A) The urgency is still there → great, let's talk
+  B) Something changed → life moved on, that's fine, say so
+
+This email doesn't assume either. It genuinely asks.
+Short. Warm. Not a guilt trip, not a chase. Just a neutral check-in.
+
+Rules:
+- 2-3 sentences max. Under 40 words.
+- No recap of earlier emails.
+- Tone: genuinely unbothered, curious, not desperate.
+- The question should make it easy to reply either way — yes OR no both work.
+
+Example (personalize — do not copy verbatim):
+  "Just checking in — did the move end up happening, or is the timeline still open?
+   Either way is fine, just want to make sure I'm not bothering you if things resolved."
+""",
+
+    4: """EMAIL 4 — Certainty Has a Price.
+
+Cash buyers close. Financed buyers sometimes don't.
+
+This email is about the hidden cost of choosing a financed buyer over a cash offer:
+appraisal contingencies, loan denials, inspection re-negotiations, a 30-45 day wait
+that can stretch to 60+ when deals fall through and restart.
+
+Barry's angle: you might get $10k more from a financed buyer on paper — but if that deal falls through 3 weeks before closing, you're back to square one, plus 2 months of carrying costs. That math often flips.
+
+Rules:
+- Story-first if possible: "Had a seller in [city] last year who passed on a cash offer to wait for more..." — short, anonymized, real.
+- One key insight: certainty has dollar value. Spell it out simply.
+- Soft question at the end: "What matters more right now — top dollar or a guaranteed close?"
+- 80-100 words. Teaching > selling.
+- No urgency. No pressure. Just a smart friend running the real math.
+""",
+
+    5: """EMAIL 5 — The Monthly Cost of Waiting.
+
+Every month you keep a home you want to sell costs real money.
+
+The "holding cost" math for a typical Hampton Roads home:
+- Mortgage: the biggest line
+- Property taxes (pro-rated monthly)
+- Homeowner's insurance
+- Maintenance / utilities if vacant
+- Opportunity cost on the equity sitting in the property
+
+For most sellers this runs $1,500–$2,500+/month in pure carrying cost.
+Waiting three months to see if the market goes higher means betting $4,500-$7,500
+that the market will move enough to cover those costs AND net more. It often doesn't.
+
+Rules:
+- Present the math as a "here's what I always tell people" — not a threat
+- Don't use their specific numbers (you don't have them) — use ranges
+- Make it concrete: "$1,800/month in holding costs" hits harder than "it costs money to wait"
+- Soft CTA: "Want me to run the actual holding cost estimate for your place?"
+- 80-100 words. Smart friend voice, not investor pitch.
+""",
+
+    6: """EMAIL 6 — Story. The client who almost waited too long.
+
+Anonymized story. Real situation. Don't make it up — use a believable Hampton Roads scenario.
+
+A homeowner wanted to sell. Got a solid cash offer. Decided to hold out and list for more.
+Market shifted (happens). Three months later they accepted less than the original cash offer,
+PLUS three months of carrying costs. Net result: came out $15-20k behind where they would have been.
+
+Barry's framing: "I share this not to scare you — most people navigate this fine.
+But it comes up more often than sellers expect, and I'd rather you have the full picture."
+
+Rules:
+- Story first: setup → decision → what happened → what they wished they'd known
+- One sentence of honest self-awareness: "Sometimes listing is clearly the right call. Sometimes cash wins. It depends on your specific situation."
+- Soft close: "Where are you in the process right now?"
+- 90-110 words. No pitch. No urgency.
+""",
+
+    7: """EMAIL 7 — Updated Numbers.
+
+Markets move. It's been a couple months. Comparable sales in their area have shifted —
+either up or down — and their cash offer estimate AND listing estimate may have changed.
+
+Barry can give them fresh numbers with no commitment required.
+
+Rules:
+- Frame it as: "The market's moved since we first connected — wanted to give you a heads-up."
+- Don't make it sound like you're tracking them. Make it sound like you're paying attention to the market on their behalf.
+- Offer to pull updated comps: "If you want current numbers on your place, I can put them together in about 10 minutes."
+- 60-80 words. Light. No pressure.
+- CTA: "Want updated comps for your neighborhood?"
+""",
+
+    8: """EMAIL 8 — The Comparison Nobody Makes.
+
+Most people compare: Cash offer price vs. Listing price.
+Barry compares the total picture: net proceeds after EVERYTHING.
+
+Side A (cash): offer price, minus nothing (no commissions, no repairs, no contingencies)
+Side B (listing): offer price, minus 5-6% commissions, minus repair credits from inspection,
+minus carrying costs during 30-45 day close, minus risk of deal falling through
+
+The gap between these two paths is almost always smaller than sellers expect.
+Sometimes it flips completely in favor of cash.
+
+Rules:
+- Present this as "here's the comparison most agents don't walk you through" — not a lecture, a gift
+- Keep it concrete with sample math (use generic Hampton Roads numbers if no specifics available)
+- One CTA: "Worth 15 minutes to look at the real numbers side by side?"
+- 90-110 words. Educational. Confident but not pushy.
+""",
+
+    9: """EMAIL 9 — The Warm Door.
+
+It's been a few months. No guilt. No chase. Just: the door is still open.
+
+Barry's tone: genuinely unbothered. He's done fine. He's not desperate for this listing.
+He just wants them to know the option exists if their situation changes.
+
+Life changes: job moves, divorces, financial shifts, family situations — these create urgency
+that wasn't there before. When that happens, Barry wants to be the first name they think of.
+
+Rules:
+- Acknowledge the time without guilt-tripping: "It's been a while — hope things are going well."
+- One sentence on what's changed (market, rates, their opportunity) — optional
+- The core message: "If anything shifts on your end, I'm still here. Same offer, same options."
+- No hard CTA. Just warmth and an open door.
+- 60-80 words. This is a relationship maintenance email, not a sales email.
+- Tone: the friend you want to call when you're finally ready.
+""",
+}
+
+
 # Sequence-specific angle instructions fed to Claude
 _SEQUENCE_GUIDE = {
     1: """EMAIL 1 — The Pattern Interrupt.
@@ -546,8 +713,25 @@ def _get_seq_guide(sequence_num):
     return _SEQUENCE_GUIDE[6] if sequence_num % 2 == 0 else _SEQUENCE_GUIDE[7]
 
 
-def _is_listing_drop(sequence_num):
-    """True for listing-drop emails (5, 7, 9, 11…) — these include IDX links."""
+def _get_z_buyer_seq_guide(sequence_num):
+    if sequence_num in _Z_BUYER_SEQUENCE_GUIDE:
+        return _Z_BUYER_SEQUENCE_GUIDE[sequence_num]
+    # Beyond 9: cycle between story/math/update angles
+    cycle = [_Z_BUYER_SEQUENCE_GUIDE[6], _Z_BUYER_SEQUENCE_GUIDE[7], _Z_BUYER_SEQUENCE_GUIDE[8]]
+    return cycle[sequence_num % 3]
+
+
+def _is_z_buyer(tags):
+    """Return True if this lead is a Z-buyer (cash offer request from Ylopo)."""
+    z_tags = {"ZLEAD", "Z_BUYER", "YLOPO_Z_BUYER"}
+    return any(t.upper().replace("-", "_") in z_tags for t in (tags or []))
+
+
+def _is_listing_drop(sequence_num, tags=None):
+    """True for listing-drop emails (5, 7, 9, 11…) — these include IDX links.
+    Z-buyer leads never get listing drops — they're sellers, not buyers."""
+    if _is_z_buyer(tags):
+        return False
     return sequence_num >= 5 and sequence_num % 2 == 1
 
 
@@ -560,26 +744,28 @@ def generate_email(person, behavior, strategy, leadstream_tier,
       1-3: reply sprint (short, direct, no links)
       4,6,8: drip content (longer, warm, no links)
       5,7,9: drip listing drop (short, IDX link included)
+    Z-buyer leads (ZLEAD/Z_BUYER) use a separate sequence guide focused on
+    the cash offer / both-options value proposition.
     Returns {subject, body_text, body_html} or raises on failure.
     """
     first_name = person.get("firstName") or "there"
     tags = person.get("tags", [])
+    is_z = _is_z_buyer(tags)
 
-    # Listing-drop emails (5, 7, 9…) include IDX links — all others do not.
-    # Sprint emails (1-3) optimize for reply; content drip (4,6,8) teaches.
-    listing_drop = _is_listing_drop(sequence_num)
+    # Z-buyers are sellers — no listing drops, different sequence guide throughout
+    listing_drop = _is_listing_drop(sequence_num, tags)
     search_urls  = build_lead_search_urls(behavior) if listing_drop else []
 
     brief     = _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags,
                                         search_urls=search_urls)
-    seq_guide = _get_seq_guide(sequence_num)
+    seq_guide = _get_z_buyer_seq_guide(sequence_num) if is_z else _get_seq_guide(sequence_num)
 
     # Phase label for logging / dry-run display
     if sequence_num <= 3:
-        phase_label = f"sprint #{sequence_num}/3"
+        phase_label = f"{'z-buyer sprint' if is_z else 'sprint'} #{sequence_num}/3"
     else:
         drip_num = sequence_num - 3
-        phase_label = f"drip #{drip_num} ({'listing' if listing_drop else 'content'})"
+        phase_label = f"{'z-buyer drip' if is_z else 'drip'} #{drip_num} ({'listing' if listing_drop else 'content'})"
 
     if dry_run:
         logger.info("[DRY RUN] Would call Claude for %s (strategy: %s, %s)",
@@ -602,7 +788,16 @@ def generate_email(person, behavior, strategy, leadstream_tier,
     client = anthropic.Anthropic(api_key=api_key)
 
     # Phase-specific word count and link rules
-    if sequence_num <= 3:
+    if is_z:
+        # Z-buyer emails: all content, no links, educational/teaching voice
+        if sequence_num <= 3:
+            length_rule = "30-50 words. Short and direct — they're overwhelmed, don't add to the noise."
+            max_tokens  = 400
+        else:
+            length_rule = "70-110 words. Substantive enough to teach something, short enough to read in 30 seconds."
+            max_tokens  = 600
+        link_rule = "NO LINKS. This is a seller lead — no IDX searches apply."
+    elif sequence_num <= 3:
         length_rule = "25-45 words for emails 1-2. 20-35 words for email 3. No links. Short is good — but never so clipped it reads as rude. A fragment without warmth is just cold."
         link_rule   = "NO LINKS — ever. They click instead of reply."
         max_tokens  = 400
@@ -615,9 +810,30 @@ def generate_email(person, behavior, strategy, leadstream_tier,
         link_rule   = "NO LINKS. The value is the insight, not a search result."
         max_tokens  = 600
 
-    prompt = f"""You are writing a nurture email from Barry Jenkins, realtor in Hampton Roads VA.
+    # Z-buyer gets a focused seller-specific system prompt
+    if is_z:
+        z_buyer_context = """
+━━━━ WHO THIS PERSON IS ━━━━
+This is a SELLER lead — they requested a cash offer on their home.
+They are NOT looking to buy. Do NOT reference home searches, IDX, or properties to buy.
 
-PHASE: {"Reply Sprint" if sequence_num <= 3 else ("Listing Drop" if listing_drop else "Long-term Drip")}
+Barry's position: he is both a licensed realtor AND a cash buyer.
+His edge: he can show them TWO options — cash now or list for potentially more.
+Most cash buyers can only offer one. Barry can show the full picture.
+
+━━━━ TONE FOR SELLER LEADS ━━━━
+- Calm, competent, educational. Not a pitch. Like a smart advisor.
+- Teaching voice: "here's what most people don't realize"
+- No WE-BUY-HOUSES energy. No exclamation points.
+- No "I'd love to help" or "feel free to reach out"
+- If you're sharing math or data, make it concrete and Hampton Roads-specific
+"""
+    else:
+        z_buyer_context = ""
+
+    prompt = f"""You are writing a nurture email from Barry Jenkins, realtor in Hampton Roads VA.
+{z_buyer_context}
+PHASE: {"Z-Buyer Drip" if is_z else ("Reply Sprint" if sequence_num <= 3 else ("Listing Drop" if listing_drop else "Long-term Drip"))}
 EMAIL #{sequence_num} in the sequence.
 
 ━━━━ LENGTH ━━━━
