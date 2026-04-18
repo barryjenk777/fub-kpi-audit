@@ -226,17 +226,11 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
     # Auto-detect agents
     agent_map = auto_detect_agents(client)
 
-    # Fetch calls per-agent to avoid the 2000-record cap being exhausted by
-    # system accounts and post-window calls (newest-first pagination means calls
-    # AFTER the audit window burn slots before the target window is reached).
-    all_calls = []
-    seen_call_ids: set = set()
-    for _name, _user in agent_map.items():
-        for _c in client.get_calls(user_id=_user["id"], since=since, until=until):
-            _cid = _c.get("id")
-            if _cid not in seen_call_ids:
-                seen_call_ids.add(_cid)
-                all_calls.append(_c)
+    # Single bulk call fetch — max_offset=5000 in fub_client.py pages past the
+    # ISA's high call volume (userId=1, Fhalen calling under Barry's account,
+    # ~1400 calls/week). Per-agent loops made 8× the API calls and hit rate
+    # limits. count_calls_for_user() filters by agent userId — ISA calls ignored.
+    all_calls = client.get_calls(since=since, until=until)
     excluded_person_ids = build_excluded_person_ids(client, all_calls)
 
     # Fetch appointments

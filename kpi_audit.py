@@ -395,17 +395,12 @@ def run_audit(client, weeks_back=1):
         print(f"Excluded: {', '.join(config.EXCLUDED_USERS)}")
     print()
 
-    # Fetch calls per-agent — avoids 2000-record cap being exhausted by system
-    # accounts and post-window calls before the audit window is reached.
-    print("  Fetching calls (per-agent)...", flush=True)
-    all_calls = []
-    seen_call_ids: set = set()
-    for _aname, _auser in agent_map.items():
-        for _c in client.get_calls(user_id=_auser["id"], since=since, until=until):
-            _cid = _c.get("id")
-            if _cid not in seen_call_ids:
-                seen_call_ids.add(_cid)
-                all_calls.append(_c)
+    # Single bulk call fetch — max_offset=5000 in fub_client.py pages past the
+    # ISA's high call volume (userId=1, Fhalen calling under Barry's account,
+    # ~1400 calls/week). Per-agent loops made 8× the API calls and hit rate
+    # limits. count_calls_for_user() filters by agent userId — ISA calls ignored.
+    print("  Fetching calls (bulk, max_offset=5000)...", flush=True)
+    all_calls = client.get_calls(since=since, until=until)
     print(f"  Found {len(all_calls)} total calls")
 
     # Build excluded personIds (e.g., Sphere leads)
