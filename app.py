@@ -5086,6 +5086,23 @@ def scheduled_send_manager_email():
         print(f"[SCHEDULER] Manager email error: {e}")
 
 
+def scheduled_run_pond_mailer():
+    """Saturday 10am ET — weekly pond mailer batch."""
+    if _already_fired_recently("pond_mailer", within_hours=20):
+        print("[SCHEDULER] Pond mailer: skipped — already sent within 20h")
+        return
+    print(f"[SCHEDULER] Running Saturday pond mailer at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        with app.test_client() as tc:
+            resp = tc.post("/api/pond-mailer/run", json={"dry_run": False})
+            result = resp.get_json() or {}
+            job_id = result.get("job_id", "unknown")
+            print(f"[SCHEDULER] Pond mailer started — job_id: {job_id}")
+        _record_fired("pond_mailer")
+    except Exception as e:
+        print(f"[SCHEDULER] Pond mailer error: {e}")
+
+
 def scheduled_sync_appointment_tags():
     """Runs 3x/day — sync APT_SET/APT_OUTCOME_NEEDED/APT_STALE tags."""
     if not _db.try_acquire_job_lock("appt_tag_sync"):
@@ -5694,6 +5711,12 @@ def start_scheduler():
     # KPI Audit email: Monday 8:30am ET
     _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET),
                        id="audit_email", name="Monday KPI audit email",
+                       max_instances=1, coalesce=True)
+
+    # Pond mailer: Saturday 10am ET
+    # coalesce=True: if server was down at 10am, fire once on restart — don't skip.
+    _scheduler.add_job(scheduled_run_pond_mailer, CronTrigger(day_of_week="sat", hour=10, minute=0, timezone=ET),
+                       id="pond_mailer", name="Saturday pond mailer (10am ET)",
                        max_instances=1, coalesce=True)
 
     # ── Nudge engine jobs ──────────────────────────────────────────────────

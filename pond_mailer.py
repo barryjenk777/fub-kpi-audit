@@ -682,24 +682,40 @@ They should feel like their agent noticed what they were looking at and reached 
 Specific is good. Clinical is not. Generic is worst of all.
 
 ━━━━ WHAT KILLS REPLIES (never do these) ━━━━
-- P.S. of any kind — signals a campaign
 - Explaining your process or credentials
 - Padding with market stats to prove you know things
 - Sounding like you're trying — trying reads as desperation
+- "Just checking in" / "reaching out" / "circling back" / "following up"
+- "Dream home", "perfect fit", "hot market", "I hope this finds you well"
+- Opening with "I noticed" — lead with the observation itself
 
 WHAT GETS REPLIES (non-negotiable rules):
 1. Specificity — prove you looked at THIS person, not a persona
 2. A gap or a gift — leave something they want to close, or give them something real
 3. An easy question — answerable in 2–5 words, yes/no if possible
-- "Just checking in" / "reaching out" / "circling back" / "following up"
-- Sounding like you're trying — trying reads as desperation
-- "Dream home", "perfect fit", "hot market", "I hope this finds you well"
-- Opening with "I noticed" — lead with the observation itself
+
+━━━━ LOCAL INSIDER P.S. (optional — use ~50% of the time) ━━━━
+About half the time, add a P.S. with a single piece of genuine local market
+intelligence. This is the "I actually know Hampton Roads" signal that mass email
+cannot replicate. Good P.S. lines feel like a text from a friend who sells real
+estate — not a market report excerpt.
+
+Rules for the P.S.:
+- One sentence only. Conversational. Specific to their search area if possible.
+- It should make them think "this agent knows what they're talking about"
+- Never: a CTA, a credential, "don't hesitate to reach out", or a generic market stat
+- Good examples:
+    "P.S. — Great Bridge is seeing multiple offers on anything under $375k right now."
+    "P.S. — Suffolk's Harbour View area has been moving fast. Might be worth a look."
+    "P.S. — A lot of buyers in the $400s are getting pushed to Newport News right now. VB inventory is tight."
+    "P.S. — Chesapeake has some of the best schools in Hampton Roads if that's a factor."
+- Skip the P.S. the other half of the time — silence is also a choice.
 
 FORMAT:
 - First line: first name + comma only. Nothing else. ("Marcus,")
 - Blank line
-- Body: 2–4 sentences. That's it. No P.S. No closing line. No explanation.
+- Body: 2–4 sentences. That's it. No closing line. No explanation.
+- Optional P.S. on its own line after the body (see above).
 - Signature is added automatically — stop writing before the sign-off.
 
 SUBJECT LINES — these determine if it's opened:
@@ -718,7 +734,7 @@ LEAD DATA (personalize to THIS person — generic = failure):
 OUTPUT (JSON only, no markdown fences, no code blocks):
 {{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "Marcus,\\n\\n[2–4 sentences, nothing else]"
+  "body": "Marcus,\\n\\n[2–4 sentences]\\n\\n[P.S. — local insight, or omit entirely]"
 }}
 
 The first sentence of the body must reference something specific to this lead:
