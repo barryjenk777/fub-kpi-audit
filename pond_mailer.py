@@ -377,8 +377,10 @@ def generate_email(person, behavior, strategy, leadstream_tier,
     first_name = person.get("firstName") or "there"
     tags = person.get("tags", [])
 
-    # Build the behavioral brief for Claude
-    brief = _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags)
+    # Build IDX search links from their actual behavior, then build the brief
+    search_urls = build_lead_search_urls(behavior)
+    brief = _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags,
+                                    search_urls=search_urls)
     seq_guide = _SEQUENCE_GUIDE.get(sequence_num, _SEQUENCE_GUIDE[1])
 
     if dry_run:
@@ -401,71 +403,56 @@ def generate_email(person, behavior, strategy, leadstream_tier,
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    prompt = f"""You are writing a short, personal real estate email for Barry Jenkins,
-Realtor at LPT Realty in Virginia Beach/Hampton Roads, VA.
+    prompt = f"""Write a real estate email from Barry Jenkins (LPT Realty, Hampton Roads VA).
 
-HAMPTON ROADS MARKET CONTEXT (use naturally when relevant):
-- Hampton Roads = Virginia Beach, Norfolk, Chesapeake, Suffolk, Hampton, Newport News,
-  Portsmouth, and surrounding military communities
-- Virginia has specific real estate laws: buyer must sign representation agreement before
-  touring; dual agency is allowed but disclosure required; no mandatory seller disclosures
-  beyond known material defects — keep any legal references general and positive
-- Local lifestyle angles (use sparingly, only if it fits the lead's search):
-  → Beach access, waterfront/water-view properties, military relocation (strong VA market)
-  → No state income tax on military pay; proximity to bases (Oceana, Little Creek, Norfolk Naval)
-  → Strong appreciation markets: Chesapeake, Virginia Beach north of 264, Great Neck area
-  → Community culture: outdoorsy, neighborhood-centric, school-district aware
+HAMPTON ROADS CONTEXT (use only when it fits naturally):
+- Hampton Roads = Virginia Beach, Norfolk, Chesapeake, Suffolk, Hampton, Newport News, Portsmouth
+- Strong appreciation: Chesapeake, VB north of 264, Great Neck area
+- Military community: Oceana, Little Creek, Norfolk Naval — relocation is common
+- Lifestyle: waterfront, outdoorsy, school-district conscious
 
-VOICE GUIDE (mandatory):
-- Conversational, like a smart friend who happens to know Hampton Roads
-- Teaching, never pushing — give insight before asking for anything
-- Never shame, never pressure, never use "just checking in"
-- Story-first: open with what you noticed or a local market observation
-- One clear, low-friction ask at the end
-- Always include a P.S. — specific and curiosity-driven, ideally local intel
-- Tone: warm, direct, confident — not salesy, never corporate
-- Never use: "dream home", "perfect fit", "hot market", "I hope this finds you well", "reach out"
+VOICE — this is the most important section:
+- Write like a real person texting a friend, not a trained copywriter
+- Fragments are fine. Contractions always. Imperfect rhythm is good.
+- One idea only. Don't over-explain it.
+- Never: "dream home", "perfect fit", "hot market", "I hope this finds you well", "reach out", "just checking in"
+- Never open with "I noticed" — lead with the observation itself
+- Warm, direct, a little wry. Not salesy. Not corporate. Not AI.
 
-ADVANCED EMAIL MARKETING RULES (apply all of these):
-Subject lines:
-  - Use the lead's specific data (street name, neighborhood, city, price point)
-  - Pattern that converts: "[specific observation]" or a question or a number
-  - No ALL CAPS, no emojis in subject, no "RE:" unless you mean it
-  - 6-9 words max, should read like it came from a person texting not a campaign
-  - Generate 3 distinct subject options (different hooks — curiosity, specificity, question)
+LENGTH — strictly enforced:
+- Emails 1 & 2: under 75 words in the body (not counting greeting or P.S.)
+- Email 3: under 50 words
+- If it feels slightly too short, it's probably right
 
-Body structure (proven high-reply formula):
-  1. Open: a specific observation about what they did (not "I noticed you…", lead with the observation itself)
-  2. Middle: one useful insight, local stat, or market nuance relevant to their search
-  3. Close: one soft ask — a question they can answer in under 10 seconds
-  4. P.S.: one line of local insider info that makes them want to reply
+STRUCTURE:
+- Line 1: first name + comma, nothing else (e.g. "Taylor,")
+- Blank line
+- One tight paragraph — observation → one useful thing → soft question
+- Blank line
+- P.S. — one sentence, specific, makes them curious enough to reply
+  → If search links are provided in the brief, drop ONE naturally in the P.S.
+     as a hyperlink: [descriptive text](url) — NOT a bare URL, NOT "click here"
 
-Click-bait (ethical): If they viewed or saved a specific property, create slight urgency
-around that property's market (days on market, comparable actives) without fabricating data.
-Say "in that price range" or "in that zip" rather than inventing specific numbers.
+SUBJECT LINES:
+- 6–9 words, reads like a text from a friend
+- Use their specific data (street, neighborhood, price point, city)
+- 3 options: one curiosity, one specific fact, one question
+- No ALL CAPS, no emojis, no "RE:"
 
-SEQUENCE POSITION — read carefully:
+SEQUENCE POSITION:
 {seq_guide}
-
-Word count: email 1 & 2 under 130 words in the body; email 3 under 80 words.
 
 LEAD BEHAVIORAL BRIEF:
 {brief}
 
-OUTPUT FORMAT (JSON only, no markdown):
+OUTPUT FORMAT (JSON only, no markdown fences):
 {{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "START with just the first name followed by a comma on its own line (e.g. 'Taylor,'), then a blank line, then the body. Do NOT write 'Hi Taylor' or 'Hello Taylor' — just 'Taylor,' alone on line 1. Stop before the sign-off — do not include any closing or signature."
+  "body": "Taylor,\\n\\n[body paragraph]\\n\\nP.S. [one line]"
 }}
 
-GREETING FORMAT EXAMPLE (mandatory):
-Taylor,
-
-Three things I noticed about your search that most agents would miss...
-
-Hyper-personalize every subject line and first observation to THIS lead's specific data.
-If they viewed a home in Hampton, reference Hampton specifically — not just "the area."
-Each subject line must feel like you wrote it only for this one person."""
+Hyper-personalize to THIS lead's data. If they viewed a home in Hampton, say Hampton.
+Each subject line must feel written for this one person only."""
 
     response = client.messages.create(
         model="claude-opus-4-5",
@@ -484,8 +471,14 @@ Each subject line must feel like you wrote it only for this one person."""
     subject = subject_options[0] if subject_options else f"Following up — {first_name}"
     claude_body = data.get("body", "")
 
-    # Plain text: append the full sign-off (email clients that strip HTML see this)
-    body_text = claude_body + "\n\n" + SIGN_OFF
+    # Plain text: convert markdown links to readable "label (url)" format
+    import re as _re
+    body_text_clean = _re.sub(
+        r'\[([^\]]+)\]\((https?://[^\)]+)\)',
+        r'\1 ( \2 )',
+        claude_body,
+    )
+    body_text = body_text_clean + "\n\n" + SIGN_OFF
 
     # HTML: render Claude body only — the HTML template has its own signature footer
     # so we do NOT include SIGN_OFF here, which would create a double signature.
@@ -499,7 +492,105 @@ Each subject line must feel like you wrote it only for this one person."""
     }
 
 
-def _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags):
+# ---------------------------------------------------------------------------
+# IDX Search URL Builder
+# ---------------------------------------------------------------------------
+
+BASE_IDX_SEARCH_URL = "https://listings.legacyhomesearch.com/search"
+
+
+def build_idx_search_url(city=None, state="VA", beds=None, baths=None,
+                          min_price=None, max_price=None, property_type=None,
+                          subdivision=None, zip_code=None):
+    """Build a legacyhomesearch.com IDX search URL from structured parameters.
+
+    URL schema decoded from Barry's examples:
+      s[locations][0][city]         — city name (URL-encoded)
+      s[locations][0][state]        — 2-char state
+      s[locations][0][subdivision]  — subdivision name
+      s[locations][0][zip]          — zip code
+      s[beds]                       — bedroom count
+      s[baths]                      — bathroom count
+      s[minPrice] / s[maxPrice]     — price bounds (integers, no commas)
+      s[propertyTypes][0]           — house | condo | townhouse | land
+      ip=t                          — include pending listings
+    """
+    from urllib.parse import quote as _q
+    params = []
+    loc = 0
+
+    if city:
+        params.append(f"s[locations][{loc}][city]={_q(city)}")
+        params.append(f"s[locations][{loc}][state]={state}")
+        if subdivision:
+            params.append(f"s[locations][{loc}][subdivision]={_q(subdivision)}")
+        loc += 1
+    elif zip_code:
+        params.append(f"s[locations][{loc}][zip]={zip_code}")
+        loc += 1
+
+    params += [
+        "s[orderBy]=sourceCreationDate%2Cdesc",
+        "s[page]=1",
+        "s[limit]=18",
+    ]
+
+    if beds:
+        params.append(f"s[beds]={int(beds)}")
+    if baths:
+        params.append(f"s[baths]={int(baths)}")
+    if min_price:
+        params.append(f"s[minPrice]={int(min_price)}")
+    if max_price:
+        params.append(f"s[maxPrice]={int(max_price)}")
+    if property_type:
+        params.append(f"s[propertyTypes][0]={property_type}")
+
+    params.append("ip=t")
+    return BASE_IDX_SEARCH_URL + "?" + "&".join(params)
+
+
+def build_lead_search_urls(behavior):
+    """Return 1–2 IDX search URLs tailored to this lead's actual browsing data.
+
+    Uses their city, typical bed count, and price range to build a search that
+    shows them homes genuinely similar to what they've been looking at.
+    """
+    b = behavior
+    urls = []
+
+    cities = list(b["cities"]) if b["cities"] else []
+    beds   = min(b["beds_seen"]) if b["beds_seen"] else None
+
+    # Round price range: 10% cushion below min, stay at their max
+    min_price = max_price = None
+    if b["price_min"] and b["price_max"]:
+        min_price = int(b["price_min"] * 0.9 / 5000) * 5000   # nearest $5k
+        max_price = int(b["price_max"]        / 5000) * 5000
+
+    for i, city in enumerate(cities[:2]):
+        url = build_idx_search_url(
+            city=city,
+            beds=beds,
+            min_price=min_price if i == 0 else None,
+            max_price=max_price if i == 0 else None,
+        )
+        bed_str   = f"{beds}bd " if beds else ""
+        price_str = f" around ${min_price:,}" if (min_price and i == 0) else ""
+        label = f"latest {bed_str}homes in {city}{price_str}"
+        urls.append({"url": url, "label": label})
+
+    # Fallback: zip code only (when no city data in events)
+    if not urls and b["zips"]:
+        zip_code = list(b["zips"])[0]
+        url = build_idx_search_url(zip_code=zip_code, beds=beds)
+        urls.append({"url": url, "label": f"latest homes in {zip_code}"})
+
+    return urls
+
+
+def _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags,
+                             search_urls=None):
     """Build a clear behavioral summary to feed Claude."""
     b = behavior
     strategy_notes = {
@@ -580,7 +671,28 @@ def _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tag
     if b["intent_signals"]:
         lines.append(f"\nYLOPO SIGNALS: {'; '.join(b['intent_signals'])}")
 
+    # IDX search links — Claude weaves ONE into the email naturally
+    if search_urls:
+        lines.append("\nSEARCH LINKS — include exactly ONE of these in the email body or P.S.")
+        lines.append("Use it as a natural hyperlink (markdown format), not a bare URL:")
+        for su in search_urls:
+            lines.append(f'  [{su["label"]}]({su["url"]})')
+
     return "\n".join(lines)
+
+
+def _md_links_to_html(text):
+    """Convert [label](url) markdown links → HTML anchor tags.
+
+    Claude writes links in markdown format when given IDX search URLs.
+    This converts them before rendering so they're clickable in the email.
+    """
+    import re
+    return re.sub(
+        r'\[([^\]]+)\]\((https?://[^\)]+)\)',
+        r'<a href="\2" style="color:#1a5fb4;text-decoration:underline">\1</a>',
+        text,
+    )
 
 
 def _render_html(body_text):
@@ -599,7 +711,7 @@ def _render_html(body_text):
     paragraphs = body_text.strip().split("\n\n")
     html_parts = []
     for para in paragraphs:
-        stripped = para.strip()
+        stripped = _md_links_to_html(para.strip())
         if stripped.startswith("P.S"):
             # P.S. gets a subtle separator
             html_parts.append(
