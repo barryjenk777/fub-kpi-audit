@@ -13,6 +13,24 @@ from datetime import datetime, timedelta
 import config
 
 
+def _disable_tracking(msg):
+    """Turn off SendGrid click + open tracking on any Mail object.
+
+    Tracking rewrites links through click.sendgrid.net and injects a 1×1 pixel
+    — both known spam-filter triggers.  Calling this on every outbound message
+    keeps our sending reputation clean.
+    """
+    try:
+        from sendgrid.helpers.mail import TrackingSettings, ClickTracking, OpenTracking
+        ts = TrackingSettings()
+        ts.click_tracking = ClickTracking(enable=False, enable_text=False)
+        ts.open_tracking = OpenTracking(enable=False)
+        msg.tracking_settings = ts
+    except Exception:
+        pass  # Older SDK — skip silently rather than crash sends
+    return msg
+
+
 def _catchy_subject(email_type, data=None):
     """Generate unique, catchy subject lines so Gmail won't thread them together."""
     week_of = datetime.now().strftime("%b %d")
@@ -578,6 +596,7 @@ def send_manager_email(manager_data, period_label):
         subject=subject,
         html_content=html_body,
     )
+    _disable_tracking(message)
 
     try:
         sg = SendGridAPIClient(api_key)
@@ -629,6 +648,7 @@ def send_report(results, period_start, period_end):
         subject=subject,
         html_content=html_body,
     )
+    _disable_tracking(message)
 
     try:
         sg = SendGridAPIClient(api_key)
@@ -810,6 +830,7 @@ def send_isa_email(isa_data):
         subject=subject,
         html_content=html_body,
     )
+    _disable_tracking(message)
 
     try:
         sg = SendGridAPIClient(api_key)
@@ -1114,6 +1135,7 @@ def send_appointment_email(appt_data, subject_override=None):
         for cc in cc_list:
             if cc.email != email:
                 message.add_cc(cc)
+        _disable_tracking(message)
 
         try:
             sg.send(message)
@@ -1137,6 +1159,7 @@ def send_appointment_email(appt_data, subject_override=None):
         subject=f"[Team Summary] {summary_subject}",
         html_content=summary_html,
     )
+    _disable_tracking(mgr_message)
     try:
         sg.send(mgr_message)
         print(f"\n✅ Manager summary sent to {mgr_recipients}")
@@ -1331,6 +1354,7 @@ def send_goal_onboarding_email(agent_name, first_name, email, setup_url, dashboa
         subject=subject,
         html_content=html_body,
     )
+    _disable_tracking(message)
 
     try:
         sg = SendGridAPIClient(api_key)

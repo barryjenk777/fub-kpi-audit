@@ -661,7 +661,10 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
         raise RuntimeError("SENDGRID_API_KEY not set")
 
     from sendgrid import SendGridAPIClient
-    from sendgrid.helpers.mail import Mail, Email as SgEmail, Bcc
+    from sendgrid.helpers.mail import (
+        Mail, Email as SgEmail, Bcc,
+        TrackingSettings, ClickTracking, OpenTracking,
+    )
 
     msg = Mail(
         from_email=SgEmail(FROM_EMAIL, FROM_NAME),
@@ -675,6 +678,13 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
 
     # BCC Barry on every email so he can see exactly what's going out
     msg.add_bcc(Bcc(FROM_EMAIL))
+
+    # Disable click + open tracking — tracking URLs rewritten through sendgrid.net
+    # are a major spam signal for Gmail/Outlook filters on lead-facing emails.
+    tracking = TrackingSettings()
+    tracking.click_tracking = ClickTracking(enable=False, enable_text=False)
+    tracking.open_tracking = OpenTracking(enable=False)
+    msg.tracking_settings = tracking
 
     sg = SendGridAPIClient(api_key)
     resp = sg.send(msg)
