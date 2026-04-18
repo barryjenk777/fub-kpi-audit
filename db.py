@@ -2516,11 +2516,49 @@ def finish_pond_mailer_job(job_id, result=None, error=None):
         logger.warning("finish_pond_mailer_job failed: %s", e)
 
 
+def timeout_stale_pond_jobs(max_minutes=30):
+    """Mark any job stuck in 'running' for longer than max_minutes as 'timeout'.
+
+    Called at the start of each run and when job status is polled, so zombie
+    jobs (killed mid-run by a Railway redeploy) auto-resolve instead of
+    staying 'running' forever in the dashboard.
+    """
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE pond_mailer_jobs
+                    SET status = 'timeout',
+                        error  = 'Job exceeded max runtime — likely killed by a Railway redeploy.',
+                        finished_at = NOW()
+                    WHERE status = 'running'
+                      AND started_at < NOW() - INTERVAL '%s minutes'
+                    RETURNING job_id
+                """, (max_minutes,))
+                timed_out = [r[0] for r in cur.fetchall()]
+            conn.commit()
+        if timed_out:
+            logger.info("Timed out stale pond jobs: %s", timed_out)
+        return len(timed_out)
+    except Exception as e:
+        logger.warning("timeout_stale_pond_jobs failed: %s", e)
+        return 0
+
+
 def get_pond_mailer_job(job_id):
-    """Fetch job status and result by ID. Returns None if not found."""
+    """Fetch job status and result by ID. Returns None if not found.
+
+    Auto-resolves stale running jobs before returning so the dashboard
+    never shows a zombie job.
+    """
     if not is_available():
         return None
     try:
+        # Resolve any zombie jobs first
+        timeout_stale_pond_jobs()
+
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""

@@ -1066,6 +1066,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
 
     _db.ensure_pond_email_log_table()
 
+    # Auto-resolve any zombie jobs from previous Railway redeploys
+    stale = _db.timeout_stale_pond_jobs(max_minutes=30)
+    if stale:
+        logger.info("Auto-resolved %d stale job(s) on startup", stale)
+
     client = FUBClient()
     now = datetime.now(timezone.utc)
 
