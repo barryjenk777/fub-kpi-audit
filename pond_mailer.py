@@ -2230,11 +2230,13 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             continue
 
         # ── HeyGen personalized video — seller Email 1 only ─────────────────────
-        # For Ylopo Prospecting sellers on their very first email, generate a
-        # 35-second personalized video: Barry's avatar + cloned voice + custom
-        # branded background showing their address.
-        # The video thumbnail is injected into the HTML above the text body.
-        # Falls back gracefully to text-only if HeyGen is unavailable or fails.
+        # Frame: Barry was already recording market videos for other clients.
+        # He remembered this person mid-session and pulled one together for them.
+        # When video succeeds, the ENTIRE email body is replaced with a short
+        # organic wrapper (2-3 sentences + thumbnail + one CTA line).
+        # The Claude-written text body is discarded — it was designed for text-only.
+        # Video emails that also have full paragraphs of text convert worse.
+        # Falls back gracefully to the Claude-written text email if HeyGen fails.
         if is_ylopo_seller and sequence_num == 1 and not dry_run:
             try:
                 from heygen_client import (
@@ -2243,15 +2245,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_and_wait,
                     get_background_url,
                     render_video_email_block_simple,
-                    AVATAR_MICROPHONE, VOICE_SUIT,
                 )
                 if heygen_available():
                     _addr_obj = (person.get("address") or {})
                     _street   = _addr_obj.get("street", "")
                     _city_hg  = _addr_obj.get("city", "")
-                    if not _street:
-                        # Try notes field — Ylopo sometimes puts address there
-                        _street = name  # fallback: use name only (graceful)
 
                     logger.info("Generating HeyGen video for %s at %s, %s", name, _street, _city_hg)
                     script = generate_seller_video_script(
@@ -2268,13 +2266,84 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             thumbnail_url=video_result["thumbnail_url"],
                             first_name=first_name,
                         )
-                        # Inject video block right after the email body opens
-                        email_data["body_html"] = email_data["body_html"].replace(
-                            '<div style="color:#222;font-size:15px;line-height:1.8">',
-                            f'<div style="color:#222;font-size:15px;line-height:1.8">\n{video_block}',
-                            1,
+
+                        # Replace the full email with a short organic video wrapper.
+                        # Three parts: setup line → thumbnail → one soft CTA.
+                        # This is intentionally NOT the Claude-written text body.
+                        # Video emails with full text blocks convert worse —
+                        # the email should get out of the way and let the video land.
+                        _city_display   = _city_hg or "Hampton Roads"
+                        _street_display = _street or "your home"
+
+                        # Plain-text version (for email clients that strip HTML)
+                        video_body_text = (
+                            f"Was putting together a few market videos for some of my sellers "
+                            f"in {_city_display} this week and realized we never actually connected "
+                            f"after my assistant reached out about your place on {_street_display}. "
+                            f"Pulled this together for you while I was at it.\n\n"
+                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"Would it make sense to do a quick 10-minute call? "
+                            f"Just reply here and we'll find a time.\n\n"
+                            + SIGN_OFF
                         )
-                        logger.info("HeyGen video injected for %s (%.1fs)", name,
+
+                        # HTML version — setup paragraph, video thumbnail, CTA
+                        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
+                        setup_html = (
+                            f'<p style="{_p}">Was putting together a few market videos for some of my '
+                            f'sellers in {_city_display} this week and realized we never actually '
+                            f'connected after my assistant reached out about your place on '
+                            f'{_street_display}. Pulled this together for you while I was at it.</p>'
+                        )
+                        cta_html = (
+                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
+                            f"Would it make sense to do a quick 10-minute call? "
+                            f"Just reply here and we'll find a time.</p>"
+                        )
+                        video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
+
+                        # Build the video email HTML directly — same shell as _render_html
+                        # but with pre-built HTML content (not markdown → <p> conversion,
+                        # which would double-wrap our already-HTML video block).
+                        email_data["body_text"] = video_body_text
+                        email_data["body_html"] = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<div style="max-width:560px;margin:0 auto;padding:32px 24px">
+  <div style="color:#222;font-size:15px;line-height:1.8">
+    {video_body_inner}
+  </div>
+  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
+    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
+         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
+    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
+      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
+      (757) 919-8874 &nbsp;|&nbsp;
+      <a href="https://www.legacyhomesearch.com"
+         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
+      1545 Crossways Blvd, Chesapeake, VA 23320<br>
+      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
+         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
+    </p>
+  </div>
+</div>
+</body></html>"""
+
+                        # Video-specific subject — hinting at the video increases open rate ~30%
+                        # Keep it organic: not "I made you a video!", more "I was doing this anyway"
+                        _subj_options = [
+                            f"quick video — {_street_display}",
+                            f"put something together for you",
+                            f"was recording for clients, thought of you",
+                        ]
+                        email_data["subject"]      = _subj_options[0]
+                        email_data["all_subjects"] = _subj_options
+
+                        logger.info("HeyGen video email built for %s (%.1fs video)", name,
                                     video_result.get("duration", 0))
                         print(f"    ▶ HeyGen video: {video_result['video_url'][:60]}...")
                     else:

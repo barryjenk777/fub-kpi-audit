@@ -210,55 +210,83 @@ def get_background_url(bg_type: str, address: str = "", city: str = "",
 def generate_seller_video_script(first_name: str, street: str, city: str,
                                   comp_snippet: str = "", ai_convo: bool = True) -> str:
     """
-    Generate a 35-40 second video script for Barry's avatar to deliver
-    to a Ylopo Prospecting seller lead.
+    Generate a 35-40 second video script for Barry's avatar.
 
-    Calls Claude to write the script based on available lead data.
-    Falls back to a template if Claude is unavailable.
+    CORE FRAME: Barry was already recording videos for other clients.
+    He thought of this person mid-session and pulled one together for them.
+    The video should feel like it happened naturally — not a marketing drip.
 
-    Args:
-        first_name:    Lead's first name
-        street:        Their home address (street only)
-        city:          City (e.g. "Chesapeake")
-        comp_snippet:  Optional: 1 sentence of real market data ("Homes on your street sold for...")
-        ai_convo:      True if they had an rAIya AI conversation (the normal case)
-
-    Returns a plain-text script ready for HeyGen TTS.
+    This is the highest-converting frame for cold video outreach:
+    - "I was already doing X" = credible (he does this for clients)
+    - "I thought of you" = personal (they feel remembered, not marketed to)
+    - "while I was at it" = low pressure (not a formal presentation)
+    - Market intel = instant credibility (he actually knows their area)
     """
     try:
         import anthropic
         client = anthropic.Anthropic()
 
-        ai_framing = (
-            "They engaged in a text conversation with Barry's AI assistant (rAIya) about their home value "
-            "and were transferred to Barry's team. They're warm — they reached out, they're curious about "
-            "what their home is worth."
-        ) if ai_convo else (
-            "They requested information about their home value."
+        comp_line = (
+            f"Include this real market data naturally in the middle section: {comp_snippet}"
+            if comp_snippet
+            else f"Include one specific, credible insight about the {city} market — "
+                 f"something about how fast homes are moving, what sellers are netting, "
+                 f"or what the inventory looks like right now. Be specific, not vague."
         )
 
-        prompt = f"""Write a 35-40 second video script for Barry Jenkins, top Hampton Roads VA real estate agent.
+        prompt = f"""Write a 35-40 second video script for Barry Jenkins, #1 real estate team in Virginia.
 
-Barry's avatar will deliver this script to {first_name}, a homeowner at {street} in {city}.
-{ai_framing}
+Barry is recording this for {first_name}, a homeowner at {street} in {city}.
+Context: they spoke with Barry's AI assistant about their home value and got transferred to his team.
+They are warm — they reached out first. This is Barry's human follow-up.
 
-SCRIPT RULES:
-- Open with their first name — feel like a real personal message, not a marketing video
-- Reference "my assistant" naturally (never say Ylopo, rAIya, or AI)
-- One credibility signal: Barry knows their neighborhood / knows what's selling nearby
-- {f'Include this real data naturally: {comp_snippet}' if comp_snippet else 'Use a general Hampton Roads market insight for their city'}
-- End with a single soft ask: the best way to connect, or a yes/no question
-- NO filler phrases: no "I'd love to", no "feel free to", no "don't hesitate"
-- Sounds like Barry actually recorded this for them specifically — not a broadcast
-- Plain spoken sentences. He's on camera, not typing. Short sentences work better.
+━━━━ THE FRAME (non-negotiable) ━━━━
+Barry was already recording market update videos for a few of his seller clients.
+Mid-session, he remembered this person and pulled one together for them on the spot.
 
-TARGET LENGTH: 35-40 seconds when read at normal speaking pace (~130 words).
+The video should feel SPONTANEOUS — like he pivoted from client work to record this.
+NOT polished. NOT formal. NOT a marketing video.
+The believability of "I was already doing this" is the entire hook.
 
-Return ONLY the script text. No labels, no stage directions, no quotes. Just the words Barry speaks."""
+━━━━ SCRIPT STRUCTURE ━━━━
+
+OPEN (3-5 seconds): Catch them off-guard. Start mid-thought, not with a formal intro.
+Good: "Hey {first_name} — so I was literally just finishing up a market video for one of my clients over in {city}..."
+Good: "Hey {first_name}, I was recording a few of these for some of my sellers this week..."
+Bad: "Hi, I'm Barry Jenkins with Legacy Home Team..." (too formal, kills the frame)
+Bad: "I wanted to reach out about your home..." (sounds like a script)
+
+PIVOT (5-7 seconds): The "remembered you" moment. Natural, not salesy.
+"...and I realized my assistant and I never actually followed up with you after that conversation about your place on {street}. So I figured — let me just do one for you while I'm at it."
+Or: "...and it hit me — we spoke about your home on {street} but never actually connected."
+
+MARKET INTEL (15-20 seconds): This is the credibility section. Barry knows {city}.
+{comp_line}
+Frame it as: "here's what I'm actually seeing right now for homes in your area."
+This is why the video is worth watching. Be specific — vague market commentary kills trust.
+
+SOFT CLOSE (5-8 seconds): One low-friction ask. Not a pitch. Not an appointment demand.
+Good: "Would it make sense to do a quick call? Even 10 minutes — I can walk you through the full picture."
+Good: "Text me back or reply here — whatever's easier."
+Bad: "I'd love to schedule a time to discuss your real estate needs." (too formal)
+Bad: "Feel free to reach out" (passive, sounds like it's on them)
+
+━━━━ VOICE ━━━━
+- Barry is 20+ years in Hampton Roads. He talks like a knowledgeable friend, not a pitch man.
+- Conversational pace. Short sentences on camera land better than long ones.
+- Never say: "Ylopo", "rAIya", "AI", any platform name — say "my assistant"
+- Never say: "I'd love to", "feel free to", "don't hesitate", "happy to help"
+- Contractions throughout. "I'm", "I've", "you're", "let's" — not formal language.
+
+━━━━ LENGTH ━━━━
+Target: 130-150 words. At normal speaking pace = 35-42 seconds. That's the sweet spot.
+Too short = doesn't build credibility. Too long = they stop watching.
+
+Return ONLY the script. No labels, no stage directions, no quotes around it. Just Barry's words."""
 
         msg = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=250,
+            max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
         script = msg.content[0].text.strip()
@@ -267,15 +295,19 @@ Return ONLY the script text. No labels, no stage directions, no quotes. Just the
 
     except Exception as e:
         logger.warning("Claude script generation failed, using fallback: %s", e)
-        # Solid fallback — still personal, still Barry's voice
-        comp_line = f" {comp_snippet}" if comp_snippet else ""
+        # Fallback preserves the same organic frame
+        comp_line = f" {comp_snippet}" if comp_snippet else (
+            f" Right now in {city}, homes are moving — sellers are getting strong offers "
+            f"and the window is real."
+        )
         return (
-            f"Hey {first_name}, Barry Jenkins here with Legacy Home Team. "
-            f"My assistant mentioned you had a conversation about your home on {street} — "
-            f"I wanted to personally follow up on that.{comp_line} "
-            f"I know that market well and I'd love to give you a real picture of what your home "
-            f"is worth right now — no pressure, no commitment, just real numbers. "
-            f"What's the best way to connect?"
+            f"Hey {first_name} — so I was literally just finishing up a market video for one of my clients "
+            f"over in {city} and I realized my assistant and I never actually followed up with you after "
+            f"that conversation about your place on {street}. So I figured, let me just do one for you "
+            f"while I'm at it.{comp_line} "
+            f"I can walk you through exactly what I'm seeing for homes like yours right now — "
+            f"what sellers are actually netting, how fast things are moving. "
+            f"Would it make sense to do a quick 10-minute call? Just reply here and we'll find a time."
         )
 
 
