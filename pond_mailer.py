@@ -2351,6 +2351,115 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             except Exception as _hg_err:
                 logger.warning("HeyGen pipeline failed for %s — sending text-only: %s", name, _hg_err)
 
+        # ── HeyGen personalized video — Z-buyer Email 1 ─────────────────────────
+        # Z-buyers requested a cash offer — they took action, they want speed.
+        # Their inbox is full of "WE BUY HOUSES" noise. Barry cuts through it by
+        # being calm, competent, and showing BOTH options (cash OR list).
+        # Same organic frame as seller video but higher energy in the content.
+        if is_z and sequence_num == 1 and not dry_run:
+            try:
+                from heygen_client import (
+                    is_available as heygen_available,
+                    generate_zbuyer_video_script,
+                    generate_and_wait,
+                    get_background_url,
+                    render_video_email_block_simple,
+                )
+                if heygen_available():
+                    _addr_obj = (person.get("address") or {})
+                    _street   = _addr_obj.get("street", "")
+                    _city_hg  = _addr_obj.get("city", "")
+
+                    logger.info("Generating HeyGen Z-buyer video for %s at %s, %s",
+                                name, _street, _city_hg)
+                    script = generate_zbuyer_video_script(
+                        first_name=first_name,
+                        street=_street or "your home",
+                        city=_city_hg or "Hampton Roads",
+                    )
+                    bg_url = get_background_url("zbuyer", address=_street, city=_city_hg)
+                    video_result = generate_and_wait(script, timeout_seconds=180)
+
+                    if video_result and video_result.get("video_url"):
+                        video_block = render_video_email_block_simple(
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            first_name=first_name,
+                        )
+
+                        _city_display   = _city_hg or "Hampton Roads"
+                        _street_display = _street or "your home"
+
+                        video_body_text = (
+                            f"Saw your cash offer request come through — I was already recording "
+                            f"some client videos so I pulled one together for you right now.\n\n"
+                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"10 minutes on the phone and I'll run both numbers — cash and listed — "
+                            f"for your specific place on {_street_display}. "
+                            f"Just reply here and we'll find a time.\n\n"
+                            + SIGN_OFF
+                        )
+
+                        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
+                        setup_html = (
+                            f'<p style="{_p}">Saw your cash offer request come through — '
+                            f'I was already recording some client videos so I pulled one together '
+                            f'for you right now.</p>'
+                        )
+                        cta_html = (
+                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
+                            f'10 minutes on the phone and I\'ll run both numbers — cash and listed — '
+                            f'for your specific place on {_street_display}. '
+                            f'Just reply here and we\'ll find a time.</p>'
+                        )
+                        video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
+
+                        email_data["body_text"] = video_body_text
+                        email_data["body_html"] = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<div style="max-width:560px;margin:0 auto;padding:32px 24px">
+  <div style="color:#222;font-size:15px;line-height:1.8">
+    {video_body_inner}
+  </div>
+  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
+    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
+         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
+    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
+      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
+      (757) 919-8874 &nbsp;|&nbsp;
+      <a href="https://www.legacyhomesearch.com"
+         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
+      1545 Crossways Blvd, Chesapeake, VA 23320<br>
+      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
+         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
+    </p>
+  </div>
+</div>
+</body></html>"""
+
+                        # Z-buyer subject — acknowledge the request, hint at the two-option pitch
+                        _subj_options = [
+                            f"cash or list — quick video for {_street_display}",
+                            f"saw your request — pulled something together",
+                            f"two options for {_street_display}",
+                        ]
+                        email_data["subject"]      = _subj_options[0]
+                        email_data["all_subjects"] = _subj_options
+
+                        logger.info("HeyGen Z-buyer video email built for %s (%.1fs)", name,
+                                    video_result.get("duration", 0))
+                        print(f"    ▶ HeyGen Z-buyer video: {video_result['video_url'][:60]}...")
+                    else:
+                        logger.warning("HeyGen video not ready for Z-buyer %s — text-only", name)
+            except Exception as _hg_err:
+                logger.warning("HeyGen Z-buyer pipeline failed for %s — text-only: %s",
+                               name, _hg_err)
+
         print(f"    Subject: {email_data['subject']}")
         if dry_run:
             print(f"\n    --- PREVIEW ---")

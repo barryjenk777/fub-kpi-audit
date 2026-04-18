@@ -4592,6 +4592,9 @@ def api_heygen_background():
 
         if bg_type == "seller":
             img_bytes = generate_seller_background_image(address, city)
+        elif bg_type == "zbuyer":
+            from heygen_client import generate_zbuyer_background_image
+            img_bytes = generate_zbuyer_background_image(address, city)
         else:
             img_bytes = generate_buyer_background_image(city, price_band)
 

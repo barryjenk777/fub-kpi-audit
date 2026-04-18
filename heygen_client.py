@@ -311,6 +311,175 @@ Return ONLY the script. No labels, no stage directions, no quotes around it. Jus
         )
 
 
+def generate_zbuyer_video_script(first_name: str, street: str, city: str,
+                                  comp_snippet: str = "") -> str:
+    """
+    Generate a 35-40 second video script for a Z-buyer (cash offer request) lead.
+
+    Z-buyer energy vs. Ylopo Prospecting seller:
+    - They didn't explore — they requested. They want an actual offer, now.
+    - Their inbox is already full of "WE BUY HOUSES" pitches.
+    - Barry's edge: he can do BOTH — cash in 7 days OR list for potentially more.
+    - The video cuts through the noise by being calm, competent, and specific.
+
+    Same organic frame: Barry was already recording videos for clients.
+    But the CONTENT pivots to the two-option pitch, not market intel.
+    """
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+
+        comp_line = (
+            f"Include this market context naturally: {comp_snippet}"
+            if comp_snippet
+            else (
+                f"Include one grounding line about what homes in {city} are actually moving for "
+                f"right now — cash vs. listed. Something specific, not vague."
+            )
+        )
+
+        prompt = f"""Write a 35-40 second video script for Barry Jenkins, #1 real estate team in Virginia.
+
+Barry is recording this for {first_name}, a homeowner at {street} in {city}.
+They submitted a CASH OFFER REQUEST online — they want to sell, they want speed,
+and their inbox is already flooded with "WE BUY HOUSES" pitches.
+
+━━━━ THE FRAME (non-negotiable) ━━━━
+Same organic setup as his other client videos — Barry was already recording for clients,
+thought of this person, pulled one together. BUT the tone is different here.
+
+This lead took action. They're not curious — they're ready to move.
+The video needs ENERGY behind it. Not hype. Not desperate. More like:
+"I can actually solve this for you. Here's exactly how."
+
+━━━━ BARRY'S EDGE (the whole point) ━━━━
+Most investors can ONLY offer cash. Most agents can ONLY list.
+Barry can do BOTH — and he can show {first_name} which one nets more for their specific home.
+
+That's it. That's the differentiator. The video should land this clearly.
+
+━━━━ SCRIPT STRUCTURE ━━━━
+
+OPEN (3-5 seconds): Start mid-thought, slightly more energized than the seller video.
+Good: "Hey {first_name} — so I was wrapping up a couple videos for some clients and your cash offer request came through..."
+Good: "Hey {first_name}, saw your request come in — was already recording some client videos so I figured let me just do one for you right now."
+Bad: "Hi, I'm Barry Jenkins and I'd like to talk about your home." (kills the energy)
+
+THE PIVOT (5-7 seconds): Get to the point — you can actually do this.
+"I can close cash in as little as 7 days. Done. No showings, no stress, no financing falling through."
+
+THE DIFFERENTIATOR (8-10 seconds): This is what separates him from every other response they got.
+"Here's what most of the other investors who reached out can't do: I'm also a licensed agent,
+so I can pull the MLS numbers and show you what listing might net — and sometimes that number
+is significantly higher. Most people don't know they can compare both options before deciding."
+
+MARKET CREDIBILITY (8-10 seconds): Ground it in {city}.
+{comp_line}
+Barry knows this market. One specific insight about what cash buyers are paying vs. what sellers are listing for.
+
+CLOSE (5-7 seconds): Direct but not pushy. Make the call feel easy.
+Good: "10 minutes on the phone — I'll run both numbers for your specific address. That's it."
+Good: "Reply here or call me directly. Let's figure out which option actually makes more sense for you."
+Bad: "I'd love to schedule a consultation at your earliest convenience."
+
+━━━━ TONE ━━━━
+Calm confidence, not hustle. The "I can actually solve this" guy, not the "WE BUY HOUSES" guy.
+Never: "I'd love to", "feel free to", "don't hesitate", "I'm happy to"
+Contractions throughout. Conversational pace. He's on camera — shorter sentences land better.
+No Ylopo, no platform names.
+
+━━━━ LENGTH ━━━━
+130-150 words. 35-42 seconds at normal pace.
+
+Return ONLY the script. No labels, no stage directions, no quotes. Just Barry's words."""
+
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        script = msg.content[0].text.strip()
+        logger.info("HeyGen Z-buyer script generated for %s (%d chars)", first_name, len(script))
+        return script
+
+    except Exception as e:
+        logger.warning("Claude Z-buyer script generation failed, using fallback: %s", e)
+        comp_line = f" {comp_snippet}" if comp_snippet else ""
+        return (
+            f"Hey {first_name} — saw your cash offer request come in and I was already "
+            f"recording some videos for clients so I figured let me do one for you right now. "
+            f"I can close cash in as little as 7 days — no showings, no financing falling through, done. "
+            f"Here's what most of the people who responded to you can't offer: "
+            f"I'm also a licensed agent, so I can pull the MLS numbers and show you "
+            f"what listing your home might actually net.{comp_line} "
+            f"Sometimes that number is significantly higher than cash — sometimes it's not worth the wait. "
+            f"Either way, you deserve to see both before you decide. "
+            f"10 minutes on the phone and I'll run both numbers for your specific place on {street}. "
+            f"Just reply here."
+        )
+
+
+def generate_zbuyer_background_image(street: str, city: str,
+                                      width: int = 1280, height: int = 720) -> bytes:
+    """
+    Branded background for Z-buyer (cash offer) videos.
+
+    Layout: dark charcoal background, "Cash Offer vs. Listing" headline,
+    address below, city context line. More direct energy than seller background.
+    Barry's avatar sits in the corner; content fills the upper portion.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    import io
+
+    img = Image.new('RGB', (width, height), color=(18, 18, 24))
+    draw = ImageDraw.Draw(img)
+
+    # Subtle warm gradient (slightly warmer than navy — more urgency)
+    for y in range(height):
+        lift = int(14 * (1 - abs(y - height / 2) / (height / 2)))
+        for x in range(0, width, 2):
+            r, g, b = img.getpixel((x, y))
+            draw.point((x, y), fill=(
+                min(255, r + lift),
+                min(255, g + lift // 2),
+                min(255, b + lift // 4),
+            ))
+
+    # Accent bars — warmer gold/amber tone to signal action
+    draw.rectangle([0, 0, width, 6], fill=(230, 160, 30))
+    draw.rectangle([0, height - 6, width, height], fill=(230, 160, 30))
+
+    try:
+        font_xl    = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 58)
+        font_lg    = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 76)
+        font_med   = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 36)
+        font_sm    = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 26)
+        font_brand = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 30)
+    except Exception:
+        font_xl = font_lg = font_med = font_sm = font_brand = ImageFont.load_default()
+
+    # Legacy Home Team branding
+    draw.text((44, 38), "LEGACY", fill=(255, 255, 255), font=font_brand)
+    draw.text((44, 74), "HOME TEAM", fill=(230, 160, 30), font=font_brand)
+
+    # "Cash Offer vs. Listing" — the two options framing
+    draw.text((width // 2, 175), "Cash Offer  vs.  Listing", fill=(230, 160, 30), font=font_xl, anchor="mm")
+
+    # Address
+    draw.text((width // 2, 275), street, fill=(255, 255, 255), font=font_lg, anchor="mm")
+
+    # City context
+    draw.text((width // 2, 360), f"{city} — We'll run both numbers",
+              fill=(200, 200, 200), font=font_med, anchor="mm")
+
+    draw.line([(width // 2 - 240, 400), (width // 2 + 240, 400)],
+              fill=(100, 80, 20), width=1)
+
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', quality=90)
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # Video Generation
 # ---------------------------------------------------------------------------
