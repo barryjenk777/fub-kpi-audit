@@ -1120,6 +1120,262 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
 
 
 # ---------------------------------------------------------------------------
+# New Lead Immediate Mailer — "I caught you at the computer"
+# ---------------------------------------------------------------------------
+
+def generate_new_lead_email(person, behavior, tags, dry_run=False):
+    """
+    Generate a first-contact "caught at the computer" email for a brand-new lead.
+
+    Tone: direct, real-time energy — like Barry just saw them pop up and grabbed his laptop.
+    Includes a local Hampton Roads market insight and one clear CTA.
+    No P.S. — immediacy is the whole vibe.
+    """
+    import anthropic
+    import json, re
+
+    _load_env()
+    client = anthropic.Anthropic()
+
+    first_name = (person.get("firstName") or "").strip() or "there"
+
+    # Detect likely intent: seller vs. buyer
+    # YLOPO Z-buyer tag signals a seller lead (home valuation form)
+    seller_tags = {"ZLEAD", "Z_BUYER", "YLOPO_Z_BUYER", "SELLER", "LISTING_LEAD",
+                   "HOME_VALUE", "HOME_VALUATION", "WHAT_IS_MY_HOME_WORTH"}
+    is_likely_seller = any(t.upper().replace("-","_") in seller_tags for t in tags)
+
+    # Build a compact behavior summary for the prompt
+    lines = []
+    if behavior.get("city"):
+        lines.append(f"City of interest: {behavior['city']}")
+    if behavior.get("price_min") or behavior.get("price_max"):
+        lo = f"${behavior['price_min']:,}" if behavior.get("price_min") else ""
+        hi = f"${behavior['price_max']:,}" if behavior.get("price_max") else ""
+        price_str = f"{lo}–{hi}" if lo and hi else (lo or hi)
+        lines.append(f"Price range: {price_str}")
+    if behavior.get("view_count"):
+        lines.append(f"Properties viewed: {behavior['view_count']}")
+    if behavior.get("save_count"):
+        lines.append(f"Properties saved: {behavior['save_count']}")
+    if behavior.get("most_viewed"):
+        mv = behavior["most_viewed"]
+        addr = mv.get("street") or mv.get("address") or ""
+        if addr:
+            lines.append(f"Most-viewed property: {addr} ({behavior.get('most_viewed_ct',1)}x)")
+    if behavior.get("search_areas"):
+        lines.append(f"Search areas: {', '.join(behavior['search_areas'][:3])}")
+
+    data_brief = "\n".join(lines) if lines else "Minimal data — lead just arrived. Use city/area if available."
+
+    intent_context = (
+        "This lead likely came through a home VALUATION form — they may be a homeowner "
+        "considering selling, not a buyer. Frame the email around market knowledge and "
+        "what homes are doing in their area, not about searching for homes to buy."
+        if is_likely_seller else
+        "This lead came through a home SEARCH site — they were looking at homes to buy "
+        "in Hampton Roads. Frame around their home search and what's available in their area."
+    )
+
+    prompt = f"""You are writing a first-contact email from Barry Jenkins, realtor in Hampton Roads VA.
+
+This lead JUST appeared in Barry's system — active within the last hour. Barry happened to see
+them come through while he was at his computer. The email should feel like he grabbed his laptop
+right then and wrote this in 90 seconds.
+
+━━━━ VIBE ━━━━
+"I caught you at the computer" — not a follow-up, not a campaign email. Real-time energy.
+Direct and confident. Not salesy. Not desperate. Not scripted.
+Sounds like a smart friend who happens to know Hampton Roads cold.
+
+━━━━ LEAD INTENT ━━━━
+{intent_context}
+
+━━━━ LEAD DATA ━━━━
+{data_brief}
+
+━━━━ WHAT THE EMAIL MUST DO ━━━━
+1. Open with a specific observation (their city, price range, or what they were looking at).
+   Prove you actually saw their activity — not a generic blast.
+2. One sentence of local Hampton Roads market intel that only an insider would know.
+   (Inventory tightness, multiple-offer situations, a specific neighborhood trend, etc.)
+3. One clear CTA — a direct question answerable in 2–5 words. Not "feel free to reach out."
+   Something like: "Worth a quick call?" or "Want me to pull what's actually available?"
+
+━━━━ HARD RULES ━━━━
+- No P.S. — immediacy is the vibe; P.S. signals a campaign
+- No "I hope this finds you well", "just checking in", "dream home", "perfect fit"
+- No "I noticed" — lead with the observation itself
+- Fragments fine. Contractions always. 3–5 sentences max.
+- Signature added automatically — stop before the sign-off.
+
+FORMAT:
+- First line: first name + comma only. ("Sarah,")
+- Blank line
+- Body: 3–5 sentences. CTA at the end.
+
+SUBJECT LINES (3 options — 3–6 words, feel like a text from a saved contact):
+- Best: property address, "[City] — quick question", just their name
+- No ALL CAPS, no emojis, direct beats clever
+
+OUTPUT (JSON only, no markdown fences):
+{{
+  "subject_options": ["option 1", "option 2", "option 3"],
+  "body": "{first_name},\\n\\n[3–5 sentences]"
+}}"""
+
+    if dry_run:
+        logger.info("[DRY RUN] Would generate new lead email for %s", first_name)
+        return {
+            "subject_options": ["[dry run] quick question", "[dry run] saw you come through", "[dry run] Hampton Roads"],
+            "body": f"{first_name},\n\n[DRY RUN — email not generated]"
+        }
+
+    response = client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = response.content[0].text.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
+    return json.loads(raw)
+
+
+def run_new_lead_mailer(dry_run=True):
+    """
+    Check Shark Tank (pond 4) for leads created in the last NEW_LEAD_LOOKBACK_MINUTES
+    minutes who haven't received the new_lead_immediate email yet, and fire the
+    "I caught you at the computer" opener after a NEW_LEAD_EMAIL_DELAY_MINUTES delay.
+
+    Runs every 5 minutes via scheduler. Typically processes 0–3 leads per run.
+    """
+    _load_env()
+
+    import db as _db
+    from fub_client import FUBClient
+    from config import (SHARK_TANK_POND_ID, NEW_LEAD_EMAIL_DELAY_MINUTES,
+                        NEW_LEAD_LOOKBACK_MINUTES)
+
+    _db.ensure_pond_email_log_table()
+    client = FUBClient()
+    now = datetime.now(timezone.utc)
+
+    # Window: leads created between (now - lookback) and (now - delay)
+    # The delay buffer is what makes it feel human instead of instant.
+    window_start = now - timedelta(minutes=NEW_LEAD_LOOKBACK_MINUTES)
+    min_age      = now - timedelta(minutes=NEW_LEAD_EMAIL_DELAY_MINUTES)
+
+    # Fetch new leads in Shark Tank created since window_start
+    new_leads = client.get_people(
+        pond_id=SHARK_TANK_POND_ID,
+        created_since=window_start,
+        limit=50,
+    )
+
+    eligible = [
+        p for p in new_leads
+        if _parse_iso(p.get("created", "")) <= min_age  # old enough to not feel instant
+    ]
+
+    if not eligible:
+        logger.debug("New lead mailer: no eligible leads this run")
+        return {"checked": len(new_leads), "sent": 0}
+
+    sent = 0
+    for person in eligible:
+        pid   = person.get("id")
+        first = person.get("firstName") or ""
+        last  = person.get("lastName") or ""
+        name  = f"{first} {last}".strip() or f"ID:{pid}"
+        tags  = person.get("tags") or []
+
+        # Already sent the immediate email?
+        if _db.has_received_new_lead_immediate(pid):
+            logger.debug("Skipping %s — already got new_lead_immediate", name)
+            continue
+
+        # Already in the drip? (had any pond email)
+        history = _db.get_lead_email_history(pid)
+        if history["emails_sent"] > 0:
+            logger.debug("Skipping %s — already in drip (%d emails)", name, history["emails_sent"])
+            continue
+
+        # Get email address
+        emails = person.get("emails") or []
+        to_email = next(
+            (e["value"] for e in emails if e.get("isPrimary") or e.get("status") == "Valid"),
+            None
+        )
+        if not to_email and emails:
+            to_email = emails[0].get("value")
+        if not to_email:
+            logger.debug("Skipping %s — no email", name)
+            continue
+
+        # Pull IDX events — new leads may have very few, that's OK
+        events = client.get_events_for_person(pid, days=7, limit=50)
+        behavior = analyze_behavior(events, tags)
+
+        # Generate the email
+        try:
+            email_data = generate_new_lead_email(person, behavior, tags, dry_run=dry_run)
+        except Exception as e:
+            logger.error("New lead email generation failed for %s: %s", name, e)
+            continue
+
+        subject_options = email_data.get("subject_options", [])
+        subject = subject_options[0] if subject_options else f"Quick question — {first or 'you'}"
+        body_text = email_data.get("body", "")
+
+        # Build HTML version (same as drip mailer)
+        body_html = _render_html(body_text)
+
+        print(f"\n  [NEW LEAD] {name} (ID: {pid})")
+        print(f"    Email: {to_email}")
+        print(f"    Created: {person.get('created', 'unknown')}")
+        print(f"    Subject: {subject}")
+
+        # Log before send
+        log_id = _db.log_pond_email(
+            person_id=pid, person_name=name, email_address=to_email,
+            subject=subject, strategy="new_lead_immediate",
+            leadstream_tier="NEW_LEAD",
+            behavior_summary=f"views:{behavior.get('view_count',0)} saves:{behavior.get('save_count',0)}",
+            sequence_num=1, dry_run=dry_run, sg_message_id=None,
+        )
+
+        try:
+            result = send_email(to_email, subject, body_text, body_html, dry_run=dry_run)
+        except Exception as e:
+            logger.error("Send failed for new lead %s: %s", name, e)
+            continue
+
+        if result.get("sg_message_id") and log_id:
+            _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
+
+        sent += 1
+        logger.info("New lead immediate email sent to %s (%s)", name, to_email)
+
+    return {"checked": len(new_leads), "eligible": len(eligible), "sent": sent}
+
+
+def _parse_iso(ts):
+    """Parse an ISO 8601 timestamp string to a UTC-aware datetime."""
+    if not ts:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    ts = ts.rstrip("Z")
+    try:
+        dt = datetime.fromisoformat(ts)
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 

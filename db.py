@@ -2217,6 +2217,24 @@ def count_pond_emails_today(tz_name="US/Eastern"):
         return 0
 
 
+def has_received_new_lead_immediate(person_id):
+    """Return True if this lead has already received a new_lead_immediate email."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM pond_email_log
+                    WHERE person_id = %s AND strategy = 'new_lead_immediate'
+                    LIMIT 1
+                """, (person_id,))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("has_received_new_lead_immediate failed for %s: %s", person_id, e)
+        return False
+
+
 def delete_pond_emails_today(tz_name="US/Eastern"):
     """Delete today's real (non-dry-run) pond email log entries. Returns count deleted."""
     if not is_available():

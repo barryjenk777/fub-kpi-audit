@@ -293,6 +293,14 @@ LEADSTREAM_EXCLUDED_STAGES = [
 #   9 = MYPlus            → pre-foreclosure investor leads, skip
 LEADSTREAM_ALLOWED_POND_IDS = {4, 7}
 
+# New Lead Immediate Mailer — "I caught you at the computer" opener
+# Pond 4 (Shark Tank) only — mix of new Ylopo buyer/seller leads and old leads.
+SHARK_TANK_POND_ID = 4
+# Minutes after lead creation before the immediate email fires (feels human, not instant)
+NEW_LEAD_EMAIL_DELAY_MINUTES = 12
+# How far back to look for new leads per check run (scheduler runs every 5 min)
+NEW_LEAD_LOOKBACK_MINUTES = 45
+
 # Stale hot threshold: days since last agent contact to qualify
 LEADSTREAM_STALE_DAYS = 3
 

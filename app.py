@@ -4488,6 +4488,31 @@ def api_pond_mailer_clear_today():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/pond-mailer/new-lead-check", methods=["POST"])
+def api_new_lead_check():
+    """
+    Check Shark Tank (pond 4) for new leads and fire the immediate
+    'caught at the computer' email after a 10-12 minute delay.
+
+    Body (optional):
+        dry_run (bool, default true)
+    """
+    import threading
+    data    = request.json or {}
+    dry_run = data.get("dry_run", True)
+
+    def _bg():
+        try:
+            from pond_mailer import run_new_lead_mailer
+            result = run_new_lead_mailer(dry_run=dry_run)
+            logger.info("New lead mailer: %s", result)
+        except Exception as e:
+            logger.error("New lead mailer error: %s", e)
+
+    threading.Thread(target=_bg, daemon=True).start()
+    return jsonify({"status": "running", "dry_run": dry_run})
+
+
 @app.route("/api/pond-mailer/stats")
 def api_pond_mailer_stats():
     """Email send history and performance stats."""
@@ -5098,6 +5123,17 @@ def scheduled_send_manager_email():
         print(f"[SCHEDULER] Manager email error: {e}")
 
 
+def scheduled_new_lead_check():
+    """Every 5 minutes — check Shark Tank for new leads and fire immediate email."""
+    try:
+        from pond_mailer import run_new_lead_mailer
+        result = run_new_lead_mailer(dry_run=False)
+        if result.get("sent", 0) > 0:
+            print(f"[SCHEDULER] New lead mailer: sent {result['sent']} immediate email(s)")
+    except Exception as e:
+        print(f"[SCHEDULER] New lead mailer error: {e}")
+
+
 def scheduled_run_pond_mailer(daily_cap=45):
     """
     Pond mailer scheduler handler — called by each time-slot job.
@@ -5697,6 +5733,13 @@ def start_scheduler():
 
     _scheduler = BackgroundScheduler(timezone="US/Eastern")
     ET = "US/Eastern"  # passed explicitly to every CronTrigger so Railway (UTC) honors ET
+
+    # New lead immediate mailer: every 5 minutes
+    # Checks Shark Tank (pond 4) for leads created in the last 45 min,
+    # fires "caught at the computer" email after the 12-minute delay buffer.
+    _scheduler.add_job(scheduled_new_lead_check, CronTrigger(minute="*/5", timezone=ET),
+                       id="new_lead_check", name="New lead immediate mailer (every 5 min)",
+                       max_instances=1, misfire_grace_time=60)
 
     # Cache warming: 3x/day at 6am, 12pm, 6pm ET
     _scheduler.add_job(scheduled_cache_warm, CronTrigger(hour="6,12,18", minute=0, timezone=ET),
