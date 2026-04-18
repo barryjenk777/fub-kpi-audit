@@ -262,6 +262,20 @@ LEADSTREAM_EXCLUDED_SOURCES = [
     "Courted.io",
 ]
 
+# =============================================================================
+# YLOPO LEAD SOURCE ROUTING
+# =============================================================================
+
+# FUB source strings that identify Ylopo AI prospecting leads.
+# These are homeowners rAIya (Ylopo AI) texted about their home value,
+# had a real AI conversation with, and live-transferred into FUB.
+# IMPORTANT: Only leads that also have AI_NEEDS_FOLLOW_UP or
+# AI_VOICE_NEEDS_FOLLOW_UP tags count — older Ylopo Prospecting leads
+# that predate the AI conversation feature are skipped entirely.
+YLOPO_PROSPECTING_SOURCES = [
+    "Ylopo Prospecting",
+]
+
 # FUB stages that mean the agent has already resolved/deferred this lead.
 # Leads in these stages score 0 regardless of Ylopo signal tags.
 # This prevents "AI_NEEDS_FOLLOW_UP" from re-surfacing a lead the agent has

@@ -546,27 +546,267 @@ Rules:
 }
 
 
-# Sequence-specific angle instructions fed to Claude
-_SEQUENCE_GUIDE = {
-    1: """EMAIL 1 — The Pattern Interrupt.
+# ---------------------------------------------------------------------------
+# Ylopo Prospecting Seller sequence — rAIya AI-converted homeowners.
+# These leads talked to Ylopo AI about their home value and were live-transferred
+# into FUB. They are NOT buyers. Never reference IDX or home searching.
+# Hook: Barry is the human follow-up to the AI conversation.
+# ---------------------------------------------------------------------------
+_YLOPO_SELLER_SEQUENCE_GUIDE = {
 
-One observation so specific they think you noticed them personally.
-One question so easy they'd feel weird not answering.
+    1: """EMAIL 1 — The Human Follow-Up.
+
+This person spoke with our AI assistant about their home. They engaged.
+Now Barry is the real human following up on that conversation.
+
+The hook: "You spoke with my assistant about your home — I wanted to personally follow up."
+This is warm, not cold. They said yes to a conversation. Remind them of that gently.
 
 Rules:
-- DO NOT give market insight, helpful tips, or education
-- DO NOT offer to help or explain yourself
-- DO NOT use "just" or "reach out" or "let me know"
-- One specific observation. One question. Stop.
+- Reference the AI conversation naturally: "my assistant", "the conversation you had about your home"
+- One specific question about where they are: timeline, situation, still thinking about it?
+- DO NOT mention home searches, IDX, buying, or properties to view
+- DO NOT sound like a cold outreach — this is a warm hand-off, not a pitch
+- 2–3 sentences max. Under 50 words.
+- No urgency. No "I'd love to help." Just: I got your conversation, I'm the person behind it.
 
-The observation should make them think: "how does he know that?"
-The question should be answerable in 2–5 words.
+Example tone (personalize — do not copy verbatim):
+  "You spoke with my assistant a little while back about your home in [city].
+   Just wanted to personally follow up — are you still thinking about making a move, or did the timing change?"
+""",
 
-Example format (do not copy verbatim — personalize to the lead):
-  "You've been back to that Chesapeake listing three times. Still on the fence about it?"
+    2: """EMAIL 2 — What's Happening in Their Market.
 
-Or for a search-pattern lead with no specific property:
-  "Four sessions in Norfolk under $250k — what's holding you back?"
+They didn't reply to email 1. Completely different angle — do NOT reference the prior email.
+
+This email is market intel specific to their area. What homes like theirs are doing RIGHT NOW.
+Feels like a note from someone who's been watching their neighborhood on their behalf.
+
+Rules:
+- Open with a specific, local observation about their city or neighborhood
+- One useful insight — something a Hampton Roads homeowner would actually want to know
+  (inventory, days on market, price trends, what's moving vs. sitting)
+- Soft question: "Wondering if this changes your thinking at all?" or "Worth a conversation?"
+- 60-80 words. Smart friend voice, not a market report.
+- No links. No urgency. No P.S.
+- Never reference the AI conversation or prior email.
+""",
+
+    3: """EMAIL 3 — The Clean Exit.
+
+2-3 sentences. Under 35 words. This is the breakup.
+
+Give them permission to stay quiet. Leave the door warm and wide open.
+
+Rules:
+- Tone: genuinely unbothered, warm, no guilt
+- Don't say "this is my last email"
+- Don't reference prior emails
+- The message: timing's probably off, totally fine, I'll be here when it makes sense
+
+Example (personalize — do not copy verbatim):
+  "Sounds like the timing might not be right — totally get it. I'll check back in a few months
+   unless something changes on your end."
+""",
+
+    4: """EMAIL 4 — First Drip: The Net Sheet Preview.
+
+They didn't engage with the sprint. Long game now. No urgency, no pressure.
+This email plants a seed: most homeowners don't know what they'd actually net.
+
+The concept: the number on the "for sale" sign isn't what they walk away with.
+After commissions, closing costs, and carrying time, the real number is often surprising.
+Barry can show them that math with no commitment required.
+
+Rules:
+- Open with: "here's something most people don't think about when they're considering selling"
+- One clear insight: offer price ≠ net proceeds
+- Soft CTA: "Want me to put together a rough estimate for your place? No commitment, just numbers."
+- 70-90 words. Teaching voice. No pressure.
+- No links. This is purely educational.
+""",
+
+    5: """EMAIL 5 — Market Update.
+
+It's been a while. The market has moved. Their home's value may have shifted.
+Barry's been watching. He can give them updated numbers with zero commitment.
+
+Rules:
+- Frame as: "Wanted to give you a heads-up — the market in [their area] has shifted since we spoke."
+- One concrete observation (inventory, price movement, buyer demand) — Hampton Roads specific
+- Offer updated comps: "I can pull current numbers on your place in about 10 minutes if you're curious."
+- 60-80 words. Light, informative, no pressure.
+- Sounds like you're doing them a favor, not chasing a listing.
+""",
+
+    6: """EMAIL 6 — Story. The Seller Who Waited.
+
+Anonymized real-ish situation. Someone who thought about selling, sat on it, and either
+benefited from moving OR missed a window. Keep it honest — not a scare tactic.
+
+Rules:
+- Story first: setup → what they decided → what happened
+- One line of honest reflection: "sometimes waiting is the right call — sometimes it isn't"
+- Soft close: "Where are you in the process right now?"
+- 80-100 words. No urgency. Just a thoughtful note from someone who's seen it play out both ways.
+""",
+
+    7: """EMAIL 7 — The Holding Cost Math.
+
+Every month they stay in a home they want to eventually sell costs real money.
+Mortgage, taxes, insurance, maintenance. It adds up. The math is usually surprising.
+
+Rules:
+- Frame as "here's what I always walk sellers through" — not a threat
+- Use Hampton Roads ranges: "$1,600–$2,400/month in carrying costs is typical"
+- "Waiting three months hoping the market goes up means betting $5-7k that it will go up enough to cover that"
+- Soft CTA: "Want me to run the actual estimate for your place?"
+- 80-100 words. Smart friend voice. Concrete numbers.
+""",
+
+    8: """EMAIL 8 — The Comparison Most Agents Skip.
+
+Cash vs. listing: most people compare offer prices. Barry compares net proceeds after everything.
+This is the comparison that actually matters, and most sellers never see it laid out clearly.
+
+Rules:
+- Present this as "here's what I walk every seller through before they decide"
+- Two columns in plain language: cash path (fast, certain, lower gross) vs. listing path (higher gross, slower, more variables)
+- The gap is almost always smaller than sellers expect
+- "Worth 15 minutes to look at both side by side?"
+- 90-110 words. Educational. Confident but never pushy.
+""",
+
+    9: """EMAIL 9 — The Warm Door.
+
+It's been months. No guilt. No chase. Just: I'm still here, door's still open.
+
+Life changes — job moves, family shifts, financial situations. When something changes,
+Barry wants to be the first name they think of.
+
+Rules:
+- Acknowledge time without guilt: "It's been a while — hope things are going well."
+- One line on what's changed in the market (optional)
+- Core message: "If anything shifts on your end, I'm still here. Same conversation, same options."
+- No hard CTA. Just warmth and an open door.
+- 60-75 words. This is a relationship maintenance email. Tone: the advisor you call when you're finally ready.
+""",
+}
+
+
+def _get_ylopo_seller_seq_guide(sequence_num):
+    """Return the right sequence guide for Ylopo Prospecting seller emails."""
+    if sequence_num in _YLOPO_SELLER_SEQUENCE_GUIDE:
+        return _YLOPO_SELLER_SEQUENCE_GUIDE[sequence_num]
+    # Beyond 9: cycle between market update / story / math
+    cycle = [
+        _YLOPO_SELLER_SEQUENCE_GUIDE[5],
+        _YLOPO_SELLER_SEQUENCE_GUIDE[6],
+        _YLOPO_SELLER_SEQUENCE_GUIDE[7],
+    ]
+    return cycle[sequence_num % 3]
+
+
+def _is_ylopo_prospecting_seller(person, tags):
+    """Return True if this is a valid Ylopo Prospecting rAIya-converted seller lead.
+
+    Requires BOTH:
+      1. Source = "Ylopo Prospecting" (configurable via config.YLOPO_PROSPECTING_SOURCES)
+      2. AI conversation tag (AI_NEEDS_FOLLOW_UP or AI_VOICE_NEEDS_FOLLOW_UP)
+         — older Ylopo Prospecting leads without the AI tag predate the rAIya
+         conversation feature and have no "my assistant" hook to reference.
+    """
+    from config import YLOPO_PROSPECTING_SOURCES
+    source = (person.get("source") or "").strip()
+    if source not in YLOPO_PROSPECTING_SOURCES:
+        return False
+    ai_tags = {"AI_NEEDS_FOLLOW_UP", "AI_VOICE_NEEDS_FOLLOW_UP"}
+    return any(t in ai_tags for t in (tags or []))
+
+
+def _build_seller_brief(first_name, person, tags):
+    """Build a compact behavioral brief for Ylopo Prospecting seller leads.
+
+    These leads have no IDX data — they're homeowners, not buyers.
+    The brief draws from the FUB person record: home address, city, tags.
+    """
+    lines = [f"LEAD: {first_name}"]
+    lines.append("LEAD TYPE: Ylopo Prospecting Seller — homeowner who spoke with Barry's AI assistant about their home value. NOT a buyer. Do NOT reference home searches, IDX, or properties for sale.")
+
+    # Home address — Ylopo Prospecting leads should have this from rAIya conversation
+    street = person.get("streetAddress") or person.get("street") or ""
+    city   = person.get("city") or ""
+    state  = person.get("state") or "VA"
+    if street and city:
+        lines.append(f"HOME ADDRESS: {street}, {city}, {state} — reference their specific home/neighborhood")
+    elif city:
+        lines.append(f"CITY: {city} — reference their area/neighborhood in Hampton Roads")
+    else:
+        lines.append("LOCATION: Hampton Roads area (city unknown — write generically for the region)")
+
+    # Relevant tags (no Ylopo platform names in emails)
+    seller_signals = []
+    if "AI_NEEDS_FOLLOW_UP" in tags:
+        seller_signals.append("had an AI text conversation about their home (strong engagement)")
+    if "AI_VOICE_NEEDS_FOLLOW_UP" in tags:
+        seller_signals.append("had an AI voice conversation about their home")
+    if "Y_SELLER_REPORT_VIEWED" in tags:
+        seller_signals.append("viewed a home value report")
+    if "YPRIORITY" in tags:
+        seller_signals.append("high-priority seller signal")
+    if seller_signals:
+        lines.append(f"\nSELLER SIGNALS: {'; '.join(seller_signals)}")
+
+    lines.append("\nCRITICAL REMINDERS:")
+    lines.append("- Never say 'Ylopo', 'rAIya', or any platform name — say 'my assistant'")
+    lines.append("- Never reference home searches, listings to buy, or IDX activity")
+    lines.append("- This person engaged about SELLING their home, not buying one")
+
+    return "\n".join(lines)
+
+
+# Sequence-specific angle instructions fed to Claude
+_SEQUENCE_GUIDE = {
+    1: """EMAIL 1 — The Pattern Interrupt + Local Intel.
+
+Three short paragraphs. Feels like Barry grabbed his phone when he saw them come through.
+NOT a stripped-down one-liner — specificity requires space. Cell phone energy, not template energy.
+
+━━ PARAGRAPH 1: The behavioral observation ━━
+Lead with something specific enough they wonder how you knew.
+Use the most specific data point available, in this priority order:
+  1. Property address they registered on or viewed multiple times
+  2. Specific price range + city ("Virginia Beach in the $600K range")
+  3. Search behavior translated naturally ("browsed without clicking into anything yet")
+NEVER open with just "Hampton Roads" — that tells them nothing and could be any lead.
+Translate what the behavior tells you about WHERE THEY ARE mentally:
+  "browsed without clicking" → still orienting, not ready to go deep yet
+  "came back to the same listing 3x" → attached but hesitating
+  "saved 2 homes and went quiet" → something changed on their end
+
+━━ PARAGRAPH 2: Local market intelligence ━━
+One piece of hyper-local knowledge about their specific area or price range.
+This is what makes them think "this agent actually knows Hampton Roads."
+It should be something they couldn't get from Zillow — specific enough to their neighborhood,
+price point, or property type that it reads as insider knowledge, not generic market copy.
+Good examples:
+  "inventory south of Shore Drive is tight but homes near [their street] tend to sit a few days longer — that's leverage"
+  "most buyers in the $400s in Chesapeake are getting pushed toward [area] right now — VB inventory is slim"
+  "Great Neck has a pocket that hits your price range but rarely surfaces in the main search filters"
+
+━━ PARAGRAPH 3: One easy CTA ━━
+One question. Yes/no or answerable in 2-5 words.
+Something that makes them feel like replying is easier than not.
+
+RULES:
+- DO NOT use "just" / "reach out" / "let me know" / "happy to help" / "I'd love to"
+- Never open with "I noticed" — lead with the observation itself
+- Every sentence references THIS person, not a buyer persona
+- Subject line: use the property address or price + city — never the lead's name alone
+
+P.S. FOR EMAIL 1: Include a P.S. about 70% of the time (higher than other emails).
+The P.S. is the "I know this market cold" closer. One sentence. Specific. Conversational.
+Something about their area, their price range, or a hidden opportunity they wouldn't find on their own.
 """,
 
     2: """EMAIL 2 — The Gap.
@@ -727,10 +967,12 @@ def _is_z_buyer(tags):
     return any(t.upper().replace("-", "_") in z_tags for t in (tags or []))
 
 
-def _is_listing_drop(sequence_num, tags=None):
+def _is_listing_drop(sequence_num, tags=None, person=None):
     """True for listing-drop emails (5, 7, 9, 11…) — these include IDX links.
-    Z-buyer leads never get listing drops — they're sellers, not buyers."""
+    Seller leads (Z-buyer, Ylopo Prospecting) never get listing drops."""
     if _is_z_buyer(tags):
+        return False
+    if person and _is_ylopo_prospecting_seller(person, tags or []):
         return False
     return sequence_num >= 5 and sequence_num % 2 == 1
 
@@ -744,28 +986,42 @@ def generate_email(person, behavior, strategy, leadstream_tier,
       1-3: reply sprint (short, direct, no links)
       4,6,8: drip content (longer, warm, no links)
       5,7,9: drip listing drop (short, IDX link included)
-    Z-buyer leads (ZLEAD/Z_BUYER) use a separate sequence guide focused on
-    the cash offer / both-options value proposition.
+
+    Lead type routing (in priority order):
+      Z-buyer (ZLEAD/Z_BUYER)          → cash offer + both-options track
+      Ylopo Prospecting + AI tag       → rAIya seller follow-up track
+      Everyone else                    → buyer IDX track
     Returns {subject, body_text, body_html} or raises on failure.
     """
     first_name = person.get("firstName") or "there"
     tags = person.get("tags", [])
-    is_z = _is_z_buyer(tags)
+    is_z      = _is_z_buyer(tags)
+    is_seller = _is_ylopo_prospecting_seller(person, tags)
 
-    # Z-buyers are sellers — no listing drops, different sequence guide throughout
-    listing_drop = _is_listing_drop(sequence_num, tags)
+    # Seller leads never get listing drops
+    listing_drop = _is_listing_drop(sequence_num, tags, person)
     search_urls  = build_lead_search_urls(behavior) if listing_drop else []
 
-    brief     = _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags,
+    # Build the right brief for each lead type
+    if is_seller:
+        brief = _build_seller_brief(first_name, person, tags)
+    else:
+        brief = _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags,
                                         search_urls=search_urls)
-    seq_guide = _get_z_buyer_seq_guide(sequence_num) if is_z else _get_seq_guide(sequence_num)
+    if is_z:
+        seq_guide = _get_z_buyer_seq_guide(sequence_num)
+    elif is_seller:
+        seq_guide = _get_ylopo_seller_seq_guide(sequence_num)
+    else:
+        seq_guide = _get_seq_guide(sequence_num)
 
     # Phase label for logging / dry-run display
+    _lead_type = "z-buyer" if is_z else ("ylopo-seller" if is_seller else "")
     if sequence_num <= 3:
-        phase_label = f"{'z-buyer sprint' if is_z else 'sprint'} #{sequence_num}/3"
+        phase_label = f"{(_lead_type + ' ') if _lead_type else ''}sprint #{sequence_num}/3"
     else:
         drip_num = sequence_num - 3
-        phase_label = f"{'z-buyer drip' if is_z else 'drip'} #{drip_num} ({'listing' if listing_drop else 'content'})"
+        phase_label = f"{(_lead_type + ' ') if _lead_type else ''}drip #{drip_num} ({'listing' if listing_drop else 'content'})"
 
     if dry_run:
         logger.info("[DRY RUN] Would call Claude for %s (strategy: %s, %s)",
@@ -797,8 +1053,22 @@ def generate_email(person, behavior, strategy, leadstream_tier,
             length_rule = "70-110 words. Substantive enough to teach something, short enough to read in 30 seconds."
             max_tokens  = 600
         link_rule = "NO LINKS. This is a seller lead — no IDX searches apply."
+    elif is_seller and sequence_num <= 3:
+        length_rule = "50-80 words for emails 1-2. 25-40 words for email 3. No links. Cell phone energy — short paragraphs, nothing polished."
+        link_rule   = "NO LINKS. This is a homeowner lead, not a buyer."
+        max_tokens  = 500
+    elif sequence_num == 1:
+        # Email 1 — the Tayler format: observation + local intel + CTA.
+        # Specificity costs words. 25-word cap was producing generic output.
+        length_rule = """3 short paragraphs. Cell phone energy — feels like Barry typed this in 90 seconds.
+Para 1 (1-2 sentences): Behavioral observation with specific detail — property address, exact price + city, search pattern. NEVER just 'Hampton Roads.'
+Para 2 (1-2 sentences): One piece of local market intel about THEIR specific neighborhood/price range — something they couldn't get from Zillow.
+Para 3 (1 sentence): One easy question — yes/no or answerable in 2-5 words.
+Total: 65-110 words. Specificity is worth every word. Short paragraphs, not short email."""
+        link_rule   = "NO LINKS — ever. They click instead of reply."
+        max_tokens  = 500
     elif sequence_num <= 3:
-        length_rule = "25-45 words for emails 1-2. 20-35 words for email 3. No links. Short is good — but never so clipped it reads as rude. A fragment without warmth is just cold."
+        length_rule = "30-50 words for email 2. 20-35 words for email 3. No links. Short is good — but never so clipped it reads as rude."
         link_rule   = "NO LINKS — ever. They click instead of reply."
         max_tokens  = 400
     elif listing_drop:
@@ -810,9 +1080,9 @@ def generate_email(person, behavior, strategy, leadstream_tier,
         link_rule   = "NO LINKS. The value is the insight, not a search result."
         max_tokens  = 600
 
-    # Z-buyer gets a focused seller-specific system prompt
+    # Lead-type-specific context injected into the prompt
     if is_z:
-        z_buyer_context = """
+        lead_type_context = """
 ━━━━ WHO THIS PERSON IS ━━━━
 This is a SELLER lead — they requested a cash offer on their home.
 They are NOT looking to buy. Do NOT reference home searches, IDX, or properties to buy.
@@ -828,12 +1098,32 @@ Most cash buyers can only offer one. Barry can show the full picture.
 - No "I'd love to help" or "feel free to reach out"
 - If you're sharing math or data, make it concrete and Hampton Roads-specific
 """
+    elif is_seller:
+        lead_type_context = """
+━━━━ WHO THIS PERSON IS ━━━━
+This is a HOMEOWNER who spoke with Barry's AI assistant about their home value and was
+transferred to Barry's team. They engaged — they're warm, not cold. They are NOT a buyer
+browsing homes. Do NOT reference home searches, IDX, listings for sale, or anything buyer-related.
+
+Barry is the human follow-up to that AI conversation. He's the real person behind it.
+His value: he knows their neighborhood, he knows what homes like theirs are selling for, and
+he can give them real numbers — no pressure, no commitment required.
+
+━━━━ TONE FOR YLOPO PROSPECTING SELLER LEADS ━━━━
+- Warm, competent, personal. Like the friend who happens to be a top Hampton Roads agent.
+- Reference "my assistant" naturally — never say Ylopo or rAIya or any platform name.
+- No "WE BUY HOUSES" energy, no cash offer push — this is a traditional listing conversation.
+- Teaching voice. Market intel feels like a gift, not a sales move.
+- Never: "I'd love to help", "feel free to reach out", "happy to assist"
+"""
     else:
-        z_buyer_context = ""
+        lead_type_context = ""
+
+    _phase_label_str = "Z-Buyer Drip" if is_z else ("Ylopo Seller" if is_seller else ("Reply Sprint" if sequence_num <= 3 else ("Listing Drop" if listing_drop else "Long-term Drip")))
 
     prompt = f"""You are writing a nurture email from Barry Jenkins, realtor in Hampton Roads VA.
-{z_buyer_context}
-PHASE: {"Z-Buyer Drip" if is_z else ("Reply Sprint" if sequence_num <= 3 else ("Listing Drop" if listing_drop else "Long-term Drip"))}
+{lead_type_context}
+PHASE: {_phase_label_str}
 EMAIL #{sequence_num} in the sequence.
 
 ━━━━ LENGTH ━━━━
@@ -910,22 +1200,24 @@ WHAT GETS REPLIES (non-negotiable rules):
 2. A gap or a gift — leave something they want to close, or give them something real
 3. An easy question — answerable in 2–5 words, yes/no if possible
 
-━━━━ LOCAL INSIDER P.S. (optional — use ~50% of the time) ━━━━
-About half the time, add a P.S. with a single piece of genuine local market
-intelligence. This is the "I actually know Hampton Roads" signal that mass email
-cannot replicate. Good P.S. lines feel like a text from a friend who sells real
-estate — not a market report excerpt.
+━━━━ LOCAL INSIDER P.S. ━━━━
+Email 1: include a P.S. ~70% of the time — it's the "I know this market cold" signal.
+Emails 2-3: include ~30% of the time — silence works here too.
+Drip emails: include ~50% of the time.
 
-Rules for the P.S.:
-- One sentence only. Conversational. Specific to their search area if possible.
-- It should make them think "this agent knows what they're talking about"
-- Never: a CTA, a credential, "don't hesitate to reach out", or a generic market stat
-- Good examples:
+The P.S. is what separates this from any email a Zillow algorithm could send.
+It should make them think: "how does this agent know this about my specific area?"
+
+Rules:
+- One sentence only. Conversational. Specific to their city, neighborhood, or price range.
+- Never: a CTA, a credential, "don't hesitate to reach out", or a stat that could apply anywhere
+- GOOD — feels like a text from a friend who sells real estate:
     "P.S. — Great Bridge is seeing multiple offers on anything under $375k right now."
     "P.S. — Suffolk's Harbour View area has been moving fast. Might be worth a look."
     "P.S. — A lot of buyers in the $400s are getting pushed to Newport News right now. VB inventory is tight."
+    "P.S. — There's a pocket near Great Neck that hits your price range but rarely shows up in the main search filters."
     "P.S. — Chesapeake has some of the best schools in Hampton Roads if that's a factor."
-- Skip the P.S. the other half of the time — silence is also a choice.
+- BAD — generic, could go to anyone: "P.S. — The Hampton Roads market is moving fast right now."
 
 FORMAT:
 - First line: first name + comma only. Nothing else. ("Marcus,")
@@ -1819,46 +2111,56 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             skipped_cooldown += 1
             continue
 
-        # Pull IDX events — each fetch = 1 FUB API call, so count against cap
-        candidates_checked += 1
-        events = client.get_events_for_person(pid, days=60, limit=100)
+        # Ylopo Prospecting seller leads: skip IDX event fetch entirely.
+        # They're homeowners transferred from rAIya — no IDX activity expected.
+        # Their data comes from the FUB person record (address, city, AI tags).
+        is_ylopo_seller = _is_ylopo_prospecting_seller(person, tags)
 
-        # Any IDX event counts for qualification (Viewed Page, Viewed Property,
-        # Property Saved, Registration). We write from search filters if no
-        # specific property views exist.
-        idx_events = [e for e in events if e.get("type")]
+        if is_ylopo_seller:
+            # No IDX events needed — use empty behavior for these leads
+            behavior      = analyze_behavior([], tags)
+            strategy      = "ylopo_prospecting"
+            leadstream_tier = "AI_NEEDS_FOLLOW_UP" if "AI_NEEDS_FOLLOW_UP" in tags else "POND"
+            logger.debug("%s — Ylopo Prospecting seller, skipping IDX fetch", name)
+        else:
+            # Pull IDX events — each fetch = 1 FUB API call, so count against cap
+            candidates_checked += 1
+            events = client.get_events_for_person(pid, days=60, limit=100)
 
-        if len(idx_events) < MIN_EVENTS_TO_EMAIL:
-            logger.debug("Skipping %s — only %d IDX events", name, len(idx_events))
-            skipped_no_activity += 1
-            continue
+            # Any IDX event counts for qualification
+            idx_events = [e for e in events if e.get("type")]
 
-        # Analyze behavior
-        behavior = analyze_behavior(events, tags)
+            if len(idx_events) < MIN_EVENTS_TO_EMAIL:
+                logger.debug("Skipping %s — only %d IDX events", name, len(idx_events))
+                skipped_no_activity += 1
+                continue
 
-        # Determine LeadStream tier from tags
-        leadstream_tier = "POND"
-        for tier_tag in ("AI_NEEDS_FOLLOW_UP", "HANDRAISER", "YPRIORITY",
-                          "AI_VOICE_NEEDS_FOLLOW_UP", "Y_HOME_3_VIEW"):
-            if tier_tag in tags:
-                leadstream_tier = tier_tag
-                break
+            behavior = analyze_behavior(events, tags)
 
-        # Select strategy
-        strategy, priority = select_strategy(behavior, leadstream_tier, tags)
+            # Determine LeadStream tier from tags
+            leadstream_tier = "POND"
+            for tier_tag in ("AI_NEEDS_FOLLOW_UP", "HANDRAISER", "YPRIORITY",
+                              "AI_VOICE_NEEDS_FOLLOW_UP", "Y_HOME_3_VIEW"):
+                if tier_tag in tags:
+                    leadstream_tier = tier_tag
+                    break
 
-        if strategy == "none" or priority < 20:
-            logger.debug("Skipping %s — no compelling email strategy (score %d)", name, priority)
-            skipped_no_strategy += 1
-            continue
+            # Select strategy
+            strategy, priority = select_strategy(behavior, leadstream_tier, tags)
+
+            if strategy == "none" or priority < 20:
+                logger.debug("Skipping %s — no compelling email strategy (score %d)", name, priority)
+                skipped_no_strategy += 1
+                continue
 
         # Log what we found
+        _lead_type_label = "YLOPO-SELLER" if is_ylopo_seller else strategy.upper()
         if sequence_num <= 3:
             seq_label = f"sprint #{sequence_num}/3"
         else:
             drip_n = sequence_num - 3
-            seq_label = f"drip #{drip_n}/6 · {'listing' if _is_listing_drop(sequence_num) else 'content'}"
-        print(f"\n  [{strategy.upper()}] {name} (ID: {pid}) — {seq_label}")
+            seq_label = f"drip #{drip_n}/6 · {'listing' if _is_listing_drop(sequence_num, tags, person) else 'content'}"
+        print(f"\n  [{_lead_type_label}] {name} (ID: {pid}) — {seq_label}")
         print(f"    Email: {to_email}")
         print(f"    Tier: {leadstream_tier} | Views: {behavior['view_count']} | Saves: {behavior['save_count']}")
         if behavior["most_viewed"]:
