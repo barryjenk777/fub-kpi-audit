@@ -4243,6 +4243,52 @@ def api_leadstream_debug():
     return jsonify(result)
 
 
+@app.route("/api/debug/calls")
+def api_debug_calls():
+    """Diagnose call fetch issues — shows raw FUB call data for the last 7 days."""
+    try:
+        from datetime import datetime, timezone, timedelta
+        client = FUBClient()
+        since = datetime.now(timezone.utc) - timedelta(days=7)
+        until = datetime.now(timezone.utc)
+
+        # Raw fetch — first page only, no date filtering, just to see what FUB returns
+        raw = client._request("GET", "calls", params={"limit": 10, "sort": "-created"})
+        sample_calls = raw.get("calls", [])
+
+        # Full fetch with date range
+        all_calls = client.get_calls(since=since, until=until)
+
+        # Show field names present in first call
+        first_call_fields = list(sample_calls[0].keys()) if sample_calls else []
+
+        # Show userId distribution
+        user_counts = {}
+        for c in all_calls:
+            uid = c.get("userId") or c.get("assignedUserId") or "none"
+            user_counts[str(uid)] = user_counts.get(str(uid), 0) + 1
+
+        # Show isIncoming distribution
+        incoming_count = sum(1 for c in all_calls if c.get("isIncoming"))
+        outbound_count = sum(1 for c in all_calls if not c.get("isIncoming"))
+
+        # Agent map for comparison
+        agent_map = auto_detect_agents(client)
+        agent_ids = {name: user["id"] for name, user in agent_map.items()}
+
+        return jsonify({
+            "total_fetched_7d":    len(all_calls),
+            "first_call_fields":   first_call_fields,
+            "incoming_count":      incoming_count,
+            "outbound_count":      outbound_count,
+            "calls_by_userId":     user_counts,
+            "agent_ids_in_system": agent_ids,
+            "sample_call":         sample_calls[0] if sample_calls else None,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/health")
 def api_health():
     """Health check endpoint — verifies scoring is running on schedule.
