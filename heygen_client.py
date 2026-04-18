@@ -26,6 +26,8 @@ Credit cost: ~1 credit per 6 seconds → 35-second video = ~6 credits.
 Current quota: 1,500 API credits. Sustainable for ~250 videos/month.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import time
@@ -40,13 +42,14 @@ _BASE = "https://api.heygen.com"
 # Barry's avatar + voice IDs — confirmed working via API test
 AVATAR_CASUAL      = "fffc73aa581a49e4af8dcd304e76349b"   # Barry Jenkins (casual)
 AVATAR_SUIT        = "dc3bfe40aeaf4590b76ee12824d019dd"   # Barry Jenkins Suit
-AVATAR_MICROPHONE  = "622b6e55473e4b5e821c9cabc8830366"   # Barry Jenkins Suit + Microphone ← DEFAULT
+AVATAR_MICROPHONE  = "622b6e55473e4b5e821c9cabc8830366"   # Barry Jenkins Suit + Microphone
+AVATAR_NEW         = "d67eb636d1674a908c39b09b055393c8"   # New avatar (replacing microphone) ← DEFAULT
 
 VOICE_CASUAL  = "b37262521af24a0e9245308e4045ac3f"   # Barry Jenkins voice
 VOICE_SUIT    = "850bdd18eb164cd8b5d540a88fdf862a"   # Barry Jenkins Suit voice ← DEFAULT for all
 
-# Default: microphone avatar + suit voice (confirmed working, 16s render time)
-DEFAULT_AVATAR = AVATAR_MICROPHONE
+# Default avatar + voice
+DEFAULT_AVATAR = AVATAR_NEW
 DEFAULT_VOICE  = VOICE_SUIT
 
 # Background endpoint hosted on Railway — generates branded background on-demand
@@ -513,7 +516,9 @@ def submit_video(script: str, background_url: str = None,
             "character": {
                 "type": "avatar",
                 "avatar_id": _avatar,
-                "avatar_style": "normal",
+                "avatar_style": "circle",   # Small circle avatar in corner
+                "scale": 0.35,              # ~35% of frame width
+                "offset": {"x": 0.62, "y": 0.55},  # Bottom-right quadrant
             },
             "voice": {
                 "type": "text",
@@ -590,7 +595,8 @@ def poll_video(video_id: str, timeout_seconds: int = 180,
     return None
 
 
-def generate_and_wait(script: str, use_suit: bool = False,
+def generate_and_wait(script: str, background_url: str = None,
+                      avatar_id: str = None, voice_id: str = None,
                       timeout_seconds: int = 180) -> dict | None:
     """
     Full pipeline: submit → poll → return result.
@@ -599,7 +605,8 @@ def generate_and_wait(script: str, use_suit: bool = False,
     This blocks for ~60-90 seconds while HeyGen renders.
     Only call this in a background job, not in a request handler.
     """
-    video_id = submit_video(script, use_suit=use_suit)
+    video_id = submit_video(script, background_url=background_url,
+                            avatar_id=avatar_id, voice_id=voice_id)
     if not video_id:
         return None
     return poll_video(video_id, timeout_seconds=timeout_seconds)

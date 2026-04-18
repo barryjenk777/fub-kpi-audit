@@ -1656,7 +1656,10 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
     msg.reply_to = SgEmail("reply@inbound.yourfriendlyagent.net", FROM_NAME)
 
     # BCC Barry on every email so he can see exactly what's going out
-    msg.add_bcc(Bcc(FROM_EMAIL))
+    # Skip BCC if TO is already Barry (e.g. test sends) — SendGrid rejects duplicate addresses
+    _to_normalized = to_email.lower().strip() if isinstance(to_email, str) else ""
+    if _to_normalized != FROM_EMAIL.lower():
+        msg.add_bcc(Bcc(FROM_EMAIL))
 
     # Disable click + open tracking — tracking URLs rewritten through sendgrid.net
     # are a major spam signal for Gmail/Outlook filters on lead-facing emails.
@@ -2258,7 +2261,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         city=_city_hg or "Hampton Roads",
                     )
                     bg_url = get_background_url("seller", address=_street, city=_city_hg)
-                    video_result = generate_and_wait(script, timeout_seconds=180)
+                    video_result = generate_and_wait(script, background_url=bg_url, timeout_seconds=180)
 
                     if video_result and video_result.get("video_url"):
                         video_block = render_video_email_block_simple(
@@ -2378,7 +2381,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         city=_city_hg or "Hampton Roads",
                     )
                     bg_url = get_background_url("zbuyer", address=_street, city=_city_hg)
-                    video_result = generate_and_wait(script, timeout_seconds=180)
+                    video_result = generate_and_wait(script, background_url=bg_url, timeout_seconds=180)
 
                     if video_result and video_result.get("video_url"):
                         video_block = render_video_email_block_simple(
