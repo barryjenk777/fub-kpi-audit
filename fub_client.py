@@ -256,11 +256,12 @@ class FUBClient:
         # Fix: pass dateFrom/dateTo as server-side filters so FUB trims the
         # result set to the window before we paginate.  Client-side date checks
         # remain as a safety net in case the params are silently ignored.
-        # 5000-record cap pages past ISA's ~1400 calls/week (userId=1) and still
-        # reaches the prior-week audit window for real agents. Per-agent filtering
-        # was tried but FUB doesn't honor userId server-side on the calls endpoint,
-        # so a single bulk fetch with a higher cap is the correct approach.
-        max_offset = 5000
+        # FUB hard-caps the calls endpoint at offset=2000 — attempting offset=2000
+        # returns 400 Bad Request. The while loop condition `while offset < 2000`
+        # means the last valid iteration is offset=1900, giving us 2000 records max.
+        # Per-agent userId filtering was tried but FUB ignores userId server-side,
+        # so a single bulk fetch is the correct approach.
+        max_offset = 2000
         while offset < max_offset:
             params = {"limit": limit, "offset": offset, "sort": "-created"}
             if user_id:

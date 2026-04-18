@@ -923,19 +923,11 @@ def api_manager():
         # Single fetch covering full 4-week range (35d covers worst-case Mon–Sat window)
         full_since = today - timedelta(days=35)
 
-        # IMPORTANT: Fetch calls per-agent (not a single bulk fetch) to avoid the
-        # 2000-record pagination cap being exhausted by high-volume system accounts.
-        # User ID 1 alone logs ~1,400+ calls/week (automated/ISA), filling the cap
-        # before any agent calls are reached. Per-agent fetches stay well under 2000.
-        all_calls_4w = []
-        seen_call_ids: set = set()
-        for _name, _user in agent_map.items():
-            _uid = _user["id"]
-            for _c in client.get_calls(user_id=_uid, since=full_since, until=today):
-                _cid = _c.get("id")
-                if _cid not in seen_call_ids:
-                    seen_call_ids.add(_cid)
-                    all_calls_4w.append(_c)
+        # Single bulk call fetch (no userId filter — FUB ignores it server-side).
+        # max_offset=2000 in fub_client.py is FUB's hard cap; per-agent loops
+        # made 8× the API calls and all hit the same cap. count_calls_for_user()
+        # filters by agent userId so ISA calls (userId=1) are silently ignored.
+        all_calls_4w = client.get_calls(since=full_since, until=today)
 
         all_appts_4w = client.get_appointments(since=full_since, until=today)
 
