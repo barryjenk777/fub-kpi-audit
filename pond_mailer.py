@@ -38,9 +38,16 @@ logger = logging.getLogger("pond_mailer")
 # Config
 # ---------------------------------------------------------------------------
 
-# How many days between emails to the same lead
-# 3 days = Day 1 → Day 4 → Day 7 cadence
+# ── Phase 1: Reply Sprint (emails 1-3) ──────────────────────────────────────
+# 3-day cadence → Day 1, Day 4, Day 7
+# Short, direct, reply-optimized. Goal: start a conversation NOW.
 EMAIL_COOLDOWN_DAYS = 3
+
+# ── Phase 2: Long-term Drip (emails 4-9) ────────────────────────────────────
+# 18-day cadence → roughly every 2.5 weeks
+# Alternates: longer content email (4, 6, 8) → listing link email (5, 7, 9)
+# Goal: stay top of mind for leads who weren't ready in the sprint.
+DRIP_COOLDOWN_DAYS = 18
 
 # Minimum IDX events needed to write a meaningful email
 # Counts ALL event types (page views, property views, saves, registration)
@@ -48,16 +55,7 @@ MIN_EVENTS_TO_EMAIL = 1
 
 # Max leads to email per run
 # Scheduler runs 3x/day (10am, 2pm, 6pm ET) → 27 max/day
-# Keeps us well inside the safe zone for a warmed domain
 MAX_PER_RUN = 9
-
-# Maximum emails to send to a single lead without a reply.
-# After 3 touches (Day 1, 4, 7) with no engagement, stop for 30 days.
-# More than 3 = spam risk and diminishing returns.
-MAX_EMAILS_PER_LEAD = 3
-
-# Days to suppress a lead after hitting the max sequence (no reply)
-SEQUENCE_COOLDOWN_DAYS = 30
 
 # Ylopo tags that indicate behavioral intent (scored separately from LeadStream)
 YLOPO_INTENT_TAGS = {
@@ -444,7 +442,110 @@ Example (personalize name/area — do not copy verbatim):
 Or:
   "No worries if the search is on pause. I'll be here when it picks back up."
 """,
+
+    # ── Phase 2: Long-term Drip ───────────────────────────────────────────────
+    # Emails 4-9. 18-day cadence. Alternates content (4,6,8) and listing drops (5,7,9).
+    # Lead didn't engage with the sprint — now we play the long game.
+
+    4: """EMAIL 4 — First Drip (content). They didn't bite on the sprint. That's fine.
+Completely different gear now. No urgency. No gap. Just Barry being genuinely useful.
+
+This email is longer than the sprint emails — 90-120 words. It should feel like a
+note from someone who's been paying attention to the market on your behalf.
+
+Rules:
+- Open with a specific market observation tied to their search area or price range
+- One useful insight — something they probably don't know — that makes them think
+- Soft question at the end. Not "what's your timeline?" — something more curious.
+  E.g. "What would have to change for it to make sense?" or "Still keeping an eye on Chesapeake?"
+- Warm, unhurried, confident. No pressure. Sounds like a smart friend, not a pitch.
+- No links. No P.S. No urgency language.
+- DO NOT reference the earlier emails.
+
+Voice: Barry's authentic teaching voice — "too nice for sales" but genuinely knows Hampton Roads.
+""",
+
+    5: """EMAIL 5 — First Listing Drop. Short. Direct. Here are homes. No fluff.
+
+40-55 words max. This email is a gift: you did the work of finding homes for them.
+Frame it as personal curation, not a system search.
+
+Rules:
+- One warm sentence explaining why you pulled these specifically (ties to their behavior)
+- Include the IDX search link from the brief as [descriptive anchor text](url)
+  Make the anchor text specific: "3bd homes in Chesapeake under $350k" not "click here"
+- One easy yes/no question: "Anything worth a closer look?" or "Want to tour any of these?"
+- DO NOT explain yourself. DO NOT pad with market context.
+- The link IS the value. Get out of the way.
+
+Subject lines should reference what you pulled: "6 homes in Chesapeake" or "found a few in Norfolk"
+""",
+
+    6: """EMAIL 6 — Drip content. Different angle from email 4.
+
+90-120 words. Story-first this time. Open with something human — a client situation
+(anonymized), a local quirk about Hampton Roads real estate, or a counterintuitive insight
+about their specific search area that most buyers get wrong.
+
+Rules:
+- Teach one thing. Don't teach three things.
+- The insight should be specific to their city, price range, or property type
+- End with a genuinely curious question — not a sales ask
+- No links. No urgency. No P.S.
+- Should feel like a 9pm email from a friend who just thought of something relevant
+""",
+
+    7: """EMAIL 7 — Second Listing Drop. Same format as email 5.
+
+40-55 words. Different from email 5 — different search angle (new listings, slight price
+shift, or a different city from their browsing history if they searched multiple areas).
+
+Use the IDX search data in the brief to build the right link.
+Same rules as email 5: personal, specific anchor text, one question, nothing else.
+""",
+
+    8: """EMAIL 8 — Drip content. Seasonal or situational.
+
+90-120 words. Tie it to something real: the time of year (spring inventory, summer moves,
+school-year timing), a rate environment note, or a shift in Hampton Roads inventory.
+Keep it grounded — no doom and gloom, no hype.
+
+One observation → one implication for their search → one soft question.
+Should feel timely, like you wrote it this week specifically for them.
+No links. No P.S.
+""",
+
+    9: """EMAIL 9 — Final Drip. Warm close. Leave the door open.
+
+75-90 words. Acknowledge it's been a while without guilt-tripping.
+Tone: genuinely warm, unbothered, respectful of their time.
+
+Something like: "Still keeping an eye on [their city] for you — the market's shifted
+a bit since we first connected. No pressure to do anything with it, but worth a quick
+catch-up if the timing ever feels right."
+
+This is the last email in the drip. Leave them feeling good about you, not chased.
+Soft close: "I'll be around whenever it makes sense."
+No links. No P.S. No urgency.
+""",
 }
+
+
+def _get_seq_guide(sequence_num):
+    """Return the right sequence guide for any email number.
+
+    For sequence_num > 9 (edge case), cycle through the drip pattern:
+    even = content email, odd = listing drop.
+    """
+    if sequence_num in _SEQUENCE_GUIDE:
+        return _SEQUENCE_GUIDE[sequence_num]
+    # Beyond 9: alternate content/listing indefinitely
+    return _SEQUENCE_GUIDE[6] if sequence_num % 2 == 0 else _SEQUENCE_GUIDE[7]
+
+
+def _is_listing_drop(sequence_num):
+    """True for listing-drop emails (5, 7, 9, 11…) — these include IDX links."""
+    return sequence_num >= 5 and sequence_num % 2 == 1
 
 
 def generate_email(person, behavior, strategy, leadstream_tier,
@@ -452,25 +553,38 @@ def generate_email(person, behavior, strategy, leadstream_tier,
     """
     Generate a personalized email using Claude.
 
-    sequence_num: 1, 2, or 3 — controls tone and angle (different each touch)
+    sequence_num: 1+ — controls phase, tone, and angle.
+      1-3: reply sprint (short, direct, no links)
+      4,6,8: drip content (longer, warm, no links)
+      5,7,9: drip listing drop (short, IDX link included)
     Returns {subject, body_text, body_html} or raises on failure.
     """
     first_name = person.get("firstName") or "there"
     tags = person.get("tags", [])
 
-    # Build IDX search links from their actual behavior, then build the brief
-    search_urls = build_lead_search_urls(behavior)
-    brief = _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags,
-                                    search_urls=search_urls)
-    seq_guide = _SEQUENCE_GUIDE.get(sequence_num, _SEQUENCE_GUIDE[1])
+    # Listing-drop emails (5, 7, 9…) include IDX links — all others do not.
+    # Sprint emails (1-3) optimize for reply; content drip (4,6,8) teaches.
+    listing_drop = _is_listing_drop(sequence_num)
+    search_urls  = build_lead_search_urls(behavior) if listing_drop else []
+
+    brief     = _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tags,
+                                        search_urls=search_urls)
+    seq_guide = _get_seq_guide(sequence_num)
+
+    # Phase label for logging / dry-run display
+    if sequence_num <= 3:
+        phase_label = f"sprint #{sequence_num}/3"
+    else:
+        drip_num = sequence_num - 3
+        phase_label = f"drip #{drip_num} ({'listing' if listing_drop else 'content'})"
 
     if dry_run:
-        logger.info("[DRY RUN] Would call Claude for %s (strategy: %s, seq: %s)",
-                    first_name, strategy, sequence_num)
+        logger.info("[DRY RUN] Would call Claude for %s (strategy: %s, %s)",
+                    first_name, strategy, phase_label)
         return {
-            "subject": f"[DRY RUN] #{sequence_num} {strategy} email for {first_name}",
-            "body_text": f"[DRY RUN seq={sequence_num}]\n\n{brief[:300]}...",
-            "body_html": f"<p>[DRY RUN seq={sequence_num}]</p><pre>{brief[:300]}</pre>",
+            "subject":   f"[DRY RUN] {phase_label} · {strategy} · {first_name}",
+            "body_text": f"[DRY RUN {phase_label}]\n\n{brief[:300]}...",
+            "body_html": f"<p>[DRY RUN {phase_label}]</p><pre>{brief[:300]}</pre>",
         }
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -484,27 +598,49 @@ def generate_email(person, behavior, strategy, leadstream_tier,
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    prompt = f"""You are writing a cold follow-up email from Barry Jenkins, realtor in Hampton Roads VA.
+    # Phase-specific word count and link rules
+    if sequence_num <= 3:
+        length_rule = "Under 45 words for emails 1-2. Under 30 words for email 3. No links."
+        link_rule   = "NO LINKS — ever. They click instead of reply."
+        max_tokens  = 400
+    elif listing_drop:
+        length_rule = "40-55 words. Short. Get out of the way and let the link do the work."
+        link_rule   = "INCLUDE the IDX link from the brief as [descriptive anchor text](url). This is the value."
+        max_tokens  = 400
+    else:
+        length_rule = "90-120 words. Long enough to be genuinely useful, short enough to finish in 30 seconds."
+        link_rule   = "NO LINKS. The value is the insight, not a search result."
+        max_tokens  = 600
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-THE ONLY GOAL: get a reply.
-Not a click. Not a compliment. Not brand awareness. A reply.
-Every word either serves that goal or gets cut.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    prompt = f"""You are writing a nurture email from Barry Jenkins, realtor in Hampton Roads VA.
+
+PHASE: {"Reply Sprint" if sequence_num <= 3 else ("Listing Drop" if listing_drop else "Long-term Drip")}
+EMAIL #{sequence_num} in the sequence.
+
+━━━━ LENGTH ━━━━
+{length_rule}
+
+━━━━ LINK RULE ━━━━
+{link_rule}
+
+━━━━ VOICE (always) ━━━━
+- Barry Jenkins: conversational, teaching > pushing, warm, direct, a little wry
+- Sounds like a smart friend who happens to know Hampton Roads deeply
+- Fragments fine. Contractions always. Never over-explain.
+- Never: "dream home", "perfect fit", "hot market", "reach out", "just checking in",
+  "I hope this finds you well", "happy to help", "feel free to", "I'd love to"
+- Never open with "I noticed" — lead with the observation itself
+
+━━━━ WHAT KILLS REPLIES (never do these) ━━━━
+- P.S. of any kind — signals a campaign
+- Explaining your process or credentials
+- Padding with market stats to prove you know things
+- Sounding like you're trying — trying reads as desperation
 
 WHAT GETS REPLIES (non-negotiable rules):
 1. Specificity — prove you looked at THIS person, not a persona
-2. A gap — leave something unanswered that only a reply can close
+2. A gap or a gift — leave something they want to close, or give them something real
 3. An easy question — answerable in 2–5 words, yes/no if possible
-4. Short — under 45 words for emails 1 & 2, under 30 for email 3
-
-WHAT KILLS REPLIES (never do these):
-- Market insight or education ("did you know inventory is down 12%…")
-- Proving you know Hampton Roads
-- Offering to help ("I'd love to…", "happy to…", "feel free to…")
-- Explaining yourself or your process
-- Links (they click instead of reply — no links in any email)
-- P.S. (signals a crafted campaign, not a human)
 - "Just checking in" / "reaching out" / "circling back" / "following up"
 - Sounding like you're trying — trying reads as desperation
 - "Dream home", "perfect fit", "hot market", "I hope this finds you well"
@@ -541,7 +677,7 @@ If you can't tell it was written for exactly this person, rewrite it."""
 
     response = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=400,   # emails are short now — 700 was for longer copy
+        max_tokens=max_tokens,   # 400 for sprint/listing, 600 for content drip
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -1034,10 +1170,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
 
         sequence_num = history["sequence_num"]
 
-        # Cooldown check — respect gap between touches
+        # Phase-aware cooldown: sprint = 3 days, drip = 18 days
+        cooldown = DRIP_COOLDOWN_DAYS if sequence_num > 3 else EMAIL_COOLDOWN_DAYS
         days_ago = _db.days_since_last_pond_email(pid)
-        if days_ago is not None and days_ago < EMAIL_COOLDOWN_DAYS:
-            logger.debug("Skipping %s — emailed %.1f days ago", name, days_ago)
+        if days_ago is not None and days_ago < cooldown:
+            logger.debug("Skipping %s — emailed %.1f days ago (need %dd)", name, days_ago, cooldown)
             skipped_cooldown += 1
             continue
 
@@ -1075,7 +1212,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
             continue
 
         # Log what we found
-        print(f"\n  [{strategy.upper()}] {name} (ID: {pid}) — Email #{sequence_num}/3")
+        if sequence_num <= 3:
+            seq_label = f"sprint #{sequence_num}/3"
+        else:
+            drip_n = sequence_num - 3
+            seq_label = f"drip #{drip_n}/6 · {'listing' if _is_listing_drop(sequence_num) else 'content'}"
+        print(f"\n  [{strategy.upper()}] {name} (ID: {pid}) — {seq_label}")
         print(f"    Email: {to_email}")
         print(f"    Tier: {leadstream_tier} | Views: {behavior['view_count']} | Saves: {behavior['save_count']}")
         if behavior["most_viewed"]:

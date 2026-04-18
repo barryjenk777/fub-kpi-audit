@@ -2103,13 +2103,18 @@ def log_pond_email(person_id, person_name, email_address, subject,
 def get_lead_email_history(person_id):
     """
     Return email sequence info for a pond lead.
-    Used to enforce the 3-touch max and pass sequence number to Claude.
+
+    Sequence design:
+      Phase 1 — emails 1-3:  reply sprint, 3-day cadence
+      Phase 2 — emails 4-9:  long-term drip, 18-day cadence
+      After email 9:          suppressed (lead is exhausted, ~3 months of nurture)
 
     Returns:
         emails_sent    — count of live (non-dry-run) emails sent
         has_replied    — True if any entry in pond_reply_log
-        sequence_num   — which email to send next (1, 2, or 3)
-        suppressed     — True if max emails hit with no reply (or in 30d quiet)
+        sequence_num   — which email to send next (1 through 9+)
+        suppressed     — True if lead has replied (agent handles), unsubscribed,
+                         or has exhausted the full 9-email sequence
     """
     if not is_available():
         return {"emails_sent": 0, "has_replied": False, "sequence_num": 1, "suppressed": False}
@@ -2131,20 +2136,12 @@ def get_lead_email_history(person_id):
                 row = cur.fetchone()
                 has_replied = (row[0] > 0) if row else False
 
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
+        # Suppressed only after full 9-email sequence (≈3 months of nurture)
+        # Cooldown pacing (3d vs 18d) is enforced in pond_mailer.py, not here.
+        MAX_SEQUENCE = 9
+        suppressed = emails_sent >= MAX_SEQUENCE and not has_replied
 
-        # Suppressed if max sequence hit with no reply AND still in quiet period
-        suppressed = False
-        if emails_sent >= 3 and not has_replied:
-            if last_sent:
-                last_sent_aware = last_sent.replace(tzinfo=timezone.utc)
-                days_since = (now - last_sent_aware).days
-                suppressed = days_since < 30  # quiet period expires after 30 days
-            else:
-                suppressed = True
-
-        sequence_num = min(emails_sent + 1, 3)
+        sequence_num = emails_sent + 1  # no cap — let it go to 10+ if needed
 
         return {
             "emails_sent":   emails_sent,
