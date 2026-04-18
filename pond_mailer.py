@@ -809,25 +809,31 @@ The P.S. is the "I know this market cold" closer. One sentence. Specific. Conver
 Something about their area, their price range, or a hidden opportunity they wouldn't find on their own.
 """,
 
-    2: """EMAIL 2 — The Gap.
+    2: """EMAIL 2 — The Listing Drop. Give them houses.
 
 They didn't reply to email 1. Completely different angle — do NOT reference the prior email.
 
-This email teases something they can only get by replying. You've "found something."
-You describe it just enough to create desire, then put it behind a reply.
+Buyers don't click because of the agent. They click because of the house. This email is
+short, personal, and leads with listings — not with Barry.
 
-DO NOT include a link. DO NOT deliver the value in the email.
-The whole point: make them reply "yes, send it" — THEN you send the link.
+Rules:
+- 40-55 words max. One warm sentence of curation context, then the link, then one yes/no question.
+- Frame the link as personal curation: "pulled these for you specifically" not "here are some listings"
+- Anchor text must be specific: "3bd homes in Chesapeake under $350k" not "click here" or "view listings"
+- One sentence of insider edge — something about that market or those homes they wouldn't get from Zillow
+- End with a single yes/no question: "Anything worth a closer look?" or "Want to tour any of these?"
+- DO NOT explain yourself. DO NOT mention email 1. DO NOT pad with agent intro.
+- The link IS the value. Get out of the way.
 
-Example format (personalize to actual lead data):
-  "Found 6 homes in Chesapeake that hit everything you've been searching — 3bd, around your price,
-   listed in the last two weeks. Want me to send them over?"
+Subject lines should be about what you found: "found a few in Norfolk" or "6 homes in your range"
 
-Or for a saved-property lead:
-  "Something came up on that property you saved — might be worth a quick conversation.
-   Want the details?"
+Good example format (personalize to actual data — do not copy verbatim):
+  "Pulled some homes in Chesapeake that match what you've been searching — 3bd, in your price range,
+   most listed in the last week or two.
 
-End with a yes/no question. Nothing else.
+   [3bd homes in Chesapeake under $400k](url)
+
+   Anything catch your eye?"
 """,
 
     3: """EMAIL 3 — The Breakup.
@@ -968,12 +974,15 @@ def _is_z_buyer(tags):
 
 
 def _is_listing_drop(sequence_num, tags=None, person=None):
-    """True for listing-drop emails (5, 7, 9, 11…) — these include IDX links.
+    """True for listing-drop emails (2, 5, 7, 9, 11…) — these include IDX links.
+    Email 2 is an early listing drop: buyers want houses, not more agent intro.
     Seller leads (Z-buyer, Ylopo Prospecting) never get listing drops."""
     if _is_z_buyer(tags):
         return False
     if person and _is_ylopo_prospecting_seller(person, tags or []):
         return False
+    if sequence_num == 2:
+        return True
     return sequence_num >= 5 and sequence_num % 2 == 1
 
 
@@ -983,7 +992,9 @@ def generate_email(person, behavior, strategy, leadstream_tier,
     Generate a personalized email using Claude.
 
     sequence_num: 1+ — controls phase, tone, and angle.
-      1-3: reply sprint (short, direct, no links)
+      1: reply sprint — behavioral observation + local intel (no link)
+      2: listing drop — short, IDX link, personal curation angle
+      3: reply sprint — breakup (no link)
       4,6,8: drip content (longer, warm, no links)
       5,7,9: drip listing drop (short, IDX link included)
 
@@ -1067,9 +1078,13 @@ Para 3 (1 sentence): One easy question — yes/no or answerable in 2-5 words.
 Total: 65-110 words. Specificity is worth every word. Short paragraphs, not short email."""
         link_rule   = "NO LINKS — ever. They click instead of reply."
         max_tokens  = 500
-    elif sequence_num <= 3:
-        length_rule = "30-50 words for email 2. 20-35 words for email 3. No links. Short is good — but never so clipped it reads as rude."
-        link_rule   = "NO LINKS — ever. They click instead of reply."
+    elif sequence_num == 2:
+        length_rule = "40-55 words. Short and personal. One curation line, the IDX link, one question. Nothing else."
+        link_rule   = "INCLUDE the IDX link from the brief as [descriptive anchor text](url). Anchor text must be specific — city, beds, price. The link is the value."
+        max_tokens  = 400
+    elif sequence_num == 3:
+        length_rule = "20-35 words. The breakup. Short is the point. Never so clipped it reads as rude."
+        link_rule   = "NO LINKS — ever. This is the breakup email. A link undercuts the message."
         max_tokens  = 400
     elif listing_drop:
         length_rule = "40-55 words. Short. Get out of the way and let the link do the work."
@@ -1119,7 +1134,7 @@ he can give them real numbers — no pressure, no commitment required.
     else:
         lead_type_context = ""
 
-    _phase_label_str = "Z-Buyer Drip" if is_z else ("Ylopo Seller" if is_seller else ("Reply Sprint" if sequence_num <= 3 else ("Listing Drop" if listing_drop else "Long-term Drip")))
+    _phase_label_str = "Z-Buyer Drip" if is_z else ("Ylopo Seller" if is_seller else ("Listing Drop" if listing_drop else ("Reply Sprint" if sequence_num <= 3 else "Long-term Drip")))
 
     prompt = f"""You are writing a nurture email from Barry Jenkins, realtor in Hampton Roads VA.
 {lead_type_context}
@@ -1519,12 +1534,11 @@ def _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tag
     if b["intent_signals"]:
         lines.append(f"\nBEHAVIOR SIGNALS (do NOT say 'Ylopo' in the email — use 'my home search website'): {'; '.join(b['intent_signals'])}")
 
-    # IDX search links — for email 2 "gap" strategy only
-    # Do NOT include links in the email body. Use this data to describe what you found
-    # in email 2 ("Found 6 homes in Chesapeake matching your search — want me to send them?")
-    # The actual link goes in the NEXT email AFTER they reply.
+    # IDX search links — included in listing-drop emails (2, 5, 7, 9)
+    # Embed the link directly in the email body using markdown: [anchor text](url)
+    # Anchor text must be specific: beds, city, price range — never generic "click here"
     if search_urls:
-        lines.append("\nIDX SEARCH DATA (for email 2 gap tease — describe, don't link):")
+        lines.append("\nIDX SEARCH LINKS (embed directly in email body as [specific anchor text](url)):")
         for su in search_urls:
             lines.append(f'  {su["label"]} → {su["url"]}')
 
@@ -2185,8 +2199,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
         # Log what we found
         _lead_type_label = "YLOPO-SELLER" if is_ylopo_seller else strategy.upper()
-        if sequence_num <= 3:
-            seq_label = f"sprint #{sequence_num}/3"
+        if sequence_num == 1:
+            seq_label = "sprint #1/3"
+        elif sequence_num == 2:
+            seq_label = "sprint #2/3 · listing drop"
+        elif sequence_num == 3:
+            seq_label = "sprint #3/3 · breakup"
         else:
             drip_n = sequence_num - 3
             seq_label = f"drip #{drip_n}/6 · {'listing' if _is_listing_drop(sequence_num, tags, person) else 'content'}"
