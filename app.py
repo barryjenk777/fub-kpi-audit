@@ -4478,6 +4478,16 @@ def api_pond_mailer_status(job_id):
     return jsonify(job)
 
 
+@app.route("/api/pond-mailer/clear-today", methods=["POST"])
+def api_pond_mailer_clear_today():
+    """Admin: delete today's non-dry-run pond email log entries so the daily cap resets."""
+    try:
+        deleted = _db.delete_pond_emails_today()
+        return jsonify({"deleted": deleted})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/pond-mailer/stats")
 def api_pond_mailer_stats():
     """Email send history and performance stats."""

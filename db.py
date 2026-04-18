@@ -2217,6 +2217,25 @@ def count_pond_emails_today(tz_name="US/Eastern"):
         return 0
 
 
+def delete_pond_emails_today(tz_name="US/Eastern"):
+    """Delete today's real (non-dry-run) pond email log entries. Returns count deleted."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM pond_email_log
+                    WHERE dry_run = FALSE
+                      AND sent_at >= (NOW() AT TIME ZONE %s)::DATE
+                      AND sent_at <  (NOW() AT TIME ZONE %s)::DATE + INTERVAL '1 day'
+                """, (tz_name, tz_name))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("delete_pond_emails_today failed: %s", e)
+        return 0
+
+
 def update_pond_email_sg_id(log_id, sg_message_id):
     """Update the SendGrid message ID on an already-logged pond email row."""
     if not is_available() or not log_id:
