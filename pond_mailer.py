@@ -601,7 +601,7 @@ def generate_email(person, behavior, strategy, leadstream_tier,
 
     # Phase-specific word count and link rules
     if sequence_num <= 3:
-        length_rule = "Under 45 words for emails 1-2. Under 30 words for email 3. No links."
+        length_rule = "25-45 words for emails 1-2. 20-35 words for email 3. No links. Short is good — but never so clipped it reads as rude. A fragment without warmth is just cold."
         link_rule   = "NO LINKS — ever. They click instead of reply."
         max_tokens  = 400
     elif listing_drop:
@@ -632,6 +632,23 @@ EMAIL #{sequence_num} in the sequence.
   "I hope this finds you well", "happy to help", "feel free to", "I'd love to"
 - NEVER say "Ylopo" — the lead has no idea what that is. Say "my home search website" instead.
 - Never open with "I noticed" — lead with the observation itself
+
+━━━━ TRANSLATE DATA → HUMAN LANGUAGE (critical) ━━━━
+The brief contains internal data labels. Never use them verbatim in the email.
+Translate everything into how a person would naturally say it:
+
+  ✗ "Two sessions"              → ✓ "You were on my home search website twice"
+  ✗ "3 sessions"                → ✓ "You've come back to my site a few times"
+  ✗ "12 views"                  → ✓ "you've been looking at homes in Chesapeake"
+  ✗ "save_count: 2"             → ✓ "you saved a couple of homes"
+  ✗ "price drift UP $40,000"    → ✓ "looks like your budget has room to stretch"
+  ✗ "hours_since_last: 36"      → ✓ "yesterday" or "a day ago"
+  ✗ "session_count"             → never use this word
+  ✗ "behavior signals"          → never reference the tracking system
+  ✗ "most_viewed_ct: 3"         → ✓ "you've been back to that one three times"
+
+The reader should never feel like they're reading a database entry.
+Specific is good. Clinical is not.
 
 ━━━━ WHAT KILLS REPLIES (never do these) ━━━━
 - P.S. of any kind — signals a campaign
@@ -889,7 +906,17 @@ def _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tag
         else:
             recency = f"last active {int(hrs/24)} days ago"
         lines.append(f"RECENCY: {recency}")
-    lines.append(f"SESSIONS: {b['session_count']} separate browsing sessions")
+    # Translate session count into natural language for Claude — "Two sessions" verbatim is too clinical
+    sc = b['session_count']
+    if sc == 1:
+        session_str = "came to the site once"
+    elif sc == 2:
+        session_str = "came back to the site twice (two separate visits)"
+    elif sc <= 4:
+        session_str = f"returned to the site {sc} times (separate visits)"
+    else:
+        session_str = f"been searching on the site {sc} times — clearly still looking"
+    lines.append(f"VISIT PATTERN (translate naturally — never say 'sessions'): {session_str}")
 
     # Seller-buyer situation
     if b["sell_before_buy"]:
