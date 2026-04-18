@@ -226,11 +226,17 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
     # Auto-detect agents
     agent_map = auto_detect_agents(client)
 
-    # Single bulk call fetch — max_offset=5000 in fub_client.py pages past the
-    # ISA's high call volume (userId=1, Fhalen calling under Barry's account,
-    # ~1400 calls/week). Per-agent loops made 8× the API calls and hit rate
-    # limits. count_calls_for_user() filters by agent userId — ISA calls ignored.
-    all_calls = client.get_calls(since=since, until=until)
+    # Try DB cache first (avoids FUB 2000-record cap exhausted by ISA calls).
+    # count_calls_for_user() already filters by agent userId so ISA calls in
+    # the cache are silently ignored — no change needed downstream.
+    cached = _db.get_cached_calls(since=since, until=until)
+    if cached:
+        all_calls = cached
+        print(f"[AUDIT] Using DB cache: {len(all_calls)} calls")
+    else:
+        # Fall back to live FUB fetch (first run before cache is seeded)
+        all_calls = client.get_calls(since=since, until=until)
+        print(f"[AUDIT] Live FUB fetch: {len(all_calls)} calls")
     excluded_person_ids = build_excluded_person_ids(client, all_calls)
 
     # Fetch appointments
@@ -813,6 +819,21 @@ def api_cache_clear():
     return jsonify({"success": True, "message": "Cache cleared — next load will fetch fresh data."})
 
 
+@app.route("/api/calls-cache/sync", methods=["POST"])
+def api_calls_cache_sync():
+    """Manually trigger an incremental calls cache sync from FUB.
+
+    Useful on first deploy or after a long downtime to seed/top-up the cache
+    before the scheduled every-30-min job fires.
+    """
+    try:
+        fetched = sync_calls_cache()
+        return jsonify({"success": True, "fetched": fetched,
+                        "message": f"Calls cache sync complete — {fetched} calls fetched from FUB."})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/settings", methods=["GET"])
 def api_get_settings():
     """Get current saved KPI thresholds."""
@@ -933,11 +954,15 @@ def api_manager():
         # Single fetch covering full 4-week range (35d covers worst-case Mon–Sat window)
         full_since = today - timedelta(days=35)
 
-        # Single bulk call fetch (no userId filter — FUB ignores it server-side).
-        # max_offset=2000 in fub_client.py is FUB's hard cap; per-agent loops
-        # made 8× the API calls and all hit the same cap. count_calls_for_user()
-        # filters by agent userId so ISA calls (userId=1) are silently ignored.
-        all_calls_4w = client.get_calls(since=full_since, until=today)
+        # Try DB cache first (avoids FUB 2000-record cap exhausted by ISA calls).
+        # count_calls_for_user() filters by agent userId so ISA calls are ignored.
+        cached_4w = _db.get_cached_calls(since=full_since, until=today)
+        if cached_4w:
+            all_calls_4w = cached_4w
+            print(f"[MANAGER] Using DB cache: {len(all_calls_4w)} calls")
+        else:
+            all_calls_4w = client.get_calls(since=full_since, until=today)
+            print(f"[MANAGER] Live FUB fetch: {len(all_calls_4w)} calls")
 
         all_appts_4w = client.get_appointments(since=full_since, until=today)
 
@@ -1302,9 +1327,16 @@ def api_isa():
         until_prev = since_curr
         since_prev = since_curr - timedelta(days=7)
 
-        # Single batch fetch: 4 weeks of calls + appointments
+        # Single batch fetch: 4 weeks of calls + appointments.
+        # Try DB cache first (avoids FUB 2000-record cap).
         full_since = today - timedelta(days=28)
-        all_calls_4w = client.get_calls(since=full_since, until=today)
+        cached_4w = _db.get_cached_calls(since=full_since, until=today)
+        if cached_4w:
+            all_calls_4w = cached_4w
+            print(f"[ISA] Using DB cache: {len(all_calls_4w)} calls")
+        else:
+            all_calls_4w = client.get_calls(since=full_since, until=today)
+            print(f"[ISA] Live FUB fetch: {len(all_calls_4w)} calls")
         all_appts_4w = client.get_appointments(since=full_since, until=today)
 
         # Filter to Fhalen's calls
@@ -5042,6 +5074,49 @@ def scheduled_cache_warm():
         _db.release_job_lock("cache_warm")
 
 
+def sync_calls_cache():
+    """Incremental sync of FUB calls into the calls_cache DB table.
+
+    Uses the newest 'created' timestamp in the cache as the watermark so
+    we only fetch records newer than what we already have — keeping each
+    batch small and well inside FUB's 2000-record offset cap.
+
+    On first run (empty table) defaults to the last 14 days so the cache
+    is seeded with enough history for the 4-week manager scorecard.
+    """
+    _db.ensure_calls_cache_table()
+    watermark = _db.get_calls_cache_watermark()
+    if watermark is None:
+        since = datetime.now(timezone.utc) - timedelta(days=14)
+        print(f"[CALLS CACHE] No watermark — seeding from {since.date()} (14-day backfill)")
+    else:
+        # Subtract 5 minutes to catch any calls that arrived slightly out-of-order
+        since = watermark - timedelta(minutes=5)
+        print(f"[CALLS CACHE] Watermark={watermark.isoformat()}, fetching since {since.isoformat()}")
+
+    client = FUBClient()
+    calls = client.get_calls(since=since)
+    if calls:
+        upserted = _db.upsert_calls_cache(calls)
+        print(f"[CALLS CACHE] Upserted {upserted} rows ({len(calls)} fetched from FUB)")
+    else:
+        print("[CALLS CACHE] No new calls from FUB")
+    return len(calls) if calls else 0
+
+
+def scheduled_sync_calls_cache():
+    """APScheduler wrapper for sync_calls_cache() — every 30 minutes."""
+    if not _db.try_acquire_job_lock("calls_cache_sync"):
+        return
+    try:
+        sync_calls_cache()
+    except Exception as e:
+        _alert_on_job_failure("calls_cache_sync", str(e))
+        print(f"[CALLS CACHE] Sync error: {e}")
+    finally:
+        _db.release_job_lock("calls_cache_sync")
+
+
 def scheduled_run_leadstream():
     """Runs every 4 hours — full score (agents + pond) and apply tags."""
     if not _db.try_acquire_job_lock("leadstream"):
@@ -5925,6 +6000,15 @@ def start_scheduler():
                            name=f"Pond mailer (Sun {_hour}:00 ET)",
                            max_instances=1, coalesce=True)
 
+    # Calls cache incremental sync: every 30 minutes
+    # Fetches only records newer than the watermark — stays well inside
+    # FUB's 2000-record offset cap. Audit/KPI endpoints read from DB cache
+    # instead of live FUB so the ISA's high call volume doesn't crowd out agents.
+    _scheduler.add_job(scheduled_sync_calls_cache,
+                       CronTrigger(minute="*/30", timezone=ET),
+                       id="calls_cache_sync", name="Calls cache sync (every 30 min)",
+                       max_instances=1, misfire_grace_time=120)
+
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
     for job in _scheduler.get_jobs():
@@ -5946,3 +6030,5 @@ else:
     # Ensure pond email/reply log tables exist
     _db.ensure_pond_email_log_table()
     _db.ensure_pond_reply_log_table()
+    # Ensure calls cache table exists (incremental FUB sync)
+    _db.ensure_calls_cache_table()

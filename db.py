@@ -2301,6 +2301,151 @@ def get_weekly_kpi_history(weeks=8):
 
 
 # ---------------------------------------------------------------------------
+# Calls Cache  (incremental FUB call sync — avoids 2000-record offset cap)
+# ---------------------------------------------------------------------------
+
+def ensure_calls_cache_table():
+    """Create calls_cache table if not exists."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS calls_cache (
+                        fub_call_id  INTEGER     PRIMARY KEY,
+                        user_id      INTEGER,
+                        person_id    INTEGER,
+                        created      TIMESTAMPTZ NOT NULL,
+                        duration     INTEGER,
+                        is_outbound  BOOLEAN,
+                        direction    TEXT,
+                        synced_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_calls_cache_created
+                        ON calls_cache (created DESC);
+                    CREATE INDEX IF NOT EXISTS idx_calls_cache_user_id
+                        ON calls_cache (user_id, created DESC);
+                """)
+            conn.commit()
+    except Exception as e:
+        logger.warning("ensure_calls_cache_table failed: %s", e)
+
+
+def upsert_calls_cache(calls):
+    """Bulk upsert a list of FUB call dicts into calls_cache.
+
+    Accepts FUB field names: id, userId, personId, created, duration,
+    isOutbound, direction.  Returns count of rows upserted.
+    """
+    if not is_available() or not calls:
+        return 0
+    try:
+        import psycopg2.extras
+        rows = []
+        for c in calls:
+            rows.append((
+                c.get("id"),
+                c.get("userId"),
+                c.get("personId"),
+                c.get("created"),
+                c.get("duration"),
+                c.get("isOutbound"),
+                c.get("direction"),
+            ))
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO calls_cache
+                        (fub_call_id, user_id, person_id, created,
+                         duration, is_outbound, direction, synced_at)
+                    VALUES %s
+                    ON CONFLICT (fub_call_id) DO UPDATE
+                        SET synced_at = NOW()
+                    """,
+                    rows,
+                    template="(%s, %s, %s, %s::timestamptz, %s, %s, %s, NOW())",
+                )
+                count = cur.rowcount
+            conn.commit()
+        return count
+    except Exception as e:
+        logger.warning("upsert_calls_cache failed: %s", e)
+        return 0
+
+
+def get_cached_calls(since, until=None):
+    """Return cached calls between since and until as list of dicts.
+
+    Returns dicts with original FUB field names (id, userId, personId,
+    created, duration, isOutbound, direction) so existing
+    count_calls_for_user() works without changes.
+    since/until are UTC-aware datetimes.
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if until:
+                    cur.execute(
+                        """
+                        SELECT fub_call_id, user_id, person_id, created,
+                               duration, is_outbound, direction
+                        FROM calls_cache
+                        WHERE created >= %s AND created <= %s
+                        ORDER BY created DESC
+                        """,
+                        (since, until),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT fub_call_id, user_id, person_id, created,
+                               duration, is_outbound, direction
+                        FROM calls_cache
+                        WHERE created >= %s
+                        ORDER BY created DESC
+                        """,
+                        (since,),
+                    )
+                rows = cur.fetchall()
+        result = []
+        for row in rows:
+            fub_call_id, user_id, person_id, created, duration, is_outbound, direction = row
+            result.append({
+                "id":         fub_call_id,
+                "userId":     user_id,
+                "personId":   person_id,
+                "created":    created.isoformat() if hasattr(created, "isoformat") else created,
+                "duration":   duration,
+                "isOutbound": is_outbound,
+                "direction":  direction,
+            })
+        return result
+    except Exception as e:
+        logger.warning("get_cached_calls failed: %s", e)
+        return []
+
+
+def get_calls_cache_watermark():
+    """Return the most recent 'created' timestamp in calls_cache, or None if empty."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT MAX(created) FROM calls_cache")
+                row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception as e:
+        logger.warning("get_calls_cache_watermark failed: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Pond Email Log  (LeadStream email marketing)
 # ---------------------------------------------------------------------------
 

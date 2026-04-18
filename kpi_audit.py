@@ -21,6 +21,7 @@ from collections import defaultdict
 from fub_client import FUBClient
 from email_report import send_report
 import config
+import db as _db_cache
 
 
 # ---------------------------------------------------------------------------
@@ -395,13 +396,17 @@ def run_audit(client, weeks_back=1):
         print(f"Excluded: {', '.join(config.EXCLUDED_USERS)}")
     print()
 
-    # Single bulk call fetch — max_offset=5000 in fub_client.py pages past the
-    # ISA's high call volume (userId=1, Fhalen calling under Barry's account,
-    # ~1400 calls/week). Per-agent loops made 8× the API calls and hit rate
-    # limits. count_calls_for_user() filters by agent userId — ISA calls ignored.
-    print("  Fetching calls (bulk, max_offset=5000)...", flush=True)
-    all_calls = client.get_calls(since=since, until=until)
-    print(f"  Found {len(all_calls)} total calls")
+    # Try DB cache first (avoids FUB 2000-record cap exhausted by ISA calls).
+    # count_calls_for_user() filters by agent userId — ISA calls (userId=1) ignored.
+    _db_cache.ensure_calls_cache_table()
+    print("  Fetching calls...", flush=True)
+    cached = _db_cache.get_cached_calls(since=since, until=until)
+    if cached:
+        all_calls = cached
+        print(f"  Using DB cache: {len(all_calls)} calls")
+    else:
+        all_calls = client.get_calls(since=since, until=until)
+        print(f"  Live FUB fetch: {len(all_calls)} calls")
 
     # Build excluded personIds (e.g., Sphere leads)
     excluded_person_ids = build_excluded_person_ids(client, all_calls)
