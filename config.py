@@ -299,10 +299,10 @@ SHARK_TANK_POND_ID = 4
 # Minutes after lead creation before the immediate email fires (feels human, not instant)
 NEW_LEAD_EMAIL_DELAY_MINUTES = 12
 # How far back to look for new leads per check run (scheduler runs every 5 min)
-NEW_LEAD_LOOKBACK_MINUTES = 45
-# Max immediate emails sent per day — prevents a lead import batch from
-# blasting hundreds of emails. New leads beyond this cap are skipped until
-# the next day when the cap resets.
+# Hard outer fence: never email a lead created more than this many minutes ago.
+# 1440 = 24 hours — Barry's rule: "don't send for anything created longer than 1 day ago"
+NEW_LEAD_LOOKBACK_MINUTES = 1440
+# Max immediate emails sent per day — prevents runaway sends on bulk imports.
 NEW_LEAD_DAILY_CAP = 15
 
 # Stale hot threshold: days since last agent contact to qualify
