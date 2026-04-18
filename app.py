@@ -370,8 +370,16 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
         cw_label = f"Mon {cw_since2.strftime('%b %-d')} – Today"
 
     try:
-        cw_calls = client.get_calls(since=cw_since2, until=cw_until2) if cw_days_elapsed > 0 else []
-        cw_appts_raw = client.get_appointments(since=cw_since2, until=cw_until2) if cw_days_elapsed > 0 else []
+        if cw_days_elapsed > 0:
+            # Use DB cache (avoids FUB 2000-record cap filled by ISA calls).
+            # Fall back to live fetch only if cache is empty (pre-seed).
+            cw_calls = _db.get_cached_calls(since=cw_since2, until=cw_until2)
+            if not cw_calls:
+                cw_calls = client.get_calls(since=cw_since2, until=cw_until2)
+            cw_appts_raw = client.get_appointments(since=cw_since2, until=cw_until2)
+        else:
+            cw_calls = []
+            cw_appts_raw = []
     except Exception:
         cw_calls = []
         cw_appts_raw = []
