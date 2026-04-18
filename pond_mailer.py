@@ -2229,6 +2229,59 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             skipped_generation_error += 1
             continue
 
+        # ── HeyGen personalized video — seller Email 1 only ─────────────────────
+        # For Ylopo Prospecting sellers on their very first email, generate a
+        # 35-second personalized video: Barry's avatar + cloned voice + custom
+        # branded background showing their address.
+        # The video thumbnail is injected into the HTML above the text body.
+        # Falls back gracefully to text-only if HeyGen is unavailable or fails.
+        if is_ylopo_seller and sequence_num == 1 and not dry_run:
+            try:
+                from heygen_client import (
+                    is_available as heygen_available,
+                    generate_seller_video_script,
+                    generate_and_wait,
+                    get_background_url,
+                    render_video_email_block_simple,
+                    AVATAR_MICROPHONE, VOICE_SUIT,
+                )
+                if heygen_available():
+                    _addr_obj = (person.get("address") or {})
+                    _street   = _addr_obj.get("street", "")
+                    _city_hg  = _addr_obj.get("city", "")
+                    if not _street:
+                        # Try notes field — Ylopo sometimes puts address there
+                        _street = name  # fallback: use name only (graceful)
+
+                    logger.info("Generating HeyGen video for %s at %s, %s", name, _street, _city_hg)
+                    script = generate_seller_video_script(
+                        first_name=first_name,
+                        street=_street or "your home",
+                        city=_city_hg or "Hampton Roads",
+                    )
+                    bg_url = get_background_url("seller", address=_street, city=_city_hg)
+                    video_result = generate_and_wait(script, timeout_seconds=180)
+
+                    if video_result and video_result.get("video_url"):
+                        video_block = render_video_email_block_simple(
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            first_name=first_name,
+                        )
+                        # Inject video block right after the email body opens
+                        email_data["body_html"] = email_data["body_html"].replace(
+                            '<div style="color:#222;font-size:15px;line-height:1.8">',
+                            f'<div style="color:#222;font-size:15px;line-height:1.8">\n{video_block}',
+                            1,
+                        )
+                        logger.info("HeyGen video injected for %s (%.1fs)", name,
+                                    video_result.get("duration", 0))
+                        print(f"    ▶ HeyGen video: {video_result['video_url'][:60]}...")
+                    else:
+                        logger.warning("HeyGen video not ready for %s — sending text-only", name)
+            except Exception as _hg_err:
+                logger.warning("HeyGen pipeline failed for %s — sending text-only: %s", name, _hg_err)
+
         print(f"    Subject: {email_data['subject']}")
         if dry_run:
             print(f"\n    --- PREVIEW ---")

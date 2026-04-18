@@ -4565,6 +4565,45 @@ def api_pond_mailer_stats():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/heygen-bg")
+def api_heygen_background():
+    """
+    Generate and serve a branded background image for HeyGen video rendering.
+
+    HeyGen fetches this URL when rendering a personalized video. We generate
+    the image on-demand from query params — no storage needed.
+
+    Query params:
+      type        — "seller" or "buyer"
+      address     — street address (seller: "1234 Oak Street")
+      city        — city name ("Chesapeake")
+      price_band  — buyer price band ("$350k–$500k")
+
+    Returns: JPEG image
+    """
+    from flask import request, Response
+    try:
+        from heygen_client import (generate_seller_background_image,
+                                   generate_buyer_background_image)
+        bg_type    = request.args.get("type", "seller")
+        address    = request.args.get("address", "Your Home")
+        city       = request.args.get("city", "Hampton Roads")
+        price_band = request.args.get("price_band", "")
+
+        if bg_type == "seller":
+            img_bytes = generate_seller_background_image(address, city)
+        else:
+            img_bytes = generate_buyer_background_image(city, price_band)
+
+        return Response(img_bytes, mimetype="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=3600"})
+    except Exception as e:
+        logger.warning("heygen-bg generation failed: %s", e)
+        # Return a plain dark fallback so HeyGen doesn't error
+        from flask import abort
+        abort(500)
+
+
 @app.route("/api/pond-mailer/reply", methods=["POST"])
 def api_pond_mailer_reply():
     """
