@@ -374,30 +374,76 @@ def select_strategy(behavior, leadstream_tier, tags):
 # ---------------------------------------------------------------------------
 
 SIGN_OFF = (
-    "To your success,\n\n\n"
-    "Barry Jenkins, Realtor\n"
-    "LPT Realty\n"
-    "1545 Crossways Blvd Chesapeake, VA 23320"
+    "Barry Jenkins\n"
+    "Legacy Home Team · LPT Realty"
 )
 
 # Sequence-specific angle instructions fed to Claude
 _SEQUENCE_GUIDE = {
-    1: """This is the FIRST email in a 3-touch sequence.
-Lead with what you noticed about their specific browsing behavior — make it feel like you
-were personally watching the market for them. One clear, low-friction ask at the end.
-P.S. should create curiosity about something specific to their search.""",
+    1: """EMAIL 1 — The Pattern Interrupt.
 
-    2: """This is the SECOND email (day 4 follow-up). They didn't reply to the first.
-DO NOT re-introduce yourself or reference the prior email. Start fresh with a different angle:
-lead with a market insight, a data point, or an observation specific to the neighborhoods/price
-range they're searching. Keep it even shorter than email 1. End with an easy yes/no question.
-P.S. should offer a piece of inside knowledge — something they can only get by replying.""",
+One observation so specific they think you noticed them personally.
+One question so easy they'd feel weird not answering.
 
-    3: """This is the THIRD and FINAL email in the sequence. Keep it under 80 words.
-Different hook entirely — try a short story, a surprising local market fact, or a genuine
-curiosity question. Do NOT mention that it's your last email or sound desperate.
-End by giving them a graceful out: "If the timing's off, no worries — I'll be here when it
-makes sense." P.S. should be one line that makes them want to respond just to know the answer.""",
+Rules:
+- DO NOT give market insight, helpful tips, or education
+- DO NOT offer to help or explain yourself
+- DO NOT use "just" or "reach out" or "let me know"
+- One specific observation. One question. Stop.
+
+The observation should make them think: "how does he know that?"
+The question should be answerable in 2–5 words.
+
+Example format (do not copy verbatim — personalize to the lead):
+  "You've been back to that Chesapeake listing three times. Still on the fence about it?"
+
+Or for a search-pattern lead with no specific property:
+  "Four sessions in Norfolk under $250k — what's holding you back?"
+""",
+
+    2: """EMAIL 2 — The Gap.
+
+They didn't reply to email 1. Completely different angle — do NOT reference the prior email.
+
+This email teases something they can only get by replying. You've "found something."
+You describe it just enough to create desire, then put it behind a reply.
+
+DO NOT include a link. DO NOT deliver the value in the email.
+The whole point: make them reply "yes, send it" — THEN you send the link.
+
+Example format (personalize to actual lead data):
+  "Found 6 homes in Chesapeake that hit everything you've been searching — 3bd, around your price,
+   listed in the last two weeks. Want me to send them over?"
+
+Or for a saved-property lead:
+  "Something came up on that property you saved — might be worth a quick conversation.
+   Want the details?"
+
+End with a yes/no question. Nothing else.
+""",
+
+    3: """EMAIL 3 — The Breakup.
+
+The most important email in the sequence. It gets the most replies. Here's why it works:
+people who've been ignoring you feel guilty, and a graceful exit gives them safe permission
+to finally respond — often with "wait, actually —"
+
+Rules:
+- 2–3 sentences max. Under 30 words.
+- DO NOT say "this is my last email"
+- DO NOT sound desperate, passive-aggressive, or like you're guilt-tripping
+- DO NOT add a P.S., a link, or market data
+- Tone: genuinely unbothered, warm, completely fine either way
+
+The formula: give them explicit permission to say no or go quiet + leave a door open.
+
+Example (personalize name/area — do not copy verbatim):
+  "Timing's probably off — totally get it. I'll check back in a few months
+   unless you want to connect before then."
+
+Or:
+  "No worries if the search is on pause. I'll be here when it picks back up."
+""",
 }
 
 
@@ -438,60 +484,64 @@ def generate_email(person, behavior, strategy, leadstream_tier,
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    prompt = f"""Write a real estate email from Barry Jenkins (LPT Realty, Hampton Roads VA).
+    prompt = f"""You are writing a cold follow-up email from Barry Jenkins, realtor in Hampton Roads VA.
 
-HAMPTON ROADS CONTEXT (use only when it fits naturally):
-- Hampton Roads = Virginia Beach, Norfolk, Chesapeake, Suffolk, Hampton, Newport News, Portsmouth
-- Strong appreciation: Chesapeake, VB north of 264, Great Neck area
-- Military community: Oceana, Little Creek, Norfolk Naval — relocation is common
-- Lifestyle: waterfront, outdoorsy, school-district conscious
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+THE ONLY GOAL: get a reply.
+Not a click. Not a compliment. Not brand awareness. A reply.
+Every word either serves that goal or gets cut.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-VOICE — this is the most important section:
-- Write like a real person texting a friend, not a trained copywriter
-- Fragments are fine. Contractions always. Imperfect rhythm is good.
-- One idea only. Don't over-explain it.
-- Never: "dream home", "perfect fit", "hot market", "I hope this finds you well", "reach out", "just checking in"
-- Never open with "I noticed" — lead with the observation itself
-- Warm, direct, a little wry. Not salesy. Not corporate. Not AI.
+WHAT GETS REPLIES (non-negotiable rules):
+1. Specificity — prove you looked at THIS person, not a persona
+2. A gap — leave something unanswered that only a reply can close
+3. An easy question — answerable in 2–5 words, yes/no if possible
+4. Short — under 45 words for emails 1 & 2, under 30 for email 3
 
-LENGTH — strictly enforced:
-- Emails 1 & 2: under 75 words in the body (not counting greeting or P.S.)
-- Email 3: under 50 words
-- If it feels slightly too short, it's probably right
+WHAT KILLS REPLIES (never do these):
+- Market insight or education ("did you know inventory is down 12%…")
+- Proving you know Hampton Roads
+- Offering to help ("I'd love to…", "happy to…", "feel free to…")
+- Explaining yourself or your process
+- Links (they click instead of reply — no links in any email)
+- P.S. (signals a crafted campaign, not a human)
+- "Just checking in" / "reaching out" / "circling back" / "following up"
+- Sounding like you're trying — trying reads as desperation
+- "Dream home", "perfect fit", "hot market", "I hope this finds you well"
+- Opening with "I noticed" — lead with the observation itself
 
-STRUCTURE:
-- Line 1: first name + comma, nothing else (e.g. "Taylor,")
+FORMAT:
+- First line: first name + comma only. Nothing else. ("Marcus,")
 - Blank line
-- One tight paragraph — observation → one useful thing → soft question
-- Blank line
-- P.S. — one sentence, specific, makes them curious enough to reply
-  → If search links are provided in the brief, drop ONE naturally in the P.S.
-     as a hyperlink: [descriptive text](url) — NOT a bare URL, NOT "click here"
+- Body: 2–4 sentences. That's it. No P.S. No closing line. No explanation.
+- Signature is added automatically — stop writing before the sign-off.
 
-SUBJECT LINES:
-- 6–9 words, reads like a text from a friend
-- Use their specific data (street, neighborhood, price point, city)
-- 3 options: one curiosity, one specific fact, one question
-- No ALL CAPS, no emojis, no "RE:"
+SUBJECT LINES — these determine if it's opened:
+- 3–6 words. Should feel like a text from a saved contact.
+- Best performers: property address, "[City] — quick question", just their name,
+  "still searching?", a specific number ("3 homes in Chesapeake")
+- No ALL CAPS. No emojis. No clever hooks. Direct beats clever every time.
+- Generate 3 options.
 
-SEQUENCE POSITION:
+SEQUENCE POSITION AND SPECIFIC INSTRUCTIONS:
 {seq_guide}
 
-LEAD BEHAVIORAL BRIEF:
+LEAD DATA (personalize to THIS person — generic = failure):
 {brief}
 
-OUTPUT FORMAT (JSON only, no markdown fences):
+OUTPUT (JSON only, no markdown fences, no code blocks):
 {{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "Taylor,\\n\\n[body paragraph]\\n\\nP.S. [one line]"
+  "body": "Marcus,\\n\\n[2–4 sentences, nothing else]"
 }}
 
-Hyper-personalize to THIS lead's data. If they viewed a home in Hampton, say Hampton.
-Each subject line must feel written for this one person only."""
+The first sentence of the body must reference something specific to this lead:
+their property address, the number of times they came back, their city, their price range.
+If you can't tell it was written for exactly this person, rewrite it."""
 
     response = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=700,
+        max_tokens=400,   # emails are short now — 700 was for longer copy
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -719,12 +769,14 @@ def _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tag
     if b["intent_signals"]:
         lines.append(f"\nYLOPO SIGNALS: {'; '.join(b['intent_signals'])}")
 
-    # IDX search links — Claude weaves ONE into the email naturally
+    # IDX search links — for email 2 "gap" strategy only
+    # Do NOT include links in the email body. Use this data to describe what you found
+    # in email 2 ("Found 6 homes in Chesapeake matching your search — want me to send them?")
+    # The actual link goes in the NEXT email AFTER they reply.
     if search_urls:
-        lines.append("\nSEARCH LINKS — include exactly ONE of these in the email body or P.S.")
-        lines.append("Use it as a natural hyperlink (markdown format), not a bare URL:")
+        lines.append("\nIDX SEARCH DATA (for email 2 gap tease — describe, don't link):")
         for su in search_urls:
-            lines.append(f'  [{su["label"]}]({su["url"]})')
+            lines.append(f'  {su["label"]} → {su["url"]}')
 
     return "\n".join(lines)
 
