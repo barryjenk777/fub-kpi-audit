@@ -67,125 +67,112 @@ def is_available() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Background Image Generator — branded cards served from Railway
+# Background Image Generator — clean, minimal, cross-platform fonts
 # ---------------------------------------------------------------------------
+
+def _load_font(size: int):
+    """
+    Load a clean sans-serif font at the given size.
+    Tries multiple paths so it works on both macOS (dev) and Railway (Linux/Debian).
+    Falls back to PIL default only as last resort.
+    """
+    from PIL import ImageFont
+    candidates = [
+        # Linux — Debian/Ubuntu (Railway)
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+        # macOS
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/SFNSDisplay.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _load_font_regular(size: int):
+    """Regular weight version of _load_font."""
+    from PIL import ImageFont
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/Library/Fonts/Arial.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _render_bg(lines: list, bg_color: tuple, width: int = 1280, height: int = 720) -> bytes:
+    """
+    Render a clean background with a list of (text, color, font_size, bold) tuples.
+    Text is centered vertically as a block, centered horizontally.
+    No gradients. No decorative chrome. Just clean text on solid color.
+    """
+    from PIL import Image, ImageDraw
+    import io
+
+    img  = Image.new("RGB", (width, height), color=bg_color)
+    draw = ImageDraw.Draw(img)
+
+    # Pre-load fonts and measure line heights
+    rendered = []
+    total_h   = 0
+    line_gap  = 24
+    for text, color, size, bold in lines:
+        font = _load_font(size) if bold else _load_font_regular(size)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw   = bbox[2] - bbox[0]
+        th   = bbox[3] - bbox[1]
+        rendered.append((text, color, font, tw, th))
+        total_h += th + line_gap
+    total_h -= line_gap  # no trailing gap
+
+    # Start y so the whole block is centered
+    y = (height - total_h) // 2
+    for text, color, font, tw, th in rendered:
+        x = (width - tw) // 2
+        draw.text((x, y), text, fill=color, font=font)
+        y += th + line_gap
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    return buf.getvalue()
+
 
 def generate_seller_background_image(address: str, city: str,
                                       width: int = 1280, height: int = 720) -> bytes:
-    """
-    Generate a branded dark-navy background image for a seller lead video.
-
-    Layout:
-      - Dark navy gradient background
-      - Legacy Home Team branding (top-left)
-      - "Your home at" label + address in large text (upper center)
-      - "{City} Market Analysis" subtitle in blue
-      - Blue accent bars top/bottom
-
-    Returns raw JPEG bytes. Served via /api/heygen-bg?type=seller&address=...&city=...
-    """
-    from PIL import Image, ImageDraw, ImageFont
-    import io
-
-    img = Image.new('RGB', (width, height), color=(12, 18, 40))
-    draw = ImageDraw.Draw(img)
-
-    # Subtle center gradient
-    for y in range(height):
-        lift = int(18 * (1 - abs(y - height / 2) / (height / 2)))
-        for x in range(0, width, 2):
-            r, g, b = img.getpixel((x, y))
-            draw.point((x, y), fill=(
-                min(255, r + lift // 4),
-                min(255, g + lift // 3),
-                min(255, b + lift),
-            ))
-
-    # Accent bars
-    draw.rectangle([0, 0, width, 6], fill=(41, 128, 185))
-    draw.rectangle([0, height - 6, width, height], fill=(41, 128, 185))
-
-    # Fonts
-    try:
-        font_xl   = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 80)
-        font_lg   = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 38)
-        font_sm   = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 26)
-        font_brand = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 30)
-    except Exception:
-        font_xl = font_lg = font_sm = font_brand = ImageFont.load_default()
-
-    # Legacy Home Team branding (top-left)
-    draw.text((44, 38), "LEGACY", fill=(255, 255, 255), font=font_brand)
-    draw.text((44, 74), "HOME TEAM", fill=(41, 128, 185), font=font_brand)
-
-    # "Your home at" label
-    draw.text((width // 2, 190), "Your home at", fill=(160, 195, 220), font=font_sm, anchor="mm")
-
-    # Address — large center
-    draw.text((width // 2, 285), address, fill=(255, 255, 255), font=font_xl, anchor="mm")
-
-    # City Market Analysis subtitle
-    draw.text((width // 2, 370), f"{city} Market Analysis",
-              fill=(41, 128, 185), font=font_lg, anchor="mm")
-
-    # Subtle divider line
-    draw.line([(width // 2 - 220, 410), (width // 2 + 220, 410)],
-              fill=(41, 90, 145), width=1)
-
-    buf = io.BytesIO()
-    img.save(buf, format='JPEG', quality=90)
-    return buf.getvalue()
+    """Clean dark background for seller videos."""
+    lines = [
+        (address,                   (255, 255, 255), 72, True),
+        (f"{city} Market Update",   (160, 200, 240), 36, False),
+        ("Legacy Home Team",        (120, 150, 180), 24, False),
+    ]
+    return _render_bg(lines, bg_color=(14, 20, 38), width=width, height=height)
 
 
 def generate_buyer_background_image(city: str, price_band: str = "",
                                      width: int = 1280, height: int = 720) -> bytes:
-    """
-    Branded background for buyer lead videos.
-
-    Layout: dark navy, "Homes in {city}" headline, price band subtitle.
-    Barry's avatar sits circle-bottom-left; text fills upper center.
-    """
-    from PIL import Image, ImageDraw, ImageFont
-    import io
-
-    img = Image.new('RGB', (width, height), color=(10, 22, 38))
-    draw = ImageDraw.Draw(img)
-
-    for y in range(height):
-        lift = int(15 * (1 - abs(y - height / 2) / (height / 2)))
-        for x in range(0, width, 2):
-            r, g, b = img.getpixel((x, y))
-            draw.point((x, y), fill=(
-                min(255, r + lift // 3),
-                min(255, g + lift // 2),
-                min(255, b + lift),
-            ))
-
-    draw.rectangle([0, 0, width, 6], fill=(26, 188, 156))
-    draw.rectangle([0, height - 6, width, height], fill=(26, 188, 156))
-
-    try:
-        font_xl    = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 76)
-        font_lg    = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 36)
-        font_sm    = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 26)
-        font_brand = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 30)
-    except Exception:
-        font_xl = font_lg = font_sm = font_brand = ImageFont.load_default()
-
-    draw.text((44, 38), "LEGACY", fill=(255, 255, 255), font=font_brand)
-    draw.text((44, 74), "HOME TEAM", fill=(26, 188, 156), font=font_brand)
-
-    draw.text((width // 2, 190), "Homes in", fill=(160, 205, 220), font=font_sm, anchor="mm")
-    draw.text((width // 2, 285), city, fill=(255, 255, 255), font=font_xl, anchor="mm")
-
+    """Clean dark background for buyer videos."""
+    lines = [
+        (f"Homes in {city}",  (255, 255, 255), 72, True),
+    ]
     if price_band:
-        draw.text((width // 2, 370), price_band, fill=(26, 188, 156), font=font_lg, anchor="mm")
-        draw.line([(width // 2 - 180, 410), (width // 2 + 180, 410)],
-                  fill=(20, 100, 80), width=1)
-
-    buf = io.BytesIO()
-    img.save(buf, format='JPEG', quality=90)
-    return buf.getvalue()
+        lines.append((price_band, (160, 220, 200), 36, False))
+    lines.append(("Legacy Home Team", (120, 160, 150), 24, False))
+    return _render_bg(lines, bg_color=(10, 22, 38), width=width, height=height)
 
 
 def get_background_url(bg_type: str, address: str = "", city: str = "",
@@ -424,63 +411,13 @@ Return ONLY the script. No labels, no stage directions, no quotes. Just Barry's 
 
 def generate_zbuyer_background_image(street: str, city: str,
                                       width: int = 1280, height: int = 720) -> bytes:
-    """
-    Branded background for Z-buyer (cash offer) videos.
-
-    Layout: dark charcoal background, "Cash Offer vs. Listing" headline,
-    address below, city context line. More direct energy than seller background.
-    Barry's avatar sits in the corner; content fills the upper portion.
-    """
-    from PIL import Image, ImageDraw, ImageFont
-    import io
-
-    img = Image.new('RGB', (width, height), color=(18, 18, 24))
-    draw = ImageDraw.Draw(img)
-
-    # Subtle warm gradient (slightly warmer than navy — more urgency)
-    for y in range(height):
-        lift = int(14 * (1 - abs(y - height / 2) / (height / 2)))
-        for x in range(0, width, 2):
-            r, g, b = img.getpixel((x, y))
-            draw.point((x, y), fill=(
-                min(255, r + lift),
-                min(255, g + lift // 2),
-                min(255, b + lift // 4),
-            ))
-
-    # Accent bars — warmer gold/amber tone to signal action
-    draw.rectangle([0, 0, width, 6], fill=(230, 160, 30))
-    draw.rectangle([0, height - 6, width, height], fill=(230, 160, 30))
-
-    try:
-        font_xl    = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 58)
-        font_lg    = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 76)
-        font_med   = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 36)
-        font_sm    = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 26)
-        font_brand = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 30)
-    except Exception:
-        font_xl = font_lg = font_med = font_sm = font_brand = ImageFont.load_default()
-
-    # Legacy Home Team branding
-    draw.text((44, 38), "LEGACY", fill=(255, 255, 255), font=font_brand)
-    draw.text((44, 74), "HOME TEAM", fill=(230, 160, 30), font=font_brand)
-
-    # "Cash Offer vs. Listing" — the two options framing
-    draw.text((width // 2, 175), "Cash Offer  vs.  Listing", fill=(230, 160, 30), font=font_xl, anchor="mm")
-
-    # Address
-    draw.text((width // 2, 275), street, fill=(255, 255, 255), font=font_lg, anchor="mm")
-
-    # City context
-    draw.text((width // 2, 360), f"{city} — We'll run both numbers",
-              fill=(200, 200, 200), font=font_med, anchor="mm")
-
-    draw.line([(width // 2 - 240, 400), (width // 2 + 240, 400)],
-              fill=(100, 80, 20), width=1)
-
-    buf = io.BytesIO()
-    img.save(buf, format='JPEG', quality=90)
-    return buf.getvalue()
+    """Clean dark background for Z-buyer (cash offer) videos."""
+    lines = [
+        (street,                              (255, 255, 255), 72, True),
+        ("Cash Offer or List for More?",      (220, 170, 60),  42, True),
+        (f"{city}  ·  Legacy Home Team",      (160, 150, 120), 24, False),
+    ]
+    return _render_bg(lines, bg_color=(18, 16, 12), width=width, height=height)
 
 
 # ---------------------------------------------------------------------------
@@ -516,9 +453,7 @@ def submit_video(script: str, background_url: str = None,
             "character": {
                 "type": "avatar",
                 "avatar_id": _avatar,
-                "avatar_style": "circle",   # Small circle avatar in corner
-                "scale": 0.35,              # ~35% of frame width
-                "offset": {"x": 0.62, "y": 0.55},  # Bottom-right quadrant
+                "avatar_style": "circle",
             },
             "voice": {
                 "type": "text",
