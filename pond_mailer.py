@@ -44,10 +44,10 @@ logger = logging.getLogger("pond_mailer")
 EMAIL_COOLDOWN_DAYS = 3
 
 # ── Phase 2: Long-term Drip (emails 4-9) ────────────────────────────────────
-# 18-day cadence → roughly every 2.5 weeks
+# 15-day cadence → roughly every 2 weeks
 # Alternates: longer content email (4, 6, 8) → listing link email (5, 7, 9)
 # Goal: stay top of mind for leads who weren't ready in the sprint.
-DRIP_COOLDOWN_DAYS = 15   # 6 emails × 15 days = 90-day drip
+DRIP_COOLDOWN_DAYS = 15   # 5 gaps × 15 days = 75-day drip (emails 4-9)
 
 # Minimum IDX events needed to write a meaningful email
 # Counts ALL event types (page views, property views, saves, registration)
@@ -445,7 +445,7 @@ Or:
 """,
 
     # ── Phase 2: Long-term Drip ───────────────────────────────────────────────
-    # Emails 4-9. 18-day cadence. Alternates content (4,6,8) and listing drops (5,7,9).
+    # Emails 4-9. 15-day cadence. Alternates content (4,6,8) and listing drops (5,7,9).
     # Lead didn't engage with the sprint — now we play the long game.
 
     4: """EMAIL 4 — First Drip (content). They didn't bite on the sprint. That's fine.
@@ -1176,8 +1176,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
 
         sequence_num = history["sequence_num"]
 
-        # Phase-aware cooldown: sprint = 3 days, drip = 18 days
-        cooldown = DRIP_COOLDOWN_DAYS if sequence_num > 3 else EMAIL_COOLDOWN_DAYS
+        # Phase-aware cooldown: sprint emails 1-3 = 3 days, drip emails 4-9 = 15 days
+        cooldown = DRIP_COOLDOWN_DAYS if sequence_num >= 4 else EMAIL_COOLDOWN_DAYS
         days_ago = _db.days_since_last_pond_email(pid)
         if days_ago is not None and days_ago < cooldown:
             logger.debug("Skipping %s — emailed %.1f days ago (need %dd)", name, days_ago, cooldown)
@@ -1250,7 +1250,31 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
             print("    " + email_data["body_text"].replace("\n", "\n    ")[:400])
             print(f"    --- END PREVIEW ---\n")
 
-        # Send
+        # ── Log BEFORE send ─────────────────────────────────────────────────────
+        # Writing the cooldown record first prevents duplicate emails if SendGrid
+        # times out or Railway restarts mid-send. The sg_message_id is backfilled
+        # after a confirmed send; it stays NULL on failure (acceptable trade-off).
+        price_min = behavior.get('price_min') or 0
+        price_max = behavior.get('price_max') or 0
+        behavior_summary = (
+            f"Views:{behavior['view_count']} Saves:{behavior['save_count']} "
+            f"Price:${price_min:,}-${price_max:,} "
+            f"Cities:{','.join(behavior['cities'])}"
+        )
+        log_id = _db.log_pond_email(
+            person_id=pid,
+            person_name=name,
+            email_address=to_email,
+            subject=email_data["subject"],
+            strategy=strategy,
+            leadstream_tier=leadstream_tier,
+            behavior_summary=behavior_summary,
+            sequence_num=sequence_num,
+            dry_run=dry_run,
+            sg_message_id=None,
+        )
+
+        # ── Send ────────────────────────────────────────────────────────────────
         try:
             result = send_email(
                 to_email=to_email,
@@ -1261,27 +1285,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
             )
         except Exception as e:
             logger.error("Send failed for %s: %s", name, e)
+            # Log record already exists → cooldown applies → no duplicate on retry
             continue
 
-        # Log — use 'or 0' so None prices format safely
-        price_min = behavior.get('price_min') or 0
-        price_max = behavior.get('price_max') or 0
-        behavior_summary = (
-            f"Views:{behavior['view_count']} Saves:{behavior['save_count']} "
-            f"Price:${price_min:,}-${price_max:,} "
-            f"Cities:{','.join(behavior['cities'])}"
-        )
-        _db.log_pond_email(
-            person_id=pid,
-            person_name=name,
-            email_address=to_email,
-            subject=email_data["subject"],
-            strategy=strategy,
-            leadstream_tier=leadstream_tier,
-            behavior_summary=behavior_summary,
-            dry_run=dry_run,
-            sg_message_id=result.get("sg_message_id"),
-        )
+        # Backfill SendGrid message ID now that send is confirmed
+        if result.get("sg_message_id") and log_id:
+            _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
 
         sent += 1
         print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'}")

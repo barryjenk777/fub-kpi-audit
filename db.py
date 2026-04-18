@@ -2135,7 +2135,7 @@ def get_agent_recent_closings(agent_name, days=60):
 # ---------------------------------------------------------------------------
 
 def ensure_pond_email_log_table():
-    """Create pond_email_log table if it doesn't exist."""
+    """Create pond_email_log table if it doesn't exist, and migrate missing columns."""
     if not is_available():
         return
     try:
@@ -2154,8 +2154,14 @@ def ensure_pond_email_log_table():
                         sent_at         TIMESTAMP DEFAULT NOW(),
                         dry_run         BOOLEAN DEFAULT FALSE,
                         sg_message_id   VARCHAR(255),
+                        sequence_num    INTEGER DEFAULT 1,
                         UNIQUE(person_id, sent_at)
                     )
+                """)
+                # Migrate: add sequence_num to existing tables that predate this column
+                cur.execute("""
+                    ALTER TABLE pond_email_log
+                    ADD COLUMN IF NOT EXISTS sequence_num INTEGER DEFAULT 1
                 """)
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_pond_email_person
@@ -2167,10 +2173,10 @@ def ensure_pond_email_log_table():
 
 def log_pond_email(person_id, person_name, email_address, subject,
                    strategy, leadstream_tier, behavior_summary="",
-                   dry_run=False, sg_message_id=None):
-    """Record a sent pond email."""
+                   dry_run=False, sg_message_id=None, sequence_num=1):
+    """Record a sent pond email. Returns the inserted row id (for sg_id update), or None."""
     if not is_available():
-        return
+        return None
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -2178,13 +2184,31 @@ def log_pond_email(person_id, person_name, email_address, subject,
                     INSERT INTO pond_email_log
                         (person_id, person_name, email_address, subject,
                          strategy, leadstream_tier, behavior_summary,
-                         dry_run, sg_message_id)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         dry_run, sg_message_id, sequence_num)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
                 """, (person_id, person_name, email_address, subject,
                       strategy, leadstream_tier, behavior_summary,
-                      dry_run, sg_message_id))
+                      dry_run, sg_message_id, sequence_num))
+                row = cur.fetchone()
+                return row[0] if row else None
     except Exception as e:
         logger.warning("log_pond_email failed for person %s: %s", person_id, e)
+        return None
+
+
+def update_pond_email_sg_id(log_id, sg_message_id):
+    """Update the SendGrid message ID on an already-logged pond email row."""
+    if not is_available() or not log_id:
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE pond_email_log SET sg_message_id = %s WHERE id = %s
+                """, (sg_message_id, log_id))
+    except Exception as e:
+        logger.warning("update_pond_email_sg_id failed for log_id %s: %s", log_id, e)
 
 
 def get_lead_email_history(person_id):
@@ -2193,8 +2217,8 @@ def get_lead_email_history(person_id):
 
     Sequence design:
       Phase 1 — emails 1-3:  reply sprint, 3-day cadence
-      Phase 2 — emails 4-9:  long-term drip, 18-day cadence
-      After email 9:          suppressed (lead is exhausted, ~3 months of nurture)
+      Phase 2 — emails 4-9:  long-term drip, 15-day cadence (5 gaps × 15d = 75-day drip)
+      After email 9:          suppressed (lead is exhausted, ~2.5 months of nurture)
 
     Returns:
         emails_sent    — count of live (non-dry-run) emails sent
@@ -2223,12 +2247,14 @@ def get_lead_email_history(person_id):
                 row = cur.fetchone()
                 has_replied = (row[0] > 0) if row else False
 
-        # Suppressed only after full 9-email sequence (≈3 months of nurture)
-        # Cooldown pacing (3d vs 18d) is enforced in pond_mailer.py, not here.
+        # Suppressed only after full 9-email sequence (≈2.5 months of nurture)
+        # Cooldown pacing (3d vs 15d) is enforced in pond_mailer.py, not here.
         MAX_SEQUENCE = 9
         suppressed = emails_sent >= MAX_SEQUENCE and not has_replied
 
-        sequence_num = emails_sent + 1  # no cap — let it go to 10+ if needed
+        # Cap at MAX_SEQUENCE when suppressed — returning 10+ would be misleading
+        # since the lead is in quiet period and no new email will be sent.
+        sequence_num = min(emails_sent + 1, MAX_SEQUENCE) if suppressed else emails_sent + 1
 
         return {
             "emails_sent":   emails_sent,
