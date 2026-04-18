@@ -42,6 +42,11 @@ EXCLUDED_USERS = [
     "Joseph Fuscaldo",
 ]
 
+# FUB user IDs whose calls should NEVER be counted or fetched.
+# userId=1 is a system/automated account that logs thousands of calls/week
+# and serves no purpose in any call metric.
+EXCLUDED_CALL_USER_IDS = {1}
+
 
 # =============================================================================
 # ROLE-SPECIFIC USER IDS

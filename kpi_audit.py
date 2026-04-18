@@ -395,9 +395,10 @@ def run_audit(client, weeks_back=1):
         print(f"Excluded: {', '.join(config.EXCLUDED_USERS)}")
     print()
 
-    # Fetch all calls once
+    # Fetch all calls once — exclude system user IDs (e.g., userId=1)
     print("  Fetching calls...", flush=True)
-    all_calls = client.get_calls(since=since, until=until)
+    all_calls = [c for c in client.get_calls(since=since, until=until)
+                 if c.get("userId") not in config.EXCLUDED_CALL_USER_IDS]
     print(f"  Found {len(all_calls)} total calls")
 
     # Build excluded personIds (e.g., Sphere leads)

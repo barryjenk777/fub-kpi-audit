@@ -224,8 +224,9 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
     # Auto-detect agents
     agent_map = auto_detect_agents(client)
 
-    # Fetch calls
-    all_calls = client.get_calls(since=since, until=until)
+    # Fetch calls — strip system user IDs that have no business in KPI metrics
+    all_calls = [c for c in client.get_calls(since=since, until=until)
+                 if c.get("userId") not in config.EXCLUDED_CALL_USER_IDS]
     excluded_person_ids = build_excluded_person_ids(client, all_calls)
 
     # Fetch appointments
