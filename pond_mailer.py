@@ -630,6 +630,7 @@ EMAIL #{sequence_num} in the sequence.
 - Fragments fine. Contractions always. Never over-explain.
 - Never: "dream home", "perfect fit", "hot market", "reach out", "just checking in",
   "I hope this finds you well", "happy to help", "feel free to", "I'd love to"
+- NEVER say "Ylopo" — the lead has no idea what that is. Say "my home search website" instead.
 - Never open with "I noticed" — lead with the observation itself
 
 ━━━━ WHAT KILLS REPLIES (never do these) ━━━━
@@ -902,9 +903,9 @@ def _build_behavioral_brief(first_name, behavior, strategy, leadstream_tier, tag
         price = f"${_safe_int(p.get('price')):,}"
         lines.append(f"\nREGISTERED ON: {addr} ({price}) — this was the original hook property.")
 
-    # Intent signals
+    # Intent signals — internal label only; never expose platform name to consumer
     if b["intent_signals"]:
-        lines.append(f"\nYLOPO SIGNALS: {'; '.join(b['intent_signals'])}")
+        lines.append(f"\nBEHAVIOR SIGNALS (do NOT say 'Ylopo' in the email — use 'my home search website'): {'; '.join(b['intent_signals'])}")
 
     # IDX search links — for email 2 "gap" strategy only
     # Do NOT include links in the email body. Use this data to describe what you found
