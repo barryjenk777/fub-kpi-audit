@@ -374,7 +374,9 @@ def select_strategy(behavior, leadstream_tier, tags):
 
 SIGN_OFF = (
     "Barry Jenkins\n"
-    "Legacy Home Team · LPT Realty"
+    "Legacy Home Team · LPT Realty\n"
+    "(757) 919-8874\n"
+    "www.legacyhomesearch.com"
 )
 
 # Sequence-specific angle instructions fed to Claude
@@ -1013,6 +1015,9 @@ def _render_html(body_text):
          style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
     <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
       Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
+      (757) 919-8874 &nbsp;|&nbsp;
+      <a href="https://www.legacyhomesearch.com"
+         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
       1545 Crossways Blvd, Chesapeake, VA 23320<br>
       <a href="mailto:{FROM_EMAIL}?subject=Unsubscribe"
          style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
