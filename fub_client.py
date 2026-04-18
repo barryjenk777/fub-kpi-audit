@@ -265,13 +265,8 @@ class FUBClient:
             params = {"limit": limit, "offset": offset, "sort": "-created"}
             if user_id:
                 params["userId"] = user_id
-            # Server-side date range — reduces pagination to window-only records.
-            # FUB calls API supports dateFrom/dateTo (confirmed on people endpoint;
-            # behavior on calls: if supported, cuts pages from ~20 to ~2 per agent).
-            if since_str:
-                params["dateFrom"] = since_str
-            if until_str:
-                params["dateTo"] = until_str
+            # NOTE: FUB calls endpoint does NOT support dateFrom/dateTo — returns 400.
+            # Date filtering is done client-side below (past_range early-exit).
 
             data = self._request("GET", "calls", params=params)
             items = data.get("calls", [])
