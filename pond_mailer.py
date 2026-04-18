@@ -47,7 +47,7 @@ EMAIL_COOLDOWN_DAYS = 3
 # 18-day cadence → roughly every 2.5 weeks
 # Alternates: longer content email (4, 6, 8) → listing link email (5, 7, 9)
 # Goal: stay top of mind for leads who weren't ready in the sprint.
-DRIP_COOLDOWN_DAYS = 18
+DRIP_COOLDOWN_DAYS = 15   # 6 emails × 15 days = 90-day drip
 
 # Minimum IDX events needed to write a meaningful email
 # Counts ALL event types (page views, property views, saves, registration)
