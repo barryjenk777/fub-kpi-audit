@@ -4437,15 +4437,17 @@ def api_pond_mailer_run():
     LeadStream-tagged pond leads based on their IDX behavior.
 
     Body (all optional):
-        dry_run  (bool, default true)  — preview without sending
-        person   (int)                 — single FUB person ID for testing
-        limit    (int)                 — max leads to process this run
+        dry_run    (bool, default true) — preview without sending
+        person     (int)               — single FUB person ID for testing
+        limit      (int)               — max leads to process this run
+        daily_cap  (int)               — daily email ceiling (scheduler passes this)
     """
     import threading, uuid
-    data     = request.json or {}
-    dry_run  = data.get("dry_run", True)
-    person   = data.get("person")
-    limit    = data.get("limit")
+    data      = request.json or {}
+    dry_run   = data.get("dry_run", True)
+    person    = data.get("person")
+    limit     = data.get("limit")
+    daily_cap = data.get("daily_cap")
 
     job_id = str(uuid.uuid4())[:8]
 
@@ -4456,7 +4458,7 @@ def api_pond_mailer_run():
     def _bg():
         try:
             from pond_mailer import run_pond_mailer
-            result = run_pond_mailer(dry_run=dry_run, person_id=person, limit=limit)
+            result = run_pond_mailer(dry_run=dry_run, person_id=person, limit=limit, daily_cap=daily_cap)
             _db.finish_pond_mailer_job(job_id, result=result)
         except Exception as e:
             logger.error("Pond mailer error: %s", e)
@@ -5086,19 +5088,27 @@ def scheduled_send_manager_email():
         print(f"[SCHEDULER] Manager email error: {e}")
 
 
-def scheduled_run_pond_mailer():
-    """Saturday 10am ET — weekly pond mailer batch."""
-    if _already_fired_recently("pond_mailer", within_hours=20):
-        print("[SCHEDULER] Pond mailer: skipped — already sent within 20h")
-        return
-    print(f"[SCHEDULER] Running Saturday pond mailer at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+def scheduled_run_pond_mailer(daily_cap=45):
+    """
+    Pond mailer scheduler handler — called by each time-slot job.
+
+    Schedule:
+      Mon–Fri  8am / 1pm / 6pm ET   daily_cap=45
+      Saturday 10am / 3pm ET        daily_cap=30
+      Sunday   1pm  / 6pm ET        daily_cap=30
+
+    daily_cap is enforced inside run_pond_mailer() by checking how many
+    emails have already been sent today (ET) and capping this run at the
+    remaining allowance.  If the day is already full, the run exits early.
+    """
+    slot = datetime.now(timezone.utc).strftime("%H:%M UTC")
+    print(f"[SCHEDULER] Pond mailer slot firing at {slot} (daily_cap={daily_cap})")
     try:
         with app.test_client() as tc:
-            resp = tc.post("/api/pond-mailer/run", json={"dry_run": False})
+            resp = tc.post("/api/pond-mailer/run", json={"dry_run": False, "daily_cap": daily_cap})
             result = resp.get_json() or {}
             job_id = result.get("job_id", "unknown")
             print(f"[SCHEDULER] Pond mailer started — job_id: {job_id}")
-        _record_fired("pond_mailer")
     except Exception as e:
         print(f"[SCHEDULER] Pond mailer error: {e}")
 
@@ -5713,11 +5723,36 @@ def start_scheduler():
                        id="audit_email", name="Monday KPI audit email",
                        max_instances=1, coalesce=True)
 
-    # Pond mailer: Saturday 10am ET
-    # coalesce=True: if server was down at 10am, fire once on restart — don't skip.
-    _scheduler.add_job(scheduled_run_pond_mailer, CronTrigger(day_of_week="sat", hour=10, minute=0, timezone=ET),
-                       id="pond_mailer", name="Saturday pond mailer (10am ET)",
-                       max_instances=1, coalesce=True)
+    # ── Pond Mailer schedule ────────────────────────────────────────────────
+    # Mon–Fri: 3× at 8am, 1pm, 6pm ET — 45 emails/day cap
+    # Saturday: 2× at 10am, 3pm ET    — 30 emails/day cap
+    # Sunday:   2× at 1pm, 6pm ET     — 30 emails/day cap
+    # daily_cap enforced inside run_pond_mailer() via DB count of today's sends.
+    # max_instances=1 prevents overlapping runs; coalesce=True fires once on
+    # restart if a slot was missed (e.g., Railway redeploy hit at send time).
+    _pond_cap_wkday = {"daily_cap": 45}
+    _pond_cap_wkend = {"daily_cap": 30}
+    _scheduler.add_job(scheduled_run_pond_mailer, CronTrigger(day_of_week="mon-fri", hour=8,  minute=0,  timezone=ET),
+                       id="pond_mailer_wkd_8am",  name="Pond mailer Mon-Fri 8am",
+                       kwargs=_pond_cap_wkday, max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_run_pond_mailer, CronTrigger(day_of_week="mon-fri", hour=13, minute=0,  timezone=ET),
+                       id="pond_mailer_wkd_1pm",  name="Pond mailer Mon-Fri 1pm",
+                       kwargs=_pond_cap_wkday, max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_run_pond_mailer, CronTrigger(day_of_week="mon-fri", hour=18, minute=0,  timezone=ET),
+                       id="pond_mailer_wkd_6pm",  name="Pond mailer Mon-Fri 6pm",
+                       kwargs=_pond_cap_wkday, max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_run_pond_mailer, CronTrigger(day_of_week="sat",     hour=10, minute=0,  timezone=ET),
+                       id="pond_mailer_sat_10am", name="Pond mailer Sat 10am",
+                       kwargs=_pond_cap_wkend, max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_run_pond_mailer, CronTrigger(day_of_week="sat",     hour=15, minute=0,  timezone=ET),
+                       id="pond_mailer_sat_3pm",  name="Pond mailer Sat 3pm",
+                       kwargs=_pond_cap_wkend, max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_run_pond_mailer, CronTrigger(day_of_week="sun",     hour=13, minute=0,  timezone=ET),
+                       id="pond_mailer_sun_1pm",  name="Pond mailer Sun 1pm",
+                       kwargs=_pond_cap_wkend, max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_run_pond_mailer, CronTrigger(day_of_week="sun",     hour=18, minute=0,  timezone=ET),
+                       id="pond_mailer_sun_6pm",  name="Pond mailer Sun 6pm",
+                       kwargs=_pond_cap_wkend, max_instances=1, coalesce=True)
 
     # ── Nudge engine jobs ──────────────────────────────────────────────────
     try:

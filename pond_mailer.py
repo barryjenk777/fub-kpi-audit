@@ -1123,9 +1123,13 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_pond_mailer(dry_run=True, person_id=None, limit=None):
+def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
     """
     Main entry point. Processes LeadStream pond leads and sends personalized emails.
+
+    daily_cap: if set, check how many emails have already been sent today (ET) and
+               cap this run so the daily total doesn't exceed that number.
+               Mon-Fri = 45, Sat/Sun = 30.
 
     1. Pull tagged pond leads from FUB
     2. Skip leads emailed within cooldown period
@@ -1144,6 +1148,19 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None):
     from config import LEADSTREAM_ALLOWED_POND_IDS
 
     _db.ensure_pond_email_log_table()
+
+    # Daily cap enforcement — count emails already sent today (ET) and reduce
+    # this run's limit to stay within the daily ceiling.
+    if daily_cap is not None and not dry_run:
+        already_sent = _db.count_pond_emails_today()
+        remaining = daily_cap - already_sent
+        if remaining <= 0:
+            logger.info("Daily cap of %d reached (%d sent). Skipping run.", daily_cap, already_sent)
+            print(f"[POND MAILER] Daily cap of {daily_cap} reached ({already_sent} sent today). Skipping.")
+            return {"skipped": True, "reason": "daily_cap_reached", "daily_cap": daily_cap, "already_sent": already_sent}
+        if limit is None or remaining < limit:
+            limit = remaining
+            logger.info("Daily cap %d — %d sent today — capping this run at %d.", daily_cap, already_sent, limit)
 
     # Auto-resolve any zombie jobs from previous Railway redeploys
     stale = _db.timeout_stale_pond_jobs(max_minutes=30)

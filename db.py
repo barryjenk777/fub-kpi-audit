@@ -2197,6 +2197,26 @@ def log_pond_email(person_id, person_name, email_address, subject,
         return None
 
 
+def count_pond_emails_today(tz_name="US/Eastern"):
+    """Count real (non-dry-run) pond emails sent today in the given timezone."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM pond_email_log
+                    WHERE dry_run = FALSE
+                      AND sent_at >= (NOW() AT TIME ZONE %s)::DATE
+                      AND sent_at <  (NOW() AT TIME ZONE %s)::DATE + INTERVAL '1 day'
+                """, (tz_name, tz_name))
+                row = cur.fetchone()
+                return row[0] if row else 0
+    except Exception as e:
+        logger.warning("count_pond_emails_today failed: %s", e)
+        return 0
+
+
 def update_pond_email_sg_id(log_id, sg_message_id):
     """Update the SendGrid message ID on an already-logged pond email row."""
     if not is_available() or not log_id:
