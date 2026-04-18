@@ -5795,22 +5795,28 @@ def start_scheduler():
                        id="gone_dark", name="Gone dark alert (Mon 7am)",
                        max_instances=1, coalesce=True)
 
-    # Pond mailer: 7 days/week, one run per day
-    # Mon–Fri 8am ET — start of work day
-    # Saturday   10am ET — weekend morning browsers
-    # Sunday      1pm ET — afternoon/evening browsing window
-    _scheduler.add_job(scheduled_pond_mailer,
-                       CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone=ET),
-                       id="pond_mailer_weekday", name="Pond mailer (Mon-Fri 8am ET)",
-                       max_instances=1, coalesce=True)
-    _scheduler.add_job(scheduled_pond_mailer,
-                       CronTrigger(day_of_week="sat", hour=10, minute=0, timezone=ET),
-                       id="pond_mailer_sat", name="Pond mailer (Sat 10am ET)",
-                       max_instances=1, coalesce=True)
-    _scheduler.add_job(scheduled_pond_mailer,
-                       CronTrigger(day_of_week="sun", hour=13, minute=0, timezone=ET),
-                       id="pond_mailer_sun", name="Pond mailer (Sun 1pm ET)",
-                       max_instances=1, coalesce=True)
+    # Pond mailer: 7 days/week, up to 15 emails/run
+    # Weekdays: 3 runs/day (8am, 1pm, 6pm ET) → 45/day max
+    # Weekends: 2 runs/day → 30/day max
+    # Cooldowns (3d sprint, 15d drip) ensure no lead is over-contacted.
+    for _hour in [8, 13, 18]:
+        _scheduler.add_job(scheduled_pond_mailer,
+                           CronTrigger(day_of_week="mon-fri", hour=_hour, minute=0, timezone=ET),
+                           id=f"pond_mailer_wday_{_hour}",
+                           name=f"Pond mailer (Mon-Fri {_hour}:00 ET)",
+                           max_instances=1, coalesce=True)
+    for _hour in [10, 15]:
+        _scheduler.add_job(scheduled_pond_mailer,
+                           CronTrigger(day_of_week="sat", hour=_hour, minute=0, timezone=ET),
+                           id=f"pond_mailer_sat_{_hour}",
+                           name=f"Pond mailer (Sat {_hour}:00 ET)",
+                           max_instances=1, coalesce=True)
+    for _hour in [13, 18]:
+        _scheduler.add_job(scheduled_pond_mailer,
+                           CronTrigger(day_of_week="sun", hour=_hour, minute=0, timezone=ET),
+                           id=f"pond_mailer_sun_{_hour}",
+                           name=f"Pond mailer (Sun {_hour}:00 ET)",
+                           max_instances=1, coalesce=True)
 
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")

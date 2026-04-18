@@ -54,8 +54,9 @@ DRIP_COOLDOWN_DAYS = 15   # 6 emails × 15 days = 90-day drip
 MIN_EVENTS_TO_EMAIL = 1
 
 # Max leads to email per run
-# Scheduler runs 3x/day (10am, 2pm, 6pm ET) → 27 max/day
-MAX_PER_RUN = 9
+# Weekdays: 3x/day (8am, 1pm, 6pm ET) → 45 max/day
+# Weekends: 2x/day (Sat 10am+3pm, Sun 1pm+6pm) → 30 max/day
+MAX_PER_RUN = 15
 
 # Ylopo tags that indicate behavioral intent (scored separately from LeadStream)
 YLOPO_INTENT_TAGS = {
