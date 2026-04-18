@@ -1280,7 +1280,7 @@ def _render_html(body_text):
       <a href="https://www.legacyhomesearch.com"
          style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
       1545 Crossways Blvd, Chesapeake, VA 23320<br>
-      <a href="mailto:{FROM_EMAIL}?subject=Unsubscribe"
+      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
          style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
     </p>
   </div>
@@ -1628,6 +1628,17 @@ def run_new_lead_mailer(dry_run=True):
         if result.get("sg_message_id") and log_id:
             _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
 
+        # Log to FUB timeline as an email send (not a note)
+        if not dry_run:
+            try:
+                client.log_email_sent(
+                    person_id=pid,
+                    subject=subject,
+                    message=body_text,
+                )
+            except Exception as _fub_err:
+                logger.warning("FUB email log skipped for new lead %s: %s", name, _fub_err)
+
         sent += 1
         logger.info("New lead immediate email sent to %s (%s)", name, to_email)
 
@@ -1915,6 +1926,19 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # Backfill SendGrid message ID now that send is confirmed
         if result.get("sg_message_id") and log_id:
             _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
+
+        # Log the outbound email to FUB's activity timeline so agents can
+        # see exactly what went out — appears as "Email Sent", not a note.
+        # The positive-reply handler adds a separate note; this is the send record.
+        if not dry_run:
+            try:
+                client.log_email_sent(
+                    person_id=pid,
+                    subject=email_data["subject"],
+                    message=email_data["body_text"],
+                )
+            except Exception as _fub_err:
+                logger.warning("FUB email log skipped for %s: %s", name, _fub_err)
 
         sent += 1
         print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'}")

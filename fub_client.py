@@ -607,6 +607,30 @@ class FUBClient:
         """Fetch all leads in FUB (no filter). Used for client-side tag filtering."""
         return self._get_paginated("people", {"limit": 100})
 
+    def log_email_sent(self, person_id, subject, message, user_id=None):
+        """Log an outbound email to a person's FUB activity timeline.
+
+        Uses POST /v1/emails — appears as 'Email Sent' in the FUB contact
+        timeline, not as a plain note.  Call this after every confirmed send
+        so agents can see exactly what went out and when.
+
+        Non-fatal: logs a warning and returns None on failure so the send
+        path is never blocked by a logging error.
+        """
+        payload = {
+            "personId":  person_id,
+            "subject":   subject,
+            "message":   message,
+            "isInbound": False,
+        }
+        if user_id:
+            payload["userId"] = user_id
+        try:
+            return self._request("POST", "emails", json_data=payload)
+        except Exception as e:
+            logger.warning("FUB email log failed for person %s: %s", person_id, e)
+            return None
+
     def get_events(self, since=None, event_type=None, limit=100, max_pages=5):
         """Get events (site visits, property views, etc.) with optional filters.
 
