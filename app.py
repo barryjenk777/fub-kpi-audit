@@ -321,6 +321,16 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
         )
     agents.sort(key=lambda x: x["score"], reverse=True)
 
+    # Persist completed-week snapshot so future loads skip FUB API calls
+    try:
+        _db.save_weekly_kpi_snapshot(
+            week_start=since.date(),
+            week_end=(until - timedelta(days=1)).date(),
+            agents=agents,
+        )
+    except Exception as _snap_err:
+        logger.warning("Weekly snapshot save failed: %s", _snap_err)
+
     # Team totals
     totals = {
         "calls": sum(a["metrics"]["outbound_calls"] for a in agents),

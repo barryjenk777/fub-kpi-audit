@@ -313,7 +313,10 @@ class FUBClient:
         if updated_since:
             params["updatedSince"] = updated_since.strftime("%Y-%m-%dT%H:%M:%S")
         if created_since:
-            params["createdSince"] = created_since.strftime("%Y-%m-%dT%H:%M:%S")
+            # Always send UTC with Z suffix so FUB doesn't misinterpret as local time
+            if created_since.tzinfo is None:
+                created_since = created_since.replace(tzinfo=__import__("datetime").timezone.utc)
+            params["createdSince"] = created_since.strftime("%Y-%m-%dT%H:%M:%SZ")
         if pond_id is not None:
             params["assignedPondId"] = pond_id
         return self._get_paginated("people", params)

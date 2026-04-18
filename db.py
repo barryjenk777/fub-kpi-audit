@@ -2131,6 +2131,176 @@ def get_agent_recent_closings(agent_name, days=60):
 
 
 # ---------------------------------------------------------------------------
+# Weekly KPI Snapshots  (completed-week cache for week-over-week trends)
+# ---------------------------------------------------------------------------
+
+def ensure_weekly_kpi_snapshots_table():
+    """Create weekly_kpi_snapshots table if it doesn't exist."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS weekly_kpi_snapshots (
+                        id               SERIAL PRIMARY KEY,
+                        week_start       DATE NOT NULL,
+                        week_end         DATE NOT NULL,
+                        agent_name       TEXT NOT NULL,
+                        agent_user_id    INTEGER,
+                        outbound_calls   INTEGER DEFAULT 0,
+                        conversations    INTEGER DEFAULT 0,
+                        talk_time_secs   INTEGER DEFAULT 0,
+                        appts_set        INTEGER DEFAULT 0,
+                        appts_met        INTEGER DEFAULT 0,
+                        texts_out        INTEGER DEFAULT 0,
+                        texts_in         INTEGER DEFAULT 0,
+                        call_to_convo    INTEGER DEFAULT 0,
+                        convo_to_appt    INTEGER DEFAULT 0,
+                        kpi_pass         BOOLEAN DEFAULT FALSE,
+                        captured_at      TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE(week_start, agent_name)
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_wks_week_start
+                    ON weekly_kpi_snapshots(week_start DESC)
+                """)
+    except Exception as e:
+        logger.warning("ensure_weekly_kpi_snapshots_table failed: %s", e)
+
+
+def save_weekly_kpi_snapshot(week_start, week_end, agents):
+    """
+    Upsert per-agent KPI metrics for a completed work week.
+
+    week_start / week_end: datetime.date objects (Monday / Saturday).
+    agents: list of agent dicts from run_audit_data() — each has 'name',
+            'user_id', 'metrics', 'evaluation', 'call_to_convo', 'convo_to_appt'.
+    """
+    if not is_available():
+        return
+    try:
+        ensure_weekly_kpi_snapshots_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for a in agents:
+                    m  = a.get("metrics", {})
+                    ev = a.get("evaluation", {})
+                    cur.execute("""
+                        INSERT INTO weekly_kpi_snapshots
+                            (week_start, week_end, agent_name, agent_user_id,
+                             outbound_calls, conversations, talk_time_secs,
+                             appts_set, appts_met, texts_out, texts_in,
+                             call_to_convo, convo_to_appt, kpi_pass, captured_at)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                        ON CONFLICT (week_start, agent_name) DO UPDATE SET
+                            week_end       = EXCLUDED.week_end,
+                            agent_user_id  = EXCLUDED.agent_user_id,
+                            outbound_calls = EXCLUDED.outbound_calls,
+                            conversations  = EXCLUDED.conversations,
+                            talk_time_secs = EXCLUDED.talk_time_secs,
+                            appts_set      = EXCLUDED.appts_set,
+                            appts_met      = EXCLUDED.appts_met,
+                            texts_out      = EXCLUDED.texts_out,
+                            texts_in       = EXCLUDED.texts_in,
+                            call_to_convo  = EXCLUDED.call_to_convo,
+                            convo_to_appt  = EXCLUDED.convo_to_appt,
+                            kpi_pass       = EXCLUDED.kpi_pass,
+                            captured_at    = NOW()
+                    """, (
+                        week_start, week_end,
+                        a["name"], a.get("user_id"),
+                        m.get("outbound_calls", 0),
+                        m.get("conversations", 0),
+                        m.get("talk_time_seconds", 0),
+                        m.get("appts_set", 0),
+                        m.get("appts_met", 0),
+                        m.get("texts_out", 0),
+                        m.get("texts_in", 0),
+                        a.get("call_to_convo", 0),
+                        a.get("convo_to_appt", 0),
+                        ev.get("overall_pass", False),
+                    ))
+    except Exception as e:
+        logger.warning("save_weekly_kpi_snapshot failed: %s", e)
+
+
+def get_weekly_kpi_history(weeks=8):
+    """
+    Return per-agent KPI snapshots for the last `weeks` completed work weeks,
+    newest first. Result format:
+
+    [
+      {
+        "week_start": "2026-04-07",
+        "week_end":   "2026-04-12",
+        "agents": [
+          {"name": "Joe", "outbound_calls": 42, "conversations": 12, ...},
+          ...
+        ]
+      },
+      ...
+    ]
+    """
+    if not is_available():
+        return []
+    try:
+        ensure_weekly_kpi_snapshots_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT week_start, week_end, agent_name, agent_user_id,
+                           outbound_calls, conversations, talk_time_secs,
+                           appts_set, appts_met, texts_out, texts_in,
+                           call_to_convo, convo_to_appt, kpi_pass, captured_at
+                    FROM weekly_kpi_snapshots
+                    WHERE week_start >= (
+                        SELECT COALESCE(MIN(week_start), CURRENT_DATE - 365)
+                        FROM (
+                            SELECT DISTINCT week_start
+                            FROM weekly_kpi_snapshots
+                            ORDER BY week_start DESC
+                            LIMIT %s
+                        ) sub
+                    )
+                    ORDER BY week_start DESC, agent_name ASC
+                """, (weeks,))
+                rows = cur.fetchall()
+
+        # Group by week
+        from collections import OrderedDict
+        weeks_map = OrderedDict()
+        for row in rows:
+            ws = row[0].isoformat()
+            if ws not in weeks_map:
+                weeks_map[ws] = {
+                    "week_start": ws,
+                    "week_end": row[1].isoformat(),
+                    "agents": []
+                }
+            weeks_map[ws]["agents"].append({
+                "name":           row[2],
+                "user_id":        row[3],
+                "outbound_calls": row[4],
+                "conversations":  row[5],
+                "talk_time_secs": row[6],
+                "appts_set":      row[7],
+                "appts_met":      row[8],
+                "texts_out":      row[9],
+                "texts_in":       row[10],
+                "call_to_convo":  row[11],
+                "convo_to_appt":  row[12],
+                "kpi_pass":       row[13],
+                "captured_at":    row[14].isoformat() if row[14] else None,
+            })
+        return list(weeks_map.values())
+    except Exception as e:
+        logger.warning("get_weekly_kpi_history failed: %s", e)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Pond Email Log  (LeadStream email marketing)
 # ---------------------------------------------------------------------------
 
@@ -2195,6 +2365,27 @@ def log_pond_email(person_id, person_name, email_address, subject,
     except Exception as e:
         logger.warning("log_pond_email failed for person %s: %s", person_id, e)
         return None
+
+
+def count_pond_emails_today_by_strategy(strategy, tz_name="US/Eastern"):
+    """Count real (non-dry-run) pond emails sent today for a specific strategy."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM pond_email_log
+                    WHERE dry_run = FALSE
+                      AND strategy = %s
+                      AND sent_at >= (NOW() AT TIME ZONE %s)::DATE
+                      AND sent_at <  (NOW() AT TIME ZONE %s)::DATE + INTERVAL '1 day'
+                """, (strategy, tz_name, tz_name))
+                row = cur.fetchone()
+                return row[0] if row else 0
+    except Exception as e:
+        logger.warning("count_pond_emails_today_by_strategy failed: %s", e)
+        return 0
 
 
 def count_pond_emails_today(tz_name="US/Eastern"):

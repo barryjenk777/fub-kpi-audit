@@ -300,6 +300,10 @@ SHARK_TANK_POND_ID = 4
 NEW_LEAD_EMAIL_DELAY_MINUTES = 12
 # How far back to look for new leads per check run (scheduler runs every 5 min)
 NEW_LEAD_LOOKBACK_MINUTES = 45
+# Max immediate emails sent per day — prevents a lead import batch from
+# blasting hundreds of emails. New leads beyond this cap are skipped until
+# the next day when the cap resets.
+NEW_LEAD_DAILY_CAP = 15
 
 # Stale hot threshold: days since last agent contact to qualify
 LEADSTREAM_STALE_DAYS = 3

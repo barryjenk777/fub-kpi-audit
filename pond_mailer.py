@@ -1256,14 +1256,25 @@ def run_new_lead_mailer(dry_run=True):
     import db as _db
     from fub_client import FUBClient
     from config import (SHARK_TANK_POND_ID, NEW_LEAD_EMAIL_DELAY_MINUTES,
-                        NEW_LEAD_LOOKBACK_MINUTES)
+                        NEW_LEAD_LOOKBACK_MINUTES, NEW_LEAD_DAILY_CAP)
 
     _db.ensure_pond_email_log_table()
     client = FUBClient()
     now = datetime.now(timezone.utc)
 
-    # Window: leads created between (now - lookback) and (now - delay)
-    # The delay buffer is what makes it feel human instead of instant.
+    # Daily cap: count how many new_lead_immediate emails already sent today (ET)
+    if not dry_run:
+        sent_today = _db.count_pond_emails_today_by_strategy("new_lead_immediate")
+        if sent_today >= NEW_LEAD_DAILY_CAP:
+            logger.info("New lead daily cap of %d reached (%d sent). Skipping.", NEW_LEAD_DAILY_CAP, sent_today)
+            return {"skipped": True, "reason": "daily_cap_reached", "sent_today": sent_today}
+        remaining_cap = NEW_LEAD_DAILY_CAP - sent_today
+    else:
+        remaining_cap = NEW_LEAD_DAILY_CAP
+
+    # Window: leads created between (now - lookback) and (now - delay).
+    # Timestamps are UTC-aware — FUBClient formats with Z suffix so FUB
+    # doesn't misinterpret as local/Eastern time.
     window_start = now - timedelta(minutes=NEW_LEAD_LOOKBACK_MINUTES)
     min_age      = now - timedelta(minutes=NEW_LEAD_EMAIL_DELAY_MINUTES)
 
@@ -1285,6 +1296,10 @@ def run_new_lead_mailer(dry_run=True):
 
     sent = 0
     for person in eligible:
+        if sent >= remaining_cap:
+            logger.info("New lead daily cap hit mid-run (%d sent). Stopping.", sent)
+            break
+
         pid   = person.get("id")
         first = person.get("firstName") or ""
         last  = person.get("lastName") or ""
