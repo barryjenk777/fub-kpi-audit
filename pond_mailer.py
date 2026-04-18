@@ -1287,7 +1287,9 @@ def run_new_lead_mailer(dry_run=True):
 
     eligible = [
         p for p in new_leads
-        if _parse_iso(p.get("created", "")) <= min_age  # old enough to not feel instant
+        if window_start <= _parse_iso(p.get("created", "")) <= min_age
+        # window_start: not older than lookback (rejects leads from weeks/months ago)
+        # min_age:      not newer than delay buffer (rejects leads < 12 min old)
     ]
 
     if not eligible:
