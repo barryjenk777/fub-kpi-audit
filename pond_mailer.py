@@ -1139,54 +1139,101 @@ def generate_new_lead_email(person, behavior, tags, dry_run=False):
 
     first_name = (person.get("firstName") or "").strip() or "there"
 
-    # Detect likely intent: seller vs. buyer
-    # YLOPO Z-buyer tag signals a seller lead (home valuation form)
-    seller_tags = {"ZLEAD", "Z_BUYER", "YLOPO_Z_BUYER", "SELLER", "LISTING_LEAD",
-                   "HOME_VALUE", "HOME_VALUATION", "WHAT_IS_MY_HOME_WORTH"}
-    is_likely_seller = any(t.upper().replace("-","_") in seller_tags for t in tags)
+    # Detect Z-buyer (cash offer request) vs. general seller vs. buyer
+    z_buyer_tags  = {"ZLEAD", "Z_BUYER", "YLOPO_Z_BUYER"}
+    seller_tags   = {"SELLER", "LISTING_LEAD", "HOME_VALUE", "HOME_VALUATION",
+                     "WHAT_IS_MY_HOME_WORTH"}
+    is_z_buyer    = any(t.upper().replace("-","_") in z_buyer_tags for t in tags)
+    is_seller     = any(t.upper().replace("-","_") in seller_tags  for t in tags)
 
-    # Build a compact behavior summary for the prompt
+    # Build a compact data brief
     lines = []
     if behavior.get("city"):
-        lines.append(f"City of interest: {behavior['city']}")
+        lines.append(f"City: {behavior['city']}")
     if behavior.get("price_min") or behavior.get("price_max"):
         lo = f"${behavior['price_min']:,}" if behavior.get("price_min") else ""
         hi = f"${behavior['price_max']:,}" if behavior.get("price_max") else ""
-        price_str = f"{lo}–{hi}" if lo and hi else (lo or hi)
-        lines.append(f"Price range: {price_str}")
-    if behavior.get("view_count"):
-        lines.append(f"Properties viewed: {behavior['view_count']}")
-    if behavior.get("save_count"):
-        lines.append(f"Properties saved: {behavior['save_count']}")
-    if behavior.get("most_viewed"):
-        mv = behavior["most_viewed"]
-        addr = mv.get("street") or mv.get("address") or ""
-        if addr:
-            lines.append(f"Most-viewed property: {addr} ({behavior.get('most_viewed_ct',1)}x)")
+        lines.append(f"Price range: {(lo+'–'+hi) if lo and hi else (lo or hi)}")
     if behavior.get("search_areas"):
-        lines.append(f"Search areas: {', '.join(behavior['search_areas'][:3])}")
+        lines.append(f"Area: {', '.join(behavior['search_areas'][:2])}")
+    data_brief = "\n".join(lines) if lines else "City/area unknown — write generically for Hampton Roads."
 
-    data_brief = "\n".join(lines) if lines else "Minimal data — lead just arrived. Use city/area if available."
+    # ── Z-BUYER PROMPT ──────────────────────────────────────────────────────
+    if is_z_buyer:
+        prompt = f"""You are writing a first-contact email from Barry Jenkins in Hampton Roads VA.
 
-    intent_context = (
-        "This lead likely came through a home VALUATION form — they may be a homeowner "
-        "considering selling, not a buyer. Frame the email around market knowledge and "
-        "what homes are doing in their area, not about searching for homes to buy."
-        if is_likely_seller else
-        "This lead came through a home SEARCH site — they were looking at homes to buy "
-        "in Hampton Roads. Frame around their home search and what's available in their area."
-    )
+This person just submitted a CASH OFFER REQUEST for their home. They want to sell — fast.
+Barry is both a licensed realtor AND a cash buyer who can close in 7 days.
 
-    prompt = f"""You are writing a first-contact email from Barry Jenkins, realtor in Hampton Roads VA.
+━━━━ WHO THIS PERSON IS ━━━━
+They asked for a cash offer. Their inbox is already flooded — they probably submitted to
+4 or 5 different investors and agents within the last hour. They are overwhelmed, skeptical,
+and looking for the one response that doesn't sound like every other "WE BUY HOUSES" pitch.
 
-This lead JUST appeared in Barry's system — active within the last hour. Barry happened to see
-them come through while he was at his computer. The email should feel like he grabbed his laptop
-right then and wrote this in 90 seconds.
+Barry's edge: he can do BOTH.
+  Option A: Cash offer, close in 7 days. Done. No showings, no stress.
+  Option B: Quick MLS listing — if they have a few more weeks, he might net them more money.
+
+Most investors can only offer Option A. Most agents can only offer Option B.
+Barry can show them both numbers and let them decide. That's the differentiator.
+
+━━━━ TONE ━━━━
+Calm. Confident. Not desperate. Not a pitch. More like: "Here's what I can actually do."
+One paragraph. Short. Don't add to the noise — cut through it.
+No hype. No "WE BUY HOUSES" energy. No "I'd love to help you."
+This lead has heard every version of the hustle. Be the quiet, competent one.
+
+━━━━ WHAT THE EMAIL MUST INCLUDE ━━━━
+1. Confirm you got their cash offer request (proves you're responding to THIS request, not blasting)
+2. Affirm: yes, cash, close in a week
+3. The differentiator in one sentence: as a licensed agent, he can also show them what listing might net — most cash buyers can't offer that comparison
+4. One simple CTA: "want me to run both numbers?" or "worth a quick call to go over both options?"
+
+━━━━ WHAT KILLS THIS EMAIL ━━━━
+- ANY "WE BUY HOUSES" energy
+- Explaining the process or credentials beyond one line
+- More than 4 sentences in the body
+- Exclamation points
+- "I'd love to", "feel free to", "don't hesitate"
+- Sounding like a template — this must feel like one person writing to one person
+
+━━━━ LEAD DATA ━━━━
+{data_brief}
+
+FORMAT:
+- First name + comma only on line 1
+- Blank line
+- Body: 3–4 sentences max
+- Signature added automatically — stop before the sign-off
+
+SUBJECT LINES (3 options — feel like a direct text, not a marketing email):
+- Good examples: "your cash offer request", "cash or list — [City]", "[first name]"
+- Under 7 words. No ALL CAPS. No exclamation points.
+
+OUTPUT (JSON only, no markdown fences):
+{{
+  "subject_options": ["option 1", "option 2", "option 3"],
+  "body": "{first_name},\\n\\n[3–4 sentences]"
+}}"""
+
+    # ── BUYER / GENERAL SELLER PROMPT ───────────────────────────────────────
+    else:
+        intent_context = (
+            "This lead came through a home valuation form — they're likely a homeowner "
+            "considering selling. Frame around what homes are doing in their area."
+            if is_seller else
+            "This lead came through a home SEARCH site — they were looking at homes to buy. "
+            "Frame around their search and what's available in their area."
+        )
+
+        prompt = f"""You are writing a first-contact email from Barry Jenkins, realtor in Hampton Roads VA.
+
+This lead JUST appeared — active within the last hour. Barry saw them come through and
+grabbed his laptop. Should feel like it was written in 90 seconds.
 
 ━━━━ VIBE ━━━━
-"I caught you at the computer" — not a follow-up, not a campaign email. Real-time energy.
-Direct and confident. Not salesy. Not desperate. Not scripted.
-Sounds like a smart friend who happens to know Hampton Roads cold.
+"I caught you at the computer" — real-time, direct, not a campaign email.
+Sounds like a smart friend who knows Hampton Roads cold.
 
 ━━━━ LEAD INTENT ━━━━
 {intent_context}
@@ -1195,27 +1242,20 @@ Sounds like a smart friend who happens to know Hampton Roads cold.
 {data_brief}
 
 ━━━━ WHAT THE EMAIL MUST DO ━━━━
-1. Open with a specific observation (their city, price range, or what they were looking at).
-   Prove you actually saw their activity — not a generic blast.
-2. One sentence of local Hampton Roads market intel that only an insider would know.
-   (Inventory tightness, multiple-offer situations, a specific neighborhood trend, etc.)
-3. One clear CTA — a direct question answerable in 2–5 words. Not "feel free to reach out."
-   Something like: "Worth a quick call?" or "Want me to pull what's actually available?"
+1. Open with a specific observation (city, price range, what they looked at)
+2. One sentence of Hampton Roads market intel only a local would know
+3. One clear CTA answerable in 2–5 words
 
 ━━━━ HARD RULES ━━━━
-- No P.S. — immediacy is the vibe; P.S. signals a campaign
-- No "I hope this finds you well", "just checking in", "dream home", "perfect fit"
+- No P.S., no "I hope this finds you well", no "just checking in", no "dream home"
 - No "I noticed" — lead with the observation itself
 - Fragments fine. Contractions always. 3–5 sentences max.
-- Signature added automatically — stop before the sign-off.
+- Signature added automatically — stop before sign-off.
 
 FORMAT:
-- First line: first name + comma only. ("Sarah,")
-- Blank line
-- Body: 3–5 sentences. CTA at the end.
+- First name + comma only on line 1. Blank line. Body.
 
-SUBJECT LINES (3 options — 3–6 words, feel like a text from a saved contact):
-- Best: property address, "[City] — quick question", just their name
+SUBJECT LINES (3 options — 3–6 words, feel like a text):
 - No ALL CAPS, no emojis, direct beats clever
 
 OUTPUT (JSON only, no markdown fences):
