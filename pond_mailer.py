@@ -126,6 +126,24 @@ def analyze_behavior(events, tags):
     all_prices = []
     time_ordered = []  # (datetime, price) for drift calc
     registration_prop = None
+    prop_type_counts = {}  # IDX type string → count, e.g. {"condo": 3, "house": 1}
+
+    # FUB/IDX property type → legacyhomesearch URL value
+    _PROP_TYPE_MAP = {
+        "condominium":      "condo",
+        "condo":            "condo",
+        "condo/townhome":   "condo",
+        "townhouse":        "townhouse",
+        "townhome":         "townhouse",
+        "single family":    "house",
+        "single family residential": "house",
+        "single family residence":   "house",
+        "house":            "house",
+        "residential":      "house",
+        "land":             "land",
+        "multi-family":     "multi-family",
+        "multifamily":      "multi-family",
+    }
 
     for e in events:
         e_type = e.get("type", "")
@@ -138,6 +156,14 @@ def analyze_behavior(events, tags):
         if e_type in ("Viewed Property", "Property Saved", "Saved Property") and prop.get("street"):
             addr  = f"{prop['street']}, {prop.get('city','')} {prop.get('code','')}"
             price = _safe_int(prop.get("price"))
+
+            # Track property type — FUB may use "type", "propertyType", or "subType"
+            raw_ptype = (
+                prop.get("type") or prop.get("propertyType") or prop.get("subType") or ""
+            ).lower().strip()
+            mapped = _PROP_TYPE_MAP.get(raw_ptype)
+            if mapped:
+                prop_type_counts[mapped] = prop_type_counts.get(mapped, 0) + 1
 
             if e_type == "Viewed Property":
                 if addr not in prop_views:
@@ -219,6 +245,11 @@ def analyze_behavior(events, tags):
     # Sell-before-buy flag
     sell_before_buy = bool(SELL_BEFORE_BUY_TAGS & set(tags))
 
+    # Dominant property type — most-viewed wins; fall back to search URL filter
+    dominant_prop_type = None
+    if prop_type_counts:
+        dominant_prop_type = max(prop_type_counts, key=prop_type_counts.get)
+
     return {
         "views":            [v["prop"] for v in prop_views.values()],
         "saves":            list(prop_saves.values()),
@@ -240,6 +271,7 @@ def analyze_behavior(events, tags):
         "intent_signals":   intent_signals,
         "search_filters":   search_filters,
         "registration_prop": registration_prop,
+        "property_type":    dominant_prop_type,   # "condo", "house", "townhouse", or None
     }
 
 
@@ -271,6 +303,9 @@ def _parse_search_urls(events):
                     filters.setdefault("cities", []).append(vals[0])
                 if "[zip]" in key:
                     filters.setdefault("zips", []).append(vals[0])
+                # Property type from search URL (s[propertyTypes][0]=condo etc.)
+                if "propertyTypes" in key and vals:
+                    filters.setdefault("property_types", []).append(vals[0].lower())
         except Exception:
             continue
     return filters
@@ -553,14 +588,24 @@ def build_idx_search_url(city=None, state="VA", beds=None, baths=None,
 def build_lead_search_urls(behavior):
     """Return 1–2 IDX search URLs tailored to this lead's actual browsing data.
 
-    Uses their city, typical bed count, and price range to build a search that
-    shows them homes genuinely similar to what they've been looking at.
+    Uses their city, typical bed count, price range, and property type to build
+    a search that shows them homes genuinely similar to what they've been browsing.
     """
     b = behavior
     urls = []
 
     cities = list(b["cities"]) if b["cities"] else []
     beds   = min(b["beds_seen"]) if b["beds_seen"] else None
+
+    # Property type: prefer dominant type from viewed listings; fall back to
+    # search page URL filters (e.g. lead searched for condos on the IDX site)
+    prop_type = b.get("property_type")
+    if not prop_type:
+        sf = b.get("search_filters", {})
+        page_types = sf.get("property_types", [])
+        if page_types:
+            # Most common from page views
+            prop_type = max(set(page_types), key=page_types.count)
 
     # Round price range: 10% cushion below min, stay at their max
     min_price = max_price = None
@@ -574,17 +619,20 @@ def build_lead_search_urls(behavior):
             beds=beds,
             min_price=min_price if i == 0 else None,
             max_price=max_price if i == 0 else None,
+            property_type=prop_type,
         )
         bed_str   = f"{beds}bd " if beds else ""
+        type_str  = f"{prop_type} " if prop_type and prop_type != "house" else ""
         price_str = f" around ${min_price:,}" if (min_price and i == 0) else ""
-        label = f"latest {bed_str}homes in {city}{price_str}"
+        label = f"latest {bed_str}{type_str}listings in {city}{price_str}"
         urls.append({"url": url, "label": label})
 
     # Fallback: zip code only (when no city data in events)
     if not urls and b["zips"]:
         zip_code = list(b["zips"])[0]
-        url = build_idx_search_url(zip_code=zip_code, beds=beds)
-        urls.append({"url": url, "label": f"latest homes in {zip_code}"})
+        url = build_idx_search_url(zip_code=zip_code, beds=beds, property_type=prop_type)
+        type_str = f"{prop_type} " if prop_type and prop_type != "house" else ""
+        urls.append({"url": url, "label": f"latest {type_str}listings in {zip_code}"})
 
     return urls
 
