@@ -395,10 +395,17 @@ def run_audit(client, weeks_back=1):
         print(f"Excluded: {', '.join(config.EXCLUDED_USERS)}")
     print()
 
-    # Fetch all calls once — exclude system user IDs (e.g., userId=1)
-    print("  Fetching calls...", flush=True)
-    all_calls = [c for c in client.get_calls(since=since, until=until)
-                 if c.get("userId") not in config.EXCLUDED_CALL_USER_IDS]
+    # Fetch calls per-agent — avoids 2000-record cap being exhausted by system
+    # accounts and post-window calls before the audit window is reached.
+    print("  Fetching calls (per-agent)...", flush=True)
+    all_calls = []
+    seen_call_ids: set = set()
+    for _aname, _auser in agent_map.items():
+        for _c in client.get_calls(user_id=_auser["id"], since=since, until=until):
+            _cid = _c.get("id")
+            if _cid not in seen_call_ids:
+                seen_call_ids.add(_cid)
+                all_calls.append(_c)
     print(f"  Found {len(all_calls)} total calls")
 
     # Build excluded personIds (e.g., Sphere leads)

@@ -117,17 +117,21 @@ def cache_clear(endpoint=None):
 
 
 def load_settings():
-    """Load saved KPI thresholds. Priority: memory > file > env vars > defaults."""
-    # Memory takes priority (set via Save Settings button)
+    """Load saved KPI thresholds. Priority: Postgres > memory > file > env vars > defaults."""
+    # Postgres is the canonical store — survives Railway deploys
+    db_settings = _db.load_kpi_settings()
+    if db_settings:
+        return db_settings
+    # Fallback: in-memory (current process only)
     if _memory_settings:
         return dict(_memory_settings)
-    # Then try settings.json
+    # Fallback: settings.json (local dev only — read-only on Railway)
     try:
         with open(SETTINGS_FILE) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         pass
-    # Then env vars (set these in Railway for persistence!)
+    # Fallback: env vars
     s = {}
     if os.environ.get("MIN_CALLS"):
         s["min_calls"] = int(os.environ["MIN_CALLS"])
@@ -139,21 +143,19 @@ def load_settings():
 
 
 def save_settings(min_calls, min_convos, max_ooc):
-    """Persist KPI thresholds. Saves to file + memory + env vars."""
+    """Persist KPI thresholds. Postgres is primary; memory + file as fallback."""
     global _memory_settings
     data = {"min_calls": min_calls, "min_convos": min_convos, "max_ooc": max_ooc}
-    # Save to memory always (survives within same process)
+    # Postgres — survives deploys
+    _db.save_kpi_settings(min_calls, min_convos, max_ooc)
+    # Memory — fast reads in current process
     _memory_settings = dict(data)
-    # Also set env vars (survives within same process on Railway)
-    os.environ["MIN_CALLS"] = str(min_calls)
-    os.environ["MIN_CONVOS"] = str(min_convos)
-    os.environ["MAX_OOC"] = str(max_ooc)
-    # Try to save to file (works locally, not on Railway)
+    # File — local dev only (fails silently on Railway)
     try:
         with open(SETTINGS_FILE, "w") as f:
             json.dump(data, f, indent=2)
     except OSError:
-        pass  # Read-only filesystem (Railway)
+        pass
     return data
 
 
@@ -224,9 +226,17 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
     # Auto-detect agents
     agent_map = auto_detect_agents(client)
 
-    # Fetch calls — strip system user IDs that have no business in KPI metrics
-    all_calls = [c for c in client.get_calls(since=since, until=until)
-                 if c.get("userId") not in config.EXCLUDED_CALL_USER_IDS]
+    # Fetch calls per-agent to avoid the 2000-record cap being exhausted by
+    # system accounts and post-window calls (newest-first pagination means calls
+    # AFTER the audit window burn slots before the target window is reached).
+    all_calls = []
+    seen_call_ids: set = set()
+    for _name, _user in agent_map.items():
+        for _c in client.get_calls(user_id=_user["id"], since=since, until=until):
+            _cid = _c.get("id")
+            if _cid not in seen_call_ids:
+                seen_call_ids.add(_cid)
+                all_calls.append(_c)
     excluded_person_ids = build_excluded_person_ids(client, all_calls)
 
     # Fetch appointments

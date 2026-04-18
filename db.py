@@ -124,6 +124,16 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
+-- KPI threshold settings (persisted across Railway deploys via Postgres)
+-- Single-row table — always upsert into key='default'.
+CREATE TABLE IF NOT EXISTS kpi_settings (
+    key         TEXT PRIMARY KEY DEFAULT 'default',
+    min_calls   INTEGER NOT NULL DEFAULT 30,
+    min_convos  INTEGER NOT NULL DEFAULT 5,
+    max_ooc     INTEGER NOT NULL DEFAULT 30,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Secure tokens for agent self-service goal setup links
 CREATE TABLE IF NOT EXISTS goal_tokens (
     id          SERIAL PRIMARY KEY,
@@ -752,6 +762,48 @@ def upsert_goal(agent_name, year, gci_goal, avg_sale_price, commission_pct,
     except Exception as e:
         logger.warning("upsert_goal failed: %s", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# KPI Settings  (Postgres-backed so they survive Railway deploys)
+# ---------------------------------------------------------------------------
+
+def load_kpi_settings():
+    """Load KPI thresholds from Postgres. Returns dict or {} if unavailable."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT min_calls, min_convos, max_ooc FROM kpi_settings WHERE key='default'")
+                row = cur.fetchone()
+        if row:
+            return {"min_calls": row[0], "min_convos": row[1], "max_ooc": row[2]}
+    except Exception as e:
+        logger.warning("load_kpi_settings failed: %s", e)
+    return {}
+
+
+def save_kpi_settings(min_calls, min_convos, max_ooc):
+    """Persist KPI thresholds to Postgres. Returns True on success."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO kpi_settings (key, min_calls, min_convos, max_ooc, updated_at)
+                    VALUES ('default', %s, %s, %s, NOW())
+                    ON CONFLICT (key) DO UPDATE SET
+                        min_calls  = EXCLUDED.min_calls,
+                        min_convos = EXCLUDED.min_convos,
+                        max_ooc    = EXCLUDED.max_ooc,
+                        updated_at = NOW()
+                """, (min_calls, min_convos, max_ooc))
+        return True
+    except Exception as e:
+        logger.warning("save_kpi_settings failed: %s", e)
+        return False
 
 
 def get_goal(agent_name, year=None):
