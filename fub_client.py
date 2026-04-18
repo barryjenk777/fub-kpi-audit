@@ -247,12 +247,27 @@ class FUBClient:
                 offset += limit
             return all_calls
 
-        # Bulk userId path: paginate newest-first, stop at since boundary
+        # Bulk userId path.
+        #
+        # FUB's calls endpoint returns records newest-first with a hard offset
+        # cap of 2000.  Post-window calls (system accounts, ISA, current week)
+        # fill the cap before we reach the audit window — returning 0 calls.
+        #
+        # Fix: pass dateFrom/dateTo as server-side filters so FUB trims the
+        # result set to the window before we paginate.  Client-side date checks
+        # remain as a safety net in case the params are silently ignored.
         max_offset = 2000
         while offset < max_offset:
             params = {"limit": limit, "offset": offset, "sort": "-created"}
             if user_id:
                 params["userId"] = user_id
+            # Server-side date range — reduces pagination to window-only records.
+            # FUB calls API supports dateFrom/dateTo (confirmed on people endpoint;
+            # behavior on calls: if supported, cuts pages from ~20 to ~2 per agent).
+            if since_str:
+                params["dateFrom"] = since_str
+            if until_str:
+                params["dateTo"] = until_str
 
             data = self._request("GET", "calls", params=params)
             items = data.get("calls", [])
