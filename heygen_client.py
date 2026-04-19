@@ -466,6 +466,7 @@ def submit_video(script: str, background_url: str = None,
         }],
         "dimension": {"width": 1280, "height": 720},
         "title": title,
+        "quality": "high",   # "high" = max render quality (uses more credits but significantly better)
     }
 
     try:
