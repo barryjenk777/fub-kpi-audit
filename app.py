@@ -63,12 +63,17 @@ def _cache_key(endpoint):
 
 
 def cache_get(endpoint):
-    """Get cached data for today. Checks memory first, then disk."""
+    """
+    Get cached data for today.
+    Tier 1: in-memory (fastest — same worker)
+    Tier 2: disk (local dev only)
+    Tier 3: Postgres (shared across all gunicorn workers; survives Railway restarts)
+    """
     key = _cache_key(endpoint)
-    # Memory cache
+    # Tier 1: memory
     if key in _cache:
         return _cache[key]
-    # Disk cache (works locally, not on Railway)
+    # Tier 2: disk (local dev)
     try:
         path = os.path.join(CACHE_DIR, f"{key.replace(':', '_')}.json")
         if os.path.exists(path):
@@ -78,14 +83,23 @@ def cache_get(endpoint):
                 return data
     except Exception:
         pass
+    # Tier 3: Postgres (Railway / multi-worker)
+    try:
+        data = _db.db_cache_get(endpoint, max_age_hours=24)
+        if data:
+            _cache[key] = data  # Promote to memory so this worker reuses it
+            logger.info("cache_get(%s): served from DB tier (post-restart or cross-worker hit)", endpoint)
+            return data
+    except Exception as _dbe:
+        logger.debug("cache_get DB tier failed: %s", _dbe)
     return None
 
 
 def cache_set(endpoint, data):
-    """Store data in today's cache. Memory always, disk when possible."""
+    """Store data in today's cache. Memory always, disk when possible, DB always."""
     key = _cache_key(endpoint)
     _cache[key] = data
-    # Try disk
+    # Tier 2: disk (local dev)
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         path = os.path.join(CACHE_DIR, f"{key.replace(':', '_')}.json")
@@ -93,6 +107,11 @@ def cache_set(endpoint, data):
             json.dump(data, f)
     except OSError:
         pass  # Read-only on Railway
+    # Tier 3: Postgres (shared across workers; survives restarts)
+    try:
+        _db.db_cache_set(endpoint, data)
+    except Exception as _dbe:
+        logger.debug("cache_set DB tier failed: %s", _dbe)
 
 
 def cache_clear(endpoint=None):
@@ -250,10 +269,18 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
         outbound, convos, talk_secs = count_calls_for_user(
             all_calls, user_id, excluded_person_ids
         )
-        speed_avg, speed_count = calculate_speed_to_lead(client, user_id, since)
-        violations, ooc_leads, ooc_sphere = count_compliance_violations(
-            client, user_id, config.COMPLIANCE_TAG
-        )
+        try:
+            speed_avg, speed_count = calculate_speed_to_lead(client, user_id, since)
+        except Exception as _stl_err:
+            logger.warning("speed_to_lead failed for %s: %s", name, _stl_err)
+            speed_avg, speed_count = None, 0
+        try:
+            violations, ooc_leads, ooc_sphere = count_compliance_violations(
+                client, user_id, config.COMPLIANCE_TAG
+            )
+        except Exception as _ooc_err:
+            logger.warning("compliance_violations failed for %s: %s", name, _ooc_err)
+            violations, ooc_leads, ooc_sphere = 0, 0, 0
         appts_set, appts_met = count_appointments_for_user(all_appointments, user_id)
 
         # Text engagement

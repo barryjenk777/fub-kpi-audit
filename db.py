@@ -336,6 +336,16 @@ CREATE TABLE IF NOT EXISTS goal_history (
     archived_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_gh_agent_year ON goal_history (agent_name, year, archived_at DESC);
+
+-- Cross-worker API response cache (persists across Railway deploys + gunicorn workers)
+-- Stores full JSON payloads so all workers share the same cached data.
+CREATE TABLE IF NOT EXISTS api_cache (
+    cache_key   TEXT PRIMARY KEY,
+    cached_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    day_key     DATE        NOT NULL DEFAULT CURRENT_DATE,
+    data        JSONB       NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_api_cache_day ON api_cache (day_key DESC);
 """
 
 
@@ -3961,4 +3971,60 @@ def get_serendipity_stats(days=30):
                 }
     except Exception as e:
         logger.warning("get_serendipity_stats failed: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Cross-worker API cache  (survives Railway restarts + gunicorn worker misses)
+# ---------------------------------------------------------------------------
+
+def db_cache_set(cache_key: str, data: dict) -> bool:
+    """
+    Persist a JSON payload to api_cache under cache_key.
+    Used by app.py's cache_set() to share data across gunicorn workers
+    and survive Railway restarts.
+    Returns True on success.
+    """
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO api_cache (cache_key, cached_at, day_key, data)
+                    VALUES (%s, NOW(), CURRENT_DATE, %s)
+                    ON CONFLICT (cache_key) DO UPDATE SET
+                        cached_at = NOW(),
+                        day_key   = CURRENT_DATE,
+                        data      = EXCLUDED.data
+                """, (cache_key, json.dumps(data)))
+        return True
+    except Exception as e:
+        logger.warning("db_cache_set(%s) failed: %s", cache_key, e)
+        return False
+
+
+def db_cache_get(cache_key: str, max_age_hours: int = 24):
+    """
+    Retrieve a JSON payload from api_cache.
+    Returns None if the key doesn't exist or is older than max_age_hours.
+    """
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT data, cached_at
+                    FROM api_cache
+                    WHERE cache_key = %s
+                      AND cached_at >= NOW() - (%s || ' hours')::INTERVAL
+                """, (cache_key, str(max_age_hours)))
+                row = cur.fetchone()
+        if row:
+            data = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+            return data
+        return None
+    except Exception as e:
+        logger.warning("db_cache_get(%s) failed: %s", cache_key, e)
+        return None
         return {}
