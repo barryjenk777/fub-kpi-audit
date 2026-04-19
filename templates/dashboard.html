@@ -850,7 +850,7 @@ async function loadCommandCenter(force){
     if(d.error)throw new Error(d.error);
     db.innerHTML=buildCommandCenter(d);
   }catch(e){
-    db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not build briefing</div><div class="alert-body">${e.message}</div></div></div>`;
+    db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not build briefing</div><div class="alert-body">${e.message||'Unknown error — check Railway logs'}</div><div style="margin-top:.6rem"><button class="btn btn-ghost btn-sm" onclick="loadCommandCenter(true)">↻ Try Again</button></div></div></div>`;
     db.style.display='block';
   }
   ld.style.display='none';db.style.display='block';

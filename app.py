@@ -771,8 +771,9 @@ def api_command_center():
         return jsonify(result)
     except Exception as e:
         import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        tb = traceback.format_exc()
+        logger.error("command-center failed: %s\n%s", e, tb)
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
 
 @app.route("/")

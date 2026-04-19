@@ -109,6 +109,7 @@ def _build_email_note(subject, sequence_num, lead_type, avatar_used=None,
 class FUBClient:
     BASE_URL = "https://api.followupboss.com/v1"
     RATE_LIMIT_DELAY = 0.35  # ~170 requests/min to stay under 200/min limit
+    REQUEST_TIMEOUT = (10, 30)  # (connect, read) seconds — prevents indefinite hangs
 
     def __init__(self, api_key=None):
         self.api_key = api_key or os.environ.get("FUB_API_KEY")
@@ -133,7 +134,8 @@ class FUBClient:
 
         for attempt in range(3):  # max 3 attempts
             response = self.session.request(
-                method, url, params=params, json=json_data
+                method, url, params=params, json=json_data,
+                timeout=self.REQUEST_TIMEOUT,
             )
             if response.status_code == 429:
                 wait = 3 * (attempt + 1)  # 3s, 6s, 9s — max 18s total
