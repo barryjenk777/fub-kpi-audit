@@ -2632,6 +2632,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # that Barry is the same human they heard from a few hours ago.
         _imm_ctx = _db.get_immediate_email_context(pid)  # "late_night" / "early_morning" / None
 
+        # ── HeyGen daily cap check ───────────────────────────────────────────────
+        # HeyGen videos are exempt from the main text-email daily cap but have
+        # their own ceiling (HEYGEN_DAILY_CAP). We compute remaining slots once
+        # here; each HeyGen block below checks it before attempting a render.
+        from config import HEYGEN_DAILY_CAP as _HG_CAP
+        _hg_used_today  = _db.count_heygen_today()
+        _hg_slots_left  = max(0, _HG_CAP - _hg_used_today)
+        if _hg_slots_left == 0:
+            logger.info("HeyGen daily cap of %d reached (%d used) — video skipped for %s",
+                        _HG_CAP, _hg_used_today, name)
+
         # ── HeyGen personalized video — seller Email 1 only ─────────────────────
         # When video succeeds the ENTIRE email body is replaced with a short wrapper.
         # Falls back gracefully to the Claude-written text email if HeyGen fails.
@@ -2645,7 +2656,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
-                if heygen_available():
+                if heygen_available() and _hg_slots_left > 0:
                     _addr_obj = (person.get("address") or {})
                     _street   = _addr_obj.get("street", "")
                     _city_hg  = _addr_obj.get("city", "")
@@ -2753,8 +2764,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         email_data["all_subjects"] = _subj_options
 
                         _avatar_used = DEFAULT_AVATAR
-                        logger.info("HeyGen video email built for %s (%.1fs video)", name,
-                                    video_result.get("duration", 0))
+                        _hg_slots_left -= 1  # consume one HeyGen slot
+                        logger.info("HeyGen video email built for %s (%.1fs video) — %d slots remain",
+                                    name, video_result.get("duration", 0), _hg_slots_left)
                         print(f"    ▶ HeyGen video: {video_result['video_url'][:60]}...")
                     else:
                         logger.warning("HeyGen video not ready for %s — sending text-only", name)
@@ -2776,7 +2788,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
-                if heygen_available():
+                if heygen_available() and _hg_slots_left > 0:
                     _addr_obj = (person.get("address") or {})
                     _street   = _addr_obj.get("street", "")
                     _city_hg  = _addr_obj.get("city", "")
@@ -2876,8 +2888,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         email_data["all_subjects"] = _subj_options
 
                         _avatar_used = DEFAULT_AVATAR
-                        logger.info("HeyGen Z-buyer video email built for %s (%.1fs)", name,
-                                    video_result.get("duration", 0))
+                        _hg_slots_left -= 1  # consume one HeyGen slot
+                        logger.info("HeyGen Z-buyer video email built for %s (%.1fs) — %d slots remain",
+                                    name, video_result.get("duration", 0), _hg_slots_left)
                         print(f"    ▶ HeyGen Z-buyer video: {video_result['video_url'][:60]}...")
                     else:
                         logger.warning("HeyGen video not ready for Z-buyer %s — text-only", name)
@@ -2906,7 +2919,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
-                if heygen_available():
+                if heygen_available() and _hg_slots_left > 0:
                     _beh_city      = (behavior.get("cities") or [])
                     _city_hg       = _beh_city[0] if _beh_city else (
                         (person.get("address") or {}).get("city", "") or "Hampton Roads"
@@ -3051,8 +3064,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         email_data["all_subjects"] = _subj_options
 
                         _avatar_used = DEFAULT_AVATAR
-                        logger.info("HeyGen buyer video email built for %s (%.1fs video)", name,
-                                    video_result.get("duration", 0))
+                        _hg_slots_left -= 1  # consume one HeyGen slot
+                        logger.info("HeyGen buyer video email built for %s (%.1fs video) — %d slots remain",
+                                    name, video_result.get("duration", 0), _hg_slots_left)
                         print(f"    ▶ HeyGen buyer video: {video_result['video_url'][:60]}...")
                     else:
                         logger.warning("HeyGen video not ready for buyer %s — text-only", name)
@@ -3075,7 +3089,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
-                if heygen_available():
+                if heygen_available() and _hg_slots_left > 0:
                     _addr_obj   = (person.get("address") or {})
                     _street_fu  = _addr_obj.get("street", "")
                     _city_fu    = _addr_obj.get("city", "") or "Hampton Roads"
@@ -3175,8 +3189,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         email_data["all_subjects"] = _subj_options
 
                         _avatar_used = AVATAR_SUIT
-                        logger.info("HeyGen Email 2 suit video built for %s (%.1fs)", name,
-                                    video_result.get("duration", 0))
+                        _hg_slots_left -= 1  # consume one HeyGen slot
+                        logger.info("HeyGen Email 2 suit video built for %s (%.1fs) — %d slots remain",
+                                    name, video_result.get("duration", 0), _hg_slots_left)
                         print(f"    ▶ HeyGen Email 2 suit: {video_result['video_url'][:60]}...")
                     else:
                         logger.warning("HeyGen Email 2 video not ready for %s — text-only", name)
@@ -3200,7 +3215,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
-                if heygen_available():
+                if heygen_available() and _hg_slots_left > 0:
                     _addr_obj4  = (person.get("address") or {})
                     _street_e4  = _addr_obj4.get("street", "")
                     # Buyers: prefer city from IDX behavior; sellers: use home city
@@ -3313,8 +3328,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         email_data["all_subjects"] = _subj_options4
 
                         _avatar_used = AVATAR_SUIT
-                        logger.info("HeyGen Email 4 drip video built for %s (%.1fs)", name,
-                                    video_result.get("duration", 0))
+                        _hg_slots_left -= 1  # consume one HeyGen slot
+                        logger.info("HeyGen Email 4 drip video built for %s (%.1fs) — %d slots remain",
+                                    name, video_result.get("duration", 0), _hg_slots_left)
                         print(f"    ▶ HeyGen Email 4 drip: {video_result['video_url'][:60]}...")
                     else:
                         logger.warning("HeyGen Email 4 video not ready for %s — text-only", name)

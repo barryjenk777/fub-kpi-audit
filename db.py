@@ -2540,7 +2540,12 @@ def count_pond_emails_today_by_strategy(strategy, tz_name="US/Eastern"):
 
 
 def count_pond_emails_today(tz_name="US/Eastern"):
-    """Count real (non-dry-run) pond emails sent today in the given timezone."""
+    """Count real (non-dry-run) TEXT pond emails sent today (HeyGen excluded).
+
+    HeyGen video emails are exempt from the main daily cap — they have their
+    own ceiling via count_heygen_today(). Excluding them here ensures a full
+    day of text sends never blocks a high-value video at first contact.
+    """
     if not is_available():
         return 0
     try:
@@ -2549,6 +2554,7 @@ def count_pond_emails_today(tz_name="US/Eastern"):
                 cur.execute("""
                     SELECT COUNT(*) FROM pond_email_log
                     WHERE dry_run = FALSE
+                      AND avatar_used IS NULL
                       AND sent_at >= (NOW() AT TIME ZONE %s)::DATE
                       AND sent_at <  (NOW() AT TIME ZONE %s)::DATE + INTERVAL '1 day'
                 """, (tz_name, tz_name))
@@ -2556,6 +2562,31 @@ def count_pond_emails_today(tz_name="US/Eastern"):
                 return row[0] if row else 0
     except Exception as e:
         logger.warning("count_pond_emails_today failed: %s", e)
+        return 0
+
+
+def count_heygen_today(tz_name="US/Eastern"):
+    """Count real (non-dry-run) HeyGen video emails sent today.
+
+    HeyGen rows have avatar_used set to the avatar ID that rendered the video.
+    Used to enforce HEYGEN_DAILY_CAP independently of the text email cap.
+    """
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM pond_email_log
+                    WHERE dry_run = FALSE
+                      AND avatar_used IS NOT NULL
+                      AND sent_at >= (NOW() AT TIME ZONE %s)::DATE
+                      AND sent_at <  (NOW() AT TIME ZONE %s)::DATE + INTERVAL '1 day'
+                """, (tz_name, tz_name))
+                row = cur.fetchone()
+                return row[0] if row else 0
+    except Exception as e:
+        logger.warning("count_heygen_today failed: %s", e)
         return 0
 
 
