@@ -422,7 +422,7 @@ def generate_zbuyer_background_image(street: str, city: str,
 
 def submit_video(script: str, background_url: str = None,
                  avatar_id: str = None, voice_id: str = None,
-                 emotion: str = "Friendly",
+                 emotion: str = "Soothing",
                  title: str = "Barry Jenkins — Personal Message") -> str | None:
     """
     Submit a video generation job to HeyGen.
@@ -535,7 +535,7 @@ def poll_video(video_id: str, timeout_seconds: int = 360,
 
 def generate_and_wait(script: str, background_url: str = None,
                       avatar_id: str = None, voice_id: str = None,
-                      emotion: str = "Friendly",
+                      emotion: str = "Soothing",
                       timeout_seconds: int = 180) -> dict | None:
     """
     Full pipeline: submit → poll → return result.
