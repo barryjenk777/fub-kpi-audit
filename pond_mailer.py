@@ -2538,6 +2538,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # They're homeowners transferred from rAIya — no IDX activity expected.
         # Their data comes from the FUB person record (address, city, AI tags).
         is_ylopo_seller = _is_ylopo_prospecting_seller(person, tags)
+        is_z            = _is_z_buyer(tags)
+        first_name      = first or "there"   # used in HeyGen script generators + wrappers
 
         if is_ylopo_seller:
             # No IDX events needed — use empty behavior for these leads
