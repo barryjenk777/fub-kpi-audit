@@ -671,6 +671,11 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
             <option value="">— Select agent —</option>
           </select>
         </div>
+        <div id="meeting-start-date-wrap" style="display:none;align-items:center;gap:.4rem">
+          <label style="font-size:.72rem;color:var(--muted)">Started</label>
+          <input type="date" id="meeting-start-date" class="meeting-select" style="min-width:unset;padding:.45rem .7rem;font-size:.8rem"
+                 onchange="saveStartDate()">
+        </div>
         <button id="btn-generate-brief" class="btn btn-gold" onclick="generateBrief()" disabled>
           ✦ Generate Brief
         </button>
@@ -978,6 +983,7 @@ function renderGoalCards(rows){
         <div class="gc-pct c-${st}">${pace.overall_pct}% of pace</div>
       </div>
       <div class="gc-bar"><div class="gc-fill ${st}" style="width:${Math.min(pace.overall_pct,100)}%"></div></div>
+      ${pace.is_new_agent?`<div style="font-size:.68rem;color:var(--blue);font-weight:600;margin-bottom:.5rem">🆕 Week ${pace.weeks_on_team} on team · targets prorated</div>`:''}
       ${pace.needs_conversation?`<div style="font-size:.68rem;color:var(--red);font-weight:700;margin-bottom:.5rem">⚠ Needs conversation</div>`:''}
       ${inactiveFlag?`<div style="font-size:.68rem;color:var(--yellow);font-weight:600;margin-bottom:.5rem">⚠ No activity logged in ${daysInactive} days</div>`:''}
       <div class="gc-metrics">
@@ -1470,13 +1476,15 @@ async function tagFollowup(ids){if(!confirm(`Tag ${ids.length} leads with ISA_Fo
 /* ════════════════════════════════════════════════
    1-ON-1 MEETING TAB
 ════════════════════════════════════════════════ */
+let _meetingAgents=[];
 async function loadMeetingAgents(){
   try{
     const r=await fetch('/api/goals/agents-list');
     const d=await r.json();
+    _meetingAgents=d.agents||[];
     const sel=document.getElementById('meeting-agent-select');
     sel.innerHTML='<option value="">— Select agent —</option>';
-    (d.agents||[]).forEach(a=>{
+    _meetingAgents.forEach(a=>{
       const opt=document.createElement('option');
       opt.value=a.name; opt.textContent=a.name;
       sel.appendChild(opt);
@@ -1486,10 +1494,33 @@ async function loadMeetingAgents(){
 
 async function onMeetingAgentChange(){
   const sel=document.getElementById('meeting-agent-select');
+  const wrap=document.getElementById('meeting-start-date-wrap');
+  const sdInput=document.getElementById('meeting-start-date');
   document.getElementById('btn-generate-brief').disabled=!sel.value;
   document.getElementById('meeting-brief-area').innerHTML='';
-  if(sel.value) await loadMeetingHistory(sel.value);
-  else document.getElementById('meeting-history-area').innerHTML='';
+  if(sel.value){
+    wrap.style.display='flex';
+    const agent=_meetingAgents.find(a=>a.name===sel.value);
+    sdInput.value=agent?.start_date||'';
+    await loadMeetingHistory(sel.value);
+  }else{
+    wrap.style.display='none';
+    document.getElementById('meeting-history-area').innerHTML='';
+  }
+}
+
+async function saveStartDate(){
+  const agentName=document.getElementById('meeting-agent-select').value;
+  const startDate=document.getElementById('meeting-start-date').value;
+  if(!agentName||!startDate)return;
+  try{
+    await fetch('/api/goals/set-start-date',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({agent_name:agentName,start_date:startDate})});
+    // Update local cache so re-selecting shows the new date
+    const agent=_meetingAgents.find(a=>a.name===agentName);
+    if(agent)agent.start_date=startDate;
+    showToast('Start date saved','ok');
+  }catch(e){showToast('Could not save: '+e.message,'err');}
 }
 
 async function loadMeetingHistory(agentName){

@@ -2730,20 +2730,24 @@ def api_agent_dashboard(token):
             "appts_ytd":   a.get("appts_ytd", 0),
             "closings_ytd": deal_summary.get("closings", 0),
         }
-    pace = _db.compute_pace(goal, targets, actuals) if goal else {}
+    _profile    = next((p for p in _db.get_agent_profiles(active_only=False)
+                        if p["agent_name"] == agent_name), {})
+    _start_date = _profile.get("start_date")
+    pace = _db.compute_pace(goal, targets, actuals, start_date=_start_date) if goal else {}
 
     return jsonify({
-        "agent_name": agent_name,
-        "year": year,
-        "goal": goal,
-        "why": why,
-        "identity": ident,
-        "streak": streak,
-        "today": today_act,
+        "agent_name":  agent_name,
+        "year":        year,
+        "goal":        goal,
+        "why":         why,
+        "identity":    ident,
+        "streak":      streak,
+        "today":       today_act,
         "activity_log": activity,
-        "targets": targets,
-        "actuals": actuals,
-        "pace": pace,
+        "targets":     targets,
+        "actuals":     actuals,
+        "pace":        pace,
+        "start_date":  _start_date,
     })
 
 
@@ -3651,10 +3655,12 @@ def api_goals_scorecard():
             "closings_ytd":  deals["closings"],
             "gci_ytd":       deals["gci_est"],
         }
-        pace = _db.compute_pace(goal, targets, actuals)
+        _start_date = profile.get("start_date")
+        pace = _db.compute_pace(goal, targets, actuals, start_date=_start_date)
         scorecard.append({
             "agent_name":   agent,
             "email":        profile.get("email", ""),
+            "start_date":   _start_date,
             "goal":         goal,
             "targets":      targets,
             "actuals":      actuals,
@@ -3681,11 +3687,24 @@ def api_goals_scorecard():
 
 @app.route("/api/goals/agents-list")
 def api_goals_agents_list():
-    """Lightweight list of active agent names + emails for dropdowns."""
+    """Lightweight list of active agent names + emails + start dates for dropdowns."""
     profiles = _db.get_agent_profiles(active_only=True)
     return jsonify({
-        "agents": [{"name": p["agent_name"], "email": p.get("email", "")} for p in profiles]
+        "agents": [{"name": p["agent_name"], "email": p.get("email", ""),
+                    "start_date": p.get("start_date")} for p in profiles]
     })
+
+
+@app.route("/api/goals/set-start-date", methods=["POST"])
+def api_set_agent_start_date():
+    """Barry sets an agent's team start date. Body: {agent_name, start_date (YYYY-MM-DD)}"""
+    body = request.get_json(silent=True) or {}
+    agent_name = body.get("agent_name", "").strip()
+    start_date = body.get("start_date", "").strip()
+    if not agent_name or not start_date:
+        return jsonify({"ok": False, "error": "agent_name and start_date required"}), 400
+    ok = _db.set_agent_start_date(agent_name, start_date)
+    return jsonify({"ok": ok})
 
 
 @app.route("/api/goals/meeting-brief/<path:agent_name>")
@@ -3710,6 +3729,8 @@ def api_meeting_brief(agent_name):
         goal         = _db.get_goal(agent_name, year=year)
         why          = _db.get_agent_why(agent_name) or {}
         streak       = _db.get_streak(agent_name) or {}
+        profiles     = {p["agent_name"]: p for p in _db.get_agent_profiles(active_only=False)}
+        start_date   = (profiles.get(agent_name) or {}).get("start_date")  # ISO str or None
         ytd_cache    = _db.get_ytd_cache(year=year)
         agent_ytd    = ytd_cache.get(agent_name, {})
         deal_summary = _db.get_deal_summary(agent_name, year=year)
@@ -3728,14 +3749,14 @@ def api_meeting_brief(agent_name):
 
         targets = _db.compute_targets(goal) if goal else {}
         actuals = {
-            "calls_ytd":    agent_ytd.get("calls_ytd", 0),
-            "convos_ytd":   agent_ytd.get("convos_ytd", 0),
-            "appts_ytd":    agent_ytd.get("appts_ytd", 0),
+            "calls_ytd":     agent_ytd.get("calls_ytd", 0),
+            "convos_ytd":    agent_ytd.get("convos_ytd", 0),
+            "appts_ytd":     agent_ytd.get("appts_ytd", 0),
             "contracts_ytd": deal_summary.get("contracts", 0),
             "closings_ytd": deal_summary.get("closings", 0),
             "gci_ytd":      deal_summary.get("gci_est", 0),
         }
-        pace = _db.compute_pace(goal, targets, actuals) if goal else {}
+        pace = _db.compute_pace(goal, targets, actuals, start_date=start_date) if goal else {}
 
         # ── Team rank for each funnel metric ──────────────────────────────
         def _rank(metric_key, ytd_key, source="ytd"):
@@ -3793,9 +3814,9 @@ Barry Jenkins background:
 This brief is for BARRY ONLY — the agent never sees it. Be honest and direct. Barry can handle the full picture.
 
 ━━━━ AGENT: {agent_name} (refer to them as {first_name}) ━━━━
-Week {week_num} of 52
-GCI Goal: ${gci_goal:,.0f}/year
-Overall Pace: {overall_pct}% of where they should be right now ({overall_status.upper()})
+Week {week_num} of 52  |  GCI Goal: ${gci_goal:,.0f}/year
+{f"Team start date: {start_date} ({pace.get('weeks_on_team', 0)} weeks on the team — PRORATE all expectations accordingly. This is a new agent. Do NOT compare their YTD numbers to a full-year agent's pace." if pace.get('is_new_agent') else "Full-year agent — full annual targets apply."}
+Overall Pace: {overall_pct}% of their {f"{pace.get('weeks_on_team', 0)}-week" if pace.get("is_new_agent") else "YTD"} target ({overall_status.upper()})
 
 YTD Funnel (actual vs. target-by-now):
 - Conversations (≥2 min calls): {actuals['convos_ytd']} actual / {convo_target_ytd} needed by now → {convo_pct}% of pace

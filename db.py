@@ -123,6 +123,11 @@ DO $$ BEGIN
   ALTER TABLE goal_history ADD COLUMN IF NOT EXISTS contact_rate NUMERIC(5,4) DEFAULT 0.15;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+-- start_date: when the agent joined the team (used to prorate pace targets mid-year)
+DO $$ BEGIN
+  ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS start_date DATE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 -- KPI threshold settings (persisted across Railway deploys via Postgres)
 -- Single-row table — always upsert into key='default'.
@@ -513,6 +518,30 @@ def read_manifest():
 # Agent profiles
 # ---------------------------------------------------------------------------
 
+def set_agent_start_date(agent_name: str, start_date) -> bool:
+    """Set or update the team start date for an agent. start_date can be a date obj or ISO string."""
+    if not is_available():
+        return False
+    from datetime import date as _date
+    if isinstance(start_date, str):
+        try:
+            start_date = _date.fromisoformat(start_date)
+        except ValueError:
+            logger.warning("set_agent_start_date: invalid date string %r", start_date)
+            return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE agent_profiles SET start_date = %s, updated_at = NOW()
+                    WHERE  agent_name = %s
+                """, (start_date, agent_name))
+        return True
+    except Exception as e:
+        logger.warning("set_agent_start_date failed for %s: %s", agent_name, e)
+        return False
+
+
 def upsert_agent_profile(agent_name, fub_user_id=None, email=None, phone=None, is_active=True):
     if not is_available():
         return False
@@ -545,19 +574,20 @@ def get_agent_profiles(active_only=True):
                     cur.execute("""
                         SELECT agent_name, fub_user_id, email,
                                COALESCE(phone, fub_phone) AS phone,
-                               is_active, fub_phone, onboarding_sent_at
+                               is_active, fub_phone, onboarding_sent_at, start_date
                         FROM   agent_profiles WHERE is_active = TRUE ORDER BY agent_name
                     """)
                 else:
                     cur.execute("""
                         SELECT agent_name, fub_user_id, email,
                                COALESCE(phone, fub_phone) AS phone,
-                               is_active, fub_phone, onboarding_sent_at
+                               is_active, fub_phone, onboarding_sent_at, start_date
                         FROM   agent_profiles ORDER BY agent_name
                     """)
                 rows = cur.fetchall()
         return [{"agent_name": r[0], "fub_user_id": r[1], "email": r[2], "phone": r[3],
-                 "is_active": r[4], "fub_phone": r[5], "onboarding_sent_at": r[6]}
+                 "is_active": r[4], "fub_phone": r[5], "onboarding_sent_at": r[6],
+                 "start_date": r[7].isoformat() if r[7] else None}
                 for r in rows]
     except Exception as e:
         logger.warning("get_agent_profiles failed: %s", e)
@@ -1240,37 +1270,72 @@ def get_meeting_briefs(agent_name: str, limit: int = 20) -> list:
 # Scorecard — pace calculation
 # ---------------------------------------------------------------------------
 
-def compute_pace(goal: dict, targets: dict, actuals: dict) -> dict:
+def compute_pace(goal: dict, targets: dict, actuals: dict, start_date=None) -> dict:
     """
     Compare actuals against where the agent should be at this point in the year.
 
     actuals = {
         "calls_ytd":     N,
+        "convos_ytd":    N,
         "appts_ytd":     N,
         "contracts_ytd": N,
         "closings_ytd":  N,
         "gci_ytd":       N,
     }
 
+    start_date: date the agent joined the team (date obj or ISO string).
+    When set and within the current year, all annual targets are prorated to the
+    agent's tenure window and pace is measured from their start date — not Jan 1.
+    This prevents a 30-day agent from looking like they're 90% behind their goals.
+
     Returns pace dict with pct and status (green/yellow/red) for each metric.
     """
-    today = date.today()
-    week_num   = today.isocalendar()[1]
-    weeks_done = min(week_num, 50)
-    pct_of_yr  = weeks_done / 50
+    today    = date.today()
+    year     = today.year
+    year_start = date(year, 1, 1)
+    year_end   = date(year, 12, 31)
+    WORK_WEEKS = 50  # standard working-year length
+
+    # ── Parse start_date ────────────────────────────────────────────────────
+    if isinstance(start_date, str):
+        try:
+            start_date = date.fromisoformat(start_date)
+        except (ValueError, TypeError):
+            start_date = None
+
+    # Only apply tenure proration when the agent actually started mid-year
+    if start_date and start_date.year == year and start_date > year_start:
+        # How many working weeks do they have available this year?
+        tenure_weeks_total = max((year_end - start_date).days / 7, 1)
+        tenure_weeks_done  = max((today - start_date).days / 7, 0)
+        pct_of_tenure  = min(tenure_weeks_done / tenure_weeks_total, 1.0)
+        # Scale annual targets: an agent starting week 20 of 50 has 30/50 = 60% of the year
+        tenure_scale   = tenure_weeks_total / WORK_WEEKS
+        weeks_on_team  = round(tenure_weeks_done)
+        is_new_agent   = True
+    else:
+        week_num       = today.isocalendar()[1]
+        weeks_done     = min(week_num, WORK_WEEKS)
+        pct_of_tenure  = weeks_done / WORK_WEEKS
+        tenure_scale   = 1.0
+        weeks_on_team  = None
+        is_new_agent   = False
 
     def _pace(actual, annual_target):
         if not annual_target:
             return {"actual": actual, "target_ytd": 0, "annual": 0, "pct": 100, "status": "green"}
-        target_ytd = annual_target * pct_of_yr
+        # Prorate annual target to agent's available tenure window
+        adjusted_annual = annual_target * tenure_scale
+        target_ytd = adjusted_annual * pct_of_tenure
         pct = round(actual / target_ytd * 100) if target_ytd > 0 else 0
         status = "green" if pct >= 90 else ("yellow" if pct >= 70 else "red")
         return {
-            "actual":     actual,
-            "target_ytd": round(target_ytd, 1),
-            "annual":     annual_target,
-            "pct":        pct,
-            "status":     status,
+            "actual":           actual,
+            "target_ytd":       round(target_ytd, 1),
+            "annual":           round(adjusted_annual, 1),   # prorated annual
+            "annual_full":      annual_target,               # original full-year target
+            "pct":              pct,
+            "status":           status,
         }
 
     calls_ytd    = actuals.get("calls_ytd", 0)
@@ -1280,15 +1345,12 @@ def compute_pace(goal: dict, targets: dict, actuals: dict) -> dict:
     gci_ytd      = actuals.get("gci_ytd", 0.0)
 
     # Pace the funnel: conversations → appointments → closings
-    # Conversations are the primary activity metric — they prove quality, not just volume.
-    # Raw dials (calls_needed_yr) are retained as context but not the pacing target.
     convos_annual   = targets.get("convos_needed_yr", 0)
     appts_annual    = targets.get("appts_needed_yr", 0)
     closings_annual = float(goal.get("gci_goal", 0)) / float(targets.get("avg_commission", 1) or 1)
 
-    # Fallback: if no convos tracked yet, pace raw dials as a proxy
+    # Fallback: if no convos tracked yet, estimate from dials at contact rate
     if convos_ytd == 0 and calls_ytd > 0:
-        # Use estimated conversations at 15% contact rate
         contact_r = float(goal.get("contact_rate", 0.15))
         convos_ytd_eff = round(calls_ytd * contact_r)
     else:
@@ -1298,23 +1360,30 @@ def compute_pace(goal: dict, targets: dict, actuals: dict) -> dict:
     appts_pace    = _pace(appts_ytd,      appts_annual)
     closings_pace = _pace(closings_ytd,   closings_annual)
 
-    overall_pct = round((convos_pace["pct"] + appts_pace["pct"] + closings_pace["pct"]) / 3)
+    overall_pct    = round((convos_pace["pct"] + appts_pace["pct"] + closings_pace["pct"]) / 3)
     overall_status = "green" if overall_pct >= 90 else ("yellow" if overall_pct >= 70 else "red")
 
+    # Determine "weeks on team" for display / coaching context
+    display_week_num = today.isocalendar()[1] if not is_new_agent else None
+
+    # Don't flag new agents as needing a coaching conversation until week 4 on team
+    weeks_elapsed_on_team = weeks_on_team if is_new_agent else min(today.isocalendar()[1], 50)
+    needs_convo = weeks_elapsed_on_team is not None and weeks_elapsed_on_team >= 4 and overall_pct < 70
+
     return {
-        "week_num":       week_num,
-        "pct_of_year":    round(pct_of_yr * 100),
+        "week_num":       display_week_num,
+        "weeks_on_team":  weeks_on_team,       # None if full-year agent
+        "is_new_agent":   is_new_agent,
+        "pct_of_tenure":  round(pct_of_tenure * 100),
+        "tenure_scale":   round(tenure_scale, 3),
         "convos":         convos_pace,          # primary activity metric
         "calls_ytd":      calls_ytd,            # raw dials — context only
         "appointments":   appts_pace,
         "closings":       closings_pace,
         "overall_pct":    overall_pct,
         "overall_status": overall_status,
-        # Don't flag before week 8 — agents can't be meaningfully behind
-        # in the first 7 weeks (Q1 ramp, goal-setting lag, etc.)
-        "needs_conversation": week_num >= 8 and overall_pct < 70,
-        # Keep backward-compat key so old callers don't break
-        "calls": convos_pace,
+        "needs_conversation": needs_convo,
+        "calls":          convos_pace,          # backward-compat alias
     }
 
 
