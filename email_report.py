@@ -608,6 +608,298 @@ def send_manager_email(manager_data, period_label):
         return False
 
 
+LIVE_TRANSFER_NUMBER = "(757) 960-1491"
+LIVE_TRANSFER_NUMBER_RAW = "7579601491"
+
+
+def build_hype_email(agents, period_label, ai_text_count, ai_voice_count,
+                     fhalen_appts, fhalen_name="Fhalen"):
+    """
+    Build the weekly KPI hype email.
+
+    agents        — list of agent dicts from run_audit_data() (all agents, pass + fail)
+    period_label  — e.g. "Apr 14 – Apr 19, 2026"
+    ai_text_count — leads with AI_NEEDS_FOLLOW_UP tag last week
+    ai_voice_count— leads with AI_VOICE_NEEDS_FOLLOW_UP tag last week
+    fhalen_appts  — ISA appointments set last week (int)
+
+    Returns HTML string.
+    """
+    from datetime import datetime
+
+    passing  = [a for a in agents if a["evaluation"]["overall_pass"]]
+    n_agents = max(len(agents), 1)
+
+    # ── Team averages (all agents — honest comparison base) ─────────────────
+    total_calls  = sum(a["metrics"]["outbound_calls"] for a in agents)
+    total_convos = sum(a["metrics"]["conversations"] for a in agents)
+    avg_calls  = total_calls  / n_agents
+    avg_convos = total_convos / n_agents
+
+    # ── Lead distribution total ─────────────────────────────────────────────
+    total_leads = ai_text_count + ai_voice_count + fhalen_appts
+
+    # ── Build per-agent performance narrative ────────────────────────────────
+    def agent_narrative(a):
+        calls  = a["metrics"]["outbound_calls"]
+        convos = a["metrics"]["conversations"]
+        first  = a["name"].split()[0]
+        calls_pct  = round((calls  - avg_calls)  / max(avg_calls,  1) * 100)
+        convos_pct = round((convos - avg_convos) / max(avg_convos, 1) * 100)
+
+        parts = []
+        if convos_pct > 0:
+            parts.append(f"<strong>{convos_pct}% more conversations</strong> than the team average")
+        if calls_pct > 0:
+            parts.append(f"<strong>{calls_pct}% more dials</strong> than the team average")
+
+        if len(parts) == 2:
+            stat_line = f"{parts[0]} and {parts[1]}"
+        elif len(parts) == 1:
+            stat_line = parts[0]
+        else:
+            stat_line = "hit their call and conversation targets this week"
+
+        return first, stat_line, convos, calls, convos_pct, calls_pct
+
+    now_str = datetime.now().strftime("%B %d, %Y")
+    week_of = datetime.now().strftime("%b %d")
+
+    html = f"""
+<html><head><meta charset="utf-8"><style>
+body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-width:680px;margin:0 auto;padding:16px;background:#f5f7fa}}
+</style></head><body>
+<div style="max-width:680px;margin:0 auto;font-family:-apple-system,'Segoe UI',Arial,sans-serif">
+
+<!-- HEADER -->
+<div style="background:#0f172a;border-radius:12px;padding:24px;margin-bottom:20px;text-align:center">
+  <img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="130" style="display:block;margin:0 auto 12px;width:130px;height:auto">
+  <p style="margin:0;color:#f59e0b;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:2px">Live Transfer Weekly</p>
+  <h1 style="margin:6px 0 4px;color:#ffffff;font-size:24px;font-weight:800">Who Earned the Board This Week</h1>
+  <p style="margin:0;color:rgba(255,255,255,0.5);font-size:13px">Week of {week_of} &nbsp;·&nbsp; {period_label}</p>
+</div>
+
+<!-- LEAD DISTRIBUTION STAT -->
+"""
+    if total_leads > 0:
+        detail_parts = []
+        if ai_text_count > 0:
+            detail_parts.append(f"{ai_text_count} AI text")
+        if ai_voice_count > 0:
+            detail_parts.append(f"{ai_voice_count} AI voice")
+        if fhalen_appts > 0:
+            detail_parts.append(f"{fhalen_appts} ISA appointments")
+        detail_str = " + ".join(detail_parts)
+
+        html += f"""
+<div style="background:#fff;border-radius:10px;border:2px solid #f59e0b;padding:20px 24px;margin-bottom:20px;text-align:center">
+  <p style="margin:0 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#6b7280">Leads Distributed Last Week</p>
+  <div style="font-size:52px;font-weight:900;color:#0f172a;line-height:1">{total_leads}</div>
+  <p style="margin:6px 0 0;font-size:14px;color:#6b7280">{detail_str}</p>
+  <p style="margin:10px 0 0;font-size:14px;color:#374151;line-height:1.5">
+    {total_leads} real people reached out, engaged with our AI, or sat down with our ISA
+    — and are waiting for an agent to pick up where the tech left off.
+    The only question is: <strong>whose phone does it ring?</strong>
+  </p>
+</div>
+"""
+    else:
+        html += f"""
+<div style="background:#fff;border-radius:10px;border:1px solid #e5e7eb;padding:20px 24px;margin-bottom:20px;text-align:center">
+  <p style="margin:0;font-size:14px;color:#6b7280">Lead distribution data not yet available for this week.</p>
+</div>
+"""
+
+    # ── QUALIFYING AGENTS ────────────────────────────────────────────────────
+    html += f"""
+<div style="background:#0f172a;border-radius:10px;padding:16px 20px;margin-bottom:12px">
+  <h2 style="margin:0;color:#f59e0b;font-size:16px;font-weight:800;text-transform:uppercase;letter-spacing:1px">
+    🏆 On the Live Transfer Line This Week
+  </h2>
+</div>
+"""
+
+    if passing:
+        html += '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">'
+        for a in passing:
+            first, stat_line, convos, calls, convos_pct, calls_pct = agent_narrative(a)
+            best_pct = max(convos_pct, calls_pct, 0)
+            badge_color = "#16a34a" if best_pct >= 30 else "#0f172a"
+            html += f"""
+<div style="background:#fff;border-radius:10px;border-left:4px solid #f59e0b;padding:16px 20px;display:flex;align-items:flex-start;gap:12px">
+  <div style="background:#f59e0b;color:#0f172a;font-weight:900;font-size:18px;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;text-align:center;line-height:40px">
+    {first[0].upper()}
+  </div>
+  <div>
+    <div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:4px">{a['name']}</div>
+    <div style="font-size:14px;color:#374151;line-height:1.5">
+      {a['name'].split()[0]} {stat_line}.
+    </div>
+  </div>
+</div>
+"""
+        html += "</div>"
+    else:
+        html += f"""
+<div style="background:#fff;border-radius:10px;border:1px solid #e5e7eb;padding:20px 24px;margin-bottom:20px;text-align:center">
+  <p style="margin:0;font-size:15px;color:#6b7280">
+    No agents hit KPIs this week. The line resets Monday — it's wide open.
+  </p>
+</div>
+"""
+
+    # ── THE PRIZE ────────────────────────────────────────────────────────────
+    if passing:
+        html += f"""
+<div style="background:#fff;border-radius:10px;border:1px solid #e5e7eb;padding:20px 24px;margin-bottom:20px">
+  <h2 style="margin:0 0 14px;color:#0f172a;font-size:16px;font-weight:800">What You Earned</h2>
+
+  <div style="display:flex;flex-direction:column;gap:10px">
+
+    <div style="display:flex;align-items:flex-start;gap:12px;padding:12px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0">
+      <span style="font-size:22px">💬</span>
+      <div>
+        <div style="font-weight:700;color:#15803d;font-size:14px">AI Text Live Transfers</div>
+        <div style="font-size:13px;color:#374151;margin-top:2px">
+          When a lead responds to our AI texting campaign and is ready to talk, you're first in line.
+          That transfer goes to you — not to whoever happens to be logged in.
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:flex-start;gap:12px;padding:12px;background:#eff6ff;border-radius:8px;border:1px solid #bfdbfe">
+      <span style="font-size:22px">🤖</span>
+      <div>
+        <div style="font-weight:700;color:#1d4ed8;font-size:14px">AI Voice Live Transfers</div>
+        <div style="font-size:13px;color:#374151;margin-top:2px">
+          When our AI voice system qualifies a caller and they want to speak to a real agent,
+          you're the next ring. AI did the work. You close it.
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:flex-start;gap:12px;padding:12px;background:#fefce8;border-radius:8px;border:1px solid #fde68a">
+      <span style="font-size:22px">📧</span>
+      <div>
+        <div style="font-weight:700;color:#b45309;font-size:14px">AI Email Live Transfers</div>
+        <div style="font-size:13px;color:#374151;margin-top:2px">
+          Leads that engage with our automated email sequences get routed to qualifying agents
+          — not the general pool. You're in the priority queue.
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- BIG PHONE NUMBER -->
+<div style="background:#0f172a;border-radius:12px;padding:28px 24px;margin-bottom:20px;text-align:center">
+  <p style="margin:0 0 4px;color:rgba(255,255,255,0.5);font-size:12px;text-transform:uppercase;letter-spacing:2px">Your Live Transfer Number</p>
+  <div style="font-size:38px;font-weight:900;color:#f59e0b;letter-spacing:2px;margin:8px 0">{LIVE_TRANSFER_NUMBER}</div>
+  <p style="margin:0 0 16px;color:rgba(255,255,255,0.7);font-size:14px;line-height:1.5">
+    When this number rings, it's a warm, AI-qualified lead ready to talk to an agent.
+    Not a cold call. Not a nurture. <strong style="color:#ffffff">Someone who wants to buy or sell.</strong>
+  </p>
+  <a href="tel:{LIVE_TRANSFER_NUMBER_RAW}"
+     style="display:inline-block;background:#f59e0b;color:#0f172a;font-weight:800;font-size:15px;
+            padding:12px 28px;border-radius:8px;text-decoration:none;letter-spacing:0.5px">
+    📱 Save This Number Now
+  </a>
+</div>
+"""
+
+    # ── FOR THE REST OF THE TEAM ─────────────────────────────────────────────
+    failing = [a for a in agents if not a["evaluation"]["overall_pass"]]
+    if failing:
+        fail_names = ", ".join(a["name"].split()[0] for a in failing[:4])
+        n_fail = len(failing)
+
+        html += f"""
+<div style="background:#fff;border-radius:10px;border:1px solid #e5e7eb;padding:20px 24px;margin-bottom:20px">
+  <h2 style="margin:0 0 10px;color:#0f172a;font-size:15px;font-weight:700">The Board Resets Monday</h2>
+  <p style="margin:0 0 10px;font-size:14px;color:#374151;line-height:1.6">
+    {fail_names}{"," if n_fail > 4 else " —"} your name could be on this email next week.
+    Every single one of those {total_leads} leads from last week? There are more coming this week.
+    The system doesn't sleep. The only question is whether you're on the list when they do.
+  </p>
+  <p style="margin:0;font-size:14px;color:#374151;line-height:1.6">
+    Make your calls. Have your conversations. The phone line doesn't care how you feel on a Tuesday morning.
+    Neither does the leaderboard. But it does reward the people who show up anyway.
+  </p>
+  <p style="margin:10px 0 0;font-size:14px;font-style:italic;color:#6b7280">
+    "You're being too nice to your comfort zone." — Barry
+  </p>
+</div>
+"""
+
+    # ── FOOTER ───────────────────────────────────────────────────────────────
+    html += f"""
+<div style="text-align:center;color:#9ca3af;font-size:11px;margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb">
+  Legacy Home Team &nbsp;·&nbsp; Generated {now_str}<br>
+  Questions? Reply to this email or text Barry directly.
+</div>
+
+</div>
+</body></html>
+"""
+    return html
+
+
+def send_hype_email(agents, period_label, ai_text_count, ai_voice_count,
+                    fhalen_appts, fhalen_name, to_emails):
+    """
+    Send the weekly KPI hype email to all team members.
+    to_emails: list of (name, email) tuples from get_all_user_emails()
+    Returns (success: bool, message: str)
+    """
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    if not api_key:
+        return False, "SENDGRID_API_KEY not set"
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail, To
+    except ImportError:
+        return False, "sendgrid package not installed"
+
+    html_body = build_hype_email(
+        agents, period_label, ai_text_count, ai_voice_count,
+        fhalen_appts, fhalen_name,
+    )
+
+    passing_count = sum(1 for a in agents if a["evaluation"]["overall_pass"])
+    total_count   = len(agents)
+    week_of       = datetime.now().strftime("%b %d")
+
+    subjects = [
+        f"🔥 {passing_count}/{total_count} Agents Earned the Live Transfer Line — Save (757) 960-1491",
+        f"📞 Who's Getting Live Transfers This Week — {week_of}",
+        f"🏆 Legacy Live Board — {passing_count} Agents Qualified — Here's What That Means",
+        f"⚡ Live Transfers, AI Leads & the Phone Number You Need to Save — {week_of}",
+    ]
+    import random as _random
+    subject = _random.choice(subjects)
+
+    to_list = [To(email=email, name=name) for name, email in to_emails if email]
+    if not to_list:
+        return False, "No valid email recipients found"
+
+    message = Mail(
+        from_email=config.EMAIL_FROM,
+        to_emails=to_list,
+        subject=subject,
+        html_content=html_body,
+    )
+    _disable_tracking(message)
+
+    try:
+        sg = SendGridAPIClient(api_key)
+        sg.send(message)
+        return True, f"Sent to {len(to_list)} recipients"
+    except Exception as e:
+        return False, str(e)
+
+
 def send_report(results, period_start, period_end):
     """Send the audit report via SendGrid."""
     api_key = os.environ.get("SENDGRID_API_KEY")

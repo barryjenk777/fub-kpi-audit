@@ -417,6 +417,38 @@ class FUBClient:
             params["assignedPondId"] = pond_id
         return self._get_paginated("people", params)
 
+    def count_people_by_tag(self, tag, updated_since=None):
+        """
+        Count FUB people/leads currently carrying a given tag.
+        Optionally restrict to records updated since a datetime (proxy for 'tagged this week').
+        Returns an integer count; never raises.
+        """
+        params = {"limit": 100, "tag": tag}
+        if updated_since:
+            params["updatedSince"] = updated_since.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            people = self._get_paginated("people", params, max_pages=50)
+            return len(people)
+        except Exception:
+            return 0
+
+    def get_all_user_emails(self):
+        """
+        Return a list of (name, email) for every FUB user that has an email address.
+        Used to send company-wide emails to the full team roster.
+        """
+        try:
+            users = self.get_users()
+            result = []
+            for u in users:
+                name  = f"{u.get('firstName','').strip()} {u.get('lastName','').strip()}".strip()
+                email = (u.get("email") or "").strip()
+                if email and "@" in email:
+                    result.append((name, email))
+            return result
+        except Exception:
+            return []
+
     def get_people_recent(self, pond_id, limit=200):
         """Fetch the most recently-active leads from a pond, capped at `limit`.
 

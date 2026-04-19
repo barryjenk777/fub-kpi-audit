@@ -2097,6 +2097,103 @@ def api_sync_appointment_tags():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/send-hype-email", methods=["POST"])
+def api_send_hype_email():
+    """
+    Build and send the weekly KPI hype email — who earned live transfers this week.
+    Computes AI tag counts, Fhalen's appointments, and all FUB user emails on the fly.
+    """
+    try:
+        from email_report import send_hype_email as _send_hype
+        from kpi_audit import count_appointments_for_user
+
+        client = FUBClient()
+
+        # ── 1. Audit data (use cache, fall back to live fetch) ────────────────
+        audit = cache_get("audit")
+        if not audit:
+            try:
+                audit = run_audit_data()
+                cache_set("audit", audit)
+            except Exception as _ae:
+                logger.warning("hype-email: audit fetch failed: %s", _ae)
+                audit = {"agents": [], "totals": {}, "period": {}, "thresholds": {}}
+
+        agents = audit.get("agents", [])
+        period = audit.get("period", {})
+        period_label = f"{period.get('start','')} – {period.get('end','')}"
+
+        # ── 2. AI tag lead counts (last 7 days) ───────────────────────────────
+        since_7d = datetime.now(timezone.utc) - timedelta(days=7)
+        ai_text_count  = 0
+        ai_voice_count = 0
+        # Try both common FUB tag formats (space-delimited and underscore)
+        for tag in ("AI Needs Follow-Up", "AI_NEEDS_FOLLOW_UP"):
+            n = client.count_people_by_tag(tag, updated_since=since_7d)
+            ai_text_count = max(ai_text_count, n)
+        for tag in ("AI Voice Needs Follow Up", "AI_VOICE_NEEDS_FOLLOW_UP"):
+            n = client.count_people_by_tag(tag, updated_since=since_7d)
+            ai_voice_count = max(ai_voice_count, n)
+
+        # ── 3. Fhalen/ISA appointments from the audit period ──────────────────
+        fhalen_name = getattr(config, "LIVE_CALLS_ADMIN", "Fhalen")
+        fhalen_appts = 0
+        # Look in audit agents first (she might be included)
+        for a in agents:
+            if a["name"].lower().startswith(fhalen_name.lower().split()[0].lower()):
+                fhalen_appts = a["metrics"].get("appts_set", 0)
+                break
+        # If not in audit, query FUB directly for her appointment count
+        if fhalen_appts == 0:
+            try:
+                fhalen_user = client.get_user_by_name(fhalen_name)
+                if fhalen_user:
+                    since_dt = datetime.fromisoformat(audit["period_since_iso"]) if "period_since_iso" in audit else since_7d
+                    until_dt = datetime.fromisoformat(audit["period_until_iso"]) if "period_until_iso" in audit else datetime.now(timezone.utc)
+                    all_appts = client.get_appointments(since=since_dt, until=until_dt)
+                    fhalen_appts, _ = count_appointments_for_user(all_appts, fhalen_user["id"])
+            except Exception as _fa:
+                logger.warning("hype-email: fhalen appts fetch failed: %s", _fa)
+
+        # ── 4. All FUB user emails (the full 11-person roster) ────────────────
+        to_emails = client.get_all_user_emails()
+        if not to_emails:
+            return jsonify({"error": "Could not retrieve team emails from FUB"}), 500
+
+        # ── 5. Send ───────────────────────────────────────────────────────────
+        success, msg = _send_hype(
+            agents=agents,
+            period_label=period_label,
+            ai_text_count=ai_text_count,
+            ai_voice_count=ai_voice_count,
+            fhalen_appts=fhalen_appts,
+            fhalen_name=fhalen_name,
+            to_emails=to_emails,
+        )
+
+        if success:
+            logger.info("hype-email sent: %s", msg)
+            return jsonify({
+                "success": True,
+                "message": msg,
+                "stats": {
+                    "ai_text": ai_text_count,
+                    "ai_voice": ai_voice_count,
+                    "fhalen_appts": fhalen_appts,
+                    "total_leads": ai_text_count + ai_voice_count + fhalen_appts,
+                    "recipients": len(to_emails),
+                    "qualifiers": sum(1 for a in agents if a["evaluation"]["overall_pass"]),
+                },
+            })
+        else:
+            return jsonify({"error": msg}), 500
+
+    except Exception as e:
+        import traceback
+        logger.error("hype-email failed: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/send-appointment-email", methods=["POST"])
 def api_send_appointment_email():
     """Send appointment accountability email."""
