@@ -58,41 +58,133 @@ MIN_EVENTS_TO_EMAIL = 1
 # Weekends: 2x/day (Sat 10am+3pm, Sun 1pm+6pm) → 30 max/day
 MAX_PER_RUN = 15
 
-# Ylopo tags that indicate behavioral intent (scored separately from LeadStream)
+# Ylopo tags that indicate behavioral intent or give context about who the
+# lead is and how they came in. These descriptions get surfaced to Claude in
+# the email brief so the copy can reference specifics instead of writing
+# generic nurture. IMPORTANT: never mention "Ylopo", "rAIya", ad names, or
+# platform names in the actual email — Claude translates these into natural
+# language ("from our Facebook ad about military homes" → "saw you came in
+# through our military buyer ad"; "my assistant" for rAIya).
 YLOPO_INTENT_TAGS = {
-    # Behavioral / site-activity signals
+    # --- Behavioral / site-activity signals ---
+    "Y_REQUESTED_TOUR":       "submitted a tour request — ready to see a home in person",
+    "Y_FAVORITED_LISTING":    "favorited a listing — attached enough to save it",
     "Y_HOME_3_VIEW":          "viewed a specific home 3+ times",
     "Y_SHARED_LISTING":       "shared a listing (likely with a partner/spouse)",
-    "Y_SELLER_REPORT_VIEWED": "viewed a seller home value report",
-    "Y_SELLER_REPORT_ENGAGED": "clicked a call-to-action on their seller report",
-    "Y_SELLER_3_VIEW":        "returned to the seller report 3+ times in a week — high seller intent",
-    "Y_SELLER_CASH_OFFER_REQUESTED": "clicked the cash offer button on the seller report",
-    "Y_SELLER_LEARN_MORE_EQUITY":    "submitted a message via the equity CTA on the seller report",
-    "Y_SELLER_TUNE_HOME_VALUE":      "tuned/adjusted their home value estimate — engaged seller",
-    "Y_ADDRESS_FOUND":        "Ylopo identified their current home address",
+    "Y_ADDRESS_FOUND":        "their current home address was identified",
     "Y_REMARKETING_ENGAGED":  "re-engaged via remarketing ads",
     "Y_AI_PRIORITY":          "flagged as high-interest across multiple signals",
-    # AI text signals
+    "RETURNED":               "returned to site after a gap",
+    "REQUESTED_RATE":         "asked for a real payment estimate — budgeting seriously",
+    "NEW_NUMBER":             "fixed a previously-bad phone number — actively re-engaging",
+    # --- Seller Report engagement (Ylopo Seller Experience 2.0) ---
+    "Y_SELLER_REPORT_VIEWED":         "viewed a home value report",
+    "Y_SELLER_REPORT_ENGAGED":        "clicked a call-to-action on their home value report",
+    "Y_SELLER_3_VIEW":                "returned to the seller report 3+ times in a week — high seller intent",
+    "Y_SELLER_CASH_OFFER_REQUESTED":  "clicked the cash offer button on the seller report",
+    "Y_SELLER_LEARN_MORE_EQUITY":     "submitted a message via the equity CTA",
+    "Y_SELLER_TUNE_HOME_VALUE":       "tuned/adjusted their home value estimate — thinking about the number",
+    "Y_SELLER_UNDERSTAND_TREND":      "submitted a message via the home-trend CTA",
+    "Y_SELLER_NEW_HOME_UPGRADES":     "submitted details about upgrades they've made",
+    "Y_SELLER_SEARCH_MORE_PROPERTIES":"used the search widget inside the seller report",
+    "Y_SELLER_VIEWED_SIMILAR_LISTINGS":"clicked a similar-listing example on the report",
+    "Y_SELLER_HEATMAP_INQUIRY":       "submitted a Private Showing inquiry",
+    "Y_SELLER_EMAIL_AGENT":           "clicked the Email Agent CTA on the seller report",
+    "Y_SELLER_CALL_AGENT":            "clicked the Call Agent CTA on the seller report",
+    "Y_SELLER_SELF_GENERATED":        "generated their own home value report",
+    "SELLER_ALERT":                   "enrolled in seller alerts — latent seller signal",
+    # --- AI text signals ---
     "AI_NEEDS_FOLLOW_UP":     "had a text conversation with Barry's assistant — flagged for immediate follow-up",
     "AI_ENGAGED":             "currently in a text conversation with Barry's assistant",
-    # AI voice signals — call-outcome tags (the "what happened on the call" signals)
+    "AI_RESPONDED":           "responded to a text from Barry's assistant (not an opt-out)",
+    # --- AI voice call outcomes (what happened on the call) ---
     "AI_VOICE_NEEDS_FOLLOW_UP":                   "had a voice conversation with Barry's assistant — flagged for human follow-up",
     "ISA_TRANSFER_UNSUCCESSFUL":                  "agreed to be connected to Barry, then got stuck on hold and disconnected — strong intent but friction hit",
     "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE": "was ready to be connected to Barry, but no agent was available to take the call",
     "ISA_ATTEMPTED_TRANSFER":                     "a call transfer to Barry was attempted but failed mid-process",
+    "DECLINED_BY_REALTOR":                        "the transfer was declined on the agent side — treat like a missed connection",
     "CALLBACK_SCHEDULED":                         "explicitly requested a specific callback time — honor that commitment",
     "NURTURE":                                    "said they're interested but not ready to talk yet — play the long game",
-    # Hand-raise / high-intent signals
-    "HANDRAISER":             "raised their hand — expressed direct interest",
-    "YPRIORITY":              "Ylopo top-priority buyer signal",
-    "HVB":                    "high-value buyer",
-    "RETURNED":               "returned to site after a gap",
+    "VOICEMAIL":                                  "the last call attempt reached voicemail",
+    "NO_ANSWER":                                  "the last call attempt got no answer",
+    "HUNG_UP":                                    "hung up during a previous call attempt — lead the email gently",
+    "LEAD_UNAVAILABLE":                           "picked up but asked to be called back later",
+    "GHOST_CALL":                                 "the last call attempt got no one on the line",
+    "BUSY_TONE":                                  "the last call attempt hit a busy tone",
+    # --- Hand-raise / high-intent signals ---
+    "HANDRAISER":             "raised their hand — expressed direct interest on the site",
+    "YPRIORITY":              "completed a high-intent action on the site",
+    "HVB":                    "came in on a high-value buyer campaign",
+    # --- Direct Connect / dynamic registration explicit asks ---
+    "call_now=yes":                   "explicitly asked to be called within the hour at registration",
+    "call_now=another_time":          "wants a call, flexible on timing",
+    "call_for_preapproval=yes":       "asked to be called about preapproval",
+    "call_about_homes=yes":           "asked to be called about home search (not immediately)",
+    "second_opinion_preapproval=yes": "already preapproved, wants a second opinion on rates",
+    "cash_buyer=yes":                 "self-identified as a cash buyer",
+    "cash_offer=Yes":                 "requested a cash offer on their home (Direct Connect)",
+    # --- Timeline signals ---
+    "timeline=within 90 days":  "timeline: within 90 days",
+    "timeline=within90days":    "timeline: within 90 days",
+    "timeline=within 6 months": "timeline: within 6 months",
+    "timeline=within6months":   "timeline: within 6 months",
+    "timeline=over 6 months":   "timeline: more than 6 months out — long-game nurture",
+    "timeline=over6months":     "timeline: more than 6 months out — long-game nurture",
+    # --- Preapproval / equity status ---
+    "PREAPPROVED_FOR_LOAN=YES":     "already preapproved for a loan",
+    "PREAPPROVED_FOR_LOAN=NO":      "not yet preapproved — may need a lender referral",
+    "USE_HOME_EQUITY=YES":          "planning to use home equity to buy",
+    "USE_HOME_EQUITY=NO":           "not planning to use home equity",
+    "USE_HOME_EQUITY=I Don't Own a Home": "doesn't own a home currently",
+    "DO_YOU_OWN_A_HOME=YES":        "currently owns a home",
+    "DO_YOU_OWN_A_HOME=NO":         "does not currently own a home",
+    "I_NEED_TO_SELL_BEFORE_I_CAN_BUY": "needs to sell their current home before buying the next",
+    "SELL_BEFORE_BUY_NO":           "does NOT need to sell before buying",
+    # --- Dynamic reg classifiers ---
+    "BUYER":                        "identified as a buyer at registration",
+    "SELLER":                       "identified as a seller at registration",
+    # --- Source / ad-subtype context (how they came in) ---
+    # The actual ad context helps Claude write an opener that reflects the lead's
+    # entry point — "saw you came through our military-buyer campaign" reads very
+    # differently from "saw you browsing luxury homes".
+    "HNW":                    "came in on a luxury (high-net-worth) ad",
+    "HOU":                    "came in on a homeowner trade-up ad (selling to buy a bigger home)",
+    "HOD":                    "came in on a homeowner trade-down ad (selling to buy a smaller home)",
+    "LTM":                    "came in on a 'likely to move' ad",
+    "NC":                     "came in on a new-construction ad",
+    "M":                      "came in on a military-buyer ad",
+    "RB":                     "came in on an out-of-town / relocation-buyer ad",
+    "CNEW":                   "came in on a city-specific listings ad",
+    "CUS":                    "came in on a custom marketing campaign",
+    "VIDEO":                  "came in through a video / 3D-tour listing ad",
+    "LISTING_ROCKET":         "came in through a carousel listing ad",
+    "YLOPO_FACEBOOK":         "registered on a Facebook ad",
+    "YLOPO_ADWORDS":          "registered on a Google search ad",
+    "YLOPO_GBP_ADS":          "registered on a Google Business Profile ad",
+    "YLOPO_LSA":              "called in through a Google Local Service Ad",
+    "YLOPO_ORGANIC":          "registered organically on the home-search site",
+    "YLOPO_DIRECT_CONNECT_FB":  "Direct Connect lead from Facebook (dynamic registration)",
+    "YLOPO_DIRECT_CONNECT_PPC": "Direct Connect lead from Google (dynamic registration)",
+    "YLOPO_REACTIVATED":      "re-engaged via a database-texting blast",
 }
 
 SELL_BEFORE_BUY_TAGS = {
     "I_NEED_TO_SELL_BEFORE_I_CAN_BUY",
     "sell_before_buy=Yes",
 }
+
+
+def _email_suppression_tags(tags):
+    """Return the list of tags that should prevent an email from being sent.
+
+    Combines LeadStream-level suppression (opt-outs, disqualifications) with
+    pond-email-specific suppression (NO_EMAIL, NO_MARKETING, listing-alert
+    unsubscribes). If anything is returned, we must NOT email this lead.
+    """
+    from config import LEADSTREAM_SUPPRESSION_TAGS, POND_EMAIL_EXTRA_SUPPRESSION_TAGS
+    block_set = LEADSTREAM_SUPPRESSION_TAGS | POND_EMAIL_EXTRA_SUPPRESSION_TAGS
+    return [t for t in (tags or []) if t in block_set]
+
 
 LOGO_URL = "https://web-production-3363cc.up.railway.app/static/logo-blue.png"
 PHYSICAL_ADDRESS = "LPT Realty · 1545 Crossways Blvd Chesapeake, VA 23320"
@@ -739,11 +831,16 @@ def _is_ylopo_prospecting_seller(person, tags):
     ai_tags = {
         "AI_NEEDS_FOLLOW_UP",
         "AI_ENGAGED",
+        "AI_RESPONDED",
         "AI_VOICE_NEEDS_FOLLOW_UP",
         "ISA_TRANSFER_UNSUCCESSFUL",
         "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE",
         "ISA_ATTEMPTED_TRANSFER",
+        "DECLINED_BY_REALTOR",
         "CALLBACK_SCHEDULED",
+        "NURTURE",
+        "VOICEMAIL",
+        "LEAD_UNAVAILABLE",
     }
     return any(t in ai_tags for t in (tags or []))
 
@@ -770,22 +867,24 @@ def _build_seller_brief(first_name, person, tags):
 
     # Relevant tags (no Ylopo platform names in emails)
     seller_signals = []
-    # AI conversation signals
+    # AI text conversation signals
     if "AI_NEEDS_FOLLOW_UP" in tags:
         seller_signals.append("had a text conversation with Barry's assistant about their home (strong engagement)")
     if "AI_ENGAGED" in tags:
         seller_signals.append("is currently in an active text conversation with Barry's assistant")
+    if "AI_RESPONDED" in tags:
+        seller_signals.append("replied to a text from Barry's assistant")
+    # AI voice presence + call outcomes — these change the email angle substantially
     if "AI_VOICE_NEEDS_FOLLOW_UP" in tags:
         seller_signals.append("had a voice conversation with Barry's assistant about their home")
-    # AI voice call outcomes — these change the email angle substantially
     if "ISA_TRANSFER_UNSUCCESSFUL" in tags:
         seller_signals.append(
             "AGREED to be connected to Barry on a live call, then got stuck on hold and disconnected — "
             "acknowledge the friction directly ('sorry we missed each other — here's a direct path')"
         )
-    if "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE" in tags:
+    if "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE" in tags or "DECLINED_BY_REALTOR" in tags:
         seller_signals.append(
-            "was ready to be connected to Barry but no one was available to take the call — "
+            "was ready to be connected to Barry but the call didn't go through on our end — "
             "acknowledge it openly ('we tried to connect you live and dropped the ball — fully on us')"
         )
     if "ISA_ATTEMPTED_TRANSFER" in tags:
@@ -803,6 +902,16 @@ def _build_seller_brief(first_name, person, tags):
             "said they're interested in selling in the future but not ready yet — long-game nurture, "
             "no urgency, no hard CTA — just stay useful"
         )
+    if "VOICEMAIL" in tags:
+        seller_signals.append(
+            "a previous call attempt reached voicemail — email should be casual follow-up, "
+            "not 'we've been trying to reach you' desperation energy"
+        )
+    if "LEAD_UNAVAILABLE" in tags:
+        seller_signals.append(
+            "picked up a previous call but asked to be reached later — brief email, "
+            "respect that they're busy, make re-connecting easy"
+        )
     # Seller-report engagement signals
     if "Y_SELLER_REPORT_VIEWED" in tags:
         seller_signals.append("viewed a home value report")
@@ -816,6 +925,24 @@ def _build_seller_brief(first_name, person, tags):
         seller_signals.append("submitted a message via the equity CTA — curious about what their home is worth net")
     if "Y_SELLER_TUNE_HOME_VALUE" in tags:
         seller_signals.append("adjusted/tuned their home value estimate — engaged, thinking about the number")
+    if "Y_SELLER_UNDERSTAND_TREND" in tags:
+        seller_signals.append("submitted a message about home-value trends — curious where the market is going")
+    if "Y_SELLER_NEW_HOME_UPGRADES" in tags:
+        seller_signals.append("told us about upgrades they've made — preparing the value story for a future sale")
+    if "Y_SELLER_HEATMAP_INQUIRY" in tags:
+        seller_signals.append("submitted a Private Showing inquiry — thinking about interested parties already")
+    if "Y_SELLER_EMAIL_AGENT" in tags:
+        seller_signals.append("clicked the Email Agent CTA on their home value report — reached out directly")
+    if "Y_SELLER_CALL_AGENT" in tags:
+        seller_signals.append("clicked the Call Agent CTA on their home value report — wants a phone conversation")
+    if "Y_SELLER_VIEWED_SIMILAR_LISTINGS" in tags:
+        seller_signals.append("clicked into similar-listing comps on their report — comparing to the market")
+    if "Y_SELLER_SEARCH_MORE_PROPERTIES" in tags:
+        seller_signals.append("used the search widget inside their seller report — possibly looking at a next move")
+    if "Y_SELLER_SELF_GENERATED" in tags:
+        seller_signals.append("generated their own home value report — self-starter, not prompted")
+    if "SELLER_ALERT" in tags:
+        seller_signals.append("enrolled in seller alerts — staying plugged in to market data")
     if "YPRIORITY" in tags or "Y_AI_PRIORITY" in tags:
         seller_signals.append("high-priority seller signal")
     if seller_signals:
@@ -2064,6 +2191,13 @@ def run_new_lead_mailer(dry_run=True):
             logger.info("Skipping new lead %s — already claimed by agent (user %s)", name, _assigned_uid)
             continue
 
+        # Compliance block — respect opt-outs before sending the immediate email.
+        _blocking = _email_suppression_tags(tags)
+        if _blocking:
+            logger.info("Skipping new lead %s — email suppressed by tag(s): %s",
+                        name, ", ".join(_blocking))
+            continue
+
         # Already sent the immediate email?
         if _db.has_received_new_lead_immediate(pid):
             logger.debug("Skipping %s — already got new_lead_immediate", name)
@@ -2307,6 +2441,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # Opt-out check — lead replied negatively to a previous email
         if "PondMailer_Unsubscribed" in tags:
             logger.debug("Skipping %s — opted out", name)
+            skipped_cooldown += 1
+            continue
+
+        # Compliance block — respect Ylopo/agent-applied opt-outs before we ever
+        # generate or send an email (NO_EMAIL, NO_MARKETING, DO_NOT_CALL,
+        # AI_OPT_OUT, LISTING_ALERT_UNSUB, etc.). These tags mean the lead has
+        # explicitly or implicitly asked us to stop reaching out.
+        _blocking = _email_suppression_tags(tags)
+        if _blocking:
+            logger.info("Skipping %s — email suppressed by tag(s): %s",
+                        name, ", ".join(_blocking))
             skipped_cooldown += 1
             continue
 
