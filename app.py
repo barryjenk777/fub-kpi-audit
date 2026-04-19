@@ -2124,9 +2124,15 @@ def api_sync_appointment_tags():
         return jsonify({"error": str(e)}), 500
 
 
-def _gather_hype_data():
+def _gather_hype_data(ai_text_count=None, ai_voice_count=None):
     """
     Shared data-gathering for the hype email preview and send endpoints.
+
+    ai_text_count / ai_voice_count: manually-entered lead counts from the
+    dashboard (from MaverickRE's reporting). When provided, these override
+    any FUB-side estimation. When None, both default to 0 — FUB's
+    tag-based counting is unreliable (updatedSince doesn't mean 'tagged since').
+
     Returns dict with: agents, period_label, ai_text_count, ai_voice_count,
                        fhalen_appts, fhalen_name, to_emails
     """
@@ -2148,15 +2154,16 @@ def _gather_hype_data():
     period = audit.get("period", {})
     period_label = f"{period.get('start','')} – {period.get('end','')}"
 
-    # ── 2. AI tag lead counts (last 7 days) ───────────────────────────────────
-    since_7d = datetime.now(timezone.utc) - timedelta(days=7)
-    ai_text_count = ai_voice_count = 0
-    for tag in ("AI Needs Follow-Up", "AI_NEEDS_FOLLOW_UP"):
-        ai_text_count = max(ai_text_count, client.count_people_by_tag(tag, updated_since=since_7d))
-    for tag in ("AI Voice Needs Follow Up", "AI_VOICE_NEEDS_FOLLOW_UP"):
-        ai_voice_count = max(ai_voice_count, client.count_people_by_tag(tag, updated_since=since_7d))
+    # ── 2. AI lead counts — use manually-entered values; default 0 ────────────
+    # FUB's updatedSince filter on /people is not reliable for counting
+    # "tagged this week" — it returns people whose record was updated for any
+    # reason, so totals balloon to thousands from historical tags.
+    # Barry enters the real numbers from MaverickRE's dashboard.
+    ai_text_count  = int(ai_text_count)  if ai_text_count  is not None else 0
+    ai_voice_count = int(ai_voice_count) if ai_voice_count is not None else 0
 
     # ── 3. ISA appointments ───────────────────────────────────────────────────
+    since_7d = datetime.now(timezone.utc) - timedelta(days=7)
     fhalen_name = getattr(config, "LIVE_CALLS_ADMIN", "Fhalen")
     fhalen_appts = 0
     for a in agents:
@@ -2199,7 +2206,9 @@ def api_preview_hype_email():
     from flask import make_response
     from email_report import build_hype_email as _build_hype
     try:
-        data = _gather_hype_data()
+        ai_text  = request.args.get("ai_text",  0, type=int)
+        ai_voice = request.args.get("ai_voice", 0, type=int)
+        data = _gather_hype_data(ai_text_count=ai_text, ai_voice_count=ai_voice)
         html = _build_hype(
             agents=data["agents"],
             period_label=data["period_label"],
@@ -2236,7 +2245,10 @@ def api_send_hype_email():
     """Send the weekly KPI hype email to the full team roster."""
     from email_report import send_hype_email as _send_hype
     try:
-        data = _gather_hype_data()
+        body = request.get_json(silent=True) or {}
+        ai_text  = int(body.get("ai_text",  0))
+        ai_voice = int(body.get("ai_voice", 0))
+        data = _gather_hype_data(ai_text_count=ai_text, ai_voice_count=ai_voice)
         if not data["to_emails"]:
             return jsonify({"error": "Could not retrieve team emails from FUB"}), 500
 
