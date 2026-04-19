@@ -246,62 +246,49 @@ def generate_seller_video_script(first_name: str, street: str, city: str,
         client = anthropic.Anthropic()
 
         comp_line = (
-            f"Include this real market data naturally in the middle section: {comp_snippet}"
+            f"Include this real market data naturally: {comp_snippet}"
             if comp_snippet
-            else f"Include one specific, credible insight about the {city} market — "
-                 f"something about how fast homes are moving, what sellers are netting, "
-                 f"or what the inventory looks like right now. Be specific, not vague."
+            else ""
         )
 
-        prompt = f"""Write a 35-40 second video script for Barry Jenkins, #1 real estate team in Virginia.
+        prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 team in Virginia.
 
 Barry is recording this for {first_name}, a homeowner at {street_spoken} in {city}.
-Context: they spoke with Barry's AI assistant about their home value and got transferred to his team.
-They are warm — they reached out first. This is Barry's human follow-up.
+They spoke with Barry's AI assistant about their home value — they're CURIOUS, not committed to selling.
+Their core question is: "what would I actually walk away with?"
 
-━━━━ THE FRAME (non-negotiable) ━━━━
-Barry was already recording market update videos for a few of his seller clients.
-Mid-session, he remembered this person and pulled one together for them on the spot.
+━━━━ THE FRAME ━━━━
+Barry was pulling comps for other sellers in {city}. He remembered this person and put together a quick recording for them.
+Spontaneous, not polished. He pivoted from client work to record this.
 
-The video should feel SPONTANEOUS — like he pivoted from client work to record this.
-NOT polished. NOT formal. NOT a marketing video.
-The believability of "I was already doing this" is the entire hook.
+━━━━ OPEN (3-5 seconds) ━━━━
+Start mid-thought. Reference pulling comps or working on something for other {city} sellers.
+Good: "Hey {first_name} — so I was actually just pulling comps for a couple of my sellers over in {city} this week and I remembered we never connected after my assistant reached out about your place on {street_spoken}. So I put together a quick recording for you while I was at it."
+Bad: "Hi, I'm Barry Jenkins..." — too formal
+Bad: "I was recording market videos..." — less credible than "pulling comps"
 
-━━━━ SCRIPT STRUCTURE ━━━━
-
-OPEN (3-5 seconds): Catch them off-guard. Start mid-thought, not with a formal intro.
-Good: "Hey {first_name} — so I was literally just finishing up a market video for one of my clients over in {city}..."
-Good: "Hey {first_name}, I was recording a few of these for some of my sellers this week..."
-Bad: "Hi, I'm Barry Jenkins with Legacy Home Team..." (too formal, kills the frame)
-Bad: "I wanted to reach out about your home..." (sounds like a script)
-
-PIVOT (5-7 seconds): The "remembered you" moment. Natural, not salesy.
-"...and I realized my assistant and I never actually followed up with you after that conversation about your place on {street}. So I figured — let me just do one for you while I'm at it."
-Or: "...and it hit me — we spoke about your home on {street} but never actually connected."
-
-MARKET INTEL (15-20 seconds): This is the credibility section. Barry knows {city}.
+━━━━ THE HOOK (15-18 seconds) ━━━━
+This is the psychology of a curious seller: they think in offer price, but the number that matters is what they walk away with.
+Create a curiosity gap — tell them there's a number they probably haven't seen yet.
 {comp_line}
-Frame it as: "here's what I'm actually seeing right now for homes in your area."
-This is why the video is worth watching. Be specific — vague market commentary kills trust.
+Good angle: "Here's what most sellers don't find out until they're already in contract: the number on the offer and the number you actually walk away with are almost always different — once you factor in commissions, repairs, and closing costs."
+Good angle: "What I'm seeing for homes like yours in {city} right now — the gap between asking price and what sellers are actually netting might surprise you."
+Do NOT say: "the market is hot", "homes are moving fast", "window is closing" — this is generic and kills trust.
 
-SOFT CLOSE (5-8 seconds): One low-friction ask. Not a pitch. Not an appointment demand.
-Good: "Would it make sense to do a quick call? Even 10 minutes — I can walk you through the full picture."
-Good: "Text me back or reply here — whatever's easier."
-Bad: "I'd love to schedule a time to discuss your real estate needs." (too formal)
-Bad: "Feel free to reach out" (passive, sounds like it's on them)
+━━━━ CLOSE (5-7 seconds) ━━━━
+Low pressure. They're curious, not ready to decide. Offer clarity, not commitment.
+Good: "I'd rather you see that picture now, before you make any decisions. Would a quick 10-minute call make sense? Just reply here."
+Bad: "I'd love to schedule a listing consultation." (too much commitment pressure)
 
 ━━━━ VOICE ━━━━
-- Barry is 20+ years in Hampton Roads. He talks like a knowledgeable friend, not a pitch man.
-- Conversational pace. Short sentences on camera land better than long ones.
-- Never say: "Ylopo", "rAIya", "AI", any platform name — say "my assistant"
-- Never say: "I'd love to", "feel free to", "don't hesitate", "happy to help"
-- Contractions throughout. "I'm", "I've", "you're", "let's" — not formal language.
+- Knowledgeable friend. Teaching, not pitching. Never say "I'd love to", "feel free to", "don't hesitate"
+- Never mention: Ylopo, rAIya, AI — say "my assistant"
+- Contractions throughout. Short sentences on camera.
 
 ━━━━ LENGTH ━━━━
-Target: 130-150 words. At normal speaking pace = 35-42 seconds. That's the sweet spot.
-Too short = doesn't build credibility. Too long = they stop watching.
+130-150 words. 35-42 seconds.
 
-Return ONLY the script. No labels, no stage directions, no quotes around it. Just Barry's words."""
+Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
         msg = client.messages.create(
             model="claude-sonnet-4-6",
@@ -314,18 +301,17 @@ Return ONLY the script. No labels, no stage directions, no quotes around it. Jus
 
     except Exception as e:
         logger.warning("Claude script generation failed, using fallback: %s", e)
-        comp_line = f" {comp_snippet}" if comp_snippet else (
-            f" Right now in {city}, homes are moving — sellers are getting strong offers "
-            f"and the window is real."
-        )
+        comp_line = f" {comp_snippet}" if comp_snippet else ""
         return (
-            f"Hey {first_name} — so I was literally just finishing up a market video for one of my clients "
-            f"over in {city} and I realized my assistant and I never actually followed up with you after "
-            f"that conversation about your place on {street_spoken}. So I figured, let me just do one for you "
-            f"while I'm at it.{comp_line} "
-            f"I can walk you through exactly what I'm seeing for homes like yours right now — "
-            f"what sellers are actually netting, how fast things are moving. "
-            f"Would it make sense to do a quick 10-minute call? Just reply here and we'll find a time."
+            f"Hey {first_name} — so I was actually just pulling comps for a couple of my sellers "
+            f"over in {city} this week and I remembered we never connected after my assistant "
+            f"reached out about your place on {street_spoken}. "
+            f"So I put together a quick recording for you while I was at it.{comp_line} "
+            f"Here's what most sellers don't find out until they're already in contract: "
+            f"the number on the offer and the number you actually walk away with are almost "
+            f"always different — once you factor in commissions, repairs, and closing costs. "
+            f"I'd rather you see that picture now, before you make any decisions. "
+            f"Would a quick 10-minute call make sense? Just reply here."
         )
 
 
@@ -353,54 +339,42 @@ def generate_zbuyer_video_script(first_name: str, street: str, city: str,
         comp_line = (
             f"Include this market context naturally: {comp_snippet}"
             if comp_snippet
-            else (
-                f"Include one grounding line about what homes in {city} are actually moving for "
-                f"right now — cash vs. listed. Something specific, not vague."
-            )
+            else ""
         )
 
         prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 real estate team in Virginia.
 
 Barry is recording this for {first_name}, a homeowner at {street_spoken} in {city}.
-They submitted a CASH OFFER REQUEST online — they want to sell, they want speed,
-and their inbox is already flooded with "WE BUY HOUSES" pitches.
+They submitted a cash offer request — they want speed, and their inbox is already full of "WE BUY HOUSES" texts.
+Barry's edge: he's a real Realtor who can do BOTH — cash OR listed — whichever nets more.
 
-━━━━ THE FRAME (non-negotiable) ━━━━
-Barry was already recording client videos. Saw the request come in, pulled one together on the spot.
-Calm confidence. The "I can actually solve this" guy, not the "WE BUY HOUSES" guy.
+━━━━ THE FRAME ━━━━
+Barry was already recording client videos. Saw the request come in, put together a quick recording on the spot.
+Calm confidence. Not a cash buyer hustler — the credible professional who can actually solve this.{comp_line}
 
-━━━━ BARRY'S CREDENTIALS (weave in naturally) ━━━━
-- Realtor with Legacy Home Team at LPT Realty (say it this way, not just "licensed agent")
-- Almost 30 years serving this community
-- Can do BOTH: cash close OR list on MLS — whichever puts more money in {first_name}'s pocket
+━━━━ OPEN (3-4 seconds) ━━━━
+Acknowledge the request, name the address and city. Direct, no warm-up.
+Good: "Hey {first_name} — saw your cash offer request come in for {street_spoken} and I was already recording some client videos, so I put together a quick recording for you."
 
-━━━━ SCRIPT STRUCTURE ━━━━
+━━━━ CREDENTIALS + DIFFERENTIATOR (18-22 seconds) ━━━━
+Lead with who Barry is BEFORE the pitch — credibility first cuts through the noise.
+"I'm Barry Jenkins — Realtor with Legacy Home Team at LPT Realty, been serving this community for almost 30 years."
+Then the two-option differentiator:
+"Here's what I do differently: I can close cash in as little as 7 days — or I can pull the MLS numbers and show you what listing your home might actually net. That gap is usually smaller than sellers expect, and sometimes it completely flips."
+Do NOT say "you deserve to see both" — weak. Just state the options directly.
 
-OPEN (3-5 seconds): Mid-thought, saw the request come in.
-Good: "Hey {first_name} — saw your cash offer request come through for your home at {street_spoken} in {city}..."
-
-THE PITCH (15-20 seconds): Cash option + the differentiator.
-"I can close cash in as little as 7 days — no showings, no stress, done.
-But here's what sets me apart: as a Realtor with Legacy Home Team at LPT Realty, I can also
-pull the MLS numbers and show you what listing might net. Sometimes that's significantly more.
-I've been serving this community for almost 30 years — I know this market."
-
-MARKET CREDIBILITY (8-10 seconds):
-{comp_line}
-
-CLOSE (5-7 seconds): Direct. Easy ask.
-"10 minutes on the phone — I'll run both numbers for your home at {street_spoken}. Just reply here."
+━━━━ CLOSE (5-6 seconds) ━━━━
+Direct. One ask.
+"10 minutes on the phone and I'll run both numbers for your home on {street_spoken}. Just reply here."
 
 ━━━━ RULES ━━━━
-- Say "Realtor with Legacy Home Team at LPT Realty" — not "licensed agent"
-- Mention almost 30 years in the community
-- Reference the street address and city naturally
-- Never: "I'd love to", "feel free to", "don't hesitate"
-- Contractions throughout. Shorter sentences on camera.
-- No Ylopo, no platform names, no "AI"
+- "Realtor with Legacy Home Team at LPT Realty" — not "licensed agent"
+- Almost 30 years in the community
+- Never: "I'd love to", "feel free to", "don't hesitate", "you deserve to"
+- Contractions throughout. No Ylopo, no AI.
 
 ━━━━ LENGTH ━━━━
-130-150 words. 35-42 seconds.
+120-140 words. 35-40 seconds.
 
 Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
@@ -417,16 +391,14 @@ Return ONLY the script. No labels, no stage directions. Just Barry's words."""
         logger.warning("Claude Z-buyer script generation failed, using fallback: %s", e)
         comp_line = f" {comp_snippet}" if comp_snippet else ""
         return (
-            f"Hey {first_name} — saw your cash offer request come through for your home at "
-            f"{street_spoken} in {city}, and I was already recording some videos for clients "
-            f"so I pulled one together for you right now. "
-            f"I can close cash in as little as 7 days — no showings, no financing falling through, done. "
-            f"But here's what separates me from everyone else who responded: "
-            f"I'm a Realtor with Legacy Home Team at LPT Realty, and I've been serving this "
-            f"community for almost 30 years. I can also pull the MLS numbers and show you "
-            f"what listing your home might actually net.{comp_line} "
-            f"Sometimes that number is significantly higher than cash. "
-            f"Either way, you deserve to see both before you decide. "
+            f"Hey {first_name} — saw your cash offer request come in for {street_spoken} "
+            f"and I was already recording some client videos, "
+            f"so I put together a quick recording for you.{comp_line} "
+            f"I'm Barry Jenkins — Realtor with Legacy Home Team at LPT Realty, "
+            f"been serving this community for almost 30 years. "
+            f"Here's what I do differently: I can close cash in as little as 7 days — "
+            f"or I can pull the MLS numbers and show you what listing your home might actually net. "
+            f"That gap is usually smaller than sellers expect, and sometimes it completely flips. "
             f"10 minutes on the phone and I'll run both numbers for your home on {street_spoken}. "
             f"Just reply here."
         )
@@ -494,50 +466,48 @@ def generate_buyer_video_script(
         import anthropic
         client = anthropic.Anthropic()
 
+        _specific_home = (
+            f"IMPORTANT: {first_name} has been back to {expand_address_for_speech(most_viewed_street)} "
+            f"more than once. Open with that — make them feel seen. "
+            f"Say something like: 'I noticed you've been back to {expand_address_for_speech(most_viewed_street)} "
+            f"more than once — I pulled everything on that home and I want to share what I found.' "
+            f"This is the hook. Don't bury it."
+            if most_viewed_street and strategy in ("saved_property", "repeat_view")
+            else f"{strategy_context}"
+        )
+
         prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 real estate team in Virginia.
 
 Barry is recording this for {first_name}, a buyer searching for a {search_desc}.
-{strategy_context}
+{_specific_home}
 
-━━━━ THE FRAME (non-negotiable) ━━━━
-Barry was already recording market update videos for other buyer clients.
-He saw {first_name}'s search come through and pulled one together on the spot.
-Same "I was already doing this" energy — not a cold pitch, a warm pivot.
+━━━━ THE FRAME ━━━━
+Barry was putting together a video for another buyer in {city} and saw {first_name}'s search come through.
+He put together a quick recording on the spot. Not a cold pitch — a warm pivot from work he was already doing.
 
-━━━━ SCRIPT STRUCTURE ━━━━
+━━━━ OPEN (3-4 seconds) ━━━━
+"Hey {first_name} — was putting together a video for another buyer in {city} and saw your search come through, so I put together a quick recording for you."
+Then immediately move to the specific hook below — don't linger.
 
-OPEN (3-5 seconds): Mid-thought, natural. Reference the city or search.
-Good: "Hey {first_name} — was just finishing up a video for another buyer looking in {city} and saw your search come through, so I pulled one together for you."
-Bad: "Hi, I'm Barry Jenkins..." (too formal)
+━━━━ THE HOOK (18-22 seconds — this is everything) ━━━━
+{"Make them feel seen about " + expand_address_for_speech(most_viewed_street) + " FIRST, then pivot to market insight." if most_viewed_street and strategy in ("saved_property", "repeat_view") else "Give one genuinely specific insight about buying in " + city + (f" in the {price_str} range" if price_str else "") + " right now."}
 
-MARKET INTEL (20-25 seconds — this is the heart of the video):
-Give a genuinely MEATY, specific snapshot of what buyers in {city} {f"in the {price_str} range" if price_str else ""} are actually navigating right now.
+Then the insider access angle — this is Barry's real differentiator:
+"By the time something good hits Zillow, it's usually already showing — sometimes already under contract. Our team closes a lot of homes in Hampton Roads, which means we hear about what's coming before it goes public."
 
-Pick 2-3 of these angles and make them specific — not vague:
-• Inventory reality: how much is actually available in that city/price range, and how fast it moves
-• Competition dynamics: are buyers seeing multiple offers? Is it softening? What price points are hottest?
-• What buyers get wrong going in — the mistake most make before working with an agent
-• What Barry's volume at Legacy Home Team gives them that Zillow can't — pocket listings, relationships with listing agents, knowing what's coming before it's public. Say "we close a lot of homes here" not a specific number.
-• Something neighborhood-specific or price-tier-specific that sounds like inside knowledge
-• The rate/affordability reality if relevant — not a prediction, just what buyers are actually doing now
+Do NOT use: "inventory is moving fast", "buyers who win are set up and ready", "the window is closing"
+These are what every agent says. They kill credibility.
 
-This is the credibility section. Specific beats generic every time.
-{"If they're circling " + expand_address_for_speech(most_viewed_street) + ", mention you can get them more info on that specific one." if most_viewed_street and strategy in ("saved_property", "repeat_view") else ""}
-
-CLOSE (5-7 seconds): Low friction. One soft ask.
-Good: "Happy to walk you through what we're actually seeing right now — just reply here."
-Good: "10 minutes on the phone and I can show you what's real in your search right now."
-Bad: "I'd love to schedule an appointment to discuss your needs." (too formal)
+━━━━ CLOSE (5-6 seconds) ━━━━
+"10 minutes on the phone and I can walk you through exactly what I'm seeing. Just reply here."
 
 ━━━━ BARRY'S VOICE ━━━━
-- Almost 30 years in Hampton Roads. Talks like a knowledgeable friend, not a pitch man.
-- Short sentences. Contractions throughout. No fluff.
-- Never: "I'd love to", "feel free to", "don't hesitate", "happy to help", "reach out"
-- Never: "Ylopo", "rAIya", "AI", "platform" — say "your search" or "you were looking at"
-- Credibility comes from specificity, not self-promotion
+- Knowledgeable friend. Teaching, not pitching. Never "I'd love to", "feel free to", "don't hesitate"
+- Never: Ylopo, rAIya, AI — say "your search"
+- Short sentences. Contractions. Specific beats generic every time.
 
 ━━━━ LENGTH ━━━━
-130-150 words. At normal speaking pace = 35-42 seconds.
+130-150 words. 35-42 seconds.
 
 Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
@@ -553,24 +523,25 @@ Return ONLY the script. No labels, no stage directions. Just Barry's words."""
     except Exception as e:
         logger.warning("Claude buyer script generation failed, using fallback: %s", e)
 
-        # Fallback — still references their city and price range specifically
-        price_line = f" in the {price_str} range" if price_str else ""
-        viewed_line = (
-            f" I also saw you were circling {expand_address_for_speech(most_viewed_street)} — "
-            f"I can pull the full picture on that one too."
-            if most_viewed_street and strategy in ("saved_property", "repeat_view")
-            else ""
-        )
+        price_line = f" in that {price_str} range" if price_str else ""
+        if most_viewed_street and strategy in ("saved_property", "repeat_view"):
+            _mv_spoken = expand_address_for_speech(most_viewed_street)
+            specific_hook = (
+                f"I noticed you've been back to {_mv_spoken} more than once — "
+                f"I pulled everything on that home and I want to share what I found. "
+            )
+        else:
+            specific_hook = ""
         return (
-            f"Hey {first_name} — was just finishing up a video for another buyer looking in {city} "
-            f"and saw your search come through, so I pulled one together for you. "
-            f"Here's what I'm actually seeing right now{price_line} in {city}: "
-            f"inventory is moving fast — homes in that price range are averaging a short window before "
-            f"they're gone, and the buyers who win are the ones who are already set up and ready to move "
-            f"when the right one hits. "
-            f"Our team closes a lot of homes here in Hampton Roads, which means I'm hearing about "
-            f"homes before they even hit the market.{viewed_line} "
-            f"10 minutes on the phone and I can walk you through what's real in your search right now. "
+            f"Hey {first_name} — was putting together a video for another buyer in {city} "
+            f"and saw your search come through, so I put together a quick recording for you. "
+            f"{specific_hook}"
+            f"Here's the reality of buying{price_line} in {city} right now: "
+            f"by the time something good hits Zillow it's usually already showing — "
+            f"sometimes already under contract. "
+            f"Our team closes a lot of homes in Hampton Roads, which means we hear about "
+            f"what's coming before it goes public. "
+            f"10 minutes on the phone and I can walk you through exactly what I'm seeing. "
             f"Just reply here."
         )
 
