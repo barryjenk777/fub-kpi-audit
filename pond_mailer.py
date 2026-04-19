@@ -47,7 +47,8 @@ EMAIL_COOLDOWN_DAYS = 3
 # 15-day cadence → roughly every 2 weeks
 # Alternates: longer content email (4, 6, 8) → listing link email (5, 7, 9)
 # Goal: stay top of mind for leads who weren't ready in the sprint.
-DRIP_COOLDOWN_DAYS = 15   # 5 gaps × 15 days = 75-day drip (emails 4-9)
+DRIP_COOLDOWN_DAYS = 10   # 5 gaps × 10 days = 50-day drip (emails 4-9)
+# Was 15 days — tightened because active searchers go cold waiting that long.
 
 # Minimum IDX events needed to write a meaningful email
 # Counts ALL event types (page views, property views, saves, registration)
@@ -3387,22 +3388,57 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         if result.get("sg_message_id") and log_id:
             _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
 
-        # Log the outbound email to FUB timeline as a 📧 note so agents can
-        # see what went out. (FUB /v1/emails is blocked for API integrations.)
+        # Log the outbound email to FUB timeline as a structured 📧 note.
+        # Agents see email number, type, what it does, and clear next-action.
+        # (FUB /v1/emails is blocked for API integrations — notes work fine.)
         if not dry_run:
             try:
-                from config import BARRY_FUB_USER_ID
+                from config import BARRY_FUB_USER_ID, DRIP_COOLDOWN_DAYS
+                _lt = ("zbuyer" if is_z
+                       else ("seller" if is_ylopo_seller else "buyer"))
                 client.log_email_sent(
                     person_id=pid,
                     subject=email_data["subject"],
                     message=email_data["body_text"],
                     user_id=BARRY_FUB_USER_ID,
+                    sequence_num=sequence_num,
+                    lead_type=_lt,
+                    avatar_used=_avatar_used,
+                    cooldown_days=DRIP_COOLDOWN_DAYS,
                 )
             except Exception as _fub_err:
                 logger.warning("FUB email log skipped for %s: %s", name, _fub_err)
 
         sent += 1
         print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'}")
+
+        # ── Sequence completion signal — Email 9 (final drip) ───────────────
+        # Apply NURTURE_COMPLETE tag + a clear FUB note so the agent knows
+        # the automated sequence is finished and this lead needs human follow-up.
+        if sequence_num >= 9 and not dry_run:
+            try:
+                client.add_tag(pid, "NURTURE_COMPLETE")
+                _complete_note = (
+                    f"🏁 NURTURE SEQUENCE COMPLETE — {name}\n"
+                    f"{'─' * 48}\n"
+                    f"Barry's AI nurture system has sent all {sequence_num} automated emails "
+                    f"to this lead with no reply.\n\n"
+                    f"AGENT ACTION REQUIRED\n"
+                    f"This lead will NOT receive any more automated emails.\n"
+                    f"They need a human touch now — call, text, or personal email.\n"
+                    f"Tag NURTURE_COMPLETE has been applied for Smart List filtering.\n"
+                    f"{'─' * 48}\n"
+                    f"Barry Jenkins AI Nurture · Legacy Home Team"
+                )
+                client._request("POST", "notes", json_data={
+                    "personId": int(pid),
+                    "body": _complete_note,
+                    "userId": BARRY_FUB_USER_ID,
+                })
+                logger.info("Nurture complete: tagged %s (seq %d)", name, sequence_num)
+                print(f"    🏁 NURTURE_COMPLETE tag applied — agent follow-up needed")
+            except Exception as _seq_err:
+                logger.warning("Sequence completion signal failed for %s: %s", name, _seq_err)
 
         # Brief pause between leads to stay friendly to FUB rate limits
         import time as _t; _t.sleep(1.5)

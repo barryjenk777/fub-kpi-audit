@@ -12,6 +12,100 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FUB note formatter — structured email accountability record for agents
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_email_note(subject, sequence_num, lead_type, avatar_used=None,
+                      total_emails=9, cooldown_days=None):
+    """Build a human-readable FUB note that tells an agent exactly what went out
+    and what they should (or shouldn't) do next.
+
+    Format is designed to be scanned in under 10 seconds:
+      • Header: email number, type label
+      • Subject line
+      • One-liner on what the email does
+      • Clear agent action with next-send timing
+    """
+    seq = sequence_num
+
+    # ── Email type label ────────────────────────────────────────────────────
+    is_video = bool(avatar_used)
+
+    if lead_type == "zbuyer":
+        ltype_label = "Z-Buyer / Cash Offer"
+    elif lead_type in ("seller", "ylopo_seller", "ylopo_prospecting"):
+        ltype_label = "Seller (Ylopo Prospecting)"
+    else:
+        ltype_label = "Buyer (IDX)"
+
+    # Map sequence number to a human description of what the email does
+    _seq_descriptions = {
+        1: ("First Touch" + (" · HeyGen Video 🎥" if is_video else ""),
+            "Personalized intro — behavioral observation + local market intel. "
+            "Gives them a reason to reply without pressure.",
+            "This is Email 1. No action needed — Barry's system will follow up automatically."),
+        2: ("Listing Drop" if lead_type not in ("zbuyer", "seller", "ylopo_seller", "ylopo_prospecting")
+            else "Follow-Up" + (" · HeyGen Video 🎥" if is_video else ""),
+            ("Curated IDX listings matching their search. Short, personal, links embedded."
+             if lead_type not in ("zbuyer", "seller", "ylopo_seller", "ylopo_prospecting")
+             else "Adds one new piece of value the first video didn't cover. "
+                  "Suit avatar — professional follow-through energy."),
+            "If they reply → jump in and introduce yourself. "
+            f"Next automated email in {cooldown_days or 10} days if no reply."),
+        3: ("Breakup",
+            "Short, honest question. No pressure. Gives them an easy way to reply "
+            "yes or no — or to opt out gracefully.",
+            "If they reply → jump in. This is the last sprint email. "
+            "If no reply, drip phase starts automatically."),
+        4: ("Drip · Re-engagement" + (" · HeyGen Video 🎥" if is_video else ""),
+            "First drip content email after the breakup. "
+            "Fresh angle — market insight or updated context. "
+            + ("Suit avatar video re-ignites the relationship." if is_video
+               else "Warm text, no links."),
+            f"If they reply → jump in. Next automated email in {cooldown_days or 10} days if no reply."),
+    }
+
+    if seq in _seq_descriptions:
+        type_label, what_it_does, agent_action = _seq_descriptions[seq]
+    elif seq >= 5 and seq % 2 == 1:
+        # Odd drip emails: listing drops
+        type_label   = f"Drip · Listing Drop (Email {seq} of {total_emails})"
+        what_it_does = "Curated IDX listings matching their search criteria. Short, personal, links embedded."
+        agent_action = (f"If they reply → jump in. "
+                        f"Next automated email in {cooldown_days or 10} days if no reply.")
+    else:
+        # Even drip emails: content
+        type_label   = f"Drip · Content (Email {seq} of {total_emails})"
+        what_it_does = "Longer warm content — market angle, story, or local intel. No links."
+        agent_action = (f"If they reply → jump in. "
+                        f"Next automated email in {cooldown_days or 10} days if no reply.")
+
+    # Sequence completion (Email 9 or beyond)
+    if seq >= total_emails:
+        agent_action = (
+            "⚠️  SEQUENCE COMPLETE — automated nurture is done for this lead. "
+            "Barry will NOT send more automated emails. This lead needs human follow-up now."
+        )
+
+    note = (
+        f"📧 AUTOMATED EMAIL — Email {seq} of {total_emails} · {type_label}\n"
+        f"{'─' * 52}\n"
+        f"Lead type : {ltype_label}\n"
+        f"Subject   : \"{subject}\"\n"
+        f"Video     : {'Yes — ' + avatar_used[:12] + '...' if is_video else 'No (text email)'}\n"
+        f"\n"
+        f"WHAT WENT OUT\n"
+        f"{what_it_does}\n"
+        f"\n"
+        f"AGENT ACTION\n"
+        f"{agent_action}\n"
+        f"{'─' * 52}\n"
+        f"Barry Jenkins AI Nurture · Legacy Home Team"
+    )
+    return note
+
+
 class FUBClient:
     BASE_URL = "https://api.followupboss.com/v1"
     RATE_LIMIT_DELAY = 0.35  # ~170 requests/min to stay under 200/min limit
@@ -607,31 +701,38 @@ class FUBClient:
         """Fetch all leads in FUB (no filter). Used for client-side tag filtering."""
         return self._get_paginated("people", {"limit": 100})
 
-    def log_email_sent(self, person_id, subject, message, user_id=None):
-        """Log an outbound email to a person's FUB activity timeline via a note.
+    def log_email_sent(self, person_id, subject, message, user_id=None,
+                       sequence_num=None, lead_type=None, avatar_used=None,
+                       total_emails=9, cooldown_days=None):
+        """Log an outbound automated email to a person's FUB activity timeline.
 
-        FUB's /v1/emails endpoint returns 403 for third-party integrations
-        ("This endpoint is currently unavailable to integrations.").
+        FUB's /v1/emails endpoint returns 403 for third-party integrations.
         We use /v1/notes instead — appears in the contact timeline so agents
-        can see exactly what went out and when.
+        can see exactly what went out, what it does, and what action to take.
 
-        Non-fatal: logs a warning and returns None on failure so the send
-        path is never blocked by a logging error.
+        When sequence_num / lead_type are provided the note is a structured
+        accountability record an agent can read in 10 seconds. Without them
+        it falls back to the old subject + preview format.
+
+        Non-fatal: logs a warning and returns None on failure.
         """
-        # Truncate long email bodies — notes don't need the full HTML wall of text
-        preview = (message or "")[:800].strip()
-        if len(message or "") > 800:
-            preview += "\n[...truncated]"
+        if sequence_num is not None and lead_type is not None:
+            note_body = _build_email_note(
+                subject=subject,
+                sequence_num=sequence_num,
+                lead_type=lead_type,
+                avatar_used=avatar_used,
+                total_emails=total_emails,
+                cooldown_days=cooldown_days,
+            )
+        else:
+            # Legacy fallback — plain preview (used by new_lead_mailer etc.)
+            preview = (message or "")[:600].strip()
+            if len(message or "") > 600:
+                preview += "\n[...truncated]"
+            note_body = f"📧 EMAIL SENT\nSubject: \"{subject}\"\n\n{preview}"
 
-        note_body = (
-            f"📧 EMAIL SENT\n"
-            f"Subject: \"{subject}\"\n\n"
-            f"{preview}"
-        )
-        payload = {
-            "personId": int(person_id),
-            "body":     note_body,
-        }
+        payload = {"personId": int(person_id), "body": note_body}
         if user_id:
             payload["userId"] = user_id
         try:

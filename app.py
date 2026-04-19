@@ -4681,13 +4681,14 @@ def api_pond_mailer_reply():
             return jsonify({"status": "ok", "action": "bad_from"}), 200
 
         # Match reply to a pond lead by their email address
-        person_id, person_name = _db.get_pond_email_person_by_email(clean_from)
+        person_id, person_name, reply_seq_num = _db.get_pond_email_person_by_email(clean_from)
 
         if not person_id:
             logger.info("Pond reply: no matching pond lead for %s", clean_from)
             return jsonify({"status": "ok", "action": "unmatched"}), 200
 
-        logger.info("Pond reply matched: %s (ID: %s)", person_name, person_id)
+        logger.info("Pond reply matched: %s (ID: %s) — replied to Email %s",
+                    person_name, person_id, reply_seq_num)
 
         # Analyze sentiment
         sentiment, sentiment_score, sentiment_reason = _pond_analyze_sentiment(
@@ -4708,11 +4709,16 @@ def api_pond_mailer_reply():
                 # Tag the lead — FUB automation handles assignment (only fires for pond leads,
                 # skips if an agent already claimed them to prevent double-assignment).
                 fub.add_tag(person_id, "Email_Conversion")
-                logger.info("Email_Conversion tag applied to lead %s", person_id)
+                logger.info("Email_Conversion tag applied to lead %s (replied to Email %s)",
+                            person_id, reply_seq_num)
                 routed = True
 
-                # Add FUB note so the timeline shows what triggered the conversion
-                fub_note_ok = _pond_add_fub_note(fub, person_id, person_name, body_text, subject, sentiment_reason)
+                # Add FUB note so the timeline shows what triggered the conversion,
+                # including which sequence email generated the reply.
+                fub_note_ok = _pond_add_fub_note(
+                    fub, person_id, person_name, body_text, subject,
+                    sentiment_reason, seq_num=reply_seq_num
+                )
 
             except Exception as e:
                 logger.error("FUB positive reply handling failed for %s (ID %s): %s", person_name, person_id, e)
@@ -4769,7 +4775,8 @@ def api_pond_mailer_reply():
                     "",
                 ]
                 if routed:
-                    _lines.append("✅ Email_Conversion tag applied — FUB automation will assign")
+                    _seq_str = f" (triggered by Email {reply_seq_num})" if reply_seq_num else ""
+                    _lines.append(f"✅ Email_Conversion tag applied{_seq_str} — FUB automation will assign")
                     _lines.append(f"✅ CRM note added: {'yes' if fub_note_ok else 'check logs'}")
                 elif sentiment == "negative":
                     _lines.append("🚫 Tagged PondMailer_Unsubscribed — lead will be suppressed from future sends")
@@ -4877,14 +4884,18 @@ Return JSON only (no markdown):
         return "neutral", 0.5, f"Analysis error: {e}"
 
 
-def _pond_add_fub_note(fub, person_id, person_name, reply_text, original_subject, sentiment_reason):
+def _pond_add_fub_note(fub, person_id, person_name, reply_text, original_subject,
+                       sentiment_reason, seq_num=None):
     """
     Generate an engaging FUB note using Claude and post it to the lead.
-    The note clearly flags this as an AI email reply, summarizes what the
-    lead said, and gives the agent a concrete recommended action.
+    The note clearly flags this as an AI email reply, which email triggered
+    the reply (seq_num), summarizes what the lead said, and gives the agent
+    a concrete recommended action.
     Falls back to a plain template if Claude is unavailable.
     Returns True if note was posted successfully, False otherwise.
     """
+    seq_label = f"Email {seq_num} of their automated sequence" if seq_num else "an automated email"
+
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         note_body = None
@@ -4898,18 +4909,18 @@ def _pond_add_fub_note(fub, person_id, person_name, reply_text, original_subject
 
 Context:
 - Lead name: {person_name or "this lead"}
-- Barry Jenkins (Legacy Home Team, Virginia Beach) sent them a personalized AI outreach email
-- Subject line of Barry's email: "{original_subject}"
-- The lead replied. AI sentiment: {sentiment_reason}
+- Barry Jenkins (Legacy Home Team, Hampton Roads VA) sent them {seq_label} via his AI nurture system
+- Subject line of the email: "{original_subject}"
+- The lead replied positively. AI sentiment: {sentiment_reason}
 - Their reply: {reply_text.strip()[:800]}
 
 Structure the note in three short sections with these exact labels:
-WHAT HAPPENED: (1 sentence — Barry sent AI email, lead replied, what the AI read from it)
+WHAT HAPPENED: (1 sentence — which email in the sequence triggered this, what the AI read from the reply)
 WHAT THEY SAID: (2-3 sentence summary of the lead's actual reply in plain language)
-YOUR MOVE: (One specific, actionable script for the agent's opening line on the phone call, then what to ask to move them forward — consult, showing, or next step)
+YOUR MOVE: (One specific, actionable opening line for the agent's call, then one question to advance toward consult, showing, or next step)
 
 Rules:
-- Write as Barry briefing the agent, energetic and direct
+- Write as Barry briefing the agent, direct and energetic
 - Under 200 words total
 - No fluff, no greetings, no sign-offs
 - Plain text only, no markdown"""
@@ -4926,23 +4937,23 @@ Rules:
         # Fallback if Claude unavailable or fails
         if not note_body:
             note_body = (
-                f"🔥 HOT LEAD — {person_name or 'This lead'} replied to Barry's AI outreach email.\n\n"
+                f"🔥 HOT LEAD — {person_name or 'This lead'} replied to Barry's AI nurture system.\n\n"
                 f"WHAT HAPPENED:\n"
-                f"Barry sent a personalized AI email with subject \"{original_subject}\".\n"
-                f"The lead replied. AI sentiment read: {sentiment_reason}\n\n"
+                f"Barry's system sent {seq_label} with subject \"{original_subject}\".\n"
+                f"The lead replied. AI sentiment: {sentiment_reason}\n\n"
                 f"WHAT THEY SAID:\n{reply_text.strip()[:600]}\n\n"
                 f"YOUR MOVE:\n"
                 f"Call them today — they're warm. Open with: "
-                f"\"Hey, I saw you replied to Barry's email about [topic] — I'm his agent and I "
-                f"wanted to reach out personally.\" Then ask what caught their attention and "
-                f"get them booked for a consult or showing."
+                f"\"Hey, I saw you replied to Barry's email — I'm his agent and I wanted to "
+                f"reach out personally.\" Then ask what caught their attention and get them "
+                f"booked for a consult or showing."
             )
 
         fub._request("POST", "notes", json_data={
             "personId": int(person_id),
             "body":     note_body,
         })
-        logger.info("FUB note added for person %s", person_id)
+        logger.info("FUB reply note added for person %s (Email %s)", person_id, seq_num)
         return True
     except Exception as e:
         logger.warning("Could not add FUB note for reply (person %s): %s", person_id, e)

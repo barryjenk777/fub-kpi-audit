@@ -2792,15 +2792,16 @@ def ensure_pond_reply_log_table():
 
 def get_pond_email_person_by_email(email_address):
     """Find the most recently emailed pond lead matching this email address.
-    Returns (person_id, person_name) or (None, None).
+    Returns (person_id, person_name, sequence_num) or (None, None, None).
+    sequence_num is the email number that most likely triggered the reply.
     """
     if not is_available():
-        return None, None
+        return None, None, None
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT person_id, person_name
+                    SELECT person_id, person_name, sequence_num
                     FROM pond_email_log
                     WHERE LOWER(email_address) = LOWER(%s)
                       AND dry_run = FALSE
@@ -2809,11 +2810,11 @@ def get_pond_email_person_by_email(email_address):
                 """, (email_address,))
                 row = cur.fetchone()
         if row:
-            return row[0], row[1]
-        return None, None
+            return row[0], row[1], row[2]
+        return None, None, None
     except Exception as e:
         logger.warning("get_pond_email_person_by_email failed: %s", e)
-        return None, None
+        return None, None, None
 
 
 def log_pond_reply(person_id, person_name, reply_from, reply_text,
