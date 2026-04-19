@@ -455,7 +455,7 @@ def submit_video(script: str, background_url: str = None,
                 "type": "text",
                 "voice_id": _voice,
                 "input_text": script,
-                "speed": 0.88,  # slower pace = calmer gestures; 1.0 fires motion model too aggressively
+                "speed": 1.0,
             },
             "background": background,
         }],
@@ -478,7 +478,7 @@ def submit_video(script: str, background_url: str = None,
         return None
 
 
-def poll_video(video_id: str, timeout_seconds: int = 180,
+def poll_video(video_id: str, timeout_seconds: int = 360,
                poll_interval: int = 8) -> dict | None:
     """
     Poll HeyGen until the video is ready or timeout is reached.
