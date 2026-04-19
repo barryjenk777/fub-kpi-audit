@@ -2637,6 +2637,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         first_name=first_name,
                         street=_street or "your home",
                         city=_city_hg or "Hampton Roads",
+                        tags=tags,
                     )
                     bg_url = get_background_url("seller", address=_street, city=_city_hg)
                     video_result = generate_and_wait(script, background_url=bg_url,
@@ -2768,6 +2769,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         first_name=first_name,
                         street=_street or "your home",
                         city=_city_hg or "Hampton Roads",
+                        tags=tags,
                     )
                     bg_url = get_background_url("zbuyer", address=_street, city=_city_hg)
                     video_result = generate_and_wait(script, background_url=bg_url,
@@ -2910,6 +2912,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         most_viewed_street=_mv_street,
                         strategy=strategy,
                         view_count=_view_count,
+                        tags=tags,
                     )
                     bg_url = get_background_url("buyer", city=_city_hg)
                     video_result = generate_and_wait(script, background_url=bg_url,
@@ -3066,6 +3069,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         first_name=first_name,
                         city=_city_fu,
                         street=_street_fu,
+                        tags=tags,
                     )
                     bg_url = get_background_url(_lead_type, address=_street_fu, city=_city_fu)
                     video_result = generate_and_wait(
