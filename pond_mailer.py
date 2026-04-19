@@ -1929,7 +1929,8 @@ def run_new_lead_mailer(dry_run=True):
     import db as _db
     from fub_client import FUBClient
     from config import (SHARK_TANK_POND_ID, NEW_LEAD_EMAIL_DELAY_MINUTES,
-                        NEW_LEAD_LOOKBACK_MINUTES, NEW_LEAD_DAILY_CAP)
+                        NEW_LEAD_LOOKBACK_MINUTES, NEW_LEAD_DAILY_CAP,
+                        BARRY_FUB_USER_ID)
 
     _db.ensure_pond_email_log_table()
     client = FUBClient()
@@ -1991,6 +1992,13 @@ def run_new_lead_mailer(dry_run=True):
         last  = person.get("lastName") or ""
         name  = f"{first} {last}".strip() or f"ID:{pid}"
         tags  = person.get("tags") or []
+
+        # Agent-claimed check — agent may have called and claimed this lead
+        # during the 12-minute delay buffer before our immediate email fires.
+        _assigned_uid = person.get("assignedUserId") or person.get("ownerId")
+        if _assigned_uid and _assigned_uid != BARRY_FUB_USER_ID:
+            logger.info("Skipping new lead %s — already claimed by agent (user %s)", name, _assigned_uid)
+            continue
 
         # Already sent the immediate email?
         if _db.has_received_new_lead_immediate(pid):
@@ -2117,7 +2125,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
     import db as _db
     from fub_client import FUBClient
-    from config import LEADSTREAM_ALLOWED_POND_IDS
+    from config import LEADSTREAM_ALLOWED_POND_IDS, BARRY_FUB_USER_ID
 
     _db.ensure_pond_email_log_table()
 
@@ -2221,6 +2229,15 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         if not to_email:
             logger.debug("Skipping %s — no email address", name)
             skipped_no_email += 1
+            continue
+
+        # Agent-claimed check — if an agent has assigned this lead to themselves
+        # (even while the pond tag is still set due to a FUB race or workflow quirk),
+        # stop the drip immediately. Agents work these leads directly.
+        _assigned_uid = person.get("assignedUserId") or person.get("ownerId")
+        if _assigned_uid and _assigned_uid != BARRY_FUB_USER_ID:
+            logger.info("Skipping %s — claimed by agent (user %s)", name, _assigned_uid)
+            skipped_cooldown += 1
             continue
 
         # Opt-out check — lead replied negatively to a previous email
