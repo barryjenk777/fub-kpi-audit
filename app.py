@@ -4586,6 +4586,51 @@ def api_pond_mailer_stats():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/serendipity/run", methods=["POST"])
+def api_serendipity_run():
+    """
+    Manually trigger the Serendipity Clause engine.
+
+    Detects new behavioral triggers from FUB events and fires any pending
+    triggers whose delay window has elapsed — in a background thread so the
+    response returns immediately.
+
+    Body (optional JSON):
+        dry_run   bool   default true — set false for live sends
+    """
+    import threading
+    data    = request.json or {}
+    dry_run = data.get("dry_run", True)
+
+    def _bg():
+        try:
+            from serendipity import run_serendipity
+            result = run_serendipity(dry_run=dry_run)
+            logger.info("Serendipity run complete: %s", result)
+        except Exception as e:
+            logger.error("Serendipity run error: %s", e, exc_info=True)
+
+    threading.Thread(target=_bg, daemon=True).start()
+    return jsonify({"status": "running", "dry_run": dry_run})
+
+
+@app.route("/api/serendipity/status")
+def api_serendipity_status():
+    """
+    Serendipity Clause status: pending trigger count, last cursor timestamp,
+    and 30-day send stats by trigger type.
+    """
+    try:
+        stats  = _db.get_serendipity_stats(days=30)
+        cursor = _db.get_serendipity_cursor()
+        return jsonify({
+            "cursor":      cursor.isoformat() if cursor else None,
+            "stats_30d":   stats,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/heygen-bg")
 def api_heygen_background():
     """
@@ -5324,6 +5369,21 @@ def scheduled_new_lead_check():
         print(f"[SCHEDULER] New lead mailer error: {e}")
 
 
+def scheduled_serendipity():
+    """Every 10 minutes — detect behavioral triggers and fire ready emails."""
+    try:
+        from serendipity import run_serendipity
+        result = run_serendipity(dry_run=False)
+        detect  = result.get("detect",  {})
+        process = result.get("process", {})
+        triggered = detect.get("triggered", 0)
+        sent      = process.get("sent", 0)
+        if triggered or sent:
+            print(f"[SERENDIPITY] {triggered} trigger(s) queued, {sent} email(s) sent")
+    except Exception as e:
+        print(f"[SERENDIPITY] Scheduler error: {e}")
+
+
 def scheduled_run_pond_mailer(daily_cap=45):
     """
     Pond mailer scheduler handler — called by each time-slot job.
@@ -5931,6 +5991,13 @@ def start_scheduler():
                        id="new_lead_check", name="New lead immediate mailer (every 5 min)",
                        max_instances=1, misfire_grace_time=60)
 
+    # Serendipity Clause: every 10 minutes
+    # Scans FUB events for behavioral triggers (save, repeat view, inactivity return)
+    # and fires queued emails once their human-feeling delay window elapses.
+    _scheduler.add_job(scheduled_serendipity, CronTrigger(minute="*/10", timezone=ET),
+                       id="serendipity", name="Serendipity Clause (every 10 min)",
+                       max_instances=1, misfire_grace_time=120)
+
     # Cache warming: 3x/day at 6am, 12pm, 6pm ET
     _scheduler.add_job(scheduled_cache_warm, CronTrigger(hour="6,12,18", minute=0, timezone=ET),
                        id="cache_warm", name="Cache warm (3x/day)")
@@ -6124,3 +6191,5 @@ else:
     _db.ensure_calls_cache_table()
     # Ensure pond mailer job tracking table exists at startup (not just on first run)
     _db.ensure_pond_mailer_jobs_table()
+    # Ensure Serendipity Clause tables exist
+    _db.ensure_serendipity_tables()

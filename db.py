@@ -3245,3 +3245,304 @@ def get_pond_recent_activity():
         out["errors"].append(f"DB query failed: {e}")
 
     return out
+
+
+# ===========================================================================
+# SERENDIPITY CLAUSE — Behavioral trigger email system
+# ===========================================================================
+
+def ensure_serendipity_tables():
+    """Create serendipity_log and serendipity_cursor tables if they don't exist."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS serendipity_log (
+                        id              SERIAL PRIMARY KEY,
+                        person_id       INTEGER NOT NULL,
+                        person_name     TEXT,
+                        email_address   TEXT,
+                        trigger_type    TEXT NOT NULL,
+                        trigger_data    JSONB,
+                        fire_after      TIMESTAMPTZ NOT NULL,
+                        status          TEXT NOT NULL DEFAULT 'pending',
+                        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        sent_at         TIMESTAMPTZ,
+                        sg_message_id   TEXT,
+                        skip_reason     TEXT,
+                        dry_run         BOOLEAN NOT NULL DEFAULT FALSE
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_seren_pending
+                    ON serendipity_log(status, fire_after)
+                    WHERE status = 'pending'
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_seren_person
+                    ON serendipity_log(person_id, created_at DESC)
+                """)
+                # Cursor table — single row, tracks the last event scan timestamp
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS serendipity_cursor (
+                        id              INTEGER PRIMARY KEY DEFAULT 1,
+                        last_checked_at TIMESTAMPTZ NOT NULL,
+                        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+    except Exception as e:
+        logger.warning("ensure_serendipity_tables failed: %s", e)
+
+
+def get_serendipity_cursor():
+    """Return the timestamp of the last serendipity event scan, or None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT last_checked_at FROM serendipity_cursor WHERE id = 1")
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("get_serendipity_cursor failed: %s", e)
+        return None
+
+
+def set_serendipity_cursor(ts):
+    """Upsert the serendipity event scan cursor."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO serendipity_cursor (id, last_checked_at, updated_at)
+                    VALUES (1, %s, NOW())
+                    ON CONFLICT (id) DO UPDATE
+                        SET last_checked_at = EXCLUDED.last_checked_at,
+                            updated_at      = NOW()
+                """, (ts,))
+    except Exception as e:
+        logger.warning("set_serendipity_cursor failed: %s", e)
+
+
+def log_serendipity_trigger(person_id, person_name, email_address,
+                             trigger_type, trigger_data, fire_after,
+                             dry_run=False):
+    """Insert a pending serendipity trigger. Returns the new row id, or None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO serendipity_log
+                        (person_id, person_name, email_address,
+                         trigger_type, trigger_data, fire_after, dry_run)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (person_id, person_name, email_address,
+                      trigger_type, json.dumps(trigger_data), fire_after, dry_run))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("log_serendipity_trigger failed for person %s: %s", person_id, e)
+        return None
+
+
+def has_pending_serendipity_trigger(person_id, trigger_type, address=None):
+    """
+    True if a pending (or recently queued) trigger already exists for this
+    person + type + address combo. Prevents double-queuing the same event.
+    Window: look back 24 hours to catch triggers queued but not yet fired.
+    """
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if address:
+                    cur.execute("""
+                        SELECT 1 FROM serendipity_log
+                        WHERE person_id   = %s
+                          AND trigger_type = %s
+                          AND status IN ('pending', 'sent')
+                          AND trigger_data->>'address' = %s
+                          AND created_at > NOW() - INTERVAL '7 days'
+                        LIMIT 1
+                    """, (person_id, trigger_type, address))
+                else:
+                    cur.execute("""
+                        SELECT 1 FROM serendipity_log
+                        WHERE person_id   = %s
+                          AND trigger_type = %s
+                          AND status IN ('pending', 'sent')
+                          AND created_at > NOW() - INTERVAL '7 days'
+                        LIMIT 1
+                    """, (person_id, trigger_type))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("has_pending_serendipity_trigger failed: %s", e)
+        return False
+
+
+def get_pending_serendipity_triggers(now=None):
+    """Return pending triggers whose fire_after has passed. Ordered oldest first."""
+    if not is_available():
+        return []
+    try:
+        ts = now or datetime.now(timezone.utc)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, person_id, person_name, email_address,
+                           trigger_type, trigger_data, fire_after, dry_run
+                    FROM serendipity_log
+                    WHERE status = 'pending' AND fire_after <= %s
+                    ORDER BY fire_after ASC
+                    LIMIT 20
+                """, (ts,))
+                rows = cur.fetchall()
+        return [
+            {
+                "id":           r[0],
+                "person_id":    r[1],
+                "person_name":  r[2],
+                "email_address":r[3],
+                "trigger_type": r[4],
+                "trigger_data": r[5] or {},
+                "fire_after":   r[6],
+                "dry_run":      r[7],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("get_pending_serendipity_triggers failed: %s", e)
+        return []
+
+
+def mark_serendipity_sent(trigger_id, sg_message_id=None):
+    """Mark a trigger as sent."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE serendipity_log
+                    SET status = 'sent', sent_at = NOW(), sg_message_id = %s
+                    WHERE id = %s
+                """, (sg_message_id, trigger_id))
+    except Exception as e:
+        logger.warning("mark_serendipity_sent failed: %s", e)
+
+
+def mark_serendipity_skipped(trigger_id, reason=None):
+    """Mark a trigger as skipped with an optional reason."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE serendipity_log
+                    SET status = 'skipped', skip_reason = %s
+                    WHERE id = %s
+                """, (reason, trigger_id))
+    except Exception as e:
+        logger.warning("mark_serendipity_skipped failed: %s", e)
+
+
+def has_recent_serendipity_sent(person_id, hours=168):
+    """True if a serendipity email was sent to this lead within the last `hours`."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM serendipity_log
+                    WHERE person_id = %s
+                      AND status = 'sent'
+                      AND sent_at > NOW() - INTERVAL '%s hours'
+                    LIMIT 1
+                """, (person_id, hours))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("has_recent_serendipity_sent failed: %s", e)
+        return False
+
+
+def has_any_recent_email(person_id, hours=48):
+    """
+    True if ANY email (drip OR serendipity) was sent to this lead in the last
+    `hours`. Used to prevent email collision between the two systems.
+    """
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Check pond drip emails
+                cur.execute("""
+                    SELECT 1 FROM pond_email_log
+                    WHERE person_id = %s
+                      AND dry_run   = FALSE
+                      AND sent_at   > NOW() - (%s || ' hours')::INTERVAL
+                    LIMIT 1
+                """, (person_id, str(hours)))
+                if cur.fetchone():
+                    return True
+                # Check serendipity emails
+                cur.execute("""
+                    SELECT 1 FROM serendipity_log
+                    WHERE person_id = %s
+                      AND status    = 'sent'
+                      AND sent_at   > NOW() - (%s || ' hours')::INTERVAL
+                    LIMIT 1
+                """, (person_id, str(hours)))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("has_any_recent_email failed: %s", e)
+        return False
+
+
+def get_serendipity_stats(days=30):
+    """Summary stats for the Serendipity Clause dashboard."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*)                                           AS total,
+                        COUNT(*) FILTER (WHERE status = 'sent')           AS sent,
+                        COUNT(*) FILTER (WHERE status = 'pending')        AS pending,
+                        COUNT(*) FILTER (WHERE status = 'skipped')        AS skipped,
+                        COUNT(*) FILTER (WHERE trigger_type = 'saved_property'   AND status = 'sent') AS saved_sent,
+                        COUNT(*) FILTER (WHERE trigger_type = 'repeat_view'      AND status = 'sent') AS repeat_sent,
+                        COUNT(*) FILTER (WHERE trigger_type = 'inactivity_return' AND status = 'sent') AS return_sent
+                    FROM serendipity_log
+                    WHERE created_at > NOW() - (%s || ' days')::INTERVAL
+                      AND dry_run = FALSE
+                """, (str(days),))
+                row = cur.fetchone()
+                return {
+                    "total":        row[0],
+                    "sent":         row[1],
+                    "pending":      row[2],
+                    "skipped":      row[3],
+                    "by_trigger": {
+                        "saved_property":    row[4],
+                        "repeat_view":       row[5],
+                        "inactivity_return": row[6],
+                    },
+                    "days":         days,
+                }
+    except Exception as e:
+        logger.warning("get_serendipity_stats failed: %s", e)
+        return {}
