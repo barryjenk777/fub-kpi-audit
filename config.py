@@ -215,42 +215,88 @@ LEADSTREAM_POND_LIMIT = 80
 
 # Ylopo signal tags and their base point values (highest tier first)
 LEADSTREAM_SIGNAL_TAGS = {
-    # AI Voice call-outcome tags — lead engaged, transfer attempted, friction hit
-    "ISA_TRANSFER_UNSUCCESSFUL":                 110,  # Engaged, agreed, hung up on hold — hottest signal
+    # --- Explicit call requests (Direct Connect / dynamic registration) ---
+    "call_now=yes":                              120,  # Wants a call within the hour — top signal
+    # --- AI Voice call-outcome tags ---
+    "ISA_TRANSFER_UNSUCCESSFUL":                 110,  # Engaged, agreed, hung up on hold
+    "Y_REQUESTED_TOUR":                          108,  # Submitted a tour request on a listing
     "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE":105,  # Ready to talk, no realtor picked up
+    "DECLINED_BY_REALTOR":                       105,  # Agent declined the transfer — same family
+    "Y_SELLER_CALL_AGENT":                       102,  # Clicked the Call Agent CTA on seller report
     "CALLBACK_SCHEDULED":                        100,  # Explicit commitment to a specific time
     "AI_NEEDS_FOLLOW_UP":                        100,  # rAIya text converted — call NOW
+    "Y_SELLER_EMAIL_AGENT":                       98,  # Clicked the Email Agent CTA on seller report
     "ISA_ATTEMPTED_TRANSFER":                     95,  # Transfer attempt failed mid-process
     "AI_VOICE_NEEDS_FOLLOW_UP":                   95,  # AI voice converted
+    "call_for_preapproval=yes":                   92,  # Wants a preapproval call
+    "cash_buyer=yes":                             90,  # Cash buyer (Direct Connect)
+    "Y_FAVORITED_LISTING":                        88,  # Favorited a listing
     "Y_SELLER_CASH_OFFER_REQUESTED":              85,  # Clicked cash offer CTA on seller report
+    "call_about_homes=yes":                       82,  # Wants a call about homes (not immediately)
     "HANDRAISER":                                 80,  # Lead asking for help
+    "cash_offer=Yes":                             78,  # Dynamic-reg cash-offer question = yes
+    "second_opinion_preapproval=yes":             76,  # Preapproved, shopping rates
     "Y_AI_PRIORITY":                              75,  # Ylopo rollup of high-interest signals
+    "REQUESTED_RATE":                             70,  # Requested a real payment estimate
     "Y_SELLER_3_VIEW":                            60,  # Viewed seller report 3+ times in a week
     "Y_SELLER_LEARN_MORE_EQUITY":                 55,  # Submitted via Equity CTA on seller report
+    "Y_SELLER_HEATMAP_INQUIRY":                   52,  # Private Showing CTA on seller report
     "YPRIORITY":                                  50,  # Ylopo top-priority buyer signal
+    "Y_SELLER_UNDERSTAND_TREND":                  48,  # Understand Home Trend CTA on seller report
+    "Y_SELLER_NEW_HOME_UPGRADES":                 46,  # Submitted home-upgrade info on seller report
     "Y_HOME_3_VIEW":                              45,  # Viewed same home 3+ times — strong attachment
     "Y_SELLER_TUNE_HOME_VALUE":                   45,  # Tuned their home value on seller report
+    "Y_SELLER_VIEWED_SIMILAR_LISTINGS":           42,  # Clicked a listing on the seller report
     "AI_ENGAGED":                                 40,  # AI text conversation in progress
+    "Y_SELLER_SEARCH_MORE_PROPERTIES":            38,  # Used search widget on seller report
+    "Y_SELLER_SELF_GENERATED":                    36,  # Self-generated their own seller report
     "HVB":                                        35,  # High-value buyer flag
     "Y_SELLER_REPORT_ENGAGED":                    35,  # Engaged with a CTA on seller report
+    "AI_RESPONDED":                               32,  # Responded to AI text (non-opt-out)
     "Y_SHARED_LISTING":                           30,  # Shared a listing (likely with partner/spouse)
+    "PREAPPROVED_FOR_LOAN=YES":                   28,  # Dynamic-reg: already preapproved
+    "call_now=another_time":                      26,  # Wants a call but flexible on timing
     "NURTURE":                                    25,  # AI voice: interested in future, not now
     "RETURNED":                                   25,  # Came back after going quiet
+    "timeline=within 90 days":                    25,  # Dynamic-reg timeline — buying soon
+    "timeline=within90days":                      25,  # Direct Connect variant (no spaces)
+    "I_NEED_TO_SELL_BEFORE_I_CAN_BUY":            22,  # Sell-before-buy buyer — longer runway
     "Y_REMARKETING_ENGAGED":                      20,  # Re-engaged via remarketing ads
+    "SELLER_ALERT":                               18,  # Enrolled in seller alerts — latent seller
     "Y_SELLER_REPORT_VIEWED":                     15,  # Viewed home value report — potential seller
+    "timeline=within 6 months":                   15,  # Dynamic-reg timeline — mid-range
+    "timeline=within6months":                     15,  # Direct Connect variant
+    "NEW_NUMBER":                                 12,  # Fixed a previously-bad phone number
     "Y_ADDRESS_FOUND":                            10,  # Ylopo identified their current home address
+    "timeline=over 6 months":                      8,  # Dynamic-reg timeline — far out
+    "timeline=over6months":                        8,  # Direct Connect variant
 }
 
-# Tags that suppress a lead entirely (score = 0, don't surface).
+# Tags that suppress a lead entirely (score = 0, don't surface in LeadStream).
 # These signal the lead has opted out, been disqualified, or completed the AI
 # cadence — no further automated outreach until a human re-engages them.
 LEADSTREAM_SUPPRESSION_TAGS = {
-    "DO_NOT_CALL",                 # Lead asked not to be called
-    "NOT_INTERESTED",              # Lead declined on AI voice call
-    "NON_ENGLISH_SPEAKER",         # Out of AI voice scope
+    "DO_NOT_CALL",                 # AI Voice: lead asked not to be called
+    "NOT_INTERESTED",              # AI Voice: lead declined on call
+    "NON_ENGLISH_SPEAKER",         # Out of AI voice scope (agent follow-up needed)
     "AI_OPT_OUT",                  # Opted out of AI text
     "AI_NOT_INTERESTED",           # Declined on AI text
-    "YLOPO_AI_VOICE_COMPLETED",    # AI voice cadence exhausted — no more auto calls
+    "YLOPO_AI_VOICE_COMPLETED",    # AI voice cadence exhausted
+    "NO_MARKETING",                # Agent-applied: kills all outreach (text/voice/email)
+    "WRONG_NUMBER",                # AI Voice: not a real RE lead
+    "DISCONNECTED_NUMBER",         # AI Voice: number no longer in service
+    "I'M_RENTING_NOT_BUYING",      # Dynamic-reg: self-identified not in market
+}
+
+# Tags that block the pond mailer from sending an email, in addition to every
+# tag in LEADSTREAM_SUPPRESSION_TAGS above. NO_EMAIL kills just email (the lead
+# may still be call-reachable), so it lives here rather than in the LeadStream
+# suppression list. LISTING_ALERT_UNSUB/SUNSET are soft signals that the lead
+# has disengaged from our Ylopo alerts — treated as a hard email block too.
+POND_EMAIL_EXTRA_SUPPRESSION_TAGS = {
+    "NO_EMAIL",                    # Agent-applied: no email of any kind
+    "LISTING_ALERT_UNSUB",         # Ylopo alert unsubscribe
+    "LISTING_ALERT_SUNSET",        # Ylopo alert sunsetted for inactivity
 }
 
 # IDX site visit recency scoring (hours_threshold: points)
