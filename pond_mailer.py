@@ -2467,6 +2467,133 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                 logger.warning("HeyGen Z-buyer pipeline failed for %s — text-only: %s",
                                name, _hg_err)
 
+        # ── HeyGen personalized video — Buyer Email 1 ────────────────────────────
+        # Buyer leads browsing IDX on legacyhomesearch.com.
+        # Frame: Barry was already recording client videos, saw their search come through,
+        # pulled one together on the spot.
+        # Content: meaty Hampton Roads market intelligence specific to their city and
+        # price range — inventory reality, competition, what buyers get wrong, what
+        # Barry's 850+/year volume gives them that Zillow can't. No generic fluff.
+        # Falls back gracefully to the Claude-written text email if HeyGen fails.
+        if not is_ylopo_seller and not is_z and sequence_num == 1 and not dry_run:
+            try:
+                from heygen_client import (
+                    is_available as heygen_available,
+                    generate_buyer_video_script,
+                    generate_and_wait,
+                    get_background_url,
+                    render_video_email_block_simple,
+                    DEFAULT_AVATAR, DEFAULT_VOICE,
+                )
+                if heygen_available():
+                    _beh_city      = (behavior.get("cities") or [])
+                    _city_hg       = _beh_city[0] if _beh_city else (
+                        (person.get("address") or {}).get("city", "") or "Hampton Roads"
+                    )
+                    _price_min     = behavior.get("price_min")
+                    _price_max     = behavior.get("price_max")
+                    _beds          = behavior.get("beds_seen") or []
+                    _prop_type     = behavior.get("property_type")
+                    _mv            = behavior.get("most_viewed") or {}
+                    _mv_street     = _mv.get("street", "") if _mv else ""
+                    _view_count    = behavior.get("view_count", 0)
+
+                    logger.info("Generating HeyGen buyer video for %s, searching %s", name, _city_hg)
+                    script = generate_buyer_video_script(
+                        first_name=first_name,
+                        city=_city_hg or "Hampton Roads",
+                        price_min=_price_min,
+                        price_max=_price_max,
+                        beds=_beds,
+                        property_type=_prop_type,
+                        most_viewed_street=_mv_street,
+                        strategy=strategy,
+                        view_count=_view_count,
+                    )
+                    bg_url = get_background_url("buyer", city=_city_hg)
+                    video_result = generate_and_wait(script, background_url=bg_url,
+                                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
+                                                    timeout_seconds=240)
+
+                    if video_result and video_result.get("video_url"):
+                        video_block = render_video_email_block_simple(
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            first_name=first_name,
+                        )
+
+                        _city_display = _city_hg or "Hampton Roads"
+
+                        # Plain-text version
+                        video_body_text = (
+                            f"Was recording a quick market update for another buyer in {_city_display} "
+                            f"and saw your search come through — so I pulled one together for you.\n\n"
+                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"Happy to walk you through what we're actually seeing right now in your search. "
+                            f"Just reply here and we'll set up 10 minutes.\n\n"
+                            + SIGN_OFF
+                        )
+
+                        # HTML version — lean wrapper: setup → video → CTA
+                        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
+                        setup_html = (
+                            f'<p style="{_p}">Was recording a quick market update for another buyer '
+                            f'in {_city_display} and saw your search come through — so I pulled one '
+                            f'together for you.</p>'
+                        )
+                        cta_html = (
+                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
+                            f"Happy to walk you through what we're actually seeing right now in your search. "
+                            f"Just reply here and we'll set up 10 minutes.</p>"
+                        )
+                        video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
+
+                        email_data["body_text"] = video_body_text
+                        email_data["body_html"] = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<div style="max-width:560px;margin:0 auto;padding:32px 24px">
+  <div style="color:#222;font-size:15px;line-height:1.8">
+    {video_body_inner}
+  </div>
+  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
+    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
+         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
+    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
+      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
+      (757) 919-8874 &nbsp;|&nbsp;
+      <a href="https://www.legacyhomesearch.com"
+         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
+      1545 Crossways Blvd, Chesapeake, VA 23320<br>
+      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
+         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
+    </p>
+  </div>
+</div>
+</body></html>"""
+
+                        # Subject hints at the video without being salesy
+                        _subj_options = [
+                            f"quick video — {_city_display} market right now",
+                            f"put something together for your search",
+                            f"was recording for clients, thought of you",
+                        ]
+                        email_data["subject"]      = _subj_options[0]
+                        email_data["all_subjects"] = _subj_options
+
+                        logger.info("HeyGen buyer video email built for %s (%.1fs video)", name,
+                                    video_result.get("duration", 0))
+                        print(f"    ▶ HeyGen buyer video: {video_result['video_url'][:60]}...")
+                    else:
+                        logger.warning("HeyGen video not ready for buyer %s — text-only", name)
+            except Exception as _hg_err:
+                logger.warning("HeyGen buyer pipeline failed for %s — text-only: %s",
+                               name, _hg_err)
+
         print(f"    Subject: {email_data['subject']}")
         if dry_run:
             print(f"\n    --- PREVIEW ---")

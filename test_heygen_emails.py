@@ -273,6 +273,115 @@ def test_zbuyer_email():
     )
 
 
+def test_buyer_email():
+    """Jordan — Ylopo buyer searching for homes in Chesapeake, $380k-$450k, 3br."""
+    first_name  = "Jordan"
+    city        = "Chesapeake"
+    price_min   = 380000
+    price_max   = 450000
+    beds        = [3]
+    prop_type   = "house"
+    mv_street   = "812 Copperfield Dr"   # most-viewed property (simulated)
+    strategy    = "repeat_view"
+    view_count  = 7
+
+    from heygen_client import (
+        is_available,
+        generate_buyer_video_script,
+        generate_and_wait,
+        get_background_url,
+        render_video_email_block_simple,
+        DEFAULT_AVATAR, DEFAULT_VOICE,
+    )
+
+    if not is_available():
+        print("  ✗ HEYGEN_API_KEY not set — skipping video generation")
+        return False
+
+    print(f"\n[Buyer] Generating video script for {first_name} searching in {city} "
+          f"${price_min//1000}k–${price_max//1000}k, {beds[0]}br...")
+    script = generate_buyer_video_script(
+        first_name=first_name,
+        city=city,
+        price_min=price_min,
+        price_max=price_max,
+        beds=beds,
+        property_type=prop_type,
+        most_viewed_street=mv_street,
+        strategy=strategy,
+        view_count=view_count,
+    )
+    print(f"  Script ({len(script)} chars):\n  ---\n  {script[:400]}{'...' if len(script) > 400 else ''}\n  ---")
+
+    bg_url = get_background_url("buyer", city=city)
+    print(f"  Background: {bg_url}")
+    print(f"\n  Submitting to HeyGen and waiting (~60-120s)...")
+    video_result = generate_and_wait(script, background_url=bg_url,
+                                     avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
+                                     timeout_seconds=360)
+
+    if not video_result or not video_result.get("video_url"):
+        print("  ✗ HeyGen video failed — sending text-only fallback")
+        body_text = (
+            f"Was recording a quick market update for another buyer in {city} and saw your "
+            f"search come through — so I pulled one together for you.\n\n"
+            f"Happy to walk you through what we're actually seeing right now in your search. "
+            f"Just reply here and we'll set up 10 minutes.\n\n"
+            + SIGN_OFF
+        )
+        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
+        body_inner = (
+            f'<p style="{_p}">Was recording a quick market update for another buyer in {city} '
+            f'and saw your search come through — so I pulled one together for you.</p>'
+            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
+            f"Happy to walk you through what we're actually seeing right now in your search. "
+            f"Just reply here and we'll set up 10 minutes.</p>"
+        )
+        return send_test_email(
+            subject=f"quick video — {city} market right now",
+            body_text=body_text,
+            body_html=build_email_html(body_inner),
+            label=f"Buyer (text-only fallback) — {first_name}",
+        )
+
+    print(f"  ✓ Video ready: {video_result['video_url'][:80]}...")
+    print(f"  Duration: {video_result.get('duration', '?')}s")
+
+    video_block = render_video_email_block_simple(
+        video_url=video_result["video_url"],
+        thumbnail_url=video_result["thumbnail_url"],
+        first_name=first_name,
+    )
+
+    _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
+    setup_html = (
+        f'<p style="{_p}">Was recording a quick market update for another buyer in {city} '
+        f'and saw your search come through — so I pulled one together for you.</p>'
+    )
+    cta_html = (
+        f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
+        f"Happy to walk you through what we're actually seeing right now in your search. "
+        f"Just reply here and we'll set up 10 minutes.</p>"
+    )
+    body_inner = setup_html + "\n" + video_block + "\n" + cta_html
+
+    body_text = (
+        f"Was recording a quick market update for another buyer in {city} and saw your "
+        f"search come through — so I pulled one together for you.\n\n"
+        f"[Video — click to watch: {video_result['video_url']}]\n\n"
+        f"Happy to walk you through what we're actually seeing right now in your search. "
+        f"Just reply here and we'll set up 10 minutes.\n\n"
+        + SIGN_OFF
+    )
+
+    return send_test_email(
+        subject=f"quick video — {city} market right now",
+        body_text=body_text,
+        body_html=build_email_html(body_inner),
+        label=f"Buyer (HeyGen video) — {first_name}",
+    )
+
+
 if __name__ == "__main__":
     print(f"\n{'#'*60}")
     print(f"  HeyGen Test — sending to {TEST_EMAIL} only")
@@ -281,11 +390,13 @@ if __name__ == "__main__":
 
     ok1 = test_seller_email()
     ok2 = test_zbuyer_email()
+    ok3 = test_buyer_email()
 
     print(f"\n{'='*60}")
     print(f"  Results:")
     print(f"    Seller email:  {'✓ sent' if ok1 else '✗ failed'}")
     print(f"    Z-buyer email: {'✓ sent' if ok2 else '✗ failed'}")
+    print(f"    Buyer email:   {'✓ sent' if ok3 else '✗ failed'}")
     print(f"{'='*60}\n")
 
-    sys.exit(0 if (ok1 and ok2) else 1)
+    sys.exit(0 if (ok1 and ok2 and ok3) else 1)

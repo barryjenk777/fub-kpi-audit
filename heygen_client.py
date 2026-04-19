@@ -431,6 +431,149 @@ Return ONLY the script. No labels, no stage directions. Just Barry's words."""
         )
 
 
+def generate_buyer_video_script(
+    first_name: str,
+    city: str = "Hampton Roads",
+    price_min: int = None,
+    price_max: int = None,
+    beds: list = None,
+    property_type: str = None,
+    most_viewed_street: str = None,
+    strategy: str = "",
+    view_count: int = 0,
+) -> str:
+    """
+    Generate a 35-40 second video script for a buyer lead (Ylopo IDX / buyer drip).
+
+    Unlike the seller track, the "meaty" section is buyer market intelligence:
+    what's happening in their specific search area at their price point — inventory,
+    competition, what buyers don't know going in, and what Barry's volume gives
+    them that they can't get from Zillow alone.
+
+    CORE FRAME: Barry was already recording client videos. Saw this buyer's search
+    come through and pulled one together on the spot. Same organic credibility as
+    the seller track, but the intel is buyer-focused.
+    """
+    # Build context strings for the prompt
+    price_str = ""
+    if price_min and price_max:
+        price_str = f"${price_min // 1000}k–${price_max // 1000}k"
+    elif price_max:
+        price_str = f"up to ${price_max // 1000}k"
+    elif price_min:
+        price_str = f"above ${price_min // 1000}k"
+
+    beds_str = ""
+    if beds:
+        if len(beds) == 1:
+            beds_str = f"{beds[0]}-bedroom"
+        else:
+            beds_str = f"{min(beds)}–{max(beds)}-bedroom"
+
+    prop_str = property_type or "home"
+
+    search_desc = " ".join(filter(None, [beds_str, prop_str, "in", city,
+                                          f"({price_str})" if price_str else ""]))
+
+    strategy_context = ""
+    if strategy == "saved_property" and most_viewed_street:
+        strategy_context = (
+            f"They SAVED a property on {expand_address_for_speech(most_viewed_street)}. "
+            f"They have specific interest — this is high intent."
+        )
+    elif strategy == "repeat_view" and most_viewed_street:
+        strategy_context = (
+            f"They came back to {expand_address_for_speech(most_viewed_street)} multiple times. "
+            f"They're circling it — high interest in that specific home."
+        )
+    elif view_count >= 4:
+        strategy_context = f"They viewed {view_count} properties in one session — actively shopping."
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+
+        prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 real estate team in Virginia (850+ homes a year).
+
+Barry is recording this for {first_name}, a buyer searching for a {search_desc}.
+{strategy_context}
+
+━━━━ THE FRAME (non-negotiable) ━━━━
+Barry was already recording market update videos for other buyer clients.
+He saw {first_name}'s search come through and pulled one together on the spot.
+Same "I was already doing this" energy — not a cold pitch, a warm pivot.
+
+━━━━ SCRIPT STRUCTURE ━━━━
+
+OPEN (3-5 seconds): Mid-thought, natural. Reference the city or search.
+Good: "Hey {first_name} — was just finishing up a video for another buyer looking in {city} and saw your search come through, so I pulled one together for you."
+Bad: "Hi, I'm Barry Jenkins..." (too formal)
+
+MARKET INTEL (20-25 seconds — this is the heart of the video):
+Give a genuinely MEATY, specific snapshot of what buyers in {city} {f"in the {price_str} range" if price_str else ""} are actually navigating right now.
+
+Pick 2-3 of these angles and make them specific — not vague:
+• Inventory reality: how much is actually available in that city/price range, and how fast it moves
+• Competition dynamics: are buyers seeing multiple offers? Is it softening? What price points are hottest?
+• What buyers get wrong going in — the mistake most make before working with an agent
+• What Barry's volume (850+ homes/year at Legacy Home Team) gives them that Zillow can't — pocket listings, relationships with listing agents, knowing what's coming before it's public
+• Something neighborhood-specific or price-tier-specific that sounds like inside knowledge
+• The rate/affordability reality if relevant — not a prediction, just what buyers are actually doing now
+
+This is the credibility section. Specific beats generic every time.
+{"If they're circling " + expand_address_for_speech(most_viewed_street) + ", mention you can get them more info on that specific one." if most_viewed_street and strategy in ("saved_property", "repeat_view") else ""}
+
+CLOSE (5-7 seconds): Low friction. One soft ask.
+Good: "Happy to walk you through what we're actually seeing right now — just reply here."
+Good: "10 minutes on the phone and I can show you what's real in your search right now."
+Bad: "I'd love to schedule an appointment to discuss your needs." (too formal)
+
+━━━━ BARRY'S VOICE ━━━━
+- Almost 30 years in Hampton Roads. Talks like a knowledgeable friend, not a pitch man.
+- Short sentences. Contractions throughout. No fluff.
+- Never: "I'd love to", "feel free to", "don't hesitate", "happy to help", "reach out"
+- Never: "Ylopo", "rAIya", "AI", "platform" — say "your search" or "you were looking at"
+- Credibility comes from specificity, not self-promotion
+
+━━━━ LENGTH ━━━━
+130-150 words. At normal speaking pace = 35-42 seconds.
+
+Return ONLY the script. No labels, no stage directions. Just Barry's words."""
+
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=350,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        script = msg.content[0].text.strip()
+        logger.info("HeyGen buyer script generated for %s (%d chars)", first_name, len(script))
+        return script
+
+    except Exception as e:
+        logger.warning("Claude buyer script generation failed, using fallback: %s", e)
+
+        # Fallback — still references their city and price range specifically
+        price_line = f" in the {price_str} range" if price_str else ""
+        viewed_line = (
+            f" I also saw you were circling {expand_address_for_speech(most_viewed_street)} — "
+            f"I can pull the full picture on that one too."
+            if most_viewed_street and strategy in ("saved_property", "repeat_view")
+            else ""
+        )
+        return (
+            f"Hey {first_name} — was just finishing up a video for another buyer looking in {city} "
+            f"and saw your search come through, so I pulled one together for you. "
+            f"Here's what I'm actually seeing right now{price_line} in {city}: "
+            f"inventory is moving fast — homes in that price range are averaging a short window before "
+            f"they're gone, and the buyers who win are the ones who are already set up and ready to move "
+            f"when the right one hits. "
+            f"Our team closes 850-plus homes a year here in Hampton Roads, which means I'm hearing about "
+            f"homes before they even hit the market.{viewed_line} "
+            f"10 minutes on the phone and I can walk you through what's real in your search right now. "
+            f"Just reply here."
+        )
+
+
 def generate_zbuyer_background_image(street: str, city: str,
                                       width: int = 1920, height: int = 1080) -> bytes:
     """Clean dark background for Z-buyer (cash offer) videos."""
