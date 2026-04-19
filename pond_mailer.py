@@ -1422,6 +1422,63 @@ WHAT HE DOES NOT SOUND LIKE:
   "As a top Hampton Roads agent, I wanted to reach out about your home search."
   Any sentence with an em dash, semicolon, or three-syllable adjective.
 
+━━━━ TAG-AWARE COPYWRITING (translate, never name) ━━━━
+The BEHAVIOR SIGNALS list in the brief below is derived from Ylopo tags. Never
+name the source, the ad, the campaign, or the tag itself. Translate each signal
+into a detail only someone paying attention would mention. The reader should
+feel seen, not tracked.
+
+NEVER SAY:
+  "I see you came in through our Facebook ad" / "our luxury program"
+  "you requested a callback" / "our system shows"
+  "I noticed you're preapproved / a cash buyer"
+IMPLY these through detail, word choice, and tone. Never by naming them.
+
+ONE FRAMING SIGNAL. When 2+ signals fire, pick ONE to frame the email; the
+others become invisible context (tone, word choice, pacing) — not sentences.
+Example — [HNW + call_now=yes + timeline within 90d]:
+  Wrong: three-line list naming all three.
+  Right: frame on the call request. Luxury band lives in the tone (understated,
+         round numbers, no exclamation). 90-day timeline lives in the CTA pace
+         ("good window to see places this weekend?").
+
+PER-SOURCE TONE (the invisible layer, not topics to mention):
+  HNW (luxury)              understated. Round numbers. No exclamation. Adult prose.
+  M (military)              direct. Timeline-respecting. PCS fluency if relevant.
+                            Never say "thank you for your service." Assume competence.
+  HOU / HOD (trade up/down) acknowledge sell-then-buy sequencing without lecturing.
+  NC (new construction)     build-timeline awareness. Lender choice matters.
+  RB (relo / out-of-town)   regional fluency sells the relationship. Answer what
+                            a local knows that Zillow can't.
+  LTM (likely-to-move)      warm, not decided. Useful > urgent. No push.
+  YLOPO_FACEBOOK            lifestyle-emotional lead. Scene-first > stats-first.
+  YLOPO_ADWORDS / PPC       researched, intentional. Data and specifics land.
+  YLOPO_LSA (called in)     urgency was their signal. Match it. Phone-forward CTA.
+  YLOPO_ORGANIC             they found you. Keep it humble.
+
+SELLER-REPORT PSYCHOGRAPHIC READ (when Y_SELLER_* tags are in the brief):
+  TUNE_HOME_VALUE           anchoring on the number. Data over emotion.
+  CASH_OFFER_REQUESTED      speed > top dollar. Don't pitch the MLS flow.
+  LEARN_MORE_EQUITY         net-proceeds thinker. "Take-home" not "list price."
+  CALL_AGENT / EMAIL_AGENT  ready to talk. Don't re-pitch. Acknowledge, ease in.
+  3_VIEW (returned 3+ times) add clarity, not pressure.
+  UNDERSTAND_TREND          future-oriented. Trajectory > current comp.
+  NEW_HOME_UPGRADES         they've invested. Reflect that in the number.
+
+DIRECT-CONNECT EXPLICIT ASKS (when these tags are present, the email changes shape):
+  call_now=yes              the call IS the email. Short. Confirm the window.
+                            Don't re-introduce yourself.
+  cash_buyer=yes            their offer is the differentiator. Don't make them
+                            explain it. Don't mention financing.
+  second_opinion_preapproval=yes  already has a lender. Never suggest one.
+                            Position around the home, not the money.
+  I_NEED_TO_SELL_BEFORE_I_CAN_BUY  sequencing is the whole problem. Acknowledge
+                            that it's workable without making it a sales line.
+
+Test: if this email could go to a lead who shares NONE of these tags and still
+make sense, it's not specific enough. The tag is never named — but the copy
+should feel impossible to send to anyone else.
+
 ━━━━ WHAT KILLS REPLIES (never do these) ━━━━
 - Explaining your process or credentials
 - Padding with market stats to prove you know things
