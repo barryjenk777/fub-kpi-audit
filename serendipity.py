@@ -324,11 +324,25 @@ to notice something and reached out. It should feel personal and observant, not 
 SITUATION:
 {situation}
 
+IMPORTANT FRAMING — read before writing:
+Home search is high-stakes with real constraints: budget, schools, commute, timeline.
+Serendipity research comes mostly from low-stakes domains like music and food. In real
+estate, too much variety signals "you're not listening" and kills reply rates faster than
+almost anything. Serendipity here means small, well-reasoned stretches — not surprise picks.
+A buyer who feels heard clicks and replies. A buyer who feels like the system is guessing
+unsubscribes.
+
 RECOMMENDATION COPY RULES (apply these, do not override the voice rules below):
 - {why_surfaced}
 - Never include match scores, compatibility percentages, or AI-sounding prediction language.
+- If suggesting a stretch beyond what they've been looking at, stay inside hard constraints
+  (budget, beds/baths, commute zone) and stretch only ONE dimension: neighborhood, style,
+  or layout. Never stretch budget or basic needs. Name the stretch explicitly and tie it to
+  something they've actually shown: "this one's a little outside the area you've been in,
+  but the layout matches almost everything you've come back to."
 - {specific_question}
-- Avoid language that implies certainty about what they want. Leave room for them to have changed their mind.
+- Avoid language that implies certainty about what they want. Buyers change their minds —
+  leave room for that.
 
 BARRY'S VOICE — non-negotiable:
 - Warm, local expert who pays attention. Not a salesperson.
