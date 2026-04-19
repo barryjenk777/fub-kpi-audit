@@ -50,6 +50,7 @@ from config import (
     LEADSTREAM_STALE_DAYS,
     LEADSTREAM_STALE_HOT_POINTS,
     LEADSTREAM_SUPPRESS_HOURS,
+    LEADSTREAM_SUPPRESSION_TAGS,
     LEADSTREAM_TAG,
     LEADSTREAM_VISIT_RECENCY,
     SELLER_TAGS,
@@ -118,6 +119,14 @@ class LeadScorer:
         stage = person.get("stage") or ""
         if stage in LEADSTREAM_EXCLUDED_STAGES:
             return 0, "EXCLUDED_STAGE", [f"stage '{stage}' excluded — lead parked by agent"]
+
+        # --- 0c. Suppression tags — opt-outs, not-interested, AI-cadence-completed ---
+        # If Ylopo (or anyone) has tagged the lead with a suppression signal, we do
+        # not surface them in LeadStream regardless of any intent signals present.
+        # A re-engagement requires the tag being removed manually by an agent.
+        suppressing = [t for t in tags if t in LEADSTREAM_SUPPRESSION_TAGS]
+        if suppressing:
+            return 0, "SUPPRESSED_TAG", [f"suppression tag(s) present: {', '.join(suppressing)}"]
 
         # --- 1. Ylopo signal tags (use highest, add multi-signal bonus) ---
         # Important: Ylopo NEVER removes these tags after setting them — they persist

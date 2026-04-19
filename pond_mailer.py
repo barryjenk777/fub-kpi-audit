@@ -60,13 +60,29 @@ MAX_PER_RUN = 15
 
 # Ylopo tags that indicate behavioral intent (scored separately from LeadStream)
 YLOPO_INTENT_TAGS = {
+    # Behavioral / site-activity signals
     "Y_HOME_3_VIEW":          "viewed a specific home 3+ times",
     "Y_SHARED_LISTING":       "shared a listing (likely with a partner/spouse)",
     "Y_SELLER_REPORT_VIEWED": "viewed a seller home value report",
+    "Y_SELLER_REPORT_ENGAGED": "clicked a call-to-action on their seller report",
+    "Y_SELLER_3_VIEW":        "returned to the seller report 3+ times in a week — high seller intent",
+    "Y_SELLER_CASH_OFFER_REQUESTED": "clicked the cash offer button on the seller report",
+    "Y_SELLER_LEARN_MORE_EQUITY":    "submitted a message via the equity CTA on the seller report",
+    "Y_SELLER_TUNE_HOME_VALUE":      "tuned/adjusted their home value estimate — engaged seller",
     "Y_ADDRESS_FOUND":        "Ylopo identified their current home address",
     "Y_REMARKETING_ENGAGED":  "re-engaged via remarketing ads",
-    "AI_NEEDS_FOLLOW_UP":     "Ylopo AI flagged for immediate follow-up",
-    "AI_VOICE_NEEDS_FOLLOW_UP": "Ylopo AI voice call needs human follow-up",
+    "Y_AI_PRIORITY":          "flagged as high-interest across multiple signals",
+    # AI text signals
+    "AI_NEEDS_FOLLOW_UP":     "had a text conversation with Barry's assistant — flagged for immediate follow-up",
+    "AI_ENGAGED":             "currently in a text conversation with Barry's assistant",
+    # AI voice signals — call-outcome tags (the "what happened on the call" signals)
+    "AI_VOICE_NEEDS_FOLLOW_UP":                   "had a voice conversation with Barry's assistant — flagged for human follow-up",
+    "ISA_TRANSFER_UNSUCCESSFUL":                  "agreed to be connected to Barry, then got stuck on hold and disconnected — strong intent but friction hit",
+    "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE": "was ready to be connected to Barry, but no agent was available to take the call",
+    "ISA_ATTEMPTED_TRANSFER":                     "a call transfer to Barry was attempted but failed mid-process",
+    "CALLBACK_SCHEDULED":                         "explicitly requested a specific callback time — honor that commitment",
+    "NURTURE":                                    "said they're interested but not ready to talk yet — play the long game",
+    # Hand-raise / high-intent signals
     "HANDRAISER":             "raised their hand — expressed direct interest",
     "YPRIORITY":              "Ylopo top-priority buyer signal",
     "HVB":                    "high-value buyer",
@@ -712,15 +728,23 @@ def _is_ylopo_prospecting_seller(person, tags):
 
     Requires BOTH:
       1. Source = "Ylopo Prospecting" (configurable via config.YLOPO_PROSPECTING_SOURCES)
-      2. AI conversation tag (AI_NEEDS_FOLLOW_UP or AI_VOICE_NEEDS_FOLLOW_UP)
-         — older Ylopo Prospecting leads without the AI tag predate the rAIya
-         conversation feature and have no "my assistant" hook to reference.
+      2. Any AI text or AI voice conversation tag — a conversation did happen and
+         we have a "my assistant" hook to reference. Older Ylopo Prospecting leads
+         without any AI tag predate the rAIya conversation feature.
     """
     from config import YLOPO_PROSPECTING_SOURCES
     source = (person.get("source") or "").strip()
     if source not in YLOPO_PROSPECTING_SOURCES:
         return False
-    ai_tags = {"AI_NEEDS_FOLLOW_UP", "AI_VOICE_NEEDS_FOLLOW_UP"}
+    ai_tags = {
+        "AI_NEEDS_FOLLOW_UP",
+        "AI_ENGAGED",
+        "AI_VOICE_NEEDS_FOLLOW_UP",
+        "ISA_TRANSFER_UNSUCCESSFUL",
+        "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE",
+        "ISA_ATTEMPTED_TRANSFER",
+        "CALLBACK_SCHEDULED",
+    }
     return any(t in ai_tags for t in (tags or []))
 
 
@@ -746,13 +770,53 @@ def _build_seller_brief(first_name, person, tags):
 
     # Relevant tags (no Ylopo platform names in emails)
     seller_signals = []
+    # AI conversation signals
     if "AI_NEEDS_FOLLOW_UP" in tags:
-        seller_signals.append("had an AI text conversation about their home (strong engagement)")
+        seller_signals.append("had a text conversation with Barry's assistant about their home (strong engagement)")
+    if "AI_ENGAGED" in tags:
+        seller_signals.append("is currently in an active text conversation with Barry's assistant")
     if "AI_VOICE_NEEDS_FOLLOW_UP" in tags:
-        seller_signals.append("had an AI voice conversation about their home")
+        seller_signals.append("had a voice conversation with Barry's assistant about their home")
+    # AI voice call outcomes — these change the email angle substantially
+    if "ISA_TRANSFER_UNSUCCESSFUL" in tags:
+        seller_signals.append(
+            "AGREED to be connected to Barry on a live call, then got stuck on hold and disconnected — "
+            "acknowledge the friction directly ('sorry we missed each other — here's a direct path')"
+        )
+    if "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE" in tags:
+        seller_signals.append(
+            "was ready to be connected to Barry but no one was available to take the call — "
+            "acknowledge it openly ('we tried to connect you live and dropped the ball — fully on us')"
+        )
+    if "ISA_ATTEMPTED_TRANSFER" in tags:
+        seller_signals.append(
+            "a transfer to Barry was attempted on the call but didn't complete — "
+            "treat like a missed connection and offer a direct path forward"
+        )
+    if "CALLBACK_SCHEDULED" in tags:
+        seller_signals.append(
+            "explicitly requested a callback at a specific time — the email should respect that "
+            "commitment, not override it ('still on for [time]' or 'confirming our call')"
+        )
+    if "NURTURE" in tags:
+        seller_signals.append(
+            "said they're interested in selling in the future but not ready yet — long-game nurture, "
+            "no urgency, no hard CTA — just stay useful"
+        )
+    # Seller-report engagement signals
     if "Y_SELLER_REPORT_VIEWED" in tags:
         seller_signals.append("viewed a home value report")
-    if "YPRIORITY" in tags:
+    if "Y_SELLER_REPORT_ENGAGED" in tags:
+        seller_signals.append("clicked a call-to-action on their home value report — actively engaged with the numbers")
+    if "Y_SELLER_3_VIEW" in tags:
+        seller_signals.append("returned to their home value report 3+ times in a week — high seller intent")
+    if "Y_SELLER_CASH_OFFER_REQUESTED" in tags:
+        seller_signals.append("clicked the cash offer button — investigating speed/certainty, not retail listing")
+    if "Y_SELLER_LEARN_MORE_EQUITY" in tags:
+        seller_signals.append("submitted a message via the equity CTA — curious about what their home is worth net")
+    if "Y_SELLER_TUNE_HOME_VALUE" in tags:
+        seller_signals.append("adjusted/tuned their home value estimate — engaged, thinking about the number")
+    if "YPRIORITY" in tags or "Y_AI_PRIORITY" in tags:
         seller_signals.append("high-priority seller signal")
     if seller_signals:
         lines.append(f"\nSELLER SIGNALS: {'; '.join(seller_signals)}")

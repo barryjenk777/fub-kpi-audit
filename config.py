@@ -215,18 +215,42 @@ LEADSTREAM_POND_LIMIT = 80
 
 # Ylopo signal tags and their base point values (highest tier first)
 LEADSTREAM_SIGNAL_TAGS = {
-    "AI_NEEDS_FOLLOW_UP":       100,  # rAIya text converted — call NOW
-    "AI_VOICE_NEEDS_FOLLOW_UP":  95,  # AI voice converted
-    "HANDRAISER":                80,  # Lead asking for help
-    "YPRIORITY":                 50,  # Ylopo top-priority buyer signal
-    # Behavioral intent tags — set by Ylopo based on IDX activity
-    "Y_HOME_3_VIEW":             45,  # Viewed same home 3+ times — strong attachment
-    "HVB":                       35,  # High-value buyer flag
-    "Y_SHARED_LISTING":          30,  # Shared a listing (likely with partner/spouse)
-    "RETURNED":                  25,  # Came back after going quiet
-    "Y_REMARKETING_ENGAGED":     20,  # Re-engaged via remarketing ads
-    "Y_SELLER_REPORT_VIEWED":    15,  # Viewed home value report — potential seller
-    "Y_ADDRESS_FOUND":           10,  # Ylopo identified their current home address
+    # AI Voice call-outcome tags — lead engaged, transfer attempted, friction hit
+    "ISA_TRANSFER_UNSUCCESSFUL":                 110,  # Engaged, agreed, hung up on hold — hottest signal
+    "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE":105,  # Ready to talk, no realtor picked up
+    "CALLBACK_SCHEDULED":                        100,  # Explicit commitment to a specific time
+    "AI_NEEDS_FOLLOW_UP":                        100,  # rAIya text converted — call NOW
+    "ISA_ATTEMPTED_TRANSFER":                     95,  # Transfer attempt failed mid-process
+    "AI_VOICE_NEEDS_FOLLOW_UP":                   95,  # AI voice converted
+    "Y_SELLER_CASH_OFFER_REQUESTED":              85,  # Clicked cash offer CTA on seller report
+    "HANDRAISER":                                 80,  # Lead asking for help
+    "Y_AI_PRIORITY":                              75,  # Ylopo rollup of high-interest signals
+    "Y_SELLER_3_VIEW":                            60,  # Viewed seller report 3+ times in a week
+    "Y_SELLER_LEARN_MORE_EQUITY":                 55,  # Submitted via Equity CTA on seller report
+    "YPRIORITY":                                  50,  # Ylopo top-priority buyer signal
+    "Y_HOME_3_VIEW":                              45,  # Viewed same home 3+ times — strong attachment
+    "Y_SELLER_TUNE_HOME_VALUE":                   45,  # Tuned their home value on seller report
+    "AI_ENGAGED":                                 40,  # AI text conversation in progress
+    "HVB":                                        35,  # High-value buyer flag
+    "Y_SELLER_REPORT_ENGAGED":                    35,  # Engaged with a CTA on seller report
+    "Y_SHARED_LISTING":                           30,  # Shared a listing (likely with partner/spouse)
+    "NURTURE":                                    25,  # AI voice: interested in future, not now
+    "RETURNED":                                   25,  # Came back after going quiet
+    "Y_REMARKETING_ENGAGED":                      20,  # Re-engaged via remarketing ads
+    "Y_SELLER_REPORT_VIEWED":                     15,  # Viewed home value report — potential seller
+    "Y_ADDRESS_FOUND":                            10,  # Ylopo identified their current home address
+}
+
+# Tags that suppress a lead entirely (score = 0, don't surface).
+# These signal the lead has opted out, been disqualified, or completed the AI
+# cadence — no further automated outreach until a human re-engages them.
+LEADSTREAM_SUPPRESSION_TAGS = {
+    "DO_NOT_CALL",                 # Lead asked not to be called
+    "NOT_INTERESTED",              # Lead declined on AI voice call
+    "NON_ENGLISH_SPEAKER",         # Out of AI voice scope
+    "AI_OPT_OUT",                  # Opted out of AI text
+    "AI_NOT_INTERESTED",           # Declined on AI text
+    "YLOPO_AI_VOICE_COMPLETED",    # AI voice cadence exhausted — no more auto calls
 }
 
 # IDX site visit recency scoring (hours_threshold: points)
