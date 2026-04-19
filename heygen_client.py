@@ -893,14 +893,19 @@ def render_video_email_block(video_url: str, thumbnail_url: str,
 
 
 def render_video_email_block_simple(video_url: str, thumbnail_url: str,
-                                     first_name: str = "") -> str:
+                                     first_name: str = "",
+                                     caption: str = "") -> str:
     """
     Simpler version — single linked image with no overlay div.
     More email client compatible (works even in Outlook desktop).
     The trade-off: no play button on the thumbnail itself.
+
+    caption: text shown below the thumbnail (include &#9654; if you want the play icon).
+             Defaults to "▶ Barry's personal video for {first_name}".
     """
     name_str = f" for {first_name}" if first_name else ""
     alt = f"Personal video from Barry Jenkins{name_str} — click to watch"
+    _caption = caption if caption else f"&#9654; Barry's personal video{name_str}"
     return (
         f'<div style="margin:20px 0;text-align:center;">'
         f'<a href="{video_url}" target="_blank" style="text-decoration:none;">'
@@ -908,6 +913,6 @@ def render_video_email_block_simple(video_url: str, thumbnail_url: str,
         f'style="display:block;margin:0 auto;border-radius:8px;'
         f'border:3px solid #e8e8e8;box-shadow:0 4px 12px rgba(0,0,0,0.12);max-width:100%;" />'
         f'<div style="margin-top:8px;font-size:13px;color:#888;font-family:Arial,sans-serif;">'
-        f'&#9654; Watch Barry\'s personal message</div>'
+        f'{_caption}</div>'
         f'</a></div>'
     )

@@ -2635,6 +2635,7 @@ def get_lead_email_history(person_id):
                     SELECT COUNT(*), MAX(sent_at)
                     FROM pond_email_log
                     WHERE person_id = %s AND dry_run = FALSE
+                      AND strategy != 'new_lead_immediate'
                 """, (person_id,))
                 row = cur.fetchone()
                 emails_sent = row[0] if row else 0
@@ -2666,6 +2667,41 @@ def get_lead_email_history(person_id):
         return {"emails_sent": 0, "has_replied": False, "sequence_num": 1, "suppressed": False}
 
 
+def get_immediate_email_context(person_id):
+    """
+    Return the time bucket of the most recent new_lead_immediate email for this person.
+    Used by pond_mailer's HeyGen blocks to reference the overnight/early text in the
+    morning video wrapper.
+
+    Returns: "late_night" (11pm–4am ET), "early_morning" (4am–7am ET), or None (normal hours / no email).
+    """
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT sent_at FROM pond_email_log
+                    WHERE person_id = %s AND strategy = 'new_lead_immediate'
+                      AND dry_run = FALSE
+                    ORDER BY sent_at DESC LIMIT 1
+                """, (person_id,))
+                row = cur.fetchone()
+        if row and row[0]:
+            from datetime import timezone
+            from zoneinfo import ZoneInfo
+            sent_utc = row[0].replace(tzinfo=timezone.utc)
+            et_hour  = sent_utc.astimezone(ZoneInfo("America/New_York")).hour
+            if et_hour >= 23 or et_hour < 4:
+                return "late_night"
+            if 4 <= et_hour < 7:
+                return "early_morning"
+        return None
+    except Exception as e:
+        logger.warning("get_immediate_email_context failed for %s: %s", person_id, e)
+        return None
+
+
 def days_since_last_pond_email(person_id):
     """Return days since last email to this lead, or None if never emailed."""
     if not is_available():
@@ -2676,6 +2712,7 @@ def days_since_last_pond_email(person_id):
                 cur.execute("""
                     SELECT MAX(sent_at) FROM pond_email_log
                     WHERE person_id = %s AND dry_run = FALSE
+                      AND strategy != 'new_lead_immediate'
                 """, (person_id,))
                 row = cur.fetchone()
         if row and row[0]:

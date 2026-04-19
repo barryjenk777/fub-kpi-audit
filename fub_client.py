@@ -608,27 +608,36 @@ class FUBClient:
         return self._get_paginated("people", {"limit": 100})
 
     def log_email_sent(self, person_id, subject, message, user_id=None):
-        """Log an outbound email to a person's FUB activity timeline.
+        """Log an outbound email to a person's FUB activity timeline via a note.
 
-        Uses POST /v1/emails — appears as 'Email Sent' in the FUB contact
-        timeline, not as a plain note.  Call this after every confirmed send
-        so agents can see exactly what went out and when.
+        FUB's /v1/emails endpoint returns 403 for third-party integrations
+        ("This endpoint is currently unavailable to integrations.").
+        We use /v1/notes instead — appears in the contact timeline so agents
+        can see exactly what went out and when.
 
         Non-fatal: logs a warning and returns None on failure so the send
         path is never blocked by a logging error.
         """
+        # Truncate long email bodies — notes don't need the full HTML wall of text
+        preview = (message or "")[:800].strip()
+        if len(message or "") > 800:
+            preview += "\n[...truncated]"
+
+        note_body = (
+            f"📧 EMAIL SENT\n"
+            f"Subject: \"{subject}\"\n\n"
+            f"{preview}"
+        )
         payload = {
-            "personId":  person_id,
-            "subject":   subject,
-            "message":   message,
-            "isInbound": False,
+            "personId": int(person_id),
+            "body":     note_body,
         }
         if user_id:
             payload["userId"] = user_id
         try:
-            return self._request("POST", "emails", json_data=payload)
+            return self._request("POST", "notes", json_data=payload)
         except Exception as e:
-            logger.warning("FUB email log failed for person %s: %s", person_id, e)
+            logger.warning("FUB email note log failed for person %s: %s", person_id, e)
             return None
 
     def get_events(self, since=None, event_type=None, limit=100, max_pages=5):

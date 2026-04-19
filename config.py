@@ -310,6 +310,7 @@ LEADSTREAM_ALLOWED_POND_IDS = {4, 7}
 # New Lead Immediate Mailer — "I caught you at the computer" opener
 # Pond 4 (Shark Tank) only — mix of new Ylopo buyer/seller leads and old leads.
 SHARK_TANK_POND_ID = 4
+BARRY_FUB_USER_ID  = 1   # Barry Jenkins — attributes email notes in FUB timeline
 # Minutes after lead creation before the immediate email fires (feels human, not instant)
 NEW_LEAD_EMAIL_DELAY_MINUTES = 12
 # How far back to look for new leads per check run (scheduler runs every 5 min)

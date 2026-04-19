@@ -1678,13 +1678,15 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
 # New Lead Immediate Mailer — "I caught you at the computer"
 # ---------------------------------------------------------------------------
 
-def generate_new_lead_email(person, behavior, tags, dry_run=False):
+def generate_new_lead_email(person, behavior, tags, dry_run=False, time_bucket="normal"):
     """
-    Generate a first-contact "caught at the computer" email for a brand-new lead.
+    Generate a first-contact email for a brand-new lead.
 
-    Tone: direct, real-time energy — like Barry just saw them pop up and grabbed his laptop.
-    Includes a local Hampton Roads market insight and one clear CTA.
-    No P.S. — immediacy is the whole vibe.
+    time_bucket: "late_night"    — 11pm–4am ET  (can't sleep / you're up too energy)
+                 "early_morning" — 4am–7am ET   (early riser energy)
+                 "normal"        — 7am–11pm ET  (caught at the computer)
+
+    Tone adapts to the hour — the lead gets a human who was actually up at the same time.
     """
     import anthropic
     import json, re
@@ -1713,92 +1715,128 @@ def generate_new_lead_email(person, behavior, tags, dry_run=False):
         lines.append(f"Area: {', '.join(behavior['search_areas'][:2])}")
     data_brief = "\n".join(lines) if lines else "City/area unknown — write generically for Hampton Roads."
 
+    # ── Time context blocks — injected into each prompt ──────────────────────
+    if time_bucket == "late_night":
+        _zbuyer_time = """━━━━ TIME CONTEXT ━━━━
+This request came in late at night (after 11pm ET). One brief human acknowledgment of the
+hour — a phrase, not a sentence about it. Something like "late-night request" or "saw this
+come through just now." Then straight to the point. They want a number, not chitchat.
+
+CTA EMPHASIS: Speed wins. Barry can have a cash number TODAY. In motivated-seller situations,
+the first serious credible offer often wins — not the highest one.
+Subject line idea: something that nods at the hour, e.g. "up late?" or "late-night request".
+"""
+        _seller_time = """━━━━ TIME CONTEXT ━━━━
+This lead came through late at night. They're probably lying awake thinking about their
+home. Brief, warm acknowledgment of the hour — one phrase only (e.g. "up late thinking
+about this" or "late-night research"). Then straight to the value. Show you're human too.
+Subject line idea: nod at the hour, e.g. "couldn't sleep either?" or "late-night question".
+"""
+        _buyer_time = """━━━━ TIME CONTEXT ━━━━
+Late-night browser — researching homes when the house is finally quiet. That's focus.
+Brief, warm acknowledgment (one phrase): "up late looking at homes too" energy, not a
+3am blast email. Show Barry was working too. Then straight to market intel.
+Subject line must hint at the hour: something like "up late?" or "couldn't sleep either?"
+"""
+    elif time_bucket == "early_morning":
+        _zbuyer_time = """━━━━ TIME CONTEXT ━━━━
+Early morning request — before 7am ET. Serious seller, up early and ready to move.
+Brief "early start" acknowledgment (one phrase). CTA: Barry can have a cash number TODAY.
+First serious offer often wins in motivated-seller situations — that's the angle.
+Subject line idea: nod at the hour, e.g. "early morning request" or "up early — me too".
+"""
+        _seller_time = """━━━━ TIME CONTEXT ━━━━
+Early morning lead — before 7am ET. Up before their day starts thinking about their home.
+That's focus. Brief "early riser" acknowledgment — one phrase, then into the value.
+Tone: quiet confidence, not a morning pep talk.
+Subject line idea: "early riser?" or "up before 7 thinking about this?"
+"""
+        _buyer_time = """━━━━ TIME CONTEXT ━━━━
+Early morning buyer — before 7am ET. Researching before their day starts. That's commitment.
+Brief acknowledgment of the hour (one phrase). Show Barry's up too. Then straight to intel.
+Subject line must hint at the hour: "early start?" or "up before 7 searching homes?"
+"""
+    else:  # normal hours
+        _zbuyer_time = """━━━━ TIME CONTEXT ━━━━
+Normal business hours. Standard real-time energy — Barry just got their request.
+CTA: emphasize speed. Barry can have a cash number fast. First serious offer often wins.
+"""
+        _seller_time = """━━━━ TIME CONTEXT ━━━━
+Normal hours — "caught you at the computer" energy. Real-time, like Barry just saw them
+pop up and grabbed his laptop.
+"""
+        _buyer_time = """━━━━ TIME CONTEXT ━━━━
+Normal hours — real-time energy. Barry saw the search come through and typed this fast.
+"""
+
     # ── Z-BUYER PROMPT ──────────────────────────────────────────────────────
     if is_z_buyer:
         prompt = f"""You are writing a first-contact email from Barry Jenkins in Hampton Roads VA.
 
-This person just submitted a CASH OFFER REQUEST for their home. They want to sell — fast.
+This person just submitted a CASH OFFER REQUEST for their home. They want to sell fast.
 Barry is both a licensed realtor AND a cash buyer who can close in 7 days.
 
 ━━━━ WHO THIS PERSON IS ━━━━
-They asked for a cash offer. Their inbox is already flooded — they probably submitted to
-4 or 5 different investors and agents within the last hour. They are overwhelmed, skeptical,
-and looking for the one response that doesn't sound like every other "WE BUY HOUSES" pitch.
+Their inbox is already flooded with "WE BUY HOUSES" responses. They submitted to multiple
+investors and agents within the last hour. Overwhelmed. Skeptical. Looking for the one
+response that sounds different.
 
-Barry's edge: he can do BOTH.
-  Option A: Cash offer, close in 7 days. Done. No showings, no stress.
-  Option B: Quick MLS listing — if they have a few more weeks, he might net them more money.
+Barry's edge — he can do BOTH. Most can only do one.
+  Option A: Cash offer, close in 7 days. No showings, no financing risk. Done.
+  Option B: Quick MLS listing — a few more weeks might net significantly more. Barry shows that math.
 
-Most investors can only offer Option A. Most agents can only offer Option B.
-Barry can show them both numbers and let them decide. That's the differentiator.
+SPEED IS THE CTA ANGLE: In motivated-seller situations the first serious, credible offer
+often wins — not the highest one. Barry can have a real number TODAY. That beats every
+investor saying "we'll call you Monday."
 
+{_zbuyer_time}
 ━━━━ TONE ━━━━
-Calm. Confident. Not desperate. Not a pitch. More like: "Here's what I can actually do."
-One paragraph. Short. Don't add to the noise — cut through it.
-No hype. No "WE BUY HOUSES" energy. No "I'd love to help you."
-This lead has heard every version of the hustle. Be the quiet, competent one.
+Calm. Confident. Not desperate. Not a pitch — more like: "Here's what I can actually do."
+No hype. No "WE BUY HOUSES" energy. No "I'd love to help."
+Be the quiet, competent one in a sea of noise.
 
 ━━━━ WHAT THE EMAIL MUST INCLUDE ━━━━
-1. Confirm you got their cash offer request (proves you're responding to THIS request, not blasting)
-2. Affirm: yes, cash, close in a week
-3. The differentiator in one sentence: as a licensed agent, he can also show them what listing might net — most cash buyers can't offer that comparison
-4. One simple CTA: "want me to run both numbers?" or "worth a quick call to go over both options?"
+1. Confirm their cash offer request specifically (not a blast)
+2. Yes, cash, can close fast
+3. One-sentence differentiator: Barry also shows what listing might net — most can't
+4. Speed-forward CTA: get them a number today / being first often wins
 
 ━━━━ WHAT KILLS THIS EMAIL ━━━━
 - ANY "WE BUY HOUSES" energy
-- Explaining the process or credentials beyond one line
 - More than 4 sentences in the body
 - Exclamation points
 - "I'd love to", "feel free to", "don't hesitate"
-- Sounding like a template — this must feel like one person writing to one person
+- Vague CTA that doesn't signal speed and first-mover advantage
 
 ━━━━ LEAD DATA ━━━━
 {data_brief}
 
 FORMAT:
-- First name + comma only on line 1
-- Blank line
-- Body: 3–4 sentences max
-- Signature added automatically — stop before the sign-off
+- First name + comma only on line 1. Blank line. Body: 3–4 sentences max.
+- Signature added automatically — stop before sign-off.
 
-SUBJECT LINES (3 options — feel like a direct text, not a marketing email):
-- Good examples: "your cash offer request", "cash or list — [City]", "[first name]"
-- Under 7 words. No ALL CAPS. No exclamation points.
+SUBJECT LINES (3 options — feel like a direct text, under 7 words, no ALL CAPS):
+- Good: "your cash offer request", "got your request — can move fast", "cash offer — [City]"
 
 OUTPUT (JSON only, no markdown fences):
-{{
+{{{{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "{first_name},\\n\\n[3–4 sentences]"
-}}"""
+  "body": "{{first_name}},\\n\\n[3–4 sentences]"
+}}}}"""
 
-    # ── BUYER / GENERAL SELLER PROMPT ───────────────────────────────────────
-    else:
-        intent_context = (
-            "This lead came through a home valuation form — they're likely a homeowner "
-            "considering selling. Frame around what homes are doing in their area."
-            if is_seller else
-            "This lead came through a home SEARCH site — they were looking at homes to buy. "
-            "Frame around their search and what's available in their area."
-        )
-
+    # ── BUYER PROMPT ──────────────────────────────────────────────────────────────────────────
+    elif not is_seller:
         prompt = f"""You are writing a first-contact email from Barry Jenkins, realtor in Hampton Roads VA.
 
-This lead JUST appeared — active within the last hour. Barry saw them come through and
-grabbed his laptop. Should feel like it was written in 90 seconds.
+This buyer JUST came through a home search site — active within the last hour.
 
-━━━━ VIBE ━━━━
-"I caught you at the computer" — real-time, direct, not a campaign email.
-Sounds like a smart friend who knows Hampton Roads cold.
-
-━━━━ LEAD INTENT ━━━━
-{intent_context}
-
+{_buyer_time}
 ━━━━ LEAD DATA ━━━━
 {data_brief}
 
 ━━━━ WHAT THE EMAIL MUST DO ━━━━
-1. Open with a specific observation (city, price range, what they looked at)
-2. One sentence of Hampton Roads market intel only a local would know
+1. Open with a specific observation (city, price range, what they searched)
+2. One sentence of Hampton Roads market intel only a local would know — specific, not generic
 3. One clear CTA answerable in 2–5 words
 
 ━━━━ HARD RULES ━━━━
@@ -1810,14 +1848,48 @@ Sounds like a smart friend who knows Hampton Roads cold.
 FORMAT:
 - First name + comma only on line 1. Blank line. Body.
 
-SUBJECT LINES (3 options — 3–6 words, feel like a text):
-- No ALL CAPS, no emojis, direct beats clever
+SUBJECT LINES (3 options — 3–6 words, feel like a text not a campaign):
+- Direct beats clever. No ALL CAPS, no emojis.
 
 OUTPUT (JSON only, no markdown fences):
-{{
+{{{{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "{first_name},\\n\\n[3–5 sentences]"
-}}"""
+  "body": "{{first_name}},\\n\\n[3–5 sentences]"
+}}}}"""
+
+    # ── SELLER PROMPT ──────────────────────────────────────────────────────────────────────────
+    else:
+        prompt = f"""You are writing a first-contact email from Barry Jenkins, realtor in Hampton Roads VA.
+
+This homeowner JUST came through a home valuation form — likely considering selling.
+Barry saw them pop up and is responding now.
+
+{_seller_time}
+━━━━ LEAD DATA ━━━━
+{data_brief}
+
+━━━━ WHAT THE EMAIL MUST DO ━━━━
+1. Open with a specific observation about their area or situation
+2. One sentence of real Hampton Roads market intel — what sellers are actually seeing now
+3. One clear CTA answerable in 2–5 words
+
+━━━━ HARD RULES ━━━━
+- No P.S., no "I hope this finds you well", no "just checking in"
+- No "I noticed" — lead with the observation itself
+- Fragments fine. Contractions always. 3–5 sentences max.
+- Signature added automatically — stop before sign-off.
+
+FORMAT:
+- First name + comma only on line 1. Blank line. Body.
+
+SUBJECT LINES (3 options — 3–6 words, feel like a text not a campaign):
+- Direct beats clever. No ALL CAPS, no emojis.
+
+OUTPUT (JSON only, no markdown fences):
+{{{{
+  "subject_options": ["option 1", "option 2", "option 3"],
+  "body": "{{first_name}},\\n\\n[3–5 sentences]"
+}}}}"""
 
     if dry_run:
         logger.info("[DRY RUN] Would generate new lead email for %s", first_name)
@@ -1846,10 +1918,11 @@ def run_new_lead_mailer(dry_run=True):
 
     Runs every 5 minutes via scheduler. Typically processes 0–3 leads per run.
 
-    QUIET HOURS: 9pm–7am ET — no immediate emails sent during this window.
-    Leads created overnight are held and picked up by the 8am pond_mailer slot,
-    which sends Email 1 with the HeyGen video (better email, better timing).
-    "Caught you at the computer" doesn't read right at midnight anyway.
+    Sends immediately at any hour — 24/7. The lead gets the text now; the
+    HeyGen video Email 1 follows at the next 8am pond_mailer run.
+    The immediate email is logged as strategy='new_lead_immediate' which is
+    intentionally excluded from the sequence count in db.py — so pond_mailer
+    still sees sequence_num=1 and fires the HeyGen video on schedule.
     """
     _load_env()
 
@@ -1862,14 +1935,16 @@ def run_new_lead_mailer(dry_run=True):
     client = FUBClient()
     now = datetime.now(timezone.utc)
 
-    # Quiet hours: 9pm–7am ET — hold leads for the 8am pond_mailer slot
-    # which sends Email 1 with the HeyGen video instead of this text-only opener.
-    # "Caught you at the computer" doesn't land right at midnight.
+    # Detect ET time bucket — shapes email tone and subject line
     from zoneinfo import ZoneInfo
-    _now_et_hour = now.astimezone(ZoneInfo("America/New_York")).hour
-    if _now_et_hour >= 21 or _now_et_hour < 7:
-        logger.debug("New lead mailer: quiet hours (%d:xx ET) — holding for 8am HeyGen slot", _now_et_hour)
-        return {"skipped": True, "reason": "quiet_hours", "et_hour": _now_et_hour}
+    _et_hour = now.astimezone(ZoneInfo("America/New_York")).hour
+    if _et_hour >= 23 or _et_hour < 4:
+        _time_bucket = "late_night"      # 11pm–4am: "can't sleep either?"
+    elif _et_hour < 7:
+        _time_bucket = "early_morning"   # 4am–7am:  "early riser too?"
+    else:
+        _time_bucket = "normal"          # 7am–11pm: caught at the computer
+    logger.debug("New lead mailer: time bucket = %s (%d:xx ET)", _time_bucket, _et_hour)
 
     # Daily cap: count how many new_lead_immediate emails already sent today (ET)
     if not dry_run:
@@ -1946,7 +2021,8 @@ def run_new_lead_mailer(dry_run=True):
 
         # Generate the email
         try:
-            email_data = generate_new_lead_email(person, behavior, tags, dry_run=dry_run)
+            email_data = generate_new_lead_email(person, behavior, tags, dry_run=dry_run,
+                                                  time_bucket=_time_bucket)
         except Exception as e:
             logger.error("New lead email generation failed for %s: %s", name, e)
             continue
@@ -1981,13 +2057,16 @@ def run_new_lead_mailer(dry_run=True):
         if result.get("sg_message_id") and log_id:
             _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
 
-        # Log to FUB timeline as an email send (not a note)
+        # Log to FUB timeline — 📧 note so agents see what went out.
+        # (FUB's /v1/emails endpoint returns 403 for API integrations — notes work.)
         if not dry_run:
             try:
+                from config import BARRY_FUB_USER_ID
                 client.log_email_sent(
                     person_id=pid,
                     subject=subject,
                     message=body_text,
+                    user_id=BARRY_FUB_USER_ID,
                 )
             except Exception as _fub_err:
                 logger.warning("FUB email log skipped for new lead %s: %s", name, _fub_err)
@@ -2246,13 +2325,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             skipped_generation_error += 1
             continue
 
+        # ── Context from the immediate text (if one was sent overnight/early) ─────
+        # If this lead got a "can't sleep?" or "early riser?" text before 7am,
+        # the morning video wrapper acknowledges it briefly — shows continuity and
+        # that Barry is the same human they heard from a few hours ago.
+        _imm_ctx = _db.get_immediate_email_context(pid)  # "late_night" / "early_morning" / None
+
         # ── HeyGen personalized video — seller Email 1 only ─────────────────────
-        # Frame: Barry was already recording market videos for other clients.
-        # He remembered this person mid-session and pulled one together for them.
-        # When video succeeds, the ENTIRE email body is replaced with a short
-        # organic wrapper (2-3 sentences + thumbnail + one CTA line).
-        # The Claude-written text body is discarded — it was designed for text-only.
-        # Video emails that also have full paragraphs of text convert worse.
+        # When video succeeds the ENTIRE email body is replaced with a short wrapper.
         # Falls back gracefully to the Claude-written text email if HeyGen fails.
         if is_ylopo_seller and sequence_num == 1 and not dry_run:
             try:
@@ -2277,47 +2357,55 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     )
                     bg_url = get_background_url("seller", address=_street, city=_city_hg)
                     video_result = generate_and_wait(script, background_url=bg_url,
-                                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE, timeout_seconds=240)
+                                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE, timeout_seconds=480)
 
                     if video_result and video_result.get("video_url"):
+                        _city_display   = _city_hg or "Hampton Roads"
+                        _street_display = _street or "your home"
+
                         video_block = render_video_email_block_simple(
                             video_url=video_result["video_url"],
                             thumbnail_url=video_result["thumbnail_url"],
                             first_name=first_name,
+                            caption=f"&#9654; Barry's take on {_street_display} — for {first_name}",
                         )
 
-                        # Replace the full email with a short organic video wrapper.
-                        # Three parts: setup line → thumbnail → one soft CTA.
-                        # This is intentionally NOT the Claude-written text body.
-                        # Video emails with full text blocks convert worse —
-                        # the email should get out of the way and let the video land.
-                        _city_display   = _city_hg or "Hampton Roads"
-                        _street_display = _street or "your home"
+                        # One line above + thumbnail + one line below.
+                        # If lead got an overnight text, briefly acknowledge it — same human, next step.
+
+                        if _imm_ctx == "late_night":
+                            _setup_sent = (
+                                f"{first_name} — we reached out late last night and I knew I'd be "
+                                f"pulling numbers on your place on {_street_display} this morning. "
+                                f"Coffee's in — here's what I put together."
+                            )
+                        elif _imm_ctx == "early_morning":
+                            _setup_sent = (
+                                f"{first_name} — we caught each other early this morning. "
+                                f"Put together a quick recording for your place on {_street_display} "
+                                f"while I had the numbers in front of me."
+                            )
+                        else:
+                            _setup_sent = (
+                                f"{first_name} — I was pulling recent sale numbers for a few of my clients "
+                                f"in {_city_display} when your place on {_street_display} came up. "
+                                f"Put together a quick recording for you."
+                            )
 
                         # Plain-text version (for email clients that strip HTML)
                         video_body_text = (
-                            f"Was putting together a few market videos for some of my sellers "
-                            f"in {_city_display} this week and realized we never actually connected "
-                            f"after my assistant reached out about your place on {_street_display}. "
-                            f"Pulled this together for you while I was at it.\n\n"
+                            f"{_setup_sent}\n\n"
                             f"[Video — click to watch: {video_result['video_url']}]\n\n"
-                            f"Would it make sense to do a quick 10-minute call? "
-                            f"Just reply here and we'll find a time.\n\n"
+                            f"Would a quick 10-minute call make sense? Just reply here.\n\n"
                             + SIGN_OFF
                         )
 
                         # HTML version — setup paragraph, video thumbnail, CTA
                         _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-                        setup_html = (
-                            f'<p style="{_p}">Was putting together a few market videos for some of my '
-                            f'sellers in {_city_display} this week and realized we never actually '
-                            f'connected after my assistant reached out about your place on '
-                            f'{_street_display}. Pulled this together for you while I was at it.</p>'
-                        )
+                        setup_html = f'<p style="{_p}">{_setup_sent}</p>'
                         cta_html = (
                             f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-                            f"Would it make sense to do a quick 10-minute call? "
-                            f"Just reply here and we'll find a time.</p>"
+                            f"Would a quick 10-minute call make sense? Just reply here.</p>"
                         )
                         video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
 
@@ -2352,11 +2440,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 </div>
 </body></html>"""
 
-                        # Video-specific subject — hinting at the video increases open rate ~30%
-                        # Keep it organic: not "I made you a video!", more "I was doing this anyway"
+                        # Subject: first name + address = most personalized signal in inbox.
+                        # Lowercase feels like a text, not a blast. Under 45 chars when possible.
                         _subj_options = [
-                            f"quick video — {_street_display}",
-                            f"put something together for you",
+                            f"{first_name} — quick video for {_street_display}",
+                            f"quick video for {_street_display}",
                             f"was recording for clients, thought of you",
                         ]
                         email_data["subject"]      = _subj_options[0]
@@ -2400,39 +2488,50 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     )
                     bg_url = get_background_url("zbuyer", address=_street, city=_city_hg)
                     video_result = generate_and_wait(script, background_url=bg_url,
-                                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE, timeout_seconds=240)
+                                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE, timeout_seconds=480)
 
                     if video_result and video_result.get("video_url"):
+                        _city_display   = _city_hg or "Hampton Roads"
+                        _street_display = _street or "your home"
+
                         video_block = render_video_email_block_simple(
                             video_url=video_result["video_url"],
                             thumbnail_url=video_result["thumbnail_url"],
                             first_name=first_name,
+                            caption=f"&#9654; Barry's video for {first_name} — {_street_display}",
                         )
 
-                        _city_display   = _city_hg or "Hampton Roads"
-                        _street_display = _street or "your home"
+                        if _imm_ctx == "late_night":
+                            _z_setup = (
+                                f"{first_name} — got your request late last night and wanted to get you "
+                                f"something real, not just a form reply. Put together a quick recording "
+                                f"on {_street_display} this morning."
+                            )
+                        elif _imm_ctx == "early_morning":
+                            _z_setup = (
+                                f"{first_name} — caught your early morning request. Put together a "
+                                f"quick recording on {_street_display} — cash and list numbers both."
+                            )
+                        else:
+                            _z_setup = (
+                                f"{first_name} — saw your cash offer request for {_street_display} "
+                                f"come through. Put together a quick recording for you."
+                            )
 
                         video_body_text = (
-                            f"Saw your cash offer request come through — I was already recording "
-                            f"some client videos so I pulled one together for you right now.\n\n"
+                            f"{_z_setup}\n\n"
                             f"[Video — click to watch: {video_result['video_url']}]\n\n"
-                            f"10 minutes on the phone and I'll run both numbers — cash and listed — "
-                            f"for your specific place on {_street_display}. "
-                            f"Just reply here and we'll find a time.\n\n"
+                            f"10 minutes on the phone and I'll run both numbers for {_street_display}. "
+                            f"Just reply here.\n\n"
                             + SIGN_OFF
                         )
 
                         _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-                        setup_html = (
-                            f'<p style="{_p}">Saw your cash offer request come through — '
-                            f'I was already recording some client videos so I pulled one together '
-                            f'for you right now.</p>'
-                        )
+                        setup_html = f'<p style="{_p}">{_z_setup}</p>'
                         cta_html = (
                             f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-                            f'10 minutes on the phone and I\'ll run both numbers — cash and listed — '
-                            f'for your specific place on {_street_display}. '
-                            f'Just reply here and we\'ll find a time.</p>'
+                            f'10 minutes on the phone and I\'ll run both numbers for {_street_display}. '
+                            f'Just reply here.</p>'
                         )
                         video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
 
@@ -2464,10 +2563,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 </div>
 </body></html>"""
 
-                        # Z-buyer subject — acknowledge the request, hint at the two-option pitch
+                        # Z-buyer subject — name + address, personal feel, lowercase
                         _subj_options = [
+                            f"{first_name} — your home on {_street_display}",
                             f"cash or list — quick video for {_street_display}",
-                            f"saw your request — pulled something together",
                             f"two options for {_street_display}",
                         ]
                         email_data["subject"]      = _subj_options[0]
@@ -2532,38 +2631,81 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     bg_url = get_background_url("buyer", city=_city_hg)
                     video_result = generate_and_wait(script, background_url=bg_url,
                                                     avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
-                                                    timeout_seconds=240)
+                                                    timeout_seconds=480)
 
                     if video_result and video_result.get("video_url"):
+                        _city_display = _city_hg or "Hampton Roads"
+
+                        # Personalize caption + wrapper + subject:
+                        # — specific home vs. general search
+                        # — overnight/early text reference if applicable
+                        if _mv_street and strategy in ("saved_property", "repeat_view"):
+                            _buyer_caption = f"&#9654; Barry's notes on {_mv_street} — for {first_name}"
+                            if _imm_ctx == "late_night":
+                                _setup_text = (
+                                    f"{first_name} — we messaged you late last night. Had a few hours "
+                                    f"to dig into {_mv_street} — put together a quick recording on what I found."
+                                )
+                            elif _imm_ctx == "early_morning":
+                                _setup_text = (
+                                    f"{first_name} — caught each other early this morning. "
+                                    f"Put together a quick recording on {_mv_street} while I had it pulled up."
+                                )
+                            else:
+                                _setup_text = (
+                                    f"{first_name} — saw you've been looking in {_city_display} "
+                                    f"and circling back to {_mv_street}. "
+                                    f"Put together a quick recording for you."
+                                )
+                            _cta_text = (
+                                f"10 minutes and I can walk you through what I'm actually seeing "
+                                f"on that one — and your search overall. Just reply here."
+                            )
+                            _buyer_subj = f"{first_name} — I looked into {_mv_street}"
+                        else:
+                            _buyer_caption = f"&#9654; Barry's take on {_city_display} homes for {first_name}"
+                            if _imm_ctx == "late_night":
+                                _setup_text = (
+                                    f"{first_name} — we reached out late last night. Put together a more "
+                                    f"detailed recording this morning on your {_city_display} search."
+                                )
+                            elif _imm_ctx == "early_morning":
+                                _setup_text = (
+                                    f"{first_name} — caught each other early. Put together a quick "
+                                    f"recording on your {_city_display} search while I had the numbers up."
+                                )
+                            else:
+                                _setup_text = (
+                                    f"{first_name} — saw your search come through for homes in {_city_display}. "
+                                    f"Put together a quick recording for you."
+                                )
+                            _cta_text = (
+                                f"10 minutes and I can walk you through exactly what I'm seeing "
+                                f"right now. Just reply here."
+                            )
+                            _buyer_subj = f"{first_name} — your {_city_display} search"
+
                         video_block = render_video_email_block_simple(
                             video_url=video_result["video_url"],
                             thumbnail_url=video_result["thumbnail_url"],
                             first_name=first_name,
+                            caption=_buyer_caption,
                         )
-
-                        _city_display = _city_hg or "Hampton Roads"
 
                         # Plain-text version
                         video_body_text = (
-                            f"Was recording a quick market update for another buyer in {_city_display} "
-                            f"and saw your search come through — so I pulled one together for you.\n\n"
+                            f"{_setup_text}\n\n"
                             f"[Video — click to watch: {video_result['video_url']}]\n\n"
-                            f"Happy to walk you through what we're actually seeing right now in your search. "
-                            f"Just reply here and we'll set up 10 minutes.\n\n"
+                            f"{_cta_text}\n\n"
                             + SIGN_OFF
                         )
 
                         # HTML version — lean wrapper: setup → video → CTA
                         _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-                        setup_html = (
-                            f'<p style="{_p}">Was recording a quick market update for another buyer '
-                            f'in {_city_display} and saw your search come through — so I pulled one '
-                            f'together for you.</p>'
-                        )
+                        setup_html = f'<p style="{_p}">{_setup_text}</p>'
                         cta_html = (
                             f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-                            f"Happy to walk you through what we're actually seeing right now in your search. "
-                            f"Just reply here and we'll set up 10 minutes.</p>"
+                            f'{_cta_text}</p>'
                         )
                         video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
 
@@ -2595,9 +2737,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 </div>
 </body></html>"""
 
-                        # Subject hints at the video without being salesy
+                        # Subject: name + specific search detail for max open rate
                         _subj_options = [
-                            f"quick video — {_city_display} market right now",
+                            _buyer_subj,
                             f"put something together for your search",
                             f"was recording for clients, thought of you",
                         ]
@@ -2647,24 +2789,36 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         script, background_url=bg_url,
                         avatar_id=AVATAR_SUIT, voice_id=DEFAULT_VOICE,
                         avatar_style="normal",   # show the suit, not a circle crop
-                        timeout_seconds=240,
+                        timeout_seconds=480,
                     )
 
                     if video_result and video_result.get("video_url"):
+                        # Wrapper: name + address → get out of the way → one CTA line.
+                        # "Not sure if you caught my last video" is the hook — use it.
+                        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
+                        if is_z:
+                            _fu_caption = f"&#9654; Barry's follow-up for {first_name} — {_street_fu}"
+                            setup_line = (
+                                f"{first_name} — not sure if you caught my last video on "
+                                f"{_street_fu}, but I ran a few more numbers and wanted to share."
+                            )
+                            cta_line = f"10 minutes on the phone and I'll walk you through both. Just reply here."
+                            _fu_subj   = f"{first_name} — one more thing on {_street_fu}"
+                        else:
+                            _fu_caption = f"&#9654; Barry's follow-up for {first_name} — {_street_fu}"
+                            setup_line = (
+                                f"{first_name} — not sure if you caught my last video, "
+                                f"but I wanted to add one more thing about your place on {_street_fu}."
+                            )
+                            cta_line = f"Reply here and we'll find 10 minutes to walk through it."
+                            _fu_subj   = f"{first_name} — one more thing about {_street_fu}"
+
                         video_block = render_video_email_block_simple(
                             video_url=video_result["video_url"],
                             thumbnail_url=video_result["thumbnail_url"],
                             first_name=first_name,
+                            caption=_fu_caption,
                         )
-
-                        # Wrapper: just enough text to frame the video, get out of the way
-                        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-                        if is_z:
-                            setup_line = f"Wanted to circle back — pulled together a quick follow-up."
-                            cta_line   = f"10 minutes and I can run both numbers. Just reply here."
-                        else:
-                            setup_line = f"Wanted to add one more thing I forgot in my last video."
-                            cta_line   = f"Reply here and we'll find 10 minutes to walk through it."
 
                         setup_html = f'<p style="{_p}">{setup_line}</p>'
                         cta_html   = (
@@ -2706,10 +2860,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 </div>
 </body></html>"""
 
+                        # Subject: name + specific address — "one more thing" alone is too vague
                         _subj_options = [
-                            f"quick follow-up",
-                            f"one more thing",
+                            _fu_subj,
                             f"not sure if you caught my last video",
+                            f"one more thing",
                         ]
                         email_data["subject"]      = _subj_options[0]
                         email_data["all_subjects"] = _subj_options
@@ -2772,15 +2927,16 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         if result.get("sg_message_id") and log_id:
             _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
 
-        # Log the outbound email to FUB's activity timeline so agents can
-        # see exactly what went out — appears as "Email Sent", not a note.
-        # The positive-reply handler adds a separate note; this is the send record.
+        # Log the outbound email to FUB timeline as a 📧 note so agents can
+        # see what went out. (FUB /v1/emails is blocked for API integrations.)
         if not dry_run:
             try:
+                from config import BARRY_FUB_USER_ID
                 client.log_email_sent(
                     person_id=pid,
                     subject=email_data["subject"],
                     message=email_data["body_text"],
+                    user_id=BARRY_FUB_USER_ID,
                 )
             except Exception as _fub_err:
                 logger.warning("FUB email log skipped for %s: %s", name, _fub_err)

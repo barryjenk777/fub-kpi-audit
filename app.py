@@ -4682,56 +4682,19 @@ def api_pond_mailer_reply():
         if sentiment == "positive":
             try:
                 from fub_client import FUBClient
-                from config import MANAGER_USER_ID, PRIORITY_GROUP_ID
                 fub = FUBClient()
 
-                # Pull Priority Agents group and pick one agent (deterministic round-robin by person_id)
-                group = fub.get_group(PRIORITY_GROUP_ID)
-                group_users = [u.get("id") for u in (group.get("users") or []) if u.get("id")]
-                if group_users:
-                    assigned_uid = group_users[person_id % len(group_users)]
-                else:
-                    person_data = fub.get_person(person_id)
-                    assigned_uid = (
-                        person_data.get("assignedUserId")
-                        or person_data.get("ownerId")
-                        or MANAGER_USER_ID
-                    )
-
-                # Assign lead to the chosen Priority Agent (moves them out of pond)
-                fub._request("PUT", f"people/{person_id}", json_data={
-                    "assignedUserId": assigned_uid,
-                })
-                logger.info("Lead %s assigned to Priority Agent user %s", person_id, assigned_uid)
-
-                from datetime import date as _date
-                tomorrow = (_date.today() + timedelta(days=1)).isoformat()
-
-                task_name = f"\U0001f525 Pond lead replied — call {person_name or clean_from} NOW"
-                task_desc = (
-                    f"This lead replied to Barry's AI outreach email with POSITIVE interest.\n\n"
-                    f"Reply preview:\n{body_text.strip()[:500]}\n\n"
-                    f"Original subject: {subject}\n"
-                    f"AI read: {sentiment_reason}\n\n"
-                    f"They've been assigned to you from the Shark Tank pond. Call them today."
-                )
-
-                task_result = fub.create_task(
-                    person_id=person_id,
-                    assigned_user_id=assigned_uid,
-                    name=task_name,
-                    due_date=tomorrow,
-                    description=task_desc,
-                )
-                task_id = (task_result or {}).get("id")
+                # Tag the lead — FUB automation handles assignment (only fires for pond leads,
+                # skips if an agent already claimed them to prevent double-assignment).
+                fub.add_tag(person_id, "Email_Conversion")
+                logger.info("Email_Conversion tag applied to lead %s", person_id)
                 routed = True
-                logger.info("FUB task %s created for user %s", task_id, assigned_uid)
 
-                # Add FUB note for positive replies
+                # Add FUB note so the timeline shows what triggered the conversion
                 fub_note_ok = _pond_add_fub_note(fub, person_id, person_name, body_text, subject, sentiment_reason)
 
             except Exception as e:
-                logger.error("FUB routing failed for %s (ID %s): %s", person_name, person_id, e)
+                logger.error("FUB positive reply handling failed for %s (ID %s): %s", person_name, person_id, e)
 
         elif sentiment == "negative":
             # Tag lead to suppress from future pond sends
@@ -4785,7 +4748,7 @@ def api_pond_mailer_reply():
                     "",
                 ]
                 if routed:
-                    _lines.append(f"✅ Assigned to Priority Agent — FUB task created (ID: {task_id})")
+                    _lines.append("✅ Email_Conversion tag applied — FUB automation will assign")
                     _lines.append(f"✅ CRM note added: {'yes' if fub_note_ok else 'check logs'}")
                 elif sentiment == "negative":
                     _lines.append("🚫 Tagged PondMailer_Unsubscribed — lead will be suppressed from future sends")
@@ -4819,7 +4782,6 @@ def api_pond_mailer_reply():
             "person_name": person_name,
             "sentiment":   sentiment,
             "routed":      routed,
-            "task_id":     task_id,
             "fub_note_ok": fub_note_ok,
         }), 200
 
