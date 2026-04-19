@@ -1158,17 +1158,33 @@ def _get_z_buyer_seq_guide(sequence_num):
     return cycle[sequence_num % 3]
 
 
-def _is_z_buyer(tags):
-    """Return True if this lead is a Z-buyer (cash offer request from Ylopo)."""
+def _is_z_buyer(tags, person=None):
+    """Return True if this lead is a Z-buyer (cash offer request from Ylopo).
+
+    Checks BOTH tags AND the lead source string so leads like Dixon's —
+    who arrive from the 'Zbuyer' source without the expected tags — still
+    route to the cash-offer sequence instead of the buyer IDX track.
+    """
     z_tags = {"ZLEAD", "Z_BUYER", "YLOPO_Z_BUYER"}
-    return any(t.upper().replace("-", "_") in z_tags for t in (tags or []))
+    if any(t.upper().replace("-", "_") in z_tags for t in (tags or [])):
+        return True
+    if person:
+        raw_source = (person.get("source") or "").strip().lower()
+        # Normalise: strip spaces, hyphens, underscores for fuzzy matching
+        src = raw_source.replace("-", "").replace(" ", "").replace("_", "")
+        if src in {"zbuyer", "ylopozbuyer", "ylopo"}:
+            return True
+        # Also catch partial matches like "Zbuyer Lead", "Z-Buyer Source" etc.
+        if "zbuyer" in src:
+            return True
+    return False
 
 
 def _is_listing_drop(sequence_num, tags=None, person=None):
     """True for listing-drop emails (2, 5, 7, 9, 11…) — these include IDX links.
     Email 2 is an early listing drop: buyers want houses, not more agent intro.
     Seller leads (Z-buyer, Ylopo Prospecting) never get listing drops."""
-    if _is_z_buyer(tags):
+    if _is_z_buyer(tags, person):
         return False
     if person and _is_ylopo_prospecting_seller(person, tags or []):
         return False
@@ -1197,7 +1213,7 @@ def generate_email(person, behavior, strategy, leadstream_tier,
     """
     first_name = person.get("firstName") or "there"
     tags = person.get("tags", [])
-    is_z      = _is_z_buyer(tags)
+    is_z      = _is_z_buyer(tags, person)
     is_seller = _is_ylopo_prospecting_seller(person, tags)
 
     # Seller leads never get listing drops
@@ -2538,7 +2554,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # They're homeowners transferred from rAIya — no IDX activity expected.
         # Their data comes from the FUB person record (address, city, AI tags).
         is_ylopo_seller = _is_ylopo_prospecting_seller(person, tags)
-        is_z            = _is_z_buyer(tags)
+        is_z            = _is_z_buyer(tags, person)  # checks source string too (fixes Zbuyer source routing)
         first_name      = first or "there"   # used in HeyGen script generators + wrappers
 
         if is_ylopo_seller:
@@ -3166,6 +3182,145 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         logger.warning("HeyGen Email 2 video not ready for %s — text-only", name)
             except Exception as _hg_err:
                 logger.warning("HeyGen Email 2 pipeline failed for %s — text-only: %s", name, _hg_err)
+
+        # ── HeyGen suit re-engagement video — Email 4 (all lead types) ───────────
+        # Email 3 is a breakup text. Email 4 is the first drip content email —
+        # perfect re-entry point with a video. Suit avatar signals a fresh angle,
+        # not a repeat of Email 1. Buyers get their 2nd video ever (Email 1 was
+        # circle). Sellers/Z-buyers get their 3rd. All three lead types are served
+        # by generate_followup_video_script() which picks the right frame.
+        # Falls back gracefully to the Claude text email if HeyGen fails.
+        if sequence_num == 4 and not dry_run:
+            try:
+                from heygen_client import (
+                    is_available as heygen_available,
+                    generate_followup_video_script,
+                    generate_and_wait,
+                    get_background_url,
+                    render_video_email_block_simple,
+                    AVATAR_SUIT, DEFAULT_VOICE,
+                )
+                if heygen_available():
+                    _addr_obj4  = (person.get("address") or {})
+                    _street_e4  = _addr_obj4.get("street", "")
+                    # Buyers: prefer city from IDX behavior; sellers: use home city
+                    _beh_cities4 = behavior.get("cities") or []
+                    _city_e4    = (_beh_cities4[0] if _beh_cities4
+                                   else _addr_obj4.get("city", "") or "Hampton Roads")
+                    _lead_type4 = "zbuyer" if is_z else ("seller" if is_ylopo_seller else "buyer")
+
+                    logger.info("Generating HeyGen Email 4 drip video for %s (%s)", name, _lead_type4)
+                    script = generate_followup_video_script(
+                        lead_type=_lead_type4,
+                        first_name=first_name,
+                        city=_city_e4,
+                        street=_street_e4,
+                        tags=tags,
+                    )
+                    bg_url = get_background_url(_lead_type4, address=_street_e4, city=_city_e4)
+                    video_result = generate_and_wait(
+                        script, background_url=bg_url,
+                        avatar_id=AVATAR_SUIT, voice_id=DEFAULT_VOICE,
+                        avatar_style="normal",   # show the suit, not a circle crop
+                        timeout_seconds=480,
+                    )
+
+                    if video_result and video_result.get("video_url"):
+                        _p4 = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
+                        if is_z:
+                            _e4_caption = f"&#9654; Barry's update for {first_name}"
+                            _setup4     = (
+                                f"{first_name} — wanted to circle back with one more thought "
+                                f"on your options for {_street_e4 or 'your home'}."
+                            )
+                            _cta4       = (
+                                f"10 minutes on the phone and I'll walk through both paths. "
+                                f"Just reply here."
+                            )
+                            _e4_subj    = f"{first_name} — one more thought"
+                        elif is_ylopo_seller:
+                            _e4_caption = f"&#9654; Barry's update for {first_name} — {_street_e4}"
+                            _setup4     = (
+                                f"{first_name} — had a thought on "
+                                f"{_street_e4 or 'your home'} I wanted to share."
+                            )
+                            _cta4       = f"Reply here and we'll find 10 minutes to walk through it."
+                            _e4_subj    = f"{first_name} — I had a thought"
+                        else:  # buyer
+                            _e4_caption = f"&#9654; Barry's update — {_city_e4} search"
+                            _setup4     = (
+                                f"{first_name} — just had a thought on the {_city_e4} market "
+                                f"I wanted to pass along."
+                            )
+                            _cta4       = (
+                                f"Reply here and I can walk you through what I'm seeing. "
+                                f"Happy to help."
+                            )
+                            _e4_subj    = f"{first_name} — {_city_e4} market update"
+
+                        video_block = render_video_email_block_simple(
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            first_name=first_name,
+                            caption=_e4_caption,
+                        )
+                        setup_html4 = f'<p style="{_p4}">{_setup4}</p>'
+                        cta_html4   = (
+                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
+                            f'{_cta4}</p>'
+                        )
+                        video_body_inner4 = setup_html4 + "\n" + video_block + "\n" + cta_html4
+
+                        video_body_text4 = (
+                            f"{_setup4}\n\n"
+                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"{_cta4}\n\n" + SIGN_OFF
+                        )
+                        email_data["body_text"] = video_body_text4
+                        email_data["body_html"] = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<div style="max-width:560px;margin:0 auto;padding:32px 24px">
+  <div style="color:#222;font-size:15px;line-height:1.8">
+    {video_body_inner4}
+  </div>
+  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
+    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
+         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
+    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
+      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
+      (757) 919-8874 &nbsp;|&nbsp;
+      <a href="https://www.legacyhomesearch.com"
+         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
+      1545 Crossways Blvd, Chesapeake, VA 23320<br>
+      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
+         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
+    </p>
+  </div>
+</div>
+</body></html>"""
+
+                        _subj_options4 = [
+                            _e4_subj,
+                            "had a thought",
+                            "one more thing",
+                        ]
+                        email_data["subject"]      = _subj_options4[0]
+                        email_data["all_subjects"] = _subj_options4
+
+                        _avatar_used = AVATAR_SUIT
+                        logger.info("HeyGen Email 4 drip video built for %s (%.1fs)", name,
+                                    video_result.get("duration", 0))
+                        print(f"    ▶ HeyGen Email 4 drip: {video_result['video_url'][:60]}...")
+                    else:
+                        logger.warning("HeyGen Email 4 video not ready for %s — text-only", name)
+            except Exception as _hg_err:
+                logger.warning("HeyGen Email 4 pipeline failed for %s — text-only: %s", name, _hg_err)
+
 
         print(f"    Subject: {email_data['subject']}")
         if dry_run:
