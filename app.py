@@ -3679,6 +3679,214 @@ def api_goals_scorecard():
     })
 
 
+@app.route("/api/goals/agents-list")
+def api_goals_agents_list():
+    """Lightweight list of active agent names + emails for dropdowns."""
+    profiles = _db.get_agent_profiles(active_only=True)
+    return jsonify({
+        "agents": [{"name": p["agent_name"], "email": p.get("email", "")} for p in profiles]
+    })
+
+
+@app.route("/api/goals/meeting-brief/<path:agent_name>")
+def api_meeting_brief(agent_name):
+    """
+    Generate Barry's AI coaching brief for a 1-on-1 meeting with an agent.
+    Synthesizes goal pace, funnel breakdown, team rank, and agent 'why' into
+    a structured coaching guide — not agent-facing, Barry only.
+    """
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+
+    try:
+        import anthropic as _anthropic
+        import json as _json
+
+        year      = datetime.now().year
+        week_num  = datetime.now().isocalendar()[1]
+        first_name = agent_name.split()[0]
+
+        # ── Gather agent data ─────────────────────────────────────────────
+        goal         = _db.get_goal(agent_name, year=year)
+        why          = _db.get_agent_why(agent_name) or {}
+        streak       = _db.get_streak(agent_name) or {}
+        ytd_cache    = _db.get_ytd_cache(year=year)
+        agent_ytd    = ytd_cache.get(agent_name, {"calls_ytd": 0, "convos_ytd": 0, "appts_ytd": 0})
+        deal_summary = _db.get_deal_summary(agent_name, year=year)
+        all_deals    = _db.get_deal_summary(year=year)   # all agents for team rank
+
+        targets = _db.compute_targets(goal) if goal else {}
+        actuals = {
+            "calls_ytd":    agent_ytd.get("calls_ytd", 0),
+            "convos_ytd":   agent_ytd.get("convos_ytd", 0),
+            "appts_ytd":    agent_ytd.get("appts_ytd", 0),
+            "contracts_ytd": deal_summary.get("contracts", 0),
+            "closings_ytd": deal_summary.get("closings", 0),
+            "gci_ytd":      deal_summary.get("gci_est", 0),
+        }
+        pace = _db.compute_pace(goal, targets, actuals) if goal else {}
+
+        # ── Team rank for each funnel metric ──────────────────────────────
+        def _rank(metric_key, ytd_key, source="ytd"):
+            """Returns (rank, total, agent_val, team_avg, team_list)."""
+            if source == "ytd":
+                values = [(n, d.get(ytd_key, 0)) for n, d in ytd_cache.items()]
+            else:
+                values = [(n, all_deals.get(n, {}).get(ytd_key, 0)) for n in ytd_cache.keys()]
+            values.sort(key=lambda x: x[1], reverse=True)
+            total = max(len(values), 1)
+            agent_val = next((v for n, v in values if n == agent_name), 0)
+            team_avg  = sum(v for _, v in values) / total
+            rank = next((i + 1 for i, (n, _) in enumerate(values) if n == agent_name), total)
+            return rank, total, agent_val, round(team_avg, 1)
+
+        convo_rank,  n_agents, _, team_convo_avg  = _rank("convos",   "convos_ytd")
+        appt_rank,   _,        _, team_appt_avg   = _rank("appts",    "appts_ytd")
+        closing_rank,_,        _, team_close_avg  = _rank("closings", "closings", source="deals")
+
+        # ── Funnel bottleneck — lowest % of pace ──────────────────────────
+        funnel_pcts = {
+            "Conversations": (pace.get("convos",       {}) or {}).get("pct", 0),
+            "Appointments":  (pace.get("appointments", {}) or {}).get("pct", 0),
+            "Closings":      (pace.get("closings",     {}) or {}).get("pct", 0),
+        }
+        bottleneck = min(funnel_pcts, key=funnel_pcts.get)
+
+        # ── Build AI prompt ───────────────────────────────────────────────
+        gci_goal          = goal.get("gci_goal", 0) if goal else 0
+        convos_per_week   = targets.get("convos_per_week", 0)
+        appts_per_week    = targets.get("appts_per_week", 0)
+        overall_pct       = pace.get("overall_pct", 0) if pace else 0
+        overall_status    = pace.get("overall_status", "gray") if pace else "gray"
+        convo_pct         = funnel_pcts["Conversations"]
+        convo_target_ytd  = (pace.get("convos", {}) or {}).get("target_ytd", 0)
+        appt_pct          = funnel_pcts["Appointments"]
+        appt_target_ytd   = (pace.get("appointments", {}) or {}).get("target_ytd", 0)
+        closing_pct       = funnel_pcts["Closings"]
+        why_stmt  = why.get("why_statement", "") if why else ""
+        who_ben   = why.get("who_benefits", "") if why else ""
+        what_hap  = why.get("what_happens", "") if why else ""
+
+        prompt = f"""You are helping Barry Jenkins prepare for a 1-on-1 coaching meeting with one of his agents.
+
+Barry Jenkins background:
+- Team leader of Legacy Home Team, Virginia's #1 real estate team (850+ homes/year)
+- Author of "Too Nice for Sales" — his entire philosophy: teaching beats pushing, serve people genuinely
+- Former pastor of 10 years. He holds the mirror up clearly but the reflection is always an opportunity.
+- Core phrase: "You're being too nice to your comfort zone." He names avoidance with empathy, then redirects.
+- He uses atomic habits / identity-based language: "You're the kind of agent who..." not "you need to do X"
+- Never shame. Always reframe. Every miss is "a pitch you let go by — more are coming."
+- Ends every coaching moment with one specific, concrete next step.
+- Conversational voice. Short sentences. Real words. No corporate language. No motivational poster phrases.
+
+This brief is for BARRY ONLY — the agent never sees it. Be honest and direct. Barry can handle the full picture.
+
+━━━━ AGENT: {agent_name} (refer to them as {first_name}) ━━━━
+Week {week_num} of 52
+GCI Goal: ${gci_goal:,.0f}/year
+Overall Pace: {overall_pct}% of where they should be right now ({overall_status.upper()})
+
+YTD Funnel (actual vs. target-by-now):
+- Conversations (≥2 min calls): {actuals['convos_ytd']} actual / {convo_target_ytd} needed by now → {convo_pct}% of pace
+- Dials made: {actuals['calls_ytd']} outbound calls
+- Appointments set: {actuals['appts_ytd']} actual / {appt_target_ytd} needed by now → {appt_pct}% of pace
+- Contracts: {actuals['contracts_ytd']}
+- Closings: {actuals['closings_ytd']} → {closing_pct}% of pace
+- GCI earned: ${actuals['gci_ytd']:,.0f}
+
+Weekly targets: {convos_per_week} conversations/wk · {appts_per_week} appointments/wk
+Primary bottleneck (weakest funnel step): {bottleneck} at {funnel_pcts[bottleneck]}% of pace
+
+Team comparison ({n_agents} agents):
+- Conversations: ranked #{convo_rank} of {n_agents} (team avg: {team_convo_avg})
+- Appointments:  ranked #{appt_rank} of {n_agents} (team avg: {team_appt_avg})
+- Closings:      ranked #{closing_rank} of {n_agents} (team avg: {team_close_avg})
+
+Streak: {streak.get('current_streak', 0)} day active streak (best ever: {streak.get('longest_streak', streak.get('best_streak', 0))})
+
+Agent's "Why" (Cheplak identity framework):
+- Why statement: {why_stmt or "(not filled in — agent hasn't set this yet)"}
+- Who benefits: {who_ben or "(not set)"}
+- What happens for them: {what_hap or "(not set)"}
+
+━━━━ GENERATE THE 1-ON-1 MEETING BRIEF ━━━━
+
+Return a JSON object with exactly these 6 keys. Write Barry's voice throughout:
+
+{{
+  "situation": "2-3 sentences. Where {first_name} stands right now. Specific numbers, honest read, no spin. What the overall pace says and what the trend in the funnel suggests.",
+
+  "bottleneck": "1-2 sentences. The single most important thing to address — not a general observation. Identify exactly where {first_name}'s funnel breaks down and what it's costing them in concrete terms (missed appointments, missed GCI, etc).",
+
+  "talking_points": [
+    {{
+      "topic": "3-5 word label",
+      "what_to_say": "2-3 sentences Barry says out loud. Conversational, specific to {first_name}'s numbers, teaching not pushing. Opens with a real observation or relatable situation before the lesson.",
+      "question": "The coaching question Barry asks. Open-ended. Leads {first_name} to see the answer themselves — not yes/no."
+    }},
+    {{
+      "topic": "3-5 word label",
+      "what_to_say": "...",
+      "question": "..."
+    }},
+    {{
+      "topic": "Identity — Atomic Habits",
+      "what_to_say": "The identity reframe. 'You're the kind of agent who...' — tie to who {first_name} is becoming, not just what they need to do differently. Include one tiny, specific habit change that makes the right behavior obvious and easy.",
+      "question": "A question about self-image and identity — not behavior."
+    }}
+  ],
+
+  "why_connection": "2-3 sentences. Connect {first_name}'s current performance gap to their why. Practical, not preachy. If the why is blank, write about how finding that reason is the first step — and what Barry should ask to surface it.",
+
+  "team_comparison": "2-3 sentences. {first_name}'s position on the team, framed as a gap to close — not a ranking to shame. Make it motivating. What does closing that gap look like in concrete weekly actions?",
+
+  "commitment": "The single specific commitment {first_name} makes before leaving this meeting. One number, one behavior, one date. Concrete enough that Barry texts them about it next week."
+}}
+
+Write in Barry's voice. Contractions. Short sentences. No 'feel free to', 'I'd love to', 'don't hesitate'. No bullet points inside the text. Just Barry talking."""
+
+        ai_client = _anthropic.Anthropic()
+        msg = ai_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        raw = msg.content[0].text.strip()
+        if raw.startswith("```"):
+            parts = raw.split("```")
+            raw = parts[1] if len(parts) > 1 else raw
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+        brief = _json.loads(raw)
+
+        return jsonify({
+            "agent_name":  agent_name,
+            "first_name":  first_name,
+            "week_num":    week_num,
+            "goal":        goal,
+            "targets":     targets,
+            "actuals":     actuals,
+            "pace":        pace,
+            "funnel_pcts": funnel_pcts,
+            "bottleneck":  bottleneck,
+            "team_rank": {
+                "convos":   {"rank": convo_rank,   "total": n_agents, "team_avg": team_convo_avg},
+                "appts":    {"rank": appt_rank,    "total": n_agents, "team_avg": team_appt_avg},
+                "closings": {"rank": closing_rank, "total": n_agents, "team_avg": team_close_avg},
+            },
+            "streak":        streak,
+            "brief":         brief,
+            "generated_at":  datetime.now(timezone.utc).isoformat(),
+        })
+
+    except Exception as e:
+        import traceback
+        logger.error("meeting-brief error for %s: %s\n%s", agent_name, e, traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/goals/scorecard-meta")
 def api_goals_scorecard_meta():
     """

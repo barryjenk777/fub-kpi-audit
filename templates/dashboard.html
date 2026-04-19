@@ -352,6 +352,73 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
   .kc-metrics{grid-template-columns:repeat(2,1fr)}
 }
 
+/* ── 1-on-1 Meeting Brief ───────────────────────────────── */
+.meeting-header {
+  display: flex; align-items: center; gap: .75rem; margin-bottom: 1.25rem; flex-wrap: wrap;
+}
+.meeting-select {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+  border-radius: var(--r-sm); padding: .55rem .9rem; font-size: .9rem; font-family: inherit;
+  min-width: 220px; cursor: pointer;
+}
+.meeting-select:focus { outline: none; border-color: var(--gold); }
+.btn-gold {
+  background: var(--gold); color: #000; font-weight: 700; border-radius: var(--r-sm);
+  padding: .55rem 1.1rem; font-size: .88rem; transition: opacity .15s;
+}
+.btn-gold:disabled { opacity: .35; cursor: not-allowed; }
+.btn-gold:not(:disabled):hover { opacity: .85; }
+
+.brief-wrap { display: flex; flex-direction: column; gap: .9rem; max-width: 780px; }
+.brief-meta {
+  font-size: .72rem; color: var(--muted); margin-bottom: .25rem;
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+}
+.brief-agent-name {
+  font-size: 1.35rem; font-weight: 800; color: var(--gold); margin-bottom: .15rem;
+}
+.brief-section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 1.1rem 1.2rem;
+}
+.brief-section-label {
+  font-size: .58rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--gold); margin-bottom: .65rem;
+}
+.brief-body { font-size: .92rem; line-height: 1.65; color: var(--text); }
+.brief-bottleneck {
+  border-left: 3px solid var(--red); background: rgba(239,68,68,.06);
+}
+.brief-bottleneck .brief-section-label { color: var(--red); }
+
+.tp-list { display: flex; flex-direction: column; gap: .85rem; }
+.tp-item { border-left: 2px solid var(--border); padding-left: .9rem; }
+.tp-num { font-size: .6rem; font-weight: 700; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; margin-bottom: .3rem; }
+.tp-topic { font-size: .88rem; font-weight: 700; color: var(--text); margin-bottom: .35rem; }
+.tp-what { font-size: .88rem; line-height: 1.6; color: var(--text); margin-bottom: .5rem; }
+.tp-question-wrap { background: var(--surface2); border-radius: var(--r-sm); padding: .6rem .8rem; }
+.tp-question-label { font-size: .58rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--gold); margin-bottom: .25rem; }
+.tp-question { font-size: .88rem; color: var(--text); font-style: italic; line-height: 1.5; }
+
+.brief-commit {
+  border: 1px solid var(--gold); background: rgba(245,166,35,.07);
+}
+.brief-commit .brief-section-label { color: var(--gold); }
+.brief-commit .brief-body { font-size: 1rem; font-weight: 600; }
+
+.brief-funnel-row {
+  display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .9rem;
+}
+.brief-funnel-chip {
+  font-size: .72rem; padding: .3rem .7rem; border-radius: 20px;
+  border: 1px solid var(--border); color: var(--muted);
+}
+.brief-funnel-chip.green { border-color: var(--green); color: var(--green); background: var(--green-bg); }
+.brief-funnel-chip.yellow { border-color: var(--yellow); color: var(--yellow); background: var(--yellow-bg); }
+.brief-funnel-chip.red { border-color: var(--red); color: var(--red); background: var(--red-bg); }
+.brief-regen { font-size: .72rem; color: var(--muted); cursor: pointer; text-decoration: underline; }
+.brief-regen:hover { color: var(--gold); }
+
 /* ── Command Center lean layout ─────────────────────────── */
 .cc-section-label {
   font-size: 0.65rem;
@@ -460,6 +527,9 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
       <span class="nav-icon">✉️</span> AI Outreach
     </button>
     <div class="nav-section">Coaching</div>
+    <button class="nav-item" data-tab="meeting" onclick="switchTab('meeting')">
+      <span class="nav-icon">🤝</span> 1-on-1
+    </button>
     <button class="nav-item" data-tab="isa" onclick="switchTab('isa')">
       <span class="nav-icon">📞</span> ISA — Fhalen
     </button>
@@ -580,6 +650,24 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
       <div id="dashboard-outreach" style="display:none"></div>
     </div>
 
+    <!-- ══════════════════════════════════════ 1-ON-1 TAB -->
+    <div class="tab-pane" id="tab-meeting">
+      <div class="meeting-header">
+        <div>
+          <select id="meeting-agent-select" class="meeting-select" onchange="onMeetingAgentChange()">
+            <option value="">— Select agent —</option>
+          </select>
+        </div>
+        <button id="btn-generate-brief" class="btn btn-gold" onclick="generateBrief()" disabled>
+          ✦ Generate Brief
+        </button>
+      </div>
+      <div id="meeting-loading" style="display:none" class="loading-pane">
+        <span class="spinner"></span> Building coaching brief…
+      </div>
+      <div id="meeting-brief-area"></div>
+    </div>
+
     <!-- ══════════════════════════════════════ ISA TAB -->
     <div class="tab-pane" id="tab-isa">
       <div id="loading-isa" class="loading-pane"><span class="spinner"></span> Loading Fhalen's data… (takes ~30s first load)</div>
@@ -640,7 +728,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 // ── GLOBAL STATE ──
 let agentData=null, managerData=null, isaData=null, appointmentData=null;
 let _goalsData=null, _emailLinks=[];
-let _loaded={goals:false,kpi:false,manager:false,appointments:false,isa:false};
+let _loaded={goals:false,kpi:false,manager:false,appointments:false,isa:false,meeting:false};
 const MEDALS=['🥇','🥈','🥉'];
 
 // ── SIDEBAR DATE ──
@@ -665,7 +753,7 @@ function switchTab(name){
   const btn=document.querySelector(`.nav-item[data-tab="${name}"]`);
   if(btn) btn.classList.add('active');
 
-  const titles={cc:'🧠 Command Center',goals:'🎯 Goals — '+new Date().getFullYear(),kpi:'📊 Team KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
+  const titles={cc:'🧠 Command Center',goals:'🎯 Goals — '+new Date().getFullYear(),kpi:'📊 Team KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
   document.getElementById('topbar-title').textContent=titles[name]||name;
 
   if(!_loaded[name]){
@@ -675,6 +763,7 @@ function switchTab(name){
     else if(name==='kpi')    loadAgents();
     else if(name==='manager')     loadManager();
     else if(name==='appointments') loadAppointments();
+    else if(name==='meeting')     loadMeetingAgents();
     else if(name==='isa')         loadIsa();
     else if(name==='outreach')    loadOutreach();
   }
@@ -1363,6 +1452,149 @@ function buildIsa(d){
 }
 async function loadIsa(){const ld=document.getElementById('loading-isa'),db=document.getElementById('dashboard-isa');ld.style.display='flex';db.style.display='none';try{const r=await fetch('/api/isa',{signal:AbortSignal.timeout(240000)});const txt=await r.text();try{const d=JSON.parse(txt);if(d.error)db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Error</div><div class="alert-body">${d.error}</div></div></div>`;else{isaData=d;db.innerHTML=buildIsa(d);}}catch(pe){db.innerHTML=`<div class="alert yellow"><span class="alert-icon">⏱️</span><div><div class="alert-title">Still warming up</div><div class="alert-body">Wait 30s and retry.<br><button class="btn btn-ghost btn-sm" onclick="loadIsa()" style="margin-top:.5rem">↻ Retry</button></div></div></div>`;}}catch(e){db.innerHTML=`<div class="alert red"><span class="alert-icon">⏱️</span><div><div class="alert-title">Timeout</div><div class="alert-body"><button class="btn btn-ghost btn-sm" onclick="loadIsa()">↻ Retry</button></div></div></div>`;}ld.style.display='none';db.style.display='block';}
 async function tagFollowup(ids){if(!confirm(`Tag ${ids.length} leads with ISA_Followup?`))return;try{const r=await fetch('/api/isa/tag-followup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({person_ids:ids})});const d=await r.json();if(d.success){showToast(`Tagged ${d.tagged} leads`,'ok');loadIsa();}else showToast('Error: '+d.error,'err');}catch(e){showToast('Error: '+e.message,'err');}}
+
+/* ════════════════════════════════════════════════
+   1-ON-1 MEETING TAB
+════════════════════════════════════════════════ */
+async function loadMeetingAgents(){
+  try{
+    const r=await fetch('/api/goals/agents-list');
+    const d=await r.json();
+    const sel=document.getElementById('meeting-agent-select');
+    sel.innerHTML='<option value="">— Select agent —</option>';
+    (d.agents||[]).forEach(a=>{
+      const opt=document.createElement('option');
+      opt.value=a.name; opt.textContent=a.name;
+      sel.appendChild(opt);
+    });
+  }catch(e){console.warn('Could not load agents:',e);}
+}
+
+function onMeetingAgentChange(){
+  const sel=document.getElementById('meeting-agent-select');
+  document.getElementById('btn-generate-brief').disabled=!sel.value;
+  document.getElementById('meeting-brief-area').innerHTML='';
+}
+
+async function generateBrief(){
+  const agentName=document.getElementById('meeting-agent-select').value;
+  if(!agentName)return;
+  const btn=document.getElementById('btn-generate-brief');
+  const loading=document.getElementById('meeting-loading');
+  const area=document.getElementById('meeting-brief-area');
+  btn.disabled=true; btn.textContent='Generating…';
+  loading.style.display='flex'; area.innerHTML='';
+  try{
+    const r=await fetch(`/api/goals/meeting-brief/${encodeURIComponent(agentName)}`,
+                        {signal:AbortSignal.timeout(60000)});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    area.innerHTML=buildMeetingBrief(d);
+  }catch(e){
+    area.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not generate brief</div><div class="alert-body">${e.message}</div></div></div>`;
+  }finally{
+    loading.style.display='none';
+    btn.disabled=false; btn.textContent='✦ Generate Brief';
+  }
+}
+
+function buildMeetingBrief(d){
+  const b=d.brief||{};
+  const a=d.actuals||{};
+  const fp=d.funnel_pcts||{};
+  const tr=d.team_rank||{};
+  const st=d.streak||{};
+  const now=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+
+  function chipClass(pct){return pct>=90?'green':pct>=70?'yellow':'red';}
+  function fmtK(n){if(!n)return '$0';return n>=1000?'$'+Math.round(n/1000)+'K':'$'+Math.round(n);}
+  function tpIcon(i){return['1.','2.','3.'][i]||'';}
+
+  let h=`<div class="brief-wrap">`;
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  h+=`<div>
+    <div class="brief-agent-name">${d.first_name}</div>
+    <div class="brief-meta">
+      <span>Week ${d.week_num} · ${now}</span>
+      ${d.goal?`<span>Goal: ${fmtK(d.goal.gci_goal)} GCI</span>`:''}
+      ${st.current_streak>0?`<span>🔥 ${st.current_streak}-day streak</span>`:''}
+      <span class="brief-regen" onclick="generateBrief()">↻ Regenerate</span>
+    </div>
+  </div>`;
+
+  // ── Funnel chips ──────────────────────────────────────────────────────────
+  h+=`<div class="brief-funnel-row">`;
+  [['Conversations',fp['Conversations']||0,a.convos_ytd||0],
+   ['Appointments', fp['Appointments']||0, a.appts_ytd||0],
+   ['Closings',     fp['Closings']||0,     a.closings_ytd||0]
+  ].forEach(([label,pct,val])=>{
+    h+=`<div class="brief-funnel-chip ${chipClass(pct)}">${label}: ${val} (${pct}% of pace)</div>`;
+  });
+  const dials=a.calls_ytd||0;
+  if(dials>0) h+=`<div class="brief-funnel-chip">${dials} dials YTD</div>`;
+  h+=`</div>`;
+
+  // ── Situation ──────────────────────────────────────────────────────────────
+  if(b.situation) h+=`<div class="brief-section">
+    <div class="brief-section-label">📋 The Situation</div>
+    <div class="brief-body">${b.situation}</div>
+  </div>`;
+
+  // ── Bottleneck ─────────────────────────────────────────────────────────────
+  if(b.bottleneck) h+=`<div class="brief-section brief-bottleneck">
+    <div class="brief-section-label">🎯 The Bottleneck</div>
+    <div class="brief-body">${b.bottleneck}</div>
+  </div>`;
+
+  // ── Talking points ─────────────────────────────────────────────────────────
+  if(b.talking_points&&b.talking_points.length){
+    h+=`<div class="brief-section">
+      <div class="brief-section-label">💬 Talking Points</div>
+      <div class="tp-list">`;
+    b.talking_points.forEach((tp,i)=>{
+      h+=`<div class="tp-item">
+        <div class="tp-num">${tpIcon(i)}</div>
+        <div class="tp-topic">${tp.topic||''}</div>
+        <div class="tp-what">${tp.what_to_say||''}</div>
+        <div class="tp-question-wrap">
+          <div class="tp-question-label">Ask</div>
+          <div class="tp-question">"${tp.question||''}"</div>
+        </div>
+      </div>`;
+    });
+    h+=`</div></div>`;
+  }
+
+  // ── Why connection ─────────────────────────────────────────────────────────
+  if(b.why_connection) h+=`<div class="brief-section">
+    <div class="brief-section-label">❤️ Their Why</div>
+    <div class="brief-body">${b.why_connection}</div>
+  </div>`;
+
+  // ── Team comparison ────────────────────────────────────────────────────────
+  if(b.team_comparison){
+    const cr=tr.convos||{}, ar=tr.appts||{}, lr=tr.closings||{};
+    h+=`<div class="brief-section">
+      <div class="brief-section-label">👥 Compared to the Team</div>
+      <div class="brief-meta" style="margin-bottom:.6rem">
+        <span>Convos: #${cr.rank||'—'} of ${cr.total||'—'} (team avg ${cr.team_avg||0})</span>
+        <span>Appts: #${ar.rank||'—'} of ${ar.total||'—'} (team avg ${ar.team_avg||0})</span>
+        <span>Closings: #${lr.rank||'—'} of ${lr.total||'—'} (team avg ${lr.team_avg||0})</span>
+      </div>
+      <div class="brief-body">${b.team_comparison}</div>
+    </div>`;
+  }
+
+  // ── Commitment ─────────────────────────────────────────────────────────────
+  if(b.commitment) h+=`<div class="brief-section brief-commit">
+    <div class="brief-section-label">✅ Leave With One Commitment</div>
+    <div class="brief-body">${b.commitment}</div>
+  </div>`;
+
+  h+=`</div>`; // close brief-wrap
+  return h;
+}
 
 /* ════════════════════════════════════════════════
    APPOINTMENTS TAB  (preserved from original)
