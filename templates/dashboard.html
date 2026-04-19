@@ -705,11 +705,20 @@ function buildCommandCenter(d){
   const paceCol=s.annual_pace>=s.pace_target?'c-green':s.annual_pace>0?'c-yellow':'c-red';
   let h='';
 
-  // ── 4 headline numbers ──────────────────────────────────────────────────────
+  // ── Headline numbers: funnel row ───────────────────────────────────────────
+  const convoCol=s.convos>0?'c-green':'c-yellow';
   h+=`<div class="cc-stat-row">
     <div class="cc-stat"><div class="cc-stat-val c-gold">${d.month_in}</div><div class="cc-stat-label">Month</div></div>
     <div class="cc-stat"><div class="cc-stat-val ${kpiCol}">${s.passed}/${s.total}</div><div class="cc-stat-label">KPI Pass</div></div>
-    <div class="cc-stat"><div class="cc-stat-val">${s.c2v}%</div><div class="cc-stat-label">Call→Convo</div></div>
+    <div class="cc-stat"><div class="cc-stat-val">${s.calls||0}</div><div class="cc-stat-label">Dials</div></div>
+    <div class="cc-stat"><div class="cc-stat-val ${convoCol}">${s.convos||0}</div><div class="cc-stat-label">Convos</div></div>
+    <div class="cc-stat"><div class="cc-stat-val">${s.c2v}%</div><div class="cc-stat-label">Dial→Convo</div></div>
+  </div>`;
+  // ── Closings row ────────────────────────────────────────────────────────────
+  h+=`<div class="cc-stat-row" style="margin-top:-.25rem">
+    <div class="cc-stat"><div class="cc-stat-val">${s.appts||0}</div><div class="cc-stat-label">Appts Set</div></div>
+    <div class="cc-stat"><div class="cc-stat-val">${s.v2a||0}%</div><div class="cc-stat-label">Convo→Appt</div></div>
+    <div class="cc-stat"><div class="cc-stat-val ${s.contracts>0?'c-yellow':''}">${s.contracts||0}</div><div class="cc-stat-label">Under Contract</div></div>
     <div class="cc-stat"><div class="cc-stat-val ${s.closings_ytd>0?'c-green':'c-red'}">${s.closings_ytd}</div><div class="cc-stat-label">Closings YTD</div></div>
     <div class="cc-stat"><div class="cc-stat-val ${paceCol}">${s.annual_pace||'—'}</div><div class="cc-stat-label">Proj. Closings</div></div>
   </div>`;
@@ -870,9 +879,9 @@ function renderGoalCards(rows){
       ${inactiveFlag?`<div style="font-size:.68rem;color:var(--yellow);font-weight:600;margin-bottom:.5rem">⚠ No activity logged in ${daysInactive} days</div>`:''}
       <div class="gc-metrics">
         <div>
-          <div class="gc-m-label">Calls YTD</div>
-          <div class="gc-m-val" style="color:${pace.calls?'var(--c-'+pace.calls.status+',var(--text))':'var(--text)'}">${actuals.calls_ytd}</div>
-          <div class="gc-m-need">${pace.calls?'need '+pace.calls.target_ytd+' by now':'—'}</div>
+          <div class="gc-m-label">Convos YTD</div>
+          <div class="gc-m-val" style="color:${pace.convos?'var(--c-'+pace.convos.status+',var(--text))':'var(--text)'}">${actuals.convos_ytd||0}</div>
+          <div class="gc-m-need">${pace.convos?'need '+pace.convos.target_ytd+' by now':(actuals.calls_ytd?actuals.calls_ytd+' dials':'—')}</div>
         </div>
         <div>
           <div class="gc-m-label">Appts YTD</div>

@@ -205,6 +205,7 @@ CREATE TABLE IF NOT EXISTS agent_ytd_cache (
     year         INTEGER NOT NULL,
     calls_ytd    INTEGER NOT NULL DEFAULT 0,
     appts_ytd    INTEGER NOT NULL DEFAULT 0,
+    convos_ytd   INTEGER NOT NULL DEFAULT 0,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (agent_name, year)
 );
@@ -1074,21 +1075,30 @@ def get_deal_summary(agent_name=None, year=None):
 # YTD actuals cache
 # ---------------------------------------------------------------------------
 
-def upsert_ytd_cache(agent_name: str, year: int, calls_ytd: int, appts_ytd: int):
-    """Store pre-computed YTD call + appointment counts for an agent."""
+def upsert_ytd_cache(agent_name: str, year: int, calls_ytd: int, appts_ytd: int,
+                     convos_ytd: int = 0):
+    """Store pre-computed YTD call + appointment + conversation counts for an agent."""
     if not is_available():
         return False
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # Safe migration: add convos_ytd column if it doesn't exist yet
                 cur.execute("""
-                    INSERT INTO agent_ytd_cache (agent_name, year, calls_ytd, appts_ytd, updated_at)
-                    VALUES (%s, %s, %s, %s, NOW())
+                    DO $$ BEGIN
+                        ALTER TABLE agent_ytd_cache ADD COLUMN convos_ytd INTEGER NOT NULL DEFAULT 0;
+                    EXCEPTION WHEN duplicate_column THEN NULL;
+                    END $$;
+                """)
+                cur.execute("""
+                    INSERT INTO agent_ytd_cache (agent_name, year, calls_ytd, appts_ytd, convos_ytd, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (agent_name, year) DO UPDATE SET
                         calls_ytd  = EXCLUDED.calls_ytd,
                         appts_ytd  = EXCLUDED.appts_ytd,
+                        convos_ytd = EXCLUDED.convos_ytd,
                         updated_at = NOW()
-                """, (agent_name, year, calls_ytd, appts_ytd))
+                """, (agent_name, year, calls_ytd, appts_ytd, convos_ytd))
         return True
     except Exception as e:
         logger.warning("upsert_ytd_cache failed: %s", e)
@@ -1098,7 +1108,7 @@ def upsert_ytd_cache(agent_name: str, year: int, calls_ytd: int, appts_ytd: int)
 def get_ytd_cache(year: int = None) -> dict:
     """
     Return cached YTD actuals keyed by agent_name.
-    {agent_name: {calls_ytd, appts_ytd, updated_at}}
+    {agent_name: {calls_ytd, appts_ytd, convos_ytd, updated_at}}
     """
     if not is_available():
         return {}
@@ -1108,14 +1118,15 @@ def get_ytd_cache(year: int = None) -> dict:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT agent_name, calls_ytd, appts_ytd, updated_at
+                    SELECT agent_name, calls_ytd, appts_ytd,
+                           COALESCE(convos_ytd, 0) AS convos_ytd, updated_at
                     FROM   agent_ytd_cache
                     WHERE  year = %s
                 """, (year,))
                 rows = cur.fetchall()
         return {
-            r[0]: {"calls_ytd": r[1], "appts_ytd": r[2],
-                   "updated_at": r[3].isoformat() if r[3] else None}
+            r[0]: {"calls_ytd": r[1], "appts_ytd": r[2], "convos_ytd": r[3],
+                   "updated_at": r[4].isoformat() if r[4] else None}
             for r in rows
         }
     except Exception as e:
@@ -1180,32 +1191,47 @@ def compute_pace(goal: dict, targets: dict, actuals: dict) -> dict:
         }
 
     calls_ytd    = actuals.get("calls_ytd", 0)
+    convos_ytd   = actuals.get("convos_ytd", 0)
     appts_ytd    = actuals.get("appts_ytd", 0)
     closings_ytd = actuals.get("closings_ytd", 0)
     gci_ytd      = actuals.get("gci_ytd", 0.0)
 
-    calls_annual    = targets.get("calls_needed_yr", 0)
+    # Pace the funnel: conversations → appointments → closings
+    # Conversations are the primary activity metric — they prove quality, not just volume.
+    # Raw dials (calls_needed_yr) are retained as context but not the pacing target.
+    convos_annual   = targets.get("convos_needed_yr", 0)
     appts_annual    = targets.get("appts_needed_yr", 0)
     closings_annual = float(goal.get("gci_goal", 0)) / float(targets.get("avg_commission", 1) or 1)
 
-    calls_pace    = _pace(calls_ytd,    calls_annual)
-    appts_pace    = _pace(appts_ytd,    appts_annual)
-    closings_pace = _pace(closings_ytd, closings_annual)
+    # Fallback: if no convos tracked yet, pace raw dials as a proxy
+    if convos_ytd == 0 and calls_ytd > 0:
+        # Use estimated conversations at 15% contact rate
+        contact_r = float(goal.get("contact_rate", 0.15))
+        convos_ytd_eff = round(calls_ytd * contact_r)
+    else:
+        convos_ytd_eff = convos_ytd
 
-    overall_pct = round((calls_pace["pct"] + appts_pace["pct"] + closings_pace["pct"]) / 3)
+    convos_pace   = _pace(convos_ytd_eff, convos_annual)
+    appts_pace    = _pace(appts_ytd,      appts_annual)
+    closings_pace = _pace(closings_ytd,   closings_annual)
+
+    overall_pct = round((convos_pace["pct"] + appts_pace["pct"] + closings_pace["pct"]) / 3)
     overall_status = "green" if overall_pct >= 90 else ("yellow" if overall_pct >= 70 else "red")
 
     return {
-        "week_num":      week_num,
-        "pct_of_year":   round(pct_of_yr * 100),
-        "calls":         calls_pace,
-        "appointments":  appts_pace,
-        "closings":      closings_pace,
-        "overall_pct":   overall_pct,
+        "week_num":       week_num,
+        "pct_of_year":    round(pct_of_yr * 100),
+        "convos":         convos_pace,          # primary activity metric
+        "calls_ytd":      calls_ytd,            # raw dials — context only
+        "appointments":   appts_pace,
+        "closings":       closings_pace,
+        "overall_pct":    overall_pct,
         "overall_status": overall_status,
         # Don't flag before week 8 — agents can't be meaningfully behind
         # in the first 7 weeks (Q1 ramp, goal-setting lag, etc.)
         "needs_conversation": week_num >= 8 and overall_pct < 70,
+        # Keep backward-compat key so old callers don't break
+        "calls": convos_pace,
     }
 
 
@@ -1452,22 +1478,22 @@ def get_daily_activity(agent_name, days=30):
 def get_todays_activity(agent_name):
     """Return today's logged activity or zeros."""
     if not is_available():
-        return {"calls": 0, "texts": 0, "appts": 0}
+        return {"calls": 0, "convos": 0, "texts": 0, "appts": 0}
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT calls_logged, texts_logged, appts_logged
+                    SELECT calls_logged, COALESCE(convos_logged, 0), texts_logged, appts_logged
                     FROM   daily_activity
                     WHERE  agent_name = %s AND activity_date = %s
                 """, (agent_name, date.today()))
                 row = cur.fetchone()
         if row:
-            return {"calls": row[0], "texts": row[1], "appts": float(row[2] or 0)}
-        return {"calls": 0, "texts": 0, "appts": 0}
+            return {"calls": row[0], "convos": row[1], "texts": row[2], "appts": float(row[3] or 0)}
+        return {"calls": 0, "convos": 0, "texts": 0, "appts": 0}
     except Exception as e:
         logger.warning("get_todays_activity failed: %s", e)
-        return {"calls": 0, "texts": 0, "appts": 0}
+        return {"calls": 0, "convos": 0, "texts": 0, "appts": 0}
 
 
 # ---------------------------------------------------------------------------

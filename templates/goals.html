@@ -253,7 +253,7 @@
           <th>Agent</th>
           <th>GCI Goal</th>
           <th>Overall Pace</th>
-          <th>Dials YTD</th>
+          <th>Convos YTD</th>
           <th>Appts YTD</th>
           <th>Contracts</th>
           <th>Closings</th>
@@ -398,7 +398,8 @@ function renderScorecard(rows) {
         </div>
       </td>
       <td class="metric-cell">
-        ${paceCell(pace.calls, actuals.calls_ytd)}
+        ${paceCell(pace.convos, actuals.convos_ytd||0)}
+        ${actuals.calls_ytd ? `<div class="metric-target" style="color:var(--subtle)">${actuals.calls_ytd} dials</div>` : ''}
       </td>
       <td class="metric-cell">
         ${paceCell(pace.appointments, actuals.appts_ytd)}

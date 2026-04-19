@@ -2725,8 +2725,9 @@ def api_agent_dashboard(token):
         a   = ytd.get(agent_name, {})
         deal_summary = _db.get_deal_summary(agent_name, year=year)
         actuals = {
-            "calls_ytd": a.get("calls_ytd", 0),
-            "appts_ytd": a.get("appts_ytd", 0),
+            "calls_ytd":   a.get("calls_ytd", 0),
+            "convos_ytd":  a.get("convos_ytd", 0),
+            "appts_ytd":   a.get("appts_ytd", 0),
             "closings_ytd": deal_summary.get("closings", 0),
         }
     pace = _db.compute_pace(goal, targets, actuals) if goal else {}
@@ -3472,13 +3473,19 @@ def api_sync_ytd_cache():
             f"{u.get('firstName','')} {u.get('lastName','')}".strip(): u.get("id")
             for u in client.get_users()
         }
-        calls_by_uid = {}
+        _convo_thresh = config.CONVERSATION_THRESHOLD_SECONDS
+        calls_by_uid  = {}
+        convos_by_uid = {}
         for call in ytd_calls:
             if call.get("isIncoming"):
                 continue
             uid = call.get("userId")
-            if uid:
-                calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+            if not uid:
+                continue
+            calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+            dur = call.get("duration", 0) or 0
+            if dur >= _convo_thresh:
+                convos_by_uid[uid] = convos_by_uid.get(uid, 0) + 1
 
         appts_by_uid = {}
         for appt in ytd_appts:
@@ -3497,10 +3504,11 @@ def api_sync_ytd_cache():
             if agent_name in config.EXCLUDED_USERS:
                 continue
             calls = calls_by_uid.get(fub_uid, 0)
+            convos = convos_by_uid.get(fub_uid, 0)
             appts = appts_by_uid.get(fub_uid, 0)
-            if _db.upsert_ytd_cache(agent_name, year, calls, appts):
+            if _db.upsert_ytd_cache(agent_name, year, calls, appts, convos_ytd=convos):
                 cached += 1
-                details[agent_name] = {"calls_ytd": calls, "appts_ytd": appts}
+                details[agent_name] = {"calls_ytd": calls, "convos_ytd": convos, "appts_ytd": appts}
 
         return jsonify({"ok": True, "agents_updated": cached, "year": year, "details": details})
     except Exception as e:
@@ -3625,7 +3633,7 @@ def api_goals_scorecard():
                 "email":        profile.get("email", ""),
                 "goal":         None,
                 "targets":      {},
-                "actuals":      {"calls_ytd": 0, "appts_ytd": 0,
+                "actuals":      {"calls_ytd": 0, "convos_ytd": 0, "appts_ytd": 0,
                                  "contracts_ytd": 0, "closings_ytd": 0, "gci_ytd": 0},
                 "pace":         _empty_pace,
                 "my_goals_url": _my_goals_url,
@@ -3634,9 +3642,10 @@ def api_goals_scorecard():
 
         targets = _db.compute_targets(goal)
         deals   = deal_summaries.get(agent, {"contracts": 0, "closings": 0, "gci_est": 0.0})
-        cached  = ytd_cache.get(agent, {"calls_ytd": 0, "appts_ytd": 0})
+        cached  = ytd_cache.get(agent, {"calls_ytd": 0, "appts_ytd": 0, "convos_ytd": 0})
         actuals = {
             "calls_ytd":     cached["calls_ytd"],
+            "convos_ytd":    cached.get("convos_ytd", 0),
             "appts_ytd":     cached["appts_ytd"],
             "contracts_ytd": deals["contracts"],
             "closings_ytd":  deals["closings"],
@@ -5791,13 +5800,19 @@ def scheduled_sync_goals_data():
                 for u in client.get_users()
             }
 
+            _convo_thresh = config.CONVERSATION_THRESHOLD_SECONDS
             calls_by_uid  = {}
+            convos_by_uid = {}
             for call in ytd_calls:
                 if call.get("isIncoming"):
                     continue
                 uid = call.get("userId")
-                if uid:
-                    calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+                if not uid:
+                    continue
+                calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+                dur = call.get("duration", 0) or 0
+                if dur >= _convo_thresh:
+                    convos_by_uid[uid] = convos_by_uid.get(uid, 0) + 1
 
             # FUB does NOT reliably expose userId at the appointment root.
             # Must check invitees array — same logic as count_appointments_for_user
@@ -5818,8 +5833,9 @@ def scheduled_sync_goals_data():
                 if agent_name in config.EXCLUDED_USERS:
                     continue
                 calls = calls_by_uid.get(fub_uid, 0)
+                convos = convos_by_uid.get(fub_uid, 0)
                 appts = appts_by_uid.get(fub_uid, 0)
-                if _db.upsert_ytd_cache(agent_name, year, calls, appts):
+                if _db.upsert_ytd_cache(agent_name, year, calls, appts, convos_ytd=convos):
                     cached += 1
 
             print(f"[GOALS SYNC] YTD cache updated for {cached} agents")

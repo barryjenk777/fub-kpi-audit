@@ -460,10 +460,13 @@ function renderDailyNumber(goal, actuals, today) {
   }
 
   // Progress toward today's conversation target
-  // We estimate from calls: ~1 in 5 calls is a real conversation (≥2 min)
+  // Use actual convos tracked from FUB (calls ≥ 2 min), fall back to estimate
   const callsToday  = today?.calls || 0;
-  const convoEst    = Math.round(callsToday * 0.20);  // rough estimate from calls
-  const progEl      = document.getElementById('dn-progress-wrap');
+  const convosToday = today?.convos || 0;
+  // If we have real convo data use it; otherwise estimate at 15% contact rate
+  const convoEst = convosToday > 0 ? convosToday : Math.round(callsToday * 0.15);
+  const isEstimate = convosToday === 0 && callsToday > 0;
+  const progEl  = document.getElementById('dn-progress-wrap');
 
   if (convosPerDay <= 8) {
     // Dot visualization
@@ -472,20 +475,24 @@ function renderDailyNumber(goal, actuals, today) {
       dots += `<div class="dn-dot${i < convoEst ? '' : ' empty'}"></div>`;
     }
     dots += '</div>';
-    if (callsToday > 0) {
-      const remaining = Math.max(convosPerDay - convoEst, 0);
-      dots += `<div class="dn-progress-text" style="margin-top:.5rem">` +
-        (convoEst >= convosPerDay
-          ? `<span class="dn-done">✓ Today's conversations done.</span>`
-          : `~<span class="dn-done">${convoEst}</span> of ${convosPerDay} today (est. from ${callsToday} calls)`) +
-        `</div>`;
+    if (callsToday > 0 || convosToday > 0) {
+      const label = convosToday > 0
+        ? (convoEst >= convosPerDay
+            ? `<span class="dn-done">✓ Today's conversations done.</span>`
+            : `<span class="dn-done">${convoEst}</span> of ${convosPerDay} today`)
+        : (convoEst >= convosPerDay
+            ? `<span class="dn-done">~✓ Today's conversations done (est).</span>`
+            : `~<span class="dn-done">${convoEst}</span> of ${convosPerDay} today (est. from ${callsToday} dials)`);
+      dots += `<div class="dn-progress-text" style="margin-top:.5rem">${label}</div>`;
     }
     progEl.innerHTML = dots;
   } else {
     // Text version for large numbers
-    progEl.innerHTML = callsToday > 0
-      ? `<div class="dn-progress-text">~<span class="dn-done">${convoEst}</span> of ${convosPerDay} today (est. from ${callsToday} calls)</div>`
-      : '';
+    if (convosToday > 0) {
+      progEl.innerHTML = `<div class="dn-progress-text"><span class="dn-done">${convoEst}</span> of ${convosPerDay} conversations today</div>`;
+    } else if (callsToday > 0) {
+      progEl.innerHTML = `<div class="dn-progress-text">~<span class="dn-done">${convoEst}</span> of ${convosPerDay} today (est. from ${callsToday} dials)</div>`;
+    }
   }
 
   // Math chain — shows the work
