@@ -40,15 +40,8 @@ _API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 _BASE = "https://api.heygen.com"
 
 # Barry's avatar + voice IDs — confirmed working via API test
-AVATAR_MICROPHONE = "622b6e55473e4b5e821c9cabc8830366"   # Barry Jenkins — microphone avatar
-AVATAR_SELLER     = "7d8885ff83594a999dea9b7980517e3d"   # Warm & consultative
-# AVATAR_ZBUYER = pending — Barry will record cash offer avatar and share the ID
-
-VOICE_GENERAL = "b37262521af24a0e9245308e4045ac3f"   # Barry Jenkins — HeyGen native (no ElevenLabs)
-VOICE_SUIT    = "850bdd18eb164cd8b5d540a88fdf862a"   # Barry Jenkins Suit — HeyGen native
-
-DEFAULT_AVATAR = AVATAR_MICROPHONE   # testing this avatar
-DEFAULT_VOICE  = VOICE_GENERAL       # general (non-suit) clone
+DEFAULT_AVATAR = "c84cbe3e16914b0c81fc8ce57f75ab68"   # Barry Jenkins — current avatar
+DEFAULT_VOICE  = "b37262521af24a0e9245308e4045ac3f"   # Barry Jenkins — HeyGen native voice clone
 
 # Background endpoint hosted on Railway — generates branded background on-demand
 # HeyGen fetches this URL during rendering. No external storage needed.
