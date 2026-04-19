@@ -3759,12 +3759,26 @@ def api_meeting_brief(agent_name):
         pace = _db.compute_pace(goal, targets, actuals, start_date=start_date) if goal else {}
 
         # ── Team rank for each funnel metric ──────────────────────────────
+        # Build a merged YTD snapshot: start with ytd_cache, then fill any
+        # agent who's missing or all-zero from daily_activity (new agents,
+        # agents whose cache hasn't synced yet).
+        all_daily = _db.get_all_ytd_from_daily_activity(year=year)
+        merged_ytd = {}
+        all_profile_names = set(profiles.keys())
+        for name in all_profile_names | set(ytd_cache.keys()) | set(all_daily.keys()):
+            cached = ytd_cache.get(name, {})
+            cached_empty = (not cached or
+                            (cached.get("calls_ytd", 0) == 0
+                             and cached.get("convos_ytd", 0) == 0
+                             and cached.get("appts_ytd", 0) == 0))
+            merged_ytd[name] = all_daily.get(name, cached) if cached_empty else cached
+
         def _rank(metric_key, ytd_key, source="ytd"):
-            """Returns (rank, total, agent_val, team_avg, team_list)."""
+            """Returns (rank, total, agent_val, team_avg)."""
             if source == "ytd":
-                values = [(n, d.get(ytd_key, 0)) for n, d in ytd_cache.items()]
+                values = [(n, d.get(ytd_key, 0)) for n, d in merged_ytd.items()]
             else:
-                values = [(n, all_deals.get(n, {}).get(ytd_key, 0)) for n in ytd_cache.keys()]
+                values = [(n, all_deals.get(n, {}).get(ytd_key, 0)) for n in merged_ytd.keys()]
             values.sort(key=lambda x: x[1], reverse=True)
             total = max(len(values), 1)
             agent_val = next((v for n, v in values if n == agent_name), 0)
@@ -3949,6 +3963,15 @@ def api_meeting_history(agent_name):
     """Return past meeting briefs for an agent, newest first."""
     briefs = _db.get_meeting_briefs(agent_name, limit=20)
     return jsonify({"agent_name": agent_name, "briefs": briefs})
+
+
+@app.route("/api/goals/meeting-brief-record/<int:brief_id>", methods=["DELETE"])
+def api_delete_meeting_brief(brief_id):
+    """Delete a saved meeting brief by id."""
+    ok = _db.delete_meeting_brief(brief_id)
+    if ok:
+        return jsonify({"deleted": brief_id})
+    return jsonify({"error": "Delete failed or record not found"}), 404
 
 
 @app.route("/api/goals/scorecard-meta")

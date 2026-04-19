@@ -1230,6 +1230,20 @@ def save_meeting_brief(agent_name: str, week_num: int, year: int,
         return None
 
 
+def delete_meeting_brief(brief_id: int) -> bool:
+    """Delete a saved meeting brief by id."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM meeting_briefs WHERE id = %s", (brief_id,))
+        return True
+    except Exception as e:
+        logger.warning("delete_meeting_brief failed for id %s: %s", brief_id, e)
+        return False
+
+
 def get_meeting_briefs(agent_name: str, limit: int = 20) -> list:
     """Return past meeting briefs for an agent, newest first."""
     if not is_available():
@@ -1846,6 +1860,42 @@ def get_team_activity_yesterday():
         }
     except Exception as e:
         logger.warning("get_team_activity_yesterday failed: %s", e)
+        return {}
+
+
+def get_all_ytd_from_daily_activity(year: int = None) -> dict:
+    """
+    Compute YTD calls, convos, and appts for ALL agents in one query.
+    Used to fill in team rank when ytd_cache only has a subset of agents.
+    Returns: { agent_name: {calls_ytd, convos_ytd, appts_ytd} }
+    """
+    if not is_available():
+        return {}
+    if year is None:
+        year = datetime.now().year
+    jan1 = date(year, 1, 1)
+    today = date.today()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COALESCE(SUM(calls_logged),  0),
+                           COALESCE(SUM(convos_logged), 0),
+                           COALESCE(SUM(appts_logged),  0)
+                    FROM   daily_activity
+                    WHERE  activity_date BETWEEN %s AND %s
+                    GROUP  BY agent_name
+                """, (jan1, today))
+                rows = cur.fetchall()
+        return {
+            r[0]: {"calls_ytd": int(r[1] or 0),
+                   "convos_ytd": int(r[2] or 0),
+                   "appts_ytd":  int(r[3] or 0)}
+            for r in rows
+        }
+    except Exception as e:
+        logger.warning("get_all_ytd_from_daily_activity failed: %s", e)
         return {}
 
 

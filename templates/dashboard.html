@@ -406,16 +406,23 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 .brief-commit .brief-section-label { color: var(--gold); }
 .brief-commit .brief-body { font-size: 1rem; font-weight: 600; }
 
-.brief-funnel-row {
-  display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .9rem;
+.brief-stats-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: .6rem; margin-bottom: 1rem;
 }
-.brief-funnel-chip {
-  font-size: .72rem; padding: .3rem .7rem; border-radius: 20px;
-  border: 1px solid var(--border); color: var(--muted);
+.brief-stat-card {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: .75rem .65rem; text-align: center;
 }
-.brief-funnel-chip.green { border-color: var(--green); color: var(--green); background: var(--green-bg); }
-.brief-funnel-chip.yellow { border-color: var(--yellow); color: var(--yellow); background: var(--yellow-bg); }
-.brief-funnel-chip.red { border-color: var(--red); color: var(--red); background: var(--red-bg); }
+.brief-stat-label { font-size: .65rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .35rem; }
+.brief-stat-value { font-size: 1.85rem; font-weight: 700; line-height: 1; margin-bottom: .25rem; }
+.brief-stat-pct   { font-size: .65rem; color: var(--muted); }
+.brief-stat-green { border-color: var(--green); }
+.brief-stat-green .brief-stat-value { color: var(--green); }
+.brief-stat-yellow { border-color: var(--yellow); }
+.brief-stat-yellow .brief-stat-value { color: var(--yellow); }
+.brief-stat-red   { border-color: var(--red); }
+.brief-stat-red   .brief-stat-value { color: var(--red); }
 .brief-regen { font-size: .72rem; color: var(--muted); cursor: pointer; text-decoration: underline; }
 .brief-regen:hover { color: var(--gold); }
 
@@ -431,6 +438,14 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 .meeting-history-item:hover { border-color: var(--gold); }
 .mh-date { font-size: .7rem; color: var(--gold); font-weight: 600; margin-bottom: .2rem; }
 .mh-preview { font-size: .75rem; color: var(--muted); line-height: 1.45; }
+.mh-delete-btn {
+  position: absolute; top: 50%; right: .55rem; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; font-size: .85rem;
+  opacity: 0; transition: opacity .15s; padding: .25rem; line-height: 1;
+  color: var(--muted);
+}
+.meeting-history-item:hover .mh-delete-btn { opacity: .55; }
+.mh-delete-btn:hover { opacity: 1 !important; color: var(--red); }
 
 /* ── Command Center lean layout ─────────────────────────── */
 .cc-section-label {
@@ -1538,14 +1553,26 @@ async function loadMeetingHistory(agentName){
       const time=dt.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
       const sit=b.brief?.situation||'';
       const preview=sit.length>90?sit.slice(0,90)+'…':sit;
-      h+=`<div class="meeting-history-item" onclick="loadSavedBrief(${b.id})">
+      h+=`<div class="meeting-history-item" onclick="loadSavedBrief(${b.id})" style="position:relative;padding-right:2.2rem">
         <div class="mh-date">Week ${b.week_num||'—'} &nbsp;·&nbsp; ${label} at ${time}</div>
         <div class="mh-preview">${preview}</div>
+        <button class="mh-delete-btn" title="Delete this brief" onclick="event.stopPropagation();deleteBrief(${b.id},'${encodeURIComponent(agentName)}')">🗑</button>
       </div>`;
     });
     h+=`</div>`;
     area.innerHTML=h;
   }catch(e){area.innerHTML=`<div style="font-size:.72rem;color:var(--red)">Could not load history: ${e.message}</div>`;}
+}
+
+async function deleteBrief(briefId, encodedAgent){
+  if(!confirm('Delete this saved brief? This cannot be undone.'))return;
+  try{
+    const r=await fetch(`/api/goals/meeting-brief-record/${briefId}`,{method:'DELETE'});
+    if(!r.ok)throw new Error('Delete failed');
+    showToast('Brief deleted','ok');
+    const agentName=decodeURIComponent(encodedAgent);
+    await loadMeetingHistory(agentName);
+  }catch(e){showToast('Could not delete: '+e.message,'err');}
 }
 
 async function loadSavedBrief(briefId){
@@ -1635,16 +1662,25 @@ function buildMeetingBrief(d){
     </div>
   </div>`;
 
-  // ── Funnel chips ──────────────────────────────────────────────────────────
-  h+=`<div class="brief-funnel-row">`;
+  // ── Funnel stats grid ──────────────────────────────────────────────────────
+  h+=`<div class="brief-stats-grid">`;
   [['Conversations',fp['Conversations']||0,a.convos_ytd||0],
    ['Appointments', fp['Appointments']||0, a.appts_ytd||0],
    ['Closings',     fp['Closings']||0,     a.closings_ytd||0]
   ].forEach(([label,pct,val])=>{
-    h+=`<div class="brief-funnel-chip ${chipClass(pct)}">${label}: ${val} (${pct}% of pace)</div>`;
+    const cls=chipClass(pct);
+    h+=`<div class="brief-stat-card brief-stat-${cls}">
+      <div class="brief-stat-label">${label}</div>
+      <div class="brief-stat-value">${val}</div>
+      <div class="brief-stat-pct">${pct}% of pace</div>
+    </div>`;
   });
   const dials=a.calls_ytd||0;
-  if(dials>0) h+=`<div class="brief-funnel-chip">${dials} dials YTD</div>`;
+  if(dials>0) h+=`<div class="brief-stat-card" style="opacity:.7">
+    <div class="brief-stat-label">Dials YTD</div>
+    <div class="brief-stat-value" style="font-size:1.4rem">${dials}</div>
+    <div class="brief-stat-pct">outbound calls</div>
+  </div>`;
   h+=`</div>`;
 
   // ── Situation ──────────────────────────────────────────────────────────────
