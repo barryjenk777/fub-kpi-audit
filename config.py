@@ -403,3 +403,29 @@ LEADSTREAM_STALE_DAYS = 3
 # Re-engage window: contact was 7-14 days ago
 LEADSTREAM_REENGAGE_MIN_DAYS = 7
 LEADSTREAM_REENGAGE_MAX_DAYS = 14
+
+
+# =============================================================================
+# SERENDIPITY CLAUSE — Behavioral Trigger Email Engine
+# Tune these without touching serendipity.py logic.
+# =============================================================================
+
+# Minutes to wait after detecting a trigger before firing the email.
+# Random delay in this range makes the email feel human, not automated.
+SERENDIPITY_FIRE_DELAY_MIN   = 30   # minutes
+SERENDIPITY_FIRE_DELAY_MAX   = 90   # minutes
+
+# repeat_view: how many views of the same property within 7 days to trigger
+SERENDIPITY_REPEAT_VIEW_THRESHOLD = 3
+
+# inactivity_return: days of silence before "came back" trigger fires
+SERENDIPITY_INACTIVITY_DAYS  = 14
+
+# Max 1 serendipity email per lead per rolling window
+SERENDIPITY_COOLDOWN_DAYS    = 7
+
+# Don't fire if ANY email (drip or serendipity) sent within this window
+SERENDIPITY_EMAIL_COOLDOWN_HOURS = 48
+
+# Max lead lookups per detect run — controls FUB API budget per 10-min tick
+SERENDIPITY_MAX_CANDIDATES   = 30
