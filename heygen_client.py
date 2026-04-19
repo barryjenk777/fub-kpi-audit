@@ -449,19 +449,19 @@ def submit_video(script: str, background_url: str = None,
             "character": {
                 "type": "avatar",
                 "avatar_id": _avatar,
-                "avatar_style": "circle",
+                "avatar_style": "normal",  # full-frame; circle crops tight on face and amplifies every head twitch
             },
             "voice": {
                 "type": "text",
                 "voice_id": _voice,
                 "input_text": script,
-                "speed": 1.0,
+                "speed": 0.88,  # slower pace = calmer gestures; 1.0 fires motion model too aggressively
             },
             "background": background,
         }],
         "dimension": {"width": 1280, "height": 720},
         "title": title,
-        "quality": "high",   # "high" = max render quality (uses more credits but significantly better)
+        "quality": "high",
     }
 
     try:
