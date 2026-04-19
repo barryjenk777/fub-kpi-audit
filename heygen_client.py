@@ -106,7 +106,7 @@ def _load_font_regular(size: int):
     return ImageFont.load_default()
 
 
-def _render_bg(lines: list, bg_color: tuple, width: int = 1280, height: int = 720) -> bytes:
+def _render_bg(lines: list, bg_color: tuple, width: int = 1920, height: int = 1080) -> bytes:
     """
     Render a clean background with a list of (text, color, font_size, bold) tuples.
     Text is centered vertically as a block, centered horizontally.
@@ -144,25 +144,25 @@ def _render_bg(lines: list, bg_color: tuple, width: int = 1280, height: int = 72
 
 
 def generate_seller_background_image(address: str, city: str,
-                                      width: int = 1280, height: int = 720) -> bytes:
+                                      width: int = 1920, height: int = 1080) -> bytes:
     """Clean dark background for seller videos."""
     lines = [
-        (address,                   (255, 255, 255), 72, True),
-        (f"{city} Market Update",   (160, 200, 240), 36, False),
-        ("Legacy Home Team",        (120, 150, 180), 24, False),
+        (address,                   (255, 255, 255), 108, True),
+        (f"{city} Market Update",   (160, 200, 240),  54, False),
+        ("Legacy Home Team",        (120, 150, 180),  36, False),
     ]
     return _render_bg(lines, bg_color=(14, 20, 38), width=width, height=height)
 
 
 def generate_buyer_background_image(city: str, price_band: str = "",
-                                     width: int = 1280, height: int = 720) -> bytes:
+                                     width: int = 1920, height: int = 1080) -> bytes:
     """Clean dark background for buyer videos."""
     lines = [
-        (f"Homes in {city}",  (255, 255, 255), 72, True),
+        (f"Homes in {city}",  (255, 255, 255), 108, True),
     ]
     if price_band:
-        lines.append((price_band, (160, 220, 200), 36, False))
-    lines.append(("Legacy Home Team", (120, 160, 150), 24, False))
+        lines.append((price_band, (160, 220, 200), 54, False))
+    lines.append(("Legacy Home Team", (120, 160, 150), 36, False))
     return _render_bg(lines, bg_color=(10, 22, 38), width=width, height=height)
 
 
@@ -401,12 +401,12 @@ Return ONLY the script. No labels, no stage directions, no quotes. Just Barry's 
 
 
 def generate_zbuyer_background_image(street: str, city: str,
-                                      width: int = 1280, height: int = 720) -> bytes:
+                                      width: int = 1920, height: int = 1080) -> bytes:
     """Clean dark background for Z-buyer (cash offer) videos."""
     lines = [
-        (street,                              (255, 255, 255), 72, True),
-        ("Cash Offer or List for More?",      (220, 170, 60),  42, True),
-        (f"{city}  ·  Legacy Home Team",      (160, 150, 120), 24, False),
+        (street,                              (255, 255, 255), 108, True),
+        ("Cash Offer or List for More?",      (220, 170, 60),   60, True),
+        (f"{city}  ·  Legacy Home Team",      (160, 150, 120),  36, False),
     ]
     return _render_bg(lines, bg_color=(18, 16, 12), width=width, height=height)
 
@@ -454,7 +454,7 @@ def submit_video(script: str, background_url: str = None,
             },
             "background": background,
         }],
-        "dimension": {"width": 1280, "height": 720},
+        "dimension": {"width": 1920, "height": 1080},
         "title": title,
         "quality": "high",
     }
