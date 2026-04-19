@@ -688,7 +688,7 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
         if ai_voice_count > 0:
             detail_parts.append(f"{ai_voice_count} AI voice")
         if fhalen_appts > 0:
-            detail_parts.append(f"{fhalen_appts} ISA appointments")
+            detail_parts.append(f"{fhalen_appts} Human ISA appointments")
         detail_str = " + ".join(detail_parts)
 
         html += f"""
@@ -811,14 +811,18 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
     # ── FOR THE REST OF THE TEAM ─────────────────────────────────────────────
     failing = [a for a in agents if not a["evaluation"]["overall_pass"]]
     if failing:
-        fail_names = ", ".join(a["name"].split()[0] for a in failing[:4])
+        fail_first = [a["name"].split()[0] for a in failing]
+        if len(fail_first) > 1:
+            fail_names = ", ".join(fail_first[:-1]) + " and " + fail_first[-1]
+        else:
+            fail_names = fail_first[0]
         n_fail = len(failing)
 
         html += f"""
 <div style="background:#fff;border-radius:10px;border:1px solid #e5e7eb;padding:20px 24px;margin-bottom:20px">
   <h2 style="margin:0 0 10px;color:#0f172a;font-size:15px;font-weight:700">The Board Resets Monday</h2>
   <p style="margin:0 0 10px;font-size:14px;color:#374151;line-height:1.6">
-    {fail_names}{"," if n_fail > 4 else " —"} your name could be on this email next week.
+    {fail_names} — your name could be on this email next week.
     Every single one of those {total_leads} leads from last week? There are more coming this week.
     The system doesn't sleep. The only question is whether you're on the list when they do.
   </p>

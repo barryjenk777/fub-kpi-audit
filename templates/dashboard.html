@@ -682,9 +682,11 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
           <button id="btnSendEmail" class="btn btn-ghost btn-sm" style="display:none" onclick="sendEmail()">📧 Email Report</button>
           <span id="hypeControls" style="display:none;align-items:center;gap:.35rem">
             <span style="font-size:.7rem;color:var(--muted);font-weight:600;white-space:nowrap">AI Text</span>
-            <input id="aiTextCount" type="number" value="0" min="0" style="width:58px;padding:3px 5px;font-size:.8rem;border:1px solid var(--border);border-radius:5px;text-align:center">
+            <input id="aiTextCount" type="number" value="0" min="0" style="width:52px;padding:3px 5px;font-size:.8rem;border:1px solid var(--border);border-radius:5px;text-align:center">
             <span style="font-size:.7rem;color:var(--muted);font-weight:600;white-space:nowrap">AI Voice</span>
-            <input id="aiVoiceCount" type="number" value="0" min="0" style="width:58px;padding:3px 5px;font-size:.8rem;border:1px solid var(--border);border-radius:5px;text-align:center">
+            <input id="aiVoiceCount" type="number" value="0" min="0" style="width:52px;padding:3px 5px;font-size:.8rem;border:1px solid var(--border);border-radius:5px;text-align:center">
+            <span style="font-size:.7rem;color:var(--muted);font-weight:600;white-space:nowrap">Human ISA</span>
+            <input id="humanIsaCount" type="number" value="0" min="0" style="width:52px;padding:3px 5px;font-size:.8rem;border:1px solid var(--border);border-radius:5px;text-align:center">
             <button class="btn btn-ghost btn-sm" onclick="previewHypeEmail()">👁 Preview</button>
             <button id="btnHypeEmail" class="btn btn-gold btn-sm" onclick="sendHypeEmail()">🔥 Send Hype</button>
           </span>
@@ -1916,11 +1918,12 @@ async function syncApptTags(){const btn=document.getElementById('btnSyncTags');i
 function _hypeParams(){
   const t=+(document.getElementById('aiTextCount')||{}).value||0;
   const v=+(document.getElementById('aiVoiceCount')||{}).value||0;
-  return {ai_text:t, ai_voice:v};
+  const h=+(document.getElementById('humanIsaCount')||{}).value||0;
+  return {ai_text:t, ai_voice:v, human_isa:h};
 }
 function previewHypeEmail(){
   const p=_hypeParams();
-  window.open(`/api/preview-hype-email?ai_text=${p.ai_text}&ai_voice=${p.ai_voice}`,'_blank','noopener');
+  window.open(`/api/preview-hype-email?ai_text=${p.ai_text}&ai_voice=${p.ai_voice}&human_isa=${p.human_isa}`,'_blank','noopener');
 }
 async function sendHypeEmail(){
   const btn=document.getElementById('btnHypeEmail');

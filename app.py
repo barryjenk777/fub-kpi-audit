@@ -2124,7 +2124,7 @@ def api_sync_appointment_tags():
         return jsonify({"error": str(e)}), 500
 
 
-def _gather_hype_data(ai_text_count=None, ai_voice_count=None):
+def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
     """
     Shared data-gathering for the hype email preview and send endpoints.
 
@@ -2132,6 +2132,9 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None):
     dashboard (from MaverickRE's reporting). When provided, these override
     any FUB-side estimation. When None, both default to 0 — FUB's
     tag-based counting is unreliable (updatedSince doesn't mean 'tagged since').
+
+    human_isa: manually-entered ISA appointment count (Fhalen). When provided,
+    overrides the auto-detected fhalen_appts from the audit.
 
     Returns dict with: agents, period_label, ai_text_count, ai_voice_count,
                        fhalen_appts, fhalen_name, to_emails
@@ -2163,25 +2166,30 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None):
     ai_voice_count = int(ai_voice_count) if ai_voice_count is not None else 0
 
     # ── 3. ISA appointments ───────────────────────────────────────────────────
-    since_7d = datetime.now(timezone.utc) - timedelta(days=7)
+    # If Barry manually entered a Human ISA count, trust that number.
+    # Otherwise fall back to auto-detecting from Fhalen's audit metrics.
     fhalen_name = getattr(config, "LIVE_CALLS_ADMIN", "Fhalen")
-    fhalen_appts = 0
-    for a in agents:
-        if a["name"].lower().startswith(fhalen_name.lower().split()[0].lower()):
-            fhalen_appts = a["metrics"].get("appts_set", 0)
-            break
-    if fhalen_appts == 0:
-        try:
-            fhalen_user = client.get_user_by_name(fhalen_name)
-            if fhalen_user:
-                since_dt = (datetime.fromisoformat(audit["period_since_iso"])
-                            if "period_since_iso" in audit else since_7d)
-                until_dt = (datetime.fromisoformat(audit["period_until_iso"])
-                            if "period_until_iso" in audit else datetime.now(timezone.utc))
-                all_appts = client.get_appointments(since=since_dt, until=until_dt)
-                fhalen_appts, _ = count_appointments_for_user(all_appts, fhalen_user["id"])
-        except Exception as _fa:
-            logger.warning("hype-email: fhalen appts fetch failed: %s", _fa)
+    if human_isa is not None:
+        fhalen_appts = int(human_isa)
+    else:
+        since_7d = datetime.now(timezone.utc) - timedelta(days=7)
+        fhalen_appts = 0
+        for a in agents:
+            if a["name"].lower().startswith(fhalen_name.lower().split()[0].lower()):
+                fhalen_appts = a["metrics"].get("appts_set", 0)
+                break
+        if fhalen_appts == 0:
+            try:
+                fhalen_user = client.get_user_by_name(fhalen_name)
+                if fhalen_user:
+                    since_dt = (datetime.fromisoformat(audit["period_since_iso"])
+                                if "period_since_iso" in audit else since_7d)
+                    until_dt = (datetime.fromisoformat(audit["period_until_iso"])
+                                if "period_until_iso" in audit else datetime.now(timezone.utc))
+                    all_appts = client.get_appointments(since=since_dt, until=until_dt)
+                    fhalen_appts, _ = count_appointments_for_user(all_appts, fhalen_user["id"])
+            except Exception as _fa:
+                logger.warning("hype-email: fhalen appts fetch failed: %s", _fa)
 
     # ── 4. All FUB user emails ────────────────────────────────────────────────
     to_emails = client.get_all_user_emails()
@@ -2206,9 +2214,10 @@ def api_preview_hype_email():
     from flask import make_response
     from email_report import build_hype_email as _build_hype
     try:
-        ai_text  = request.args.get("ai_text",  0, type=int)
-        ai_voice = request.args.get("ai_voice", 0, type=int)
-        data = _gather_hype_data(ai_text_count=ai_text, ai_voice_count=ai_voice)
+        ai_text   = request.args.get("ai_text",   0, type=int)
+        ai_voice  = request.args.get("ai_voice",  0, type=int)
+        human_isa = request.args.get("human_isa", None, type=int)
+        data = _gather_hype_data(ai_text_count=ai_text, ai_voice_count=ai_voice, human_isa=human_isa)
         html = _build_hype(
             agents=data["agents"],
             period_label=data["period_label"],
@@ -2246,9 +2255,11 @@ def api_send_hype_email():
     from email_report import send_hype_email as _send_hype
     try:
         body = request.get_json(silent=True) or {}
-        ai_text  = int(body.get("ai_text",  0))
-        ai_voice = int(body.get("ai_voice", 0))
-        data = _gather_hype_data(ai_text_count=ai_text, ai_voice_count=ai_voice)
+        ai_text   = int(body.get("ai_text",  0))
+        ai_voice  = int(body.get("ai_voice", 0))
+        human_isa = body.get("human_isa", None)
+        human_isa = int(human_isa) if human_isa is not None else None
+        data = _gather_hype_data(ai_text_count=ai_text, ai_voice_count=ai_voice, human_isa=human_isa)
         if not data["to_emails"]:
             return jsonify({"error": "Could not retrieve team emails from FUB"}), 500
 
