@@ -2248,6 +2248,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_and_wait,
                     get_background_url,
                     render_video_email_block_simple,
+                    AVATAR_SELLER,
                 )
                 if heygen_available():
                     _addr_obj = (person.get("address") or {})
@@ -2261,7 +2262,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         city=_city_hg or "Hampton Roads",
                     )
                     bg_url = get_background_url("seller", address=_street, city=_city_hg)
-                    video_result = generate_and_wait(script, background_url=bg_url, timeout_seconds=180)
+                    video_result = generate_and_wait(script, background_url=bg_url,
+                                                    avatar_id=AVATAR_SELLER, timeout_seconds=240)
 
                     if video_result and video_result.get("video_url"):
                         video_block = render_video_email_block_simple(
@@ -2367,6 +2369,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_and_wait,
                     get_background_url,
                     render_video_email_block_simple,
+                    AVATAR_ZBUYER,
                 )
                 if heygen_available():
                     _addr_obj = (person.get("address") or {})
@@ -2381,7 +2384,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         city=_city_hg or "Hampton Roads",
                     )
                     bg_url = get_background_url("zbuyer", address=_street, city=_city_hg)
-                    video_result = generate_and_wait(script, background_url=bg_url, timeout_seconds=180)
+                    video_result = generate_and_wait(script, background_url=bg_url,
+                                                    avatar_id=AVATAR_ZBUYER, timeout_seconds=240)
 
                     if video_result and video_result.get("video_url"):
                         video_block = render_video_email_block_simple(

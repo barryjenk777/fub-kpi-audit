@@ -43,13 +43,14 @@ _BASE = "https://api.heygen.com"
 AVATAR_CASUAL      = "fffc73aa581a49e4af8dcd304e76349b"   # Barry Jenkins (casual)
 AVATAR_SUIT        = "dc3bfe40aeaf4590b76ee12824d019dd"   # Barry Jenkins Suit
 AVATAR_MICROPHONE  = "622b6e55473e4b5e821c9cabc8830366"   # Barry Jenkins Suit + Microphone
-AVATAR_NEW         = "d67eb636d1674a908c39b09b055393c8"   # New avatar (replacing microphone) ← DEFAULT
+AVATAR_SELLER      = "7d8885ff83594a999dea9b7980517e3d"   # Warm & consultative — seller track ← DEFAULT
+AVATAR_ZBUYER      = "d67eb636d1674a908c39b09b055393c8"   # Placeholder until cash offer avatar recorded
 
 VOICE_CASUAL  = "b37262521af24a0e9245308e4045ac3f"   # Barry Jenkins voice
 VOICE_SUIT    = "850bdd18eb164cd8b5d540a88fdf862a"   # Barry Jenkins Suit voice ← DEFAULT for all
 
-# Default avatar + voice
-DEFAULT_AVATAR = AVATAR_NEW
+# Defaults — seller avatar used until Z-buyer avatar is recorded
+DEFAULT_AVATAR = AVATAR_SELLER
 DEFAULT_VOICE  = VOICE_SUIT
 
 # Background endpoint hosted on Railway — generates branded background on-demand
