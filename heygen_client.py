@@ -540,6 +540,23 @@ def generate_and_wait(script: str, background_url: str = None,
     This blocks for ~60-90 seconds while HeyGen renders.
     Only call this in a background job, not in a request handler.
     """
+    # Pre-warm the background URL so Railway has it cached before HeyGen fetches it.
+    # Without this, Railway generates the PIL image on HeyGen's first fetch (~400ms),
+    # which may exceed HeyGen's asset download timeout and silently drop the background.
+    if background_url:
+        try:
+            r = requests.get(background_url, timeout=10)
+            if r.status_code == 200:
+                logger.info("Background pre-warmed (%d bytes): %s",
+                            len(r.content), background_url[:60])
+            else:
+                logger.warning("Background pre-warm returned %d — using color fallback",
+                               r.status_code)
+                background_url = None
+        except Exception as e:
+            logger.warning("Background pre-warm failed (%s) — using color fallback", e)
+            background_url = None
+
     video_id = submit_video(script, background_url=background_url,
                             avatar_id=avatar_id, voice_id=voice_id)
     if not video_id:

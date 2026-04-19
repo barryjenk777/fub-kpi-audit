@@ -4574,7 +4574,7 @@ def api_heygen_background():
     the image on-demand from query params — no storage needed.
 
     Query params:
-      type        — "seller" or "buyer"
+      type        — "seller", "zbuyer", or "buyer"
       address     — street address (seller: "1234 Oak Street")
       city        — city name ("Chesapeake")
       price_band  — buyer price band ("$350k–$500k")
@@ -4584,27 +4584,40 @@ def api_heygen_background():
     from flask import request, Response
     try:
         from heygen_client import (generate_seller_background_image,
-                                   generate_buyer_background_image)
+                                   generate_buyer_background_image,
+                                   generate_zbuyer_background_image)
         bg_type    = request.args.get("type", "seller")
         address    = request.args.get("address", "Your Home")
         city       = request.args.get("city", "Hampton Roads")
         price_band = request.args.get("price_band", "")
 
+        cache_key = f"{bg_type}|{address}|{city}|{price_band}"
+        cached    = _heygen_bg_cache.get(cache_key)
+        if cached:
+            return Response(cached, mimetype="image/jpeg",
+                            headers={"Cache-Control": "public, max-age=3600"})
+
         if bg_type == "seller":
             img_bytes = generate_seller_background_image(address, city)
         elif bg_type == "zbuyer":
-            from heygen_client import generate_zbuyer_background_image
             img_bytes = generate_zbuyer_background_image(address, city)
         else:
             img_bytes = generate_buyer_background_image(city, price_band)
 
+        _heygen_bg_cache[cache_key] = img_bytes
         return Response(img_bytes, mimetype="image/jpeg",
                         headers={"Cache-Control": "public, max-age=3600"})
     except Exception as e:
         logger.warning("heygen-bg generation failed: %s", e)
-        # Return a plain dark fallback so HeyGen doesn't error
         from flask import abort
         abort(500)
+
+
+# In-memory cache for generated background images — keyed by "type|address|city|price_band"
+# Survives for the lifetime of the Railway process (hours to days).
+# HeyGen fetches our bg URL at render time (~60s after submission); without caching,
+# PIL regenerates on every request which takes 300-500ms.
+_heygen_bg_cache: dict = {}
 
 
 @app.route("/api/pond-mailer/reply", methods=["POST"])
