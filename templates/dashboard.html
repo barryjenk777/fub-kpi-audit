@@ -419,6 +419,19 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 .brief-regen { font-size: .72rem; color: var(--muted); cursor: pointer; text-decoration: underline; }
 .brief-regen:hover { color: var(--gold); }
 
+.meeting-history-label {
+  font-size: .58rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: .45rem;
+}
+.meeting-history-list { display: flex; flex-direction: column; gap: .3rem; }
+.meeting-history-item {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: .55rem .85rem; cursor: pointer; transition: border-color .15s;
+}
+.meeting-history-item:hover { border-color: var(--gold); }
+.mh-date { font-size: .7rem; color: var(--gold); font-weight: 600; margin-bottom: .2rem; }
+.mh-preview { font-size: .75rem; color: var(--muted); line-height: 1.45; }
+
 /* ── Command Center lean layout ─────────────────────────── */
 .cc-section-label {
   font-size: 0.65rem;
@@ -662,6 +675,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
           ✦ Generate Brief
         </button>
       </div>
+      <div id="meeting-history-area" style="margin-bottom:.75rem"></div>
       <div id="meeting-loading" style="display:none" class="loading-pane">
         <span class="spinner"></span> Building coaching brief…
       </div>
@@ -1470,10 +1484,73 @@ async function loadMeetingAgents(){
   }catch(e){console.warn('Could not load agents:',e);}
 }
 
-function onMeetingAgentChange(){
+async function onMeetingAgentChange(){
   const sel=document.getElementById('meeting-agent-select');
   document.getElementById('btn-generate-brief').disabled=!sel.value;
   document.getElementById('meeting-brief-area').innerHTML='';
+  if(sel.value) await loadMeetingHistory(sel.value);
+  else document.getElementById('meeting-history-area').innerHTML='';
+}
+
+async function loadMeetingHistory(agentName){
+  const area=document.getElementById('meeting-history-area');
+  area.innerHTML='<div style="font-size:.72rem;color:var(--muted);padding:.5rem 0">Loading past meetings…</div>';
+  try{
+    const r=await fetch(`/api/goals/meeting-history/${encodeURIComponent(agentName)}`);
+    const d=await r.json();
+    const briefs=d.briefs||[];
+    if(!briefs.length){area.innerHTML='<div style="font-size:.72rem;color:var(--muted);padding:.5rem 0">No past meetings recorded.</div>';return;}
+    let h=`<div class="meeting-history-label">Past Meetings</div><div class="meeting-history-list">`;
+    briefs.forEach(b=>{
+      const dt=new Date(b.generated_at);
+      const label=dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+      const time=dt.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+      const sit=b.brief?.situation||'';
+      const preview=sit.length>90?sit.slice(0,90)+'…':sit;
+      h+=`<div class="meeting-history-item" onclick="loadSavedBrief(${b.id})">
+        <div class="mh-date">Week ${b.week_num||'—'} &nbsp;·&nbsp; ${label} at ${time}</div>
+        <div class="mh-preview">${preview}</div>
+      </div>`;
+    });
+    h+=`</div>`;
+    area.innerHTML=h;
+  }catch(e){area.innerHTML=`<div style="font-size:.72rem;color:var(--red)">Could not load history: ${e.message}</div>`;}
+}
+
+async function loadSavedBrief(briefId){
+  // Find the brief in already-fetched history (no extra network call needed)
+  // We re-fetch from history since we have the agent name in the select
+  const agentName=document.getElementById('meeting-agent-select').value;
+  const loading=document.getElementById('meeting-loading');
+  const area=document.getElementById('meeting-brief-area');
+  loading.style.display='flex'; area.innerHTML='';
+  try{
+    const r=await fetch(`/api/goals/meeting-history/${encodeURIComponent(agentName)}`);
+    const d=await r.json();
+    const brief=( d.briefs||[]).find(b=>b.id===briefId);
+    if(!brief) throw new Error('Brief not found');
+    const meta=brief.meta||{};
+    // Reconstruct the display object from saved data
+    const displayObj={
+      agent_name:  agentName,
+      first_name:  meta.first_name||agentName.split(' ')[0],
+      week_num:    brief.week_num,
+      goal:        meta.goal||null,
+      targets:     meta.targets||{},
+      actuals:     brief.actuals||{},
+      pace:        brief.pace||{},
+      funnel_pcts: meta.funnel_pcts||{},
+      bottleneck:  meta.bottleneck||'',
+      team_rank:   meta.team_rank||{},
+      streak:      meta.streak||{},
+      brief:       brief.brief||{},
+      generated_at: brief.generated_at,
+      from_history: true,
+    };
+    area.innerHTML=buildMeetingBrief(displayObj);
+  }catch(e){
+    area.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not load saved brief</div><div class="alert-body">${e.message}</div></div></div>`;
+  }finally{loading.style.display='none';}
 }
 
 async function generateBrief(){
@@ -1504,7 +1581,9 @@ function buildMeetingBrief(d){
   const fp=d.funnel_pcts||{};
   const tr=d.team_rank||{};
   const st=d.streak||{};
-  const now=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+  const briefDate=d.generated_at?new Date(d.generated_at):new Date();
+  const now=briefDate.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+  const isHistory=!!d.from_history;
 
   function chipClass(pct){return pct>=90?'green':pct>=70?'yellow':'red';}
   function fmtK(n){if(!n)return '$0';return n>=1000?'$'+Math.round(n/1000)+'K':'$'+Math.round(n);}
@@ -1519,7 +1598,8 @@ function buildMeetingBrief(d){
       <span>Week ${d.week_num} · ${now}</span>
       ${d.goal?`<span>Goal: ${fmtK(d.goal.gci_goal)} GCI</span>`:''}
       ${st.current_streak>0?`<span>🔥 ${st.current_streak}-day streak</span>`:''}
-      <span class="brief-regen" onclick="generateBrief()">↻ Regenerate</span>
+      ${isHistory?'<span style="font-size:.7rem;color:var(--yellow);background:var(--yellow-bg);border:1px solid var(--yellow);border-radius:20px;padding:.2rem .6rem">archived</span>':''}
+    <span class="brief-regen" onclick="generateBrief()">↻ ${isHistory?'Generate New':'Regenerate'}</span>
     </div>
   </div>`;
 

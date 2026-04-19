@@ -3861,6 +3861,34 @@ Write in Barry's voice. Contractions. Short sentences. No 'feel free to', 'I'd l
         raw = raw.strip()
         brief = _json.loads(raw)
 
+        team_rank = {
+            "convos":   {"rank": convo_rank,   "total": n_agents, "team_avg": team_convo_avg},
+            "appts":    {"rank": appt_rank,    "total": n_agents, "team_avg": team_appt_avg},
+            "closings": {"rank": closing_rank, "total": n_agents, "team_avg": team_close_avg},
+        }
+
+        # Auto-save to DB — silently, never block the response
+        try:
+            _db.save_meeting_brief(
+                agent_name=agent_name,
+                week_num=week_num,
+                year=datetime.now().year,
+                brief=brief,
+                actuals=actuals,
+                pace=pace,
+                meta={
+                    "funnel_pcts": funnel_pcts,
+                    "bottleneck":  bottleneck,
+                    "team_rank":   team_rank,
+                    "streak":      streak,
+                    "first_name":  first_name,
+                    "goal":        goal,
+                    "targets":     targets,
+                },
+            )
+        except Exception as _save_err:
+            logger.warning("meeting-brief save failed (non-fatal): %s", _save_err)
+
         return jsonify({
             "agent_name":  agent_name,
             "first_name":  first_name,
@@ -3871,20 +3899,23 @@ Write in Barry's voice. Contractions. Short sentences. No 'feel free to', 'I'd l
             "pace":        pace,
             "funnel_pcts": funnel_pcts,
             "bottleneck":  bottleneck,
-            "team_rank": {
-                "convos":   {"rank": convo_rank,   "total": n_agents, "team_avg": team_convo_avg},
-                "appts":    {"rank": appt_rank,    "total": n_agents, "team_avg": team_appt_avg},
-                "closings": {"rank": closing_rank, "total": n_agents, "team_avg": team_close_avg},
-            },
-            "streak":        streak,
-            "brief":         brief,
-            "generated_at":  datetime.now(timezone.utc).isoformat(),
+            "team_rank":   team_rank,
+            "streak":      streak,
+            "brief":       brief,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
         })
 
     except Exception as e:
         import traceback
         logger.error("meeting-brief error for %s: %s\n%s", agent_name, e, traceback.format_exc())
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/goals/meeting-history/<path:agent_name>")
+def api_meeting_history(agent_name):
+    """Return past meeting briefs for an agent, newest first."""
+    briefs = _db.get_meeting_briefs(agent_name, limit=20)
+    return jsonify({"agent_name": agent_name, "briefs": briefs})
 
 
 @app.route("/api/goals/scorecard-meta")

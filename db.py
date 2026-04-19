@@ -210,6 +210,20 @@ CREATE TABLE IF NOT EXISTS agent_ytd_cache (
     UNIQUE (agent_name, year)
 );
 
+-- 1-on-1 meeting brief history (auto-saved each time Barry generates a brief)
+CREATE TABLE IF NOT EXISTS meeting_briefs (
+    id           SERIAL PRIMARY KEY,
+    agent_name   TEXT        NOT NULL,
+    week_num     INTEGER,
+    year         INTEGER,
+    brief_json   JSONB       NOT NULL,
+    actuals_json JSONB,
+    pace_json    JSONB,
+    meta_json    JSONB,
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_mb_agent ON meeting_briefs (agent_name, generated_at DESC);
+
 -- Behavioral goal-setting: agent's "why" (Cheplak framework)
 CREATE TABLE IF NOT EXISTS agent_why (
     agent_name          TEXT PRIMARY KEY REFERENCES agent_profiles(agent_name) ON DELETE CASCADE,
@@ -1151,6 +1165,75 @@ def get_cache_updated_at(year: int = None) -> "str | None":
     except Exception as e:
         logger.warning("get_cache_updated_at failed: %s", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# 1-on-1 meeting brief history
+# ---------------------------------------------------------------------------
+
+def save_meeting_brief(agent_name: str, week_num: int, year: int,
+                       brief: dict, actuals: dict = None,
+                       pace: dict = None, meta: dict = None) -> "int | None":
+    """Save a generated meeting brief. Returns the new row id, or None on failure."""
+    if not is_available():
+        return None
+    import json as _json
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO meeting_briefs
+                        (agent_name, week_num, year, brief_json, actuals_json, pace_json, meta_json, generated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    RETURNING id
+                """, (
+                    agent_name, week_num, year,
+                    _json.dumps(brief),
+                    _json.dumps(actuals or {}),
+                    _json.dumps(pace   or {}),
+                    _json.dumps(meta   or {}),
+                ))
+                row = cur.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        logger.warning("save_meeting_brief failed for %s: %s", agent_name, e)
+        return None
+
+
+def get_meeting_briefs(agent_name: str, limit: int = 20) -> list:
+    """Return past meeting briefs for an agent, newest first."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, agent_name, week_num, year, brief_json,
+                           actuals_json, pace_json, meta_json, generated_at
+                    FROM   meeting_briefs
+                    WHERE  agent_name = %s
+                    ORDER  BY generated_at DESC
+                    LIMIT  %s
+                """, (agent_name, limit))
+                rows = cur.fetchall()
+        result = []
+        import json as _json
+        for r in rows:
+            result.append({
+                "id":           r[0],
+                "agent_name":   r[1],
+                "week_num":     r[2],
+                "year":         r[3],
+                "brief":        r[4] if isinstance(r[4], dict) else _json.loads(r[4] or "{}"),
+                "actuals":      r[5] if isinstance(r[5], dict) else _json.loads(r[5] or "{}"),
+                "pace":         r[6] if isinstance(r[6], dict) else _json.loads(r[6] or "{}"),
+                "meta":         r[7] if isinstance(r[7], dict) else _json.loads(r[7] or "{}"),
+                "generated_at": r[8].isoformat() if r[8] else None,
+            })
+        return result
+    except Exception as e:
+        logger.warning("get_meeting_briefs failed for %s: %s", agent_name, e)
+        return []
 
 
 # ---------------------------------------------------------------------------
