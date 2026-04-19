@@ -1845,6 +1845,11 @@ def run_new_lead_mailer(dry_run=True):
     "I caught you at the computer" opener after a NEW_LEAD_EMAIL_DELAY_MINUTES delay.
 
     Runs every 5 minutes via scheduler. Typically processes 0–3 leads per run.
+
+    QUIET HOURS: 9pm–7am ET — no immediate emails sent during this window.
+    Leads created overnight are held and picked up by the 8am pond_mailer slot,
+    which sends Email 1 with the HeyGen video (better email, better timing).
+    "Caught you at the computer" doesn't read right at midnight anyway.
     """
     _load_env()
 
@@ -1856,6 +1861,15 @@ def run_new_lead_mailer(dry_run=True):
     _db.ensure_pond_email_log_table()
     client = FUBClient()
     now = datetime.now(timezone.utc)
+
+    # Quiet hours: 9pm–7am ET — hold leads for the 8am pond_mailer slot
+    # which sends Email 1 with the HeyGen video instead of this text-only opener.
+    # "Caught you at the computer" doesn't land right at midnight.
+    from zoneinfo import ZoneInfo
+    _now_et_hour = now.astimezone(ZoneInfo("America/New_York")).hour
+    if _now_et_hour >= 21 or _now_et_hour < 7:
+        logger.debug("New lead mailer: quiet hours (%d:xx ET) — holding for 8am HeyGen slot", _now_et_hour)
+        return {"skipped": True, "reason": "quiet_hours", "et_hour": _now_et_hour}
 
     # Daily cap: count how many new_lead_immediate emails already sent today (ET)
     if not dry_run:
