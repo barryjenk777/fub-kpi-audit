@@ -33,16 +33,18 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants — sourced from config.py so Barry can tune without touching logic
 # ---------------------------------------------------------------------------
 
-TRIGGER_DELAY_MIN        = 30    # minutes before email fires (feels human)
-TRIGGER_DELAY_MAX        = 90
-REPEAT_VIEW_THRESHOLD    = 3     # views of same property to trigger
-INACTIVITY_DAYS          = 14    # days of silence before "return" trigger
-SERENDIPITY_COOLDOWN_DAYS = 7   # max 1 serendipity email per lead per week
-EMAIL_COOLDOWN_HOURS     = 48    # don't fire if ANY email sent within 48h
-MAX_CANDIDATES_PER_RUN   = 30   # max person lookups per detect run (API budget)
+from config import (
+    SERENDIPITY_FIRE_DELAY_MIN    as TRIGGER_DELAY_MIN,
+    SERENDIPITY_FIRE_DELAY_MAX    as TRIGGER_DELAY_MAX,
+    SERENDIPITY_REPEAT_VIEW_THRESHOLD as REPEAT_VIEW_THRESHOLD,
+    SERENDIPITY_INACTIVITY_DAYS   as INACTIVITY_DAYS,
+    SERENDIPITY_COOLDOWN_DAYS,
+    SERENDIPITY_EMAIL_COOLDOWN_HOURS  as EMAIL_COOLDOWN_HOURS,
+    SERENDIPITY_MAX_CANDIDATES    as MAX_CANDIDATES_PER_RUN,
+)
 
 # Event types FUB uses (from fub_client.get_events docstring + analyze_behavior)
 SAVE_EVENT_TYPES   = {"Property Saved", "Saved Property"}
@@ -284,10 +286,37 @@ That is behavioral signal — more honest than what people say they want."""
         )
 
     elif trigger_type == "inactivity_return":
+        # Build a curated IDX search URL from their behavior so the email
+        # includes something actionable — not just "welcome back" with no link.
+        # Uses legacyhomesearch.com URL schema, same as listing-drop emails.
+        _inactivity_search_url = ""
+        try:
+            from pond_mailer import build_lead_search_urls, analyze_behavior
+            _recent_events = trigger_data.get("_recent_events", [])
+            if _recent_events:
+                _inact_behavior = analyze_behavior(_recent_events, tags)
+            else:
+                # Fallback: build from trigger_data city/beds/price if available
+                _inact_behavior = {
+                    "cities": [city] if city else [],
+                    "beds_seen": {int(beds)} if beds else set(),
+                    "price_min": price * 0.9 if price else None,
+                    "price_max": price if price else None,
+                    "property_type": None,
+                    "zips": set(),
+                    "search_filters": {},
+                }
+            _inact_urls = build_lead_search_urls(_inact_behavior)
+            if _inact_urls:
+                _inactivity_search_url = _inact_urls[0]["url"]
+        except Exception as _url_err:
+            logger.debug("inactivity_return: could not build search URL: %s", _url_err)
+
         if address:
             situation = f"""The lead went quiet for {INACTIVITY_DAYS}+ days and just came back,
 and their recent activity included:
   {prop_label}{(' — ' + prop_detail) if prop_detail else ''}
+  {('Search URL for similar homes: ' + _inactivity_search_url) if _inactivity_search_url else ''}
 
 Trigger: returning after a long silence is a real signal. Something changed for them."""
             why_surfaced = (
@@ -298,6 +327,7 @@ Trigger: returning after a long silence is a real signal. Something changed for 
         else:
             situation = f"""The lead went quiet for {INACTIVITY_DAYS}+ days and just came back
 to the site — browsing again without saving anything specific yet.
+  {('Search URL for their range: ' + _inactivity_search_url) if _inactivity_search_url else ''}
 
 Trigger: returning after a long silence. Something changed. Don't make it a big deal."""
             why_surfaced = (
@@ -308,6 +338,7 @@ Trigger: returning after a long silence. Something changed. Don't make it a big 
             "Close with one open question about where they are in the process right now — "
             "not generic. Something that gives them room to say 'timing changed' or "
             "'I found a house' or 'still looking, just got busy.' "
+            f"{'If you have a search URL, embed it naturally as a curated link — not as a raw URL dump.' if _inactivity_search_url else ''}"
             "Avoid implying certainty about what they want — buyers change their minds."
         )
     else:
