@@ -2362,6 +2362,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         email_data["subject"]      = _subj_options[0]
                         email_data["all_subjects"] = _subj_options
 
+                        _avatar_used = DEFAULT_AVATAR
                         logger.info("HeyGen video email built for %s (%.1fs video)", name,
                                     video_result.get("duration", 0))
                         print(f"    ▶ HeyGen video: {video_result['video_url'][:60]}...")
@@ -2472,6 +2473,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         email_data["subject"]      = _subj_options[0]
                         email_data["all_subjects"] = _subj_options
 
+                        _avatar_used = DEFAULT_AVATAR
                         logger.info("HeyGen Z-buyer video email built for %s (%.1fs)", name,
                                     video_result.get("duration", 0))
                         print(f"    ▶ HeyGen Z-buyer video: {video_result['video_url'][:60]}...")
@@ -2480,6 +2482,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             except Exception as _hg_err:
                 logger.warning("HeyGen Z-buyer pipeline failed for %s — text-only: %s",
                                name, _hg_err)
+
+        # ── Track which avatar was used (for A/B analysis) ──────────────────────
+        _avatar_used = None
 
         # ── HeyGen personalized video — Buyer Email 1 ────────────────────────────
         # Buyer leads browsing IDX on legacyhomesearch.com.
@@ -2599,6 +2604,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         email_data["subject"]      = _subj_options[0]
                         email_data["all_subjects"] = _subj_options
 
+                        _avatar_used = DEFAULT_AVATAR
                         logger.info("HeyGen buyer video email built for %s (%.1fs video)", name,
                                     video_result.get("duration", 0))
                         print(f"    ▶ HeyGen buyer video: {video_result['video_url'][:60]}...")
@@ -2607,6 +2613,115 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             except Exception as _hg_err:
                 logger.warning("HeyGen buyer pipeline failed for %s — text-only: %s",
                                name, _hg_err)
+
+        # ── HeyGen suit follow-up video — Email 2 (seller + Z-buyer only) ────────
+        # Buyer Email 2 stays as the listing drop — too valuable to replace.
+        # Suit avatar reads as "I take this seriously" — different energy from
+        # the casual circle opener. Frame: "Not sure if you caught my last video,
+        # but I wanted to add one more thing..." New piece of value, not a repeat.
+        if sequence_num == 2 and (is_ylopo_seller or is_z) and not dry_run:
+            try:
+                from heygen_client import (
+                    is_available as heygen_available,
+                    generate_followup_video_script,
+                    generate_and_wait,
+                    get_background_url,
+                    render_video_email_block_simple,
+                    AVATAR_SUIT, DEFAULT_VOICE,
+                )
+                if heygen_available():
+                    _addr_obj   = (person.get("address") or {})
+                    _street_fu  = _addr_obj.get("street", "")
+                    _city_fu    = _addr_obj.get("city", "") or "Hampton Roads"
+                    _lead_type  = "zbuyer" if is_z else "seller"
+
+                    logger.info("Generating HeyGen Email 2 follow-up for %s (%s)", name, _lead_type)
+                    script = generate_followup_video_script(
+                        lead_type=_lead_type,
+                        first_name=first_name,
+                        city=_city_fu,
+                        street=_street_fu,
+                    )
+                    bg_url = get_background_url(_lead_type, address=_street_fu, city=_city_fu)
+                    video_result = generate_and_wait(
+                        script, background_url=bg_url,
+                        avatar_id=AVATAR_SUIT, voice_id=DEFAULT_VOICE,
+                        avatar_style="normal",   # show the suit, not a circle crop
+                        timeout_seconds=240,
+                    )
+
+                    if video_result and video_result.get("video_url"):
+                        video_block = render_video_email_block_simple(
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            first_name=first_name,
+                        )
+
+                        # Wrapper: just enough text to frame the video, get out of the way
+                        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
+                        if is_z:
+                            setup_line = f"Wanted to circle back — pulled together a quick follow-up."
+                            cta_line   = f"10 minutes and I can run both numbers. Just reply here."
+                        else:
+                            setup_line = f"Wanted to add one more thing I forgot in my last video."
+                            cta_line   = f"Reply here and we'll find 10 minutes to walk through it."
+
+                        setup_html = f'<p style="{_p}">{setup_line}</p>'
+                        cta_html   = (
+                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
+                            f'{cta_line}</p>'
+                        )
+                        video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
+
+                        video_body_text = (
+                            f"{setup_line}\n\n"
+                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"{cta_line}\n\n" + SIGN_OFF
+                        )
+                        email_data["body_text"] = video_body_text
+                        email_data["body_html"] = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<div style="max-width:560px;margin:0 auto;padding:32px 24px">
+  <div style="color:#222;font-size:15px;line-height:1.8">
+    {video_body_inner}
+  </div>
+  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
+    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
+         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
+    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
+      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
+      (757) 919-8874 &nbsp;|&nbsp;
+      <a href="https://www.legacyhomesearch.com"
+         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
+      1545 Crossways Blvd, Chesapeake, VA 23320<br>
+      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
+         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
+    </p>
+  </div>
+</div>
+</body></html>"""
+
+                        _subj_options = [
+                            f"quick follow-up",
+                            f"one more thing",
+                            f"not sure if you caught my last video",
+                        ]
+                        email_data["subject"]      = _subj_options[0]
+                        email_data["all_subjects"] = _subj_options
+
+                        _avatar_used = AVATAR_SUIT
+                        logger.info("HeyGen Email 2 suit video built for %s (%.1fs)", name,
+                                    video_result.get("duration", 0))
+                        print(f"    ▶ HeyGen Email 2 suit: {video_result['video_url'][:60]}...")
+                    else:
+                        logger.warning("HeyGen Email 2 video not ready for %s — text-only", name)
+            except Exception as _hg_err:
+                logger.warning("HeyGen Email 2 pipeline failed for %s — text-only: %s", name, _hg_err)
 
         print(f"    Subject: {email_data['subject']}")
         if dry_run:
@@ -2636,6 +2751,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             sequence_num=sequence_num,
             dry_run=dry_run,
             sg_message_id=None,
+            avatar_used=_avatar_used,
         )
 
         # ── Send ────────────────────────────────────────────────────────────────

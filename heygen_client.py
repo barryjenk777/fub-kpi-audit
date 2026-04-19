@@ -40,7 +40,8 @@ _API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 _BASE = "https://api.heygen.com"
 
 # Barry's avatar + voice IDs — confirmed working via API test
-DEFAULT_AVATAR = "4b314392e9b6441d97abaf6d83808de5"   # Barry Jenkins — Avatar 2 (confirmed best)
+DEFAULT_AVATAR = "4b314392e9b6441d97abaf6d83808de5"   # Barry Jenkins — Avatar 2, circle style (Email 1)
+AVATAR_SUIT    = "dc3bfe40aeaf4590b76ee12824d019dd"   # Barry Jenkins — Suit avatar (Email 2 follow-up)
 DEFAULT_VOICE  = "b37262521af24a0e9245308e4045ac3f"   # Barry Jenkins — HeyGen native voice clone
 
 # Background endpoint hosted on Railway — generates branded background on-demand
@@ -574,6 +575,137 @@ Return ONLY the script. No labels, no stage directions. Just Barry's words."""
         )
 
 
+def generate_followup_video_script(
+    lead_type: str,
+    first_name: str,
+    city: str = "Hampton Roads",
+    street: str = "",
+) -> str:
+    """
+    Generate a 30-35 second follow-up video script for the SUIT avatar (Email 2).
+
+    Lead types: "seller", "zbuyer", "buyer"
+
+    Energy: Professional, calm follow-through. Not chasing — just circling back
+    with one additional piece of value they didn't get in the first video.
+    The suit reads as "I take this seriously" without being stiff.
+
+    Frame: "Not sure if you caught my last video" — acknowledges the first video
+    naturally, gives them a graceful out if they missed it, then adds something new.
+    """
+    street_spoken = expand_address_for_speech(street) if street else ""
+
+    if lead_type == "seller":
+        context = (
+            f"Barry sent {first_name} a personalized market video last week about their "
+            f"home in {city}. No reply yet. "
+            f"This follow-up adds one new insight: most sellers compare OFFER PRICES, "
+            f"but the number they actually walk away with — after commissions, repairs, "
+            f"and carrying costs — is almost always different. Barry can put together "
+            f"a side-by-side net proceeds comparison for their specific home."
+        )
+        cta = "Want me to put together a quick side-by-side for your place?"
+        address_ref = f" on {street_spoken}" if street_spoken else ""
+        fallback = (
+            f"Hey {first_name} — not sure if you had a chance to catch my last video, "
+            f"but I wanted to add one thing. Most sellers I talk to focus on the offer price — "
+            f"and I get it, that's the number everyone leads with. "
+            f"But what you actually walk away with after commissions, repairs, and closing costs "
+            f"is almost always a different number. "
+            f"I can put together a quick side-by-side for your home{address_ref} — "
+            f"takes about 10 minutes on the phone. Just reply here."
+        )
+    elif lead_type == "zbuyer":
+        context = (
+            f"Barry sent {first_name} a video last week about their home"
+            f"{' at ' + street_spoken if street_spoken else ''} in {city}. "
+            f"They submitted a cash offer request. No reply yet. "
+            f"This follow-up circles back with one concrete point: "
+            f"the gap between cash price and listed price — after you factor in timeline, "
+            f"carrying costs, and deal risk — is almost always smaller than sellers expect. "
+            f"Sometimes the listed route nets more. Barry can run both numbers in 10 minutes."
+        )
+        cta = "Just reply here and I'll run both numbers for your specific home."
+        address_ref = f" on {street_spoken}" if street_spoken else ""
+        fallback = (
+            f"Hey {first_name} — wanted to circle back in case you missed my last video. "
+            f"I work with a lot of sellers who come in wanting cash, "
+            f"and what I see consistently is that the gap between cash and listed — "
+            f"once you factor in carrying costs and deal risk — "
+            f"is almost always smaller than people expect. "
+            f"Sometimes the listed route nets more. "
+            f"I can run both numbers for your home{address_ref} in 10 minutes. "
+            f"Just reply here."
+        )
+    else:  # buyer
+        context = (
+            f"Barry sent {first_name} a market video last week about their home search in {city}. "
+            f"No reply yet. "
+            f"This follow-up adds a practical next step: what it actually takes to win "
+            f"when the right home hits — being pre-approved and ready moves fast. "
+            f"Barry's team can help them get set up so they're not scrambling."
+        )
+        cta = "Just reply here — I can walk you through the next step."
+        fallback = (
+            f"Hey {first_name} — not sure if you caught my last video, just wanted to follow up. "
+            f"One thing I see buyers miss in {city} is timing — "
+            f"when the right home hits in your range, the window is short. "
+            f"Buyers who are already set up and pre-approved move first. "
+            f"Happy to walk you through what that looks like so you're ready when it happens. "
+            f"Just reply here."
+        )
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic()
+
+        prompt = f"""Write a 30-35 second follow-up video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty.
+
+Context:
+{context}
+
+━━━━ THE FRAME ━━━━
+Barry is wearing a suit. This is a professional follow-up — calm, direct, no chase energy.
+He's circling back to add value, not to ask "did you get my email?"
+The tone is: "I take this seriously and I have one more thing worth hearing."
+
+━━━━ SCRIPT STRUCTURE ━━━━
+
+OPEN (3-4 seconds): Acknowledge the first video simply, then move on immediately.
+Good: "Hey {first_name} — not sure if you caught my last video, but wanted to follow up with one thing."
+Bad: "Hi, I wanted to check in and see if you had a chance to review..." (too formal, too salesy)
+
+SUBSTANCE (18-22 seconds): One new piece of value — something they didn't hear in the first video.
+Not a repeat of what Barry said before. A genuinely different angle.
+Be specific and concrete. Vague insight = deleted video.
+
+CLOSE (5-6 seconds): One easy ask. "{cta}"
+
+━━━━ BARRY'S VOICE ━━━━
+- Confident but not pushy. The suit reads as serious — let it do that work, don't over-compensate.
+- Contractions throughout. Shorter sentences land better on camera.
+- Never: "I'd love to", "feel free to", "don't hesitate", "circling back on my previous message"
+- Never: "Ylopo", "rAIya", "AI" — say "my last video" or "what I sent over"
+
+━━━━ LENGTH ━━━━
+110-130 words. 30-35 seconds. Tighter than Email 1 — they're either interested or they're not.
+
+Return ONLY the script. No labels, no stage directions. Just Barry's words."""
+
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=280,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        script = msg.content[0].text.strip()
+        logger.info("HeyGen follow-up script generated for %s/%s (%d chars)", lead_type, first_name, len(script))
+        return script
+
+    except Exception as e:
+        logger.warning("Claude follow-up script generation failed, using fallback: %s", e)
+        return fallback
+
+
 def generate_zbuyer_background_image(street: str, city: str,
                                       width: int = 1920, height: int = 1080) -> bytes:
     """Clean dark background for Z-buyer (cash offer) videos."""
@@ -591,6 +723,7 @@ def generate_zbuyer_background_image(street: str, city: str,
 
 def submit_video(script: str, background_url: str = None,
                  avatar_id: str = None, voice_id: str = None,
+                 avatar_style: str = "circle",
                  title: str = "Barry Jenkins — Personal Message") -> str | None:
     """
     Submit a video generation job to HeyGen.
@@ -601,8 +734,9 @@ def submit_video(script: str, background_url: str = None,
         script:         The spoken text for Barry's avatar
         background_url: URL of a background image (our Railway /api/heygen-bg endpoint).
                         If None, uses a dark navy color background.
-        avatar_id:      Override avatar (defaults to AVATAR_SELLER)
-        voice_id:       Override voice (defaults to VOICE_SUIT)
+        avatar_id:      Override avatar (defaults to DEFAULT_AVATAR)
+        voice_id:       Override voice (defaults to DEFAULT_VOICE)
+        avatar_style:   "circle" (Email 1 default) or "normal" (suit follow-up)
         title:          Video title (for HeyGen dashboard)
     """
     _avatar = avatar_id or DEFAULT_AVATAR
@@ -618,7 +752,7 @@ def submit_video(script: str, background_url: str = None,
             "character": {
                 "type": "avatar",
                 "avatar_id": _avatar,
-                "avatar_style": "circle",
+                "avatar_style": avatar_style,
             },
             "voice": {
                 "type": "text",
@@ -698,6 +832,7 @@ def poll_video(video_id: str, timeout_seconds: int = 360,
 
 def generate_and_wait(script: str, background_url: str = None,
                       avatar_id: str = None, voice_id: str = None,
+                      avatar_style: str = "circle",
                       timeout_seconds: int = 180) -> dict | None:
     """
     Full pipeline: submit → poll → return result.
@@ -724,7 +859,8 @@ def generate_and_wait(script: str, background_url: str = None,
             background_url = None
 
     video_id = submit_video(script, background_url=background_url,
-                            avatar_id=avatar_id, voice_id=voice_id)
+                            avatar_id=avatar_id, voice_id=voice_id,
+                            avatar_style=avatar_style)
     if not video_id:
         return None
     return poll_video(video_id, timeout_seconds=timeout_seconds)

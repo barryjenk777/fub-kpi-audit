@@ -2478,6 +2478,11 @@ def ensure_pond_email_log_table():
                     ALTER TABLE pond_email_log
                     ADD COLUMN IF NOT EXISTS sequence_num INTEGER DEFAULT 1
                 """)
+                # Migrate: add avatar_used for A/B tracking of HeyGen avatar variants
+                cur.execute("""
+                    ALTER TABLE pond_email_log
+                    ADD COLUMN IF NOT EXISTS avatar_used VARCHAR(64)
+                """)
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_pond_email_person
                     ON pond_email_log(person_id, sent_at DESC)
@@ -2488,7 +2493,8 @@ def ensure_pond_email_log_table():
 
 def log_pond_email(person_id, person_name, email_address, subject,
                    strategy, leadstream_tier, behavior_summary="",
-                   dry_run=False, sg_message_id=None, sequence_num=1):
+                   dry_run=False, sg_message_id=None, sequence_num=1,
+                   avatar_used=None):
     """Record a sent pond email. Returns the inserted row id (for sg_id update), or None."""
     if not is_available():
         return None
@@ -2499,12 +2505,12 @@ def log_pond_email(person_id, person_name, email_address, subject,
                     INSERT INTO pond_email_log
                         (person_id, person_name, email_address, subject,
                          strategy, leadstream_tier, behavior_summary,
-                         dry_run, sg_message_id, sequence_num)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         dry_run, sg_message_id, sequence_num, avatar_used)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (person_id, person_name, email_address, subject,
                       strategy, leadstream_tier, behavior_summary,
-                      dry_run, sg_message_id, sequence_num))
+                      dry_run, sg_message_id, sequence_num, avatar_used))
                 row = cur.fetchone()
                 return row[0] if row else None
     except Exception as e:
