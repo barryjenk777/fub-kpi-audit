@@ -1821,7 +1821,7 @@ SUBJECT LINES (3 options — feel like a direct text, under 7 words, no ALL CAPS
 OUTPUT (JSON only, no markdown fences):
 {{{{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "{{first_name}},\\n\\n[3–4 sentences]"
+  "body": "{first_name},\\n\\n[3–4 sentences]"
 }}}}"""
 
     # ── BUYER PROMPT ──────────────────────────────────────────────────────────────────────────
@@ -1854,7 +1854,7 @@ SUBJECT LINES (3 options — 3–6 words, feel like a text not a campaign):
 OUTPUT (JSON only, no markdown fences):
 {{{{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "{{first_name}},\\n\\n[3–5 sentences]"
+  "body": "{first_name},\\n\\n[3–5 sentences]"
 }}}}"""
 
     # ── SELLER PROMPT ──────────────────────────────────────────────────────────────────────────
@@ -1888,7 +1888,7 @@ SUBJECT LINES (3 options — 3–6 words, feel like a text not a campaign):
 OUTPUT (JSON only, no markdown fences):
 {{{{
   "subject_options": ["option 1", "option 2", "option 3"],
-  "body": "{{first_name}},\\n\\n[3–5 sentences]"
+  "body": "{first_name},\\n\\n[3–5 sentences]"
 }}}}"""
 
     if dry_run:
