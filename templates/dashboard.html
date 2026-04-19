@@ -680,6 +680,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
         <div style="margin-left:auto;display:flex;gap:.4rem">
           <button id="btnUpdateGroup" class="btn btn-ghost btn-sm" style="display:none" onclick="updateGroup()">🔄 Update Priority Group</button>
           <button id="btnSendEmail" class="btn btn-ghost btn-sm" style="display:none" onclick="sendEmail()">📧 Email Report</button>
+          <button id="btnPreviewHype" class="btn btn-ghost btn-sm" style="display:none" onclick="previewHypeEmail()">👁 Preview Hype</button>
           <button id="btnHypeEmail" class="btn btn-gold btn-sm" style="display:none" onclick="sendHypeEmail()">🔥 Send Hype Email</button>
         </div>
       </div>
@@ -1438,6 +1439,7 @@ async function loadAgents(force){
       db.innerHTML=buildAgents(d);
       document.getElementById('btnUpdateGroup').style.display='';
       document.getElementById('btnSendEmail').style.display='';
+      document.getElementById('btnPreviewHype').style.display='';
       document.getElementById('btnHypeEmail').style.display='';
       if(d.from_cache){
         db.insertAdjacentHTML('afterbegin',`<div style="background:var(--surface2);border-radius:var(--r-sm);padding:.5rem 1rem;margin-bottom:.9rem;font-size:.72rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between"><span>⚡ Loaded from cache${d.cache_age?' ('+d.cache_age+')':''}</span><button class="btn btn-ghost btn-sm" onclick="loadAgents(true)">↻ Refresh Live</button></div>`);
@@ -1906,6 +1908,10 @@ async function loadAppointments(force){const ld=document.getElementById('loading
    SHARED ACTIONS
 ════════════════════════════════════════════════ */
 async function syncApptTags(){const btn=document.getElementById('btnSyncTags');if(!confirm('Sync appointment tags now?\n\nThis will apply the APT_SET → APT_OUTCOME_NEEDED → APT_STALE lifecycle.'))return;btn.disabled=true;btn.textContent='Syncing…';try{const r=await fetch('/api/appointments/sync-tags',{method:'POST',headers:{'Content-Type':'application/json'}});const d=await r.json();if(d.success){const a=d.actions;showToast(`Done! Set:${a.tagged_set} Needed:${a.tagged_needed} Stale:${a.tagged_stale} Removed:${a.tags_removed}`,'ok');loadAppointments(true);}else showToast('Error: '+d.error,'err');}catch(e){showToast('Error: '+e.message,'err');}btn.disabled=false;btn.textContent='🏷️ Sync Tags Now';}
+function previewHypeEmail(){
+  // Opens the rendered email HTML in a new tab — no email sent
+  window.open('/api/preview-hype-email','_blank','noopener');
+}
 async function sendHypeEmail(){
   const btn=document.getElementById('btnHypeEmail');
   btn.disabled=true; btn.textContent='Building…';
