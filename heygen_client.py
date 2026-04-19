@@ -169,10 +169,20 @@ def generate_buyer_background_image(city: str, price_band: str = "",
 def get_background_url(bg_type: str, address: str = "", city: str = "",
                         price_band: str = "") -> str:
     """
-    Return the Railway endpoint URL that serves the branded background image.
-    HeyGen fetches this URL when rendering the video.
+    Return the URL HeyGen will fetch as the video background.
+
+    Z-buyer + buyer use static pre-rendered JPEGs (faster, always available).
+    Seller uses the dynamic endpoint so the lead's address appears on screen.
     """
     from urllib.parse import quote
+
+    # Static backgrounds — always the same, no generation needed at render time
+    if bg_type == "zbuyer":
+        return f"{RAILWAY_BASE_URL}/static/bg_zbuyer.jpg"
+    if bg_type == "buyer":
+        return f"{RAILWAY_BASE_URL}/static/bg_buyer.jpg"
+
+    # Seller — dynamic so the address appears on the background
     base = f"{RAILWAY_BASE_URL}/api/heygen-bg"
     params = [f"type={bg_type}"]
     if address:
@@ -444,7 +454,7 @@ def submit_video(script: str, background_url: str = None,
             "character": {
                 "type": "avatar",
                 "avatar_id": _avatar,
-                "avatar_style": "closeUp",
+                "avatar_style": "circle",
             },
             "voice": {
                 "type": "text",
