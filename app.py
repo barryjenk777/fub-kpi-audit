@@ -3747,16 +3747,17 @@ def api_meeting_brief(agent_name):
             logger.info("meeting-brief: using daily_activity fallback for %s (ytd cache empty)", agent_name)
         all_deals    = _db.get_deal_summary(year=year)   # all agents for team rank
 
-        targets = _db.compute_targets(goal) if goal else {}
-        actuals = {
+        targets  = _db.compute_targets(goal) if goal else {}
+        actuals  = {
             "calls_ytd":     agent_ytd.get("calls_ytd", 0),
             "convos_ytd":    agent_ytd.get("convos_ytd", 0),
             "appts_ytd":     agent_ytd.get("appts_ytd", 0),
             "contracts_ytd": deal_summary.get("contracts", 0),
-            "closings_ytd": deal_summary.get("closings", 0),
-            "gci_ytd":      deal_summary.get("gci_est", 0),
+            "closings_ytd":  deal_summary.get("closings", 0),
+            "gci_ytd":       deal_summary.get("gci_est", 0),
         }
-        pace = _db.compute_pace(goal, targets, actuals, start_date=start_date) if goal else {}
+        pace    = _db.compute_pace(goal, targets, actuals, start_date=start_date) if goal else {}
+        act_ctx = _db.get_agent_activity_context(agent_name)
 
         # ── Team rank for each funnel metric ──────────────────────────────
         # Build a merged YTD snapshot: start with ytd_cache, then fill any
@@ -3842,6 +3843,13 @@ YTD Funnel (actual vs. target-by-now):
 
 Weekly targets: {convos_per_week} conversations/wk · {appts_per_week} appointments/wk
 Primary bottleneck (weakest funnel step): {bottleneck} at {funnel_pcts[bottleneck]}% of pace
+
+Recent momentum (last 60 days — use this to speak to current effort, not just YTD totals):
+- This week so far:  {act_ctx.get('windows',{}).get('this_week',{}).get('convos',0)} convos · {act_ctx.get('windows',{}).get('this_week',{}).get('appts',0)} appts · {act_ctx.get('windows',{}).get('this_week',{}).get('calls',0)} dials
+- Last full week:    {act_ctx.get('windows',{}).get('last_week',{}).get('convos',0)} convos · {act_ctx.get('windows',{}).get('last_week',{}).get('appts',0)} appts · {act_ctx.get('windows',{}).get('last_week',{}).get('calls',0)} dials
+- This month (MTD): {act_ctx.get('windows',{}).get('mtd',{}).get('convos',0)} convos · {act_ctx.get('windows',{}).get('mtd',{}).get('appts',0)} appts
+- Last month full:  {act_ctx.get('windows',{}).get('last_month',{}).get('convos',0)} convos · {act_ctx.get('windows',{}).get('last_month',{}).get('appts',0)} appts
+- 60-day trend direction: {act_ctx.get('trend_dir','unknown')} (recent 3-week avg: {act_ctx.get('avg_recent',0)} convos/wk vs prior avg: {act_ctx.get('avg_prior',0)} convos/wk)
 
 Team comparison ({n_agents} agents):
 - Conversations: ranked #{convo_rank} of {n_agents} (team avg: {team_convo_avg})
@@ -3930,24 +3938,26 @@ Write in Barry's voice. Contractions. Short sentences. No 'feel free to', 'I'd l
                     "first_name":  first_name,
                     "goal":        goal,
                     "targets":     targets,
+                    "act_ctx":     act_ctx,
                 },
             )
         except Exception as _save_err:
             logger.warning("meeting-brief save failed (non-fatal): %s", _save_err)
 
         return jsonify({
-            "agent_name":  agent_name,
-            "first_name":  first_name,
-            "week_num":    week_num,
-            "goal":        goal,
-            "targets":     targets,
-            "actuals":     actuals,
-            "pace":        pace,
-            "funnel_pcts": funnel_pcts,
-            "bottleneck":  bottleneck,
-            "team_rank":   team_rank,
-            "streak":      streak,
-            "brief":       brief,
+            "agent_name":   agent_name,
+            "first_name":   first_name,
+            "week_num":     week_num,
+            "goal":         goal,
+            "targets":      targets,
+            "actuals":      actuals,
+            "pace":         pace,
+            "funnel_pcts":  funnel_pcts,
+            "bottleneck":   bottleneck,
+            "team_rank":    team_rank,
+            "streak":       streak,
+            "brief":        brief,
+            "act_ctx":      act_ctx,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "ytd_source":   _ytd_source,
         })

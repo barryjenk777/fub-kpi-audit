@@ -1934,6 +1934,116 @@ def get_ytd_from_daily_activity(agent_name: str, year: int = None) -> dict:
         return {"calls_ytd": 0, "convos_ytd": 0, "appts_ytd": 0}
 
 
+def get_agent_activity_context(agent_name: str) -> dict:
+    """
+    Single DB query covering the past 70 days, aggregated in Python into:
+      - windows: {this_week, last_week, mtd, last_month}  — each {calls, convos, appts}
+      - weekly_trend: list of 9 weekly buckets oldest→newest
+          each: {week_start (ISO), week_label, calls, convos, appts, is_current}
+    Used by the 1-on-1 meeting brief for recent momentum context.
+    """
+    if not is_available():
+        return {"windows": {}, "weekly_trend": []}
+
+    today = date.today()
+    since = today - timedelta(days=70)
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT activity_date,
+                           COALESCE(calls_logged, 0),
+                           COALESCE(convos_logged, 0),
+                           COALESCE(appts_logged, 0)
+                    FROM   daily_activity
+                    WHERE  agent_name   = %s
+                      AND  activity_date BETWEEN %s AND %s
+                    ORDER  BY activity_date
+                """, (agent_name, since, today))
+                rows = cur.fetchall()
+    except Exception as e:
+        logger.warning("get_agent_activity_context failed for %s: %s", agent_name, e)
+        return {"windows": {}, "weekly_trend": []}
+
+    # ── Index rows by date ──────────────────────────────────────────────────
+    by_date = {}
+    for activity_date, calls, convos, appts in rows:
+        by_date[activity_date] = (int(calls), int(convos), float(appts))
+
+    def _sum_range(start, end):
+        """Sum calls/convos/appts for date range [start, end] inclusive."""
+        calls = convos = appts = 0
+        d = start
+        while d <= end:
+            if d in by_date:
+                c, cv, a = by_date[d]
+                calls += c; convos += cv; appts += a
+            d += timedelta(days=1)
+        return {"calls": calls, "convos": convos, "appts": round(appts, 1)}
+
+    # ── Calendar boundaries ─────────────────────────────────────────────────
+    days_since_mon   = today.weekday()          # 0=Mon, 6=Sun
+    this_week_start  = today - timedelta(days=days_since_mon)
+    last_week_end    = this_week_start - timedelta(days=1)
+    last_week_start  = last_week_end   - timedelta(days=6)
+
+    mtd_start        = date(today.year, today.month, 1)
+    if today.month == 1:
+        lm_start = date(today.year - 1, 12, 1)
+        lm_end   = date(today.year, 1, 1) - timedelta(days=1)
+    else:
+        lm_start = date(today.year, today.month - 1, 1)
+        lm_end   = mtd_start - timedelta(days=1)
+
+    windows = {
+        "this_week":  _sum_range(this_week_start,  today),
+        "last_week":  _sum_range(last_week_start,  last_week_end),
+        "mtd":        _sum_range(mtd_start,         today),
+        "last_month": _sum_range(lm_start,          lm_end),
+    }
+
+    # ── 9 weekly buckets (Mon-Sun), oldest→newest ───────────────────────────
+    weekly_trend = []
+    for i in range(8, -1, -1):
+        wk_start = this_week_start - timedelta(weeks=i)
+        wk_end   = wk_start + timedelta(days=6)
+        wk_end   = min(wk_end, today)
+        label    = wk_start.strftime("%-m/%-d") + "–" + wk_end.strftime("%-m/%-d")
+        s        = _sum_range(wk_start, wk_end)
+        weekly_trend.append({
+            "week_start":  wk_start.isoformat(),
+            "week_label":  label,
+            "calls":       s["calls"],
+            "convos":      s["convos"],
+            "appts":       s["appts"],
+            "is_current":  (i == 0),
+        })
+
+    # ── Trend direction: compare last 3 complete weeks vs prior 4 ──────────
+    complete_weeks = [w for w in weekly_trend if not w["is_current"]]
+    recent3  = complete_weeks[-3:] if len(complete_weeks) >= 3 else complete_weeks
+    prior4   = complete_weeks[-7:-3] if len(complete_weeks) >= 7 else complete_weeks[:max(0, len(complete_weeks)-3)]
+    avg_r = (sum(w["convos"] for w in recent3) / len(recent3)) if recent3 else 0
+    avg_p = (sum(w["convos"] for w in prior4)  / len(prior4))  if prior4  else 0
+    if avg_p == 0:
+        trend_dir = "insufficient_data"
+    elif avg_r >= avg_p * 1.15:
+        trend_dir = "building"
+    elif avg_r <= avg_p * 0.80:
+        trend_dir = "backing_off"
+    else:
+        trend_dir = "steady"
+
+    return {
+        "windows":      windows,
+        "weekly_trend": weekly_trend,
+        "trend_dir":    trend_dir,
+        "avg_recent":   round(avg_r, 1),
+        "avg_prior":    round(avg_p, 1),
+    }
+
+
 def get_team_activity_range(start_date, end_date):
     """
     Return summed FUB activity for every active agent over a date range (inclusive).

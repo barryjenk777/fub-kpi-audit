@@ -426,6 +426,40 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 .brief-regen { font-size: .72rem; color: var(--muted); cursor: pointer; text-decoration: underline; }
 .brief-regen:hover { color: var(--gold); }
 
+/* Recent activity windows */
+.brief-windows-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; margin-bottom: .75rem;
+}
+@media (max-width: 700px) { .brief-windows-grid { grid-template-columns: repeat(2,1fr); } }
+.brief-window-card {
+  background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: .6rem .5rem; text-align: center;
+}
+.brief-window-label   { font-size: .6rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: .25rem; }
+.brief-window-convos  { font-size: 1.65rem; font-weight: 700; color: var(--text); line-height: 1; }
+.brief-window-sub     { font-size: .58rem; color: var(--muted); margin-bottom: .3rem; }
+.brief-window-row     { display: flex; justify-content: space-between; font-size: .65rem; color: var(--text-2); }
+
+/* 60-day sparkline */
+.brief-spark-wrap   { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: .65rem .75rem; }
+.brief-spark-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: .5rem; }
+.brief-spark-title  { font-size: .67rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.brief-spark-dir    { font-size: .72rem; font-weight: 600; }
+.brief-spark-bars   { display: flex; gap: 3px; align-items: flex-end; height: 72px; }
+.brief-spark-col    { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.brief-spark-num    { font-size: .58rem; color: var(--muted); height: 12px; line-height: 1; }
+.brief-spark-bar-wrap { flex: 1; width: 100%; display: flex; align-items: flex-end; }
+.brief-spark-bar    { width: 100%; border-radius: 2px 2px 0 0; transition: height .3s; min-height: 2px; }
+.spark-bar-green    { background: var(--green); }
+.spark-bar-yellow   { background: var(--yellow); }
+.spark-bar-red      { background: var(--red); opacity: .75; }
+.spark-bar-blue     { background: var(--blue); }
+.spark-bar-muted    { background: var(--border); }
+.spark-bar-current  { opacity: .55; }
+.brief-spark-lbl    { font-size: .52rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: clip; max-width: 100%; text-align: center; }
+.brief-spark-tgt-row { margin-top: .35rem; text-align: right; }
+.brief-spark-tgt-label { font-size: .62rem; color: var(--muted); font-style: italic; }
+
 .meeting-history-label {
   font-size: .58rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase;
   color: var(--muted); margin-bottom: .45rem;
@@ -1602,6 +1636,7 @@ async function loadSavedBrief(briefId){
       team_rank:   meta.team_rank||{},
       streak:      meta.streak||{},
       brief:       brief.brief||{},
+      act_ctx:     meta.act_ctx||{},
       generated_at: brief.generated_at,
       from_history: true,
     };
@@ -1682,6 +1717,89 @@ function buildMeetingBrief(d){
     <div class="brief-stat-pct">outbound calls</div>
   </div>`;
   h+=`</div>`;
+
+  // ── Recent activity windows + 60-day sparkline ────────────────────────────
+  const actx = d.act_ctx || {};
+  const wins  = actx.windows || {};
+  const trend = actx.weekly_trend || [];
+  const tdir  = actx.trend_dir || '';
+  const hasWinData = Object.values(wins).some(w=>w&&(w.convos>0||w.appts>0||w.calls>0));
+  const hasTrendData = trend.some(w=>w.convos>0||w.appts>0);
+  if(hasWinData || hasTrendData){
+    // Window cards
+    const wCols=[
+      {label:'This Week',  key:'this_week'},
+      {label:'Last Week',  key:'last_week'},
+      {label:'This Month', key:'mtd'},
+      {label:'Last Month', key:'last_month'},
+    ];
+    h+=`<div class="brief-section" style="padding-bottom:.5rem">
+      <div class="brief-section-label">📆 Recent Activity</div>
+      <div class="brief-windows-grid">`;
+    wCols.forEach(({label,key})=>{
+      const w=wins[key]||{};
+      const cv=w.convos||0, ap=w.appts||0, dl=w.calls||0;
+      h+=`<div class="brief-window-card">
+        <div class="brief-window-label">${label}</div>
+        <div class="brief-window-convos">${cv}</div>
+        <div class="brief-window-sub">convos</div>
+        <div class="brief-window-row"><span>${ap} appts</span><span style="color:var(--muted);font-size:.65rem">${dl} dials</span></div>
+      </div>`;
+    });
+    h+=`</div>`;
+
+    // 60-day sparkline
+    if(trend.length){
+      const tgt = (d.targets||{}).convos_per_week || 0;
+      const maxV = Math.max(...trend.map(w=>w.convos), tgt, 1);
+      const trendLabel = {
+        building:          '📈 Building momentum',
+        steady:            '→ Holding steady',
+        backing_off:       '📉 Backing off',
+        insufficient_data: '— Not enough history yet',
+      }[tdir] || '';
+      const trendColor = {
+        building:'var(--green)', steady:'var(--muted)',
+        backing_off:'var(--red)', insufficient_data:'var(--muted)',
+      }[tdir] || 'var(--muted)';
+
+      h+=`<div class="brief-spark-wrap">
+        <div class="brief-spark-header">
+          <span class="brief-spark-title">60-Day Trend — Conversations/Week</span>
+          ${trendLabel?`<span class="brief-spark-dir" style="color:${trendColor}">${trendLabel}</span>`:''}
+        </div>
+        <div class="brief-spark-bars">`;
+      trend.forEach(wk=>{
+        const barH = maxV>0 ? Math.max(Math.round(wk.convos/maxV*100),2) : 2;
+        let barCls = 'spark-bar-muted';
+        if(wk.convos>0 && tgt>0){
+          barCls = wk.convos>=tgt?'spark-bar-green':wk.convos>=tgt*.7?'spark-bar-yellow':'spark-bar-red';
+        } else if(wk.convos>0){
+          barCls = 'spark-bar-blue';
+        }
+        const curMark = wk.is_current?' spark-bar-current':'';
+        h+=`<div class="brief-spark-col">
+          <div class="brief-spark-num">${wk.convos||''}</div>
+          <div class="brief-spark-bar-wrap">
+            <div class="brief-spark-bar ${barCls}${curMark}" style="height:${barH}%"></div>
+          </div>
+          <div class="brief-spark-lbl">${wk.week_label}</div>
+        </div>`;
+      });
+      // target line label
+      if(tgt>0){
+        const tgtPct = Math.round(tgt/maxV*100);
+        h+=`</div>
+        <div class="brief-spark-tgt-row">
+          <span class="brief-spark-tgt-label">Weekly target: ${tgt} convos</span>
+        </div>`;
+      } else {
+        h+=`</div>`;
+      }
+      h+=`</div>`;// close brief-spark-wrap
+    }
+    h+=`</div>`;// close brief-section
+  }
 
   // ── Situation ──────────────────────────────────────────────────────────────
   if(b.situation) h+=`<div class="brief-section">
