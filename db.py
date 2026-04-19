@@ -2540,7 +2540,12 @@ def count_pond_emails_today_by_strategy(strategy, tz_name="US/Eastern"):
 
 
 def count_pond_emails_today(tz_name="US/Eastern"):
-    """Count real (non-dry-run) pond emails sent today in the given timezone."""
+    """Count real (non-dry-run) TEXT pond emails sent today (HeyGen excluded).
+
+    HeyGen video emails are exempt from the main daily cap — they have their
+    own ceiling via count_heygen_today(). Excluding them here ensures a full
+    day of text sends never blocks a high-value video at first contact.
+    """
     if not is_available():
         return 0
     try:
@@ -2549,6 +2554,7 @@ def count_pond_emails_today(tz_name="US/Eastern"):
                 cur.execute("""
                     SELECT COUNT(*) FROM pond_email_log
                     WHERE dry_run = FALSE
+                      AND avatar_used IS NULL
                       AND sent_at >= (NOW() AT TIME ZONE %s)::DATE
                       AND sent_at <  (NOW() AT TIME ZONE %s)::DATE + INTERVAL '1 day'
                 """, (tz_name, tz_name))
@@ -2556,6 +2562,31 @@ def count_pond_emails_today(tz_name="US/Eastern"):
                 return row[0] if row else 0
     except Exception as e:
         logger.warning("count_pond_emails_today failed: %s", e)
+        return 0
+
+
+def count_heygen_today(tz_name="US/Eastern"):
+    """Count real (non-dry-run) HeyGen video emails sent today.
+
+    HeyGen rows have avatar_used set to the avatar ID that rendered the video.
+    Used to enforce HEYGEN_DAILY_CAP independently of the text email cap.
+    """
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM pond_email_log
+                    WHERE dry_run = FALSE
+                      AND avatar_used IS NOT NULL
+                      AND sent_at >= (NOW() AT TIME ZONE %s)::DATE
+                      AND sent_at <  (NOW() AT TIME ZONE %s)::DATE + INTERVAL '1 day'
+                """, (tz_name, tz_name))
+                row = cur.fetchone()
+                return row[0] if row else 0
+    except Exception as e:
+        logger.warning("count_heygen_today failed: %s", e)
         return 0
 
 
@@ -2761,15 +2792,16 @@ def ensure_pond_reply_log_table():
 
 def get_pond_email_person_by_email(email_address):
     """Find the most recently emailed pond lead matching this email address.
-    Returns (person_id, person_name) or (None, None).
+    Returns (person_id, person_name, sequence_num) or (None, None, None).
+    sequence_num is the email number that most likely triggered the reply.
     """
     if not is_available():
-        return None, None
+        return None, None, None
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT person_id, person_name
+                    SELECT person_id, person_name, sequence_num
                     FROM pond_email_log
                     WHERE LOWER(email_address) = LOWER(%s)
                       AND dry_run = FALSE
@@ -2778,11 +2810,11 @@ def get_pond_email_person_by_email(email_address):
                 """, (email_address,))
                 row = cur.fetchone()
         if row:
-            return row[0], row[1]
-        return None, None
+            return row[0], row[1], row[2]
+        return None, None, None
     except Exception as e:
         logger.warning("get_pond_email_person_by_email failed: %s", e)
-        return None, None
+        return None, None, None
 
 
 def log_pond_reply(person_id, person_name, reply_from, reply_text,

@@ -390,6 +390,13 @@ NEW_LEAD_LOOKBACK_MINUTES = 1440
 # Max immediate emails sent per day — prevents runaway sends on bulk imports.
 NEW_LEAD_DAILY_CAP = 15
 
+# HeyGen video emails are exempt from the main pond mailer daily cap.
+# They get their own ceiling so the most valuable touchpoint (personalized
+# video at first contact) is never rationed against generic drip sends.
+# Each video takes up to 8 min to render — realistically 5-6 per day max
+# before Railway job timeouts; 8 gives comfortable headroom to tune up later.
+HEYGEN_DAILY_CAP = 8
+
 # Stale hot threshold: days since last agent contact to qualify
 LEADSTREAM_STALE_DAYS = 3
 
