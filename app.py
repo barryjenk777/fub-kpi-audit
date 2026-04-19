@@ -4674,8 +4674,10 @@ def api_pond_mailer_reply():
         )
         logger.info("Sentiment: %s (%.2f) — %s", sentiment, sentiment_score, sentiment_reason)
 
-        routed   = False
-        task_id  = None
+        routed       = False
+        task_id      = None
+        assigned_uid = None
+        fub_note_ok  = False
 
         if sentiment == "positive":
             try:
@@ -4725,8 +4727,8 @@ def api_pond_mailer_reply():
                 routed = True
                 logger.info("FUB task %s created for user %s", task_id, assigned_uid)
 
-                # Generate and add an engaging Claude-written note
-                _pond_add_fub_note(fub, person_id, person_name, body_text, subject, sentiment_reason)
+                # Add FUB note for positive replies
+                fub_note_ok = _pond_add_fub_note(fub, person_id, person_name, body_text, subject, sentiment_reason)
 
             except Exception as e:
                 logger.error("FUB routing failed for %s (ID %s): %s", person_name, person_id, e)
@@ -4741,6 +4743,15 @@ def api_pond_mailer_reply():
             except Exception as e:
                 logger.warning("Could not tag unsubscribe for %s: %s", person_name, e)
 
+        else:
+            # Neutral — still log a FUB note so the reply is visible in CRM
+            try:
+                from fub_client import FUBClient
+                fub = FUBClient()
+                fub_note_ok = _pond_add_fub_note(fub, person_id, person_name, body_text, subject, sentiment_reason)
+            except Exception as e:
+                logger.warning("Could not add FUB note for neutral reply (person %s): %s", person_id, e)
+
         # Log the reply
         _db.log_pond_reply(
             person_id=person_id,
@@ -4753,6 +4764,55 @@ def api_pond_mailer_reply():
             fub_task_id=task_id,
         )
 
+        # ── Notify Barry of the reply ──────────────────────────────────────
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail as _SGMail
+            sg_key = os.environ.get("SENDGRID_API_KEY")
+            if sg_key:
+                _emoji = {"positive": "🔥", "negative": "🚫", "neutral": "💬"}.get(sentiment, "📬")
+                _subj  = f"{_emoji} Reply from {person_name or clean_from} — {sentiment.upper()}"
+
+                _lines = [
+                    f"{person_name or 'A lead'} ({clean_from}) replied to your AI outreach email.",
+                    "",
+                    f"Subject they replied to: {subject}",
+                    f"Sentiment: {sentiment.upper()} — {sentiment_reason}",
+                    "",
+                    "─── Their reply ───────────────────────────────────",
+                    body_text.strip()[:1200],
+                    "────────────────────────────────────────────────────",
+                    "",
+                ]
+                if routed:
+                    _lines.append(f"✅ Assigned to Priority Agent — FUB task created (ID: {task_id})")
+                    _lines.append(f"✅ CRM note added: {'yes' if fub_note_ok else 'check logs'}")
+                elif sentiment == "negative":
+                    _lines.append("🚫 Tagged PondMailer_Unsubscribed — lead will be suppressed from future sends")
+                else:
+                    _lines.append(f"📝 CRM note added: {'yes' if fub_note_ok else 'check logs'}")
+
+                _lines += ["", "— Legacy Home Team AI Outreach"]
+                _notify_body = "\n".join(_lines)
+                _notify_html = (
+                    "<div style='font-family:-apple-system,sans-serif;font-size:15px;"
+                    "line-height:1.7;color:#222;max-width:560px;margin:24px auto'>"
+                    + _notify_body.replace("\n", "<br>") +
+                    "</div>"
+                )
+                _sg_msg = _SGMail(
+                    from_email=config.EMAIL_FROM,
+                    to_emails=config.EMAIL_FROM,
+                    subject=_subj,
+                    plain_text_content=_notify_body,
+                    html_content=_notify_html,
+                )
+                SendGridAPIClient(sg_key).send(_sg_msg)
+                logger.info("Barry notified of %s reply from %s", sentiment, clean_from)
+        except Exception as _ne:
+            logger.warning("Could not notify Barry of reply: %s", _ne)
+        # ──────────────────────────────────────────────────────────────────
+
         return jsonify({
             "status":      "ok",
             "person_id":   person_id,
@@ -4760,6 +4820,7 @@ def api_pond_mailer_reply():
             "sentiment":   sentiment,
             "routed":      routed,
             "task_id":     task_id,
+            "fub_note_ok": fub_note_ok,
         }), 200
 
     except Exception as e:
@@ -4839,6 +4900,7 @@ def _pond_add_fub_note(fub, person_id, person_name, reply_text, original_subject
     The note clearly flags this as an AI email reply, summarizes what the
     lead said, and gives the agent a concrete recommended action.
     Falls back to a plain template if Claude is unavailable.
+    Returns True if note was posted successfully, False otherwise.
     """
     try:
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -4846,32 +4908,31 @@ def _pond_add_fub_note(fub, person_id, person_name, reply_text, original_subject
 
         if api_key:
             try:
-                import anthropic, json as _json, re
+                import anthropic
                 client = anthropic.Anthropic(api_key=api_key)
 
-                prompt = f"""Write a short internal CRM note for a real estate agent.
+                prompt = f"""Write an internal CRM note for a real estate agent who just got a hot lead hand-off.
 
 Context:
 - Lead name: {person_name or "this lead"}
-- They received a personalized AI-written email from Barry Jenkins (Legacy Home Team)
+- Barry Jenkins (Legacy Home Team, Virginia Beach) sent them a personalized AI outreach email
 - Subject line of Barry's email: "{original_subject}"
-- The lead REPLIED with positive interest
+- The lead replied. AI sentiment: {sentiment_reason}
 - Their reply: {reply_text.strip()[:800]}
-- AI sentiment read: {sentiment_reason}
 
-Write the note AS IF you're Barry briefing the agent who just got this lead assigned to them.
-Make it:
-- Energetic and direct — this is a hot hand-off
-- Clear that the lead responded to an AI-written outreach email (not a cold call)
-- A 2-3 sentence gist of what the lead actually said in their reply
-- One specific recommended action step the agent should take on the phone call
+Structure the note in three short sections with these exact labels:
+WHAT HAPPENED: (1 sentence — Barry sent AI email, lead replied, what the AI read from it)
+WHAT THEY SAID: (2-3 sentence summary of the lead's actual reply in plain language)
+YOUR MOVE: (One specific, actionable script for the agent's opening line on the phone call, then what to ask to move them forward — consult, showing, or next step)
+
+Rules:
+- Write as Barry briefing the agent, energetic and direct
 - Under 200 words total
-- No fluff, no "I hope this finds you well" — get to the point
-
-Output plain text only. No JSON, no markdown headers."""
+- No fluff, no greetings, no sign-offs
+- Plain text only, no markdown"""
 
                 response = client.messages.create(
-                    model="claude-haiku-4-5",
+                    model="claude-3-5-haiku-20241022",
                     max_tokens=300,
                     messages=[{"role": "user", "content": prompt}],
                 )
@@ -4882,21 +4943,27 @@ Output plain text only. No JSON, no markdown headers."""
         # Fallback if Claude unavailable or fails
         if not note_body:
             note_body = (
-                f"🔥 HOT HAND-OFF — {person_name or 'Lead'} replied to Barry's AI outreach email.\n\n"
-                f"Email subject: \"{original_subject}\"\n\n"
-                f"What they said:\n{reply_text.strip()[:600]}\n\n"
-                f"AI read: {sentiment_reason}\n\n"
-                f"Recommended action: Call them today. Open with: "
-                f"\"Hey, I saw you replied to Barry's email — I wanted to reach out personally.\""
+                f"🔥 HOT LEAD — {person_name or 'This lead'} replied to Barry's AI outreach email.\n\n"
+                f"WHAT HAPPENED:\n"
+                f"Barry sent a personalized AI email with subject \"{original_subject}\".\n"
+                f"The lead replied. AI sentiment read: {sentiment_reason}\n\n"
+                f"WHAT THEY SAID:\n{reply_text.strip()[:600]}\n\n"
+                f"YOUR MOVE:\n"
+                f"Call them today — they're warm. Open with: "
+                f"\"Hey, I saw you replied to Barry's email about [topic] — I'm his agent and I "
+                f"wanted to reach out personally.\" Then ask what caught their attention and "
+                f"get them booked for a consult or showing."
             )
 
         fub._request("POST", "notes", json_data={
-            "personId": person_id,
+            "personId": int(person_id),
             "body":     note_body,
         })
         logger.info("FUB note added for person %s", person_id)
+        return True
     except Exception as e:
         logger.warning("Could not add FUB note for reply (person %s): %s", person_id, e)
+        return False
 
 
 @app.route("/api/pond-mailer/dashboard")
