@@ -1159,6 +1159,74 @@ def _get_z_buyer_seq_guide(sequence_num):
     return cycle[sequence_num % 3]
 
 
+_HR_CITIES = {
+    "virginia beach", "chesapeake", "norfolk", "portsmouth", "hampton",
+    "newport news", "suffolk", "williamsburg", "james city", "york county",
+    "poquoson", "isle of wight", "smithfield", "gloucester", "mathews",
+    "surry", "franklin", "emporia",
+}
+
+# ZIP → city lookup for common Hampton Roads zips stored as tags by Ylopo
+_HR_ZIP_TO_CITY = {
+    "23451": "Virginia Beach", "23452": "Virginia Beach", "23453": "Virginia Beach",
+    "23454": "Virginia Beach", "23455": "Virginia Beach", "23456": "Virginia Beach",
+    "23457": "Virginia Beach", "23459": "Virginia Beach", "23460": "Virginia Beach",
+    "23461": "Virginia Beach", "23462": "Virginia Beach", "23464": "Virginia Beach",
+    "23301": "Accomack", "23320": "Chesapeake", "23321": "Chesapeake",
+    "23322": "Chesapeake", "23323": "Chesapeake", "23324": "Chesapeake",
+    "23325": "Chesapeake", "23420": "Chesapeake",
+    "23501": "Norfolk", "23502": "Norfolk", "23503": "Norfolk", "23504": "Norfolk",
+    "23505": "Norfolk", "23507": "Norfolk", "23508": "Norfolk", "23509": "Norfolk",
+    "23510": "Norfolk", "23511": "Norfolk", "23513": "Norfolk", "23517": "Norfolk",
+    "23518": "Norfolk", "23523": "Norfolk",
+    "23701": "Portsmouth", "23702": "Portsmouth", "23703": "Portsmouth",
+    "23704": "Portsmouth", "23707": "Portsmouth", "23708": "Portsmouth",
+    "23660": "Hampton", "23661": "Hampton", "23662": "Hampton", "23663": "Hampton",
+    "23664": "Hampton", "23665": "Hampton", "23666": "Hampton", "23669": "Hampton",
+    "23601": "Newport News", "23602": "Newport News", "23603": "Newport News",
+    "23604": "Newport News", "23605": "Newport News", "23606": "Newport News",
+    "23607": "Newport News", "23608": "Newport News",
+    "23434": "Suffolk", "23435": "Suffolk", "23436": "Suffolk", "23437": "Suffolk",
+    "23438": "Suffolk", "23439": "Suffolk",
+    "23185": "Williamsburg", "23186": "Williamsburg", "23187": "Williamsburg",
+    "23188": "Williamsburg", "23168": "Toano",
+}
+
+
+def _city_from_tags(tags):
+    """Extract the best available city name from a lead's FUB tags.
+
+    Ylopo stores location data as tags — both city names ("Virginia Beach",
+    "Norfolk") and raw ZIP codes ("23453", "23503"). FUB's addresses array
+    is usually empty for Ylopo leads, so this is the most reliable source
+    of location context for personalized email/video scripts.
+
+    Returns a city string or "" if nothing found.
+    """
+    city_from_name = ""
+    city_from_zip = ""
+    for tag in (tags or []):
+        t = tag.strip()
+        # ZIP code tag → city lookup
+        if t.isdigit() and len(t) == 5 and t in _HR_ZIP_TO_CITY:
+            if not city_from_zip:
+                city_from_zip = _HR_ZIP_TO_CITY[t]
+        # City name tag (exact or starts-with match)
+        elif t.lower() in _HR_CITIES:
+            city_from_name = t  # use as-is (preserves capitalisation from tag)
+            break  # prefer first city-name tag found
+        # Tags like "Virginia Beach city, VA" or "Looking for homes in: NORFOLK, VA"
+        elif "city, va" in t.lower():
+            city_from_name = t.split("city,")[0].strip().title()
+            break
+        elif "looking for homes in:" in t.lower():
+            raw = t.lower().replace("looking for homes in:", "").strip()
+            city_part = raw.split(",")[0].strip().title()
+            if not city_from_name:
+                city_from_name = city_part
+    return city_from_name or city_from_zip
+
+
 def _is_z_buyer(tags, person=None):
     """Return True if this lead is a Z-buyer (cash offer request from Ylopo).
 
@@ -1173,9 +1241,12 @@ def _is_z_buyer(tags, person=None):
         raw_source = (person.get("source") or "").strip().lower()
         # Normalise: strip spaces, hyphens, underscores for fuzzy matching
         src = raw_source.replace("-", "").replace(" ", "").replace("_", "")
-        if src in {"zbuyer", "ylopozbuyer", "ylopo"}:
+        # Match known Z-buyer source strings only. Do NOT include bare "ylopo" —
+        # that matches every Ylopo lead (buyers, sellers, etc.) not just cash-offer leads.
+        if src in {"zbuyer", "ylopozbuyer", "ylopozbuyer2", "zbuyerlead"}:
             return True
-        # Also catch partial matches like "Zbuyer Lead", "Z-Buyer Source" etc.
+        # Also catch partial matches like "Zbuyer Lead", "Z-Buyer Source", "DixonZbuyer" etc.
+        # but only when "zbuyer" substring is actually present.
         if "zbuyer" in src:
             return True
     return False
@@ -2658,10 +2729,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
-                    # FUB person objects expose address as top-level fields,
-                    # not a nested "address" dict. streetAddress / city / state.
-                    _street   = (person.get("streetAddress") or "").strip()
-                    _city_hg  = (person.get("city") or "").strip()
+                    # FUB addresses array is usually empty for Ylopo leads.
+                    # Try standard address fields, then fall back to tag-derived city.
+                    _addrs   = person.get("addresses") or []
+                    _addr0   = _addrs[0] if _addrs else {}
+                    _street  = (_addr0.get("street") or "").strip()
+                    _city_hg = (_addr0.get("city") or "").strip()
+                    if not _city_hg:
+                        _city_hg = _city_from_tags(tags)
 
                     logger.info("Generating HeyGen video for %s at %s, %s", name, _street, _city_hg)
                     script = generate_seller_video_script(
@@ -2791,9 +2866,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
-                    # FUB returns address as top-level fields, not a nested dict
-                    _street   = (person.get("streetAddress") or "").strip()
-                    _city_hg  = (person.get("city") or "").strip()
+                    # FUB addresses array is usually empty for Ylopo leads.
+                    # Try addresses array, then fall back to tag-derived city.
+                    _addrs   = person.get("addresses") or []
+                    _addr0   = _addrs[0] if _addrs else {}
+                    _street  = (_addr0.get("street") or "").strip()
+                    _city_hg = (_addr0.get("city") or "").strip()
+                    if not _city_hg:
+                        _city_hg = _city_from_tags(tags)
 
                     logger.info("Generating HeyGen Z-buyer video for %s at %s, %s",
                                 name, _street, _city_hg)
@@ -2932,7 +3012,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                 if heygen_available() and _hg_slots_left > 0:
                     _beh_city      = (behavior.get("cities") or [])
                     _city_hg       = _beh_city[0] if _beh_city else (
-                        (person.get("city") or "").strip() or "Hampton Roads"
+                        _city_from_tags(tags) or "Hampton Roads"
                     )
                     _price_min     = behavior.get("price_min")
                     _price_max     = behavior.get("price_max")
@@ -3100,9 +3180,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
-                    # FUB returns address as top-level fields, not a nested dict
-                    _street_fu  = (person.get("streetAddress") or "").strip()
-                    _city_fu    = (person.get("city") or "").strip() or "Hampton Roads"
+                    _addrs_fu   = person.get("addresses") or []
+                    _addr0_fu   = _addrs_fu[0] if _addrs_fu else {}
+                    _street_fu  = (_addr0_fu.get("street") or "").strip()
+                    _city_fu    = (_addr0_fu.get("city") or "").strip()
+                    if not _city_fu:
+                        _city_fu = _city_from_tags(tags) or "Hampton Roads"
                     _lead_type  = "zbuyer" if is_z else "seller"
 
                     logger.info("Generating HeyGen Email 2 follow-up for %s (%s)", name, _lead_type)
@@ -3226,12 +3309,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
-                    # FUB returns address as top-level fields, not a nested dict
-                    _street_e4  = (person.get("streetAddress") or "").strip()
-                    # Buyers: prefer city from IDX behavior; sellers: use home city
+                    _addrs_e4   = person.get("addresses") or []
+                    _addr0_e4   = _addrs_e4[0] if _addrs_e4 else {}
+                    _street_e4  = (_addr0_e4.get("street") or "").strip()
+                    # Buyers: prefer city from IDX behavior; sellers/Z-buyers: use tag-derived city
                     _beh_cities4 = behavior.get("cities") or []
                     _city_e4    = (_beh_cities4[0] if _beh_cities4
-                                   else (person.get("city") or "").strip() or "Hampton Roads")
+                                   else (_addr0_e4.get("city") or "").strip()
+                                        or _city_from_tags(tags) or "Hampton Roads")
                     _lead_type4 = "zbuyer" if is_z else ("seller" if is_ylopo_seller else "buyer")
 
                     logger.info("Generating HeyGen Email 4 drip video for %s (%s)", name, _lead_type4)
