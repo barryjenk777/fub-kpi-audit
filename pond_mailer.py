@@ -2658,9 +2658,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
-                    _addr_obj = (person.get("address") or {})
-                    _street   = _addr_obj.get("street", "")
-                    _city_hg  = _addr_obj.get("city", "")
+                    # FUB person objects expose address as top-level fields,
+                    # not a nested "address" dict. streetAddress / city / state.
+                    _street   = (person.get("streetAddress") or "").strip()
+                    _city_hg  = (person.get("city") or "").strip()
 
                     logger.info("Generating HeyGen video for %s at %s, %s", name, _street, _city_hg)
                     script = generate_seller_video_script(
@@ -2790,9 +2791,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
-                    _addr_obj = (person.get("address") or {})
-                    _street   = _addr_obj.get("street", "")
-                    _city_hg  = _addr_obj.get("city", "")
+                    # FUB returns address as top-level fields, not a nested dict
+                    _street   = (person.get("streetAddress") or "").strip()
+                    _city_hg  = (person.get("city") or "").strip()
 
                     logger.info("Generating HeyGen Z-buyer video for %s at %s, %s",
                                 name, _street, _city_hg)
@@ -2880,11 +2881,19 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 </body></html>"""
 
                         # Z-buyer subject — name + address, personal feel, lowercase
-                        _subj_options = [
-                            f"{first_name} — your home on {_street_display}",
-                            f"cash or list — quick video for {_street_display}",
-                            f"two options for {_street_display}",
-                        ]
+                        # When no street is known, avoid "your home on your home"
+                        if _street and _street.lower() != "your home":
+                            _subj_options = [
+                                f"{first_name} — quick video on {_street_display}",
+                                f"cash or list — quick video for {_street_display}",
+                                f"two options for {_street_display}",
+                            ]
+                        else:
+                            _subj_options = [
+                                f"{first_name} — two options for your home",
+                                f"{first_name} — cash or list? quick video",
+                                f"quick video on your cash offer request",
+                            ]
                         email_data["subject"]      = _subj_options[0]
                         email_data["all_subjects"] = _subj_options
 
@@ -2923,7 +2932,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                 if heygen_available() and _hg_slots_left > 0:
                     _beh_city      = (behavior.get("cities") or [])
                     _city_hg       = _beh_city[0] if _beh_city else (
-                        (person.get("address") or {}).get("city", "") or "Hampton Roads"
+                        (person.get("city") or "").strip() or "Hampton Roads"
                     )
                     _price_min     = behavior.get("price_min")
                     _price_max     = behavior.get("price_max")
@@ -3091,9 +3100,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
-                    _addr_obj   = (person.get("address") or {})
-                    _street_fu  = _addr_obj.get("street", "")
-                    _city_fu    = _addr_obj.get("city", "") or "Hampton Roads"
+                    # FUB returns address as top-level fields, not a nested dict
+                    _street_fu  = (person.get("streetAddress") or "").strip()
+                    _city_fu    = (person.get("city") or "").strip() or "Hampton Roads"
                     _lead_type  = "zbuyer" if is_z else "seller"
 
                     logger.info("Generating HeyGen Email 2 follow-up for %s (%s)", name, _lead_type)
@@ -3217,12 +3226,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
-                    _addr_obj4  = (person.get("address") or {})
-                    _street_e4  = _addr_obj4.get("street", "")
+                    # FUB returns address as top-level fields, not a nested dict
+                    _street_e4  = (person.get("streetAddress") or "").strip()
                     # Buyers: prefer city from IDX behavior; sellers: use home city
                     _beh_cities4 = behavior.get("cities") or []
                     _city_e4    = (_beh_cities4[0] if _beh_cities4
-                                   else _addr_obj4.get("city", "") or "Hampton Roads")
+                                   else (person.get("city") or "").strip() or "Hampton Roads")
                     _lead_type4 = "zbuyer" if is_z else ("seller" if is_ylopo_seller else "buyer")
 
                     logger.info("Generating HeyGen Email 4 drip video for %s (%s)", name, _lead_type4)

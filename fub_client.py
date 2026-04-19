@@ -732,13 +732,42 @@ class FUBClient:
                 preview += "\n[...truncated]"
             note_body = f"📧 EMAIL SENT\nSubject: \"{subject}\"\n\n{preview}"
 
-        payload = {"personId": int(person_id), "body": note_body}
-        if user_id:
-            payload["userId"] = user_id
         try:
-            return self._request("POST", "notes", json_data=payload)
+            payload = {"personId": int(person_id), "body": note_body}
+            if user_id:
+                payload["userId"] = user_id
+            try:
+                result = self._request("POST", "notes", json_data=payload)
+                logger.info("FUB note posted for person %s (seq %s)", person_id, sequence_num)
+                print(f"    📝 FUB note posted (person {person_id}, seq {sequence_num})")
+                return result
+            except Exception as e_with_user:
+                # userId may be rejected if it references a system account.
+                # Retry without it — note will post as the API key owner.
+                if user_id:
+                    logger.warning(
+                        "FUB note with userId=%s failed for person %s: %s — retrying without userId",
+                        user_id, person_id, e_with_user,
+                    )
+                    try:
+                        payload.pop("userId", None)
+                        result = self._request("POST", "notes", json_data=payload)
+                        logger.info("FUB note posted (no userId) for person %s (seq %s)", person_id, sequence_num)
+                        print(f"    📝 FUB note posted without userId (person {person_id}, seq {sequence_num})")
+                        return result
+                    except Exception as e_no_user:
+                        logger.warning(
+                            "FUB note failed (both attempts) for person %s: %s",
+                            person_id, e_no_user,
+                        )
+                        print(f"    ⚠️  FUB note FAILED for person {person_id}: {e_no_user}")
+                        return None
+                else:
+                    logger.warning("FUB note failed for person %s: %s", person_id, e_with_user)
+                    print(f"    ⚠️  FUB note FAILED for person {person_id}: {e_with_user}")
+                    return None
         except Exception as e:
-            logger.warning("FUB email note log failed for person %s: %s", person_id, e)
+            logger.warning("FUB email note log error for person %s: %s", person_id, e)
             return None
 
     def get_events(self, since=None, event_type=None, limit=100, max_pages=5):
