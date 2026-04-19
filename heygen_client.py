@@ -220,11 +220,90 @@ def expand_address_for_speech(address: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tag-aware context hints for video prompts
+#
+# Returns a small additive context block (or empty string) describing the
+# highest-leverage Ylopo signals present on this lead. This is a nuance
+# layer — influence, not replacement. The existing script prompts (frame,
+# open, hook, voice, length, CTA rules) are untouched when no tags fire.
+# ---------------------------------------------------------------------------
+
+def _signal_hint_for_video(tags, lead_type):
+    """Return a compact optional-context block for the video prompt.
+
+    Kept narrow on purpose. Barry's script bones (frame, voice, length, CTA)
+    stay the master; these hints only add 1-3 lines of nuance when relevant.
+    If no relevant tags are present, returns '' — meaning the video prompt
+    is character-for-character identical to today.
+    """
+    tags = set(tags or [])
+    hints = []
+
+    # --- Missed live-connection attempts (all lead types) ---
+    transfer_friction = {
+        "ISA_TRANSFER_UNSUCCESSFUL",
+        "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE",
+        "ISA_ATTEMPTED_TRANSFER",
+        "DECLINED_BY_REALTOR",
+    }
+    if transfer_friction & tags:
+        hints.append(
+            "They already tried to connect live and it didn't land on our end. "
+            "A natural one-beat acknowledgment fits ('we almost caught each other' / "
+            "'sorry we missed live') — not a stiff apology."
+        )
+
+    # --- Scheduled callback (all lead types) ---
+    if "CALLBACK_SCHEDULED" in tags:
+        hints.append(
+            "They already scheduled a callback time. The video is a warm bridge to "
+            "that confirmed call — reference the commitment instead of re-pitching."
+        )
+
+    # --- Seller-specific (one light influence) ---
+    if lead_type == "seller":
+        if "NURTURE" in tags:
+            hints.append(
+                "They've said they're interested but not ready yet. Ease off any "
+                "urgency — long-game energy, no hard CTA."
+            )
+
+    # --- Buyer-specific (four high-leverage tags, pick at most one frame hint) ---
+    if lead_type == "buyer":
+        if "call_now=yes" in tags:
+            hints.append(
+                "At registration they explicitly asked to be called within the hour. "
+                "The video can nod to that naturally — the call itself is the CTA."
+            )
+        elif "Y_REQUESTED_TOUR" in tags:
+            hints.append(
+                "They submitted a tour request. The hook can acknowledge they want "
+                "to see a home in person, not keep browsing."
+            )
+        elif "Y_FAVORITED_LISTING" in tags:
+            hints.append(
+                "They favorited a listing. They're attached to something concrete — "
+                "don't treat them as a casual browser."
+            )
+
+    if not hints:
+        return ""
+
+    return (
+        "\n━━━━ OPTIONAL TAG CONTEXT (weave subtly, never name the tag or source) ━━━━\n"
+        + "\n".join(f"- {h}" for h in hints)
+        + "\n(Keep the frame, voice, length, and CTA exactly as specified above. "
+        "This block is nuance — influence only, not replacement.)\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Script Generation — Claude writes the 35-second seller video script
 # ---------------------------------------------------------------------------
 
 def generate_seller_video_script(first_name: str, street: str, city: str,
-                                  comp_snippet: str = "", ai_convo: bool = True) -> str:
+                                  comp_snippet: str = "", ai_convo: bool = True,
+                                  tags: list = None) -> str:
     """
     Generate a 35-40 second video script for Barry's avatar.
 
@@ -250,6 +329,7 @@ def generate_seller_video_script(first_name: str, street: str, city: str,
             if comp_snippet
             else ""
         )
+        signal_hint = _signal_hint_for_video(tags, "seller")
 
         prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 team in Virginia.
 
@@ -287,7 +367,7 @@ Bad: "I'd love to schedule a listing consultation." (too much commitment pressur
 
 ━━━━ LENGTH ━━━━
 130-150 words. 35-42 seconds.
-
+{signal_hint}
 Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
         msg = client.messages.create(
@@ -316,7 +396,7 @@ Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
 
 def generate_zbuyer_video_script(first_name: str, street: str, city: str,
-                                  comp_snippet: str = "") -> str:
+                                  comp_snippet: str = "", tags: list = None) -> str:
     """
     Generate a 35-40 second video script for a Z-buyer (cash offer request) lead.
 
@@ -341,6 +421,7 @@ def generate_zbuyer_video_script(first_name: str, street: str, city: str,
             if comp_snippet
             else ""
         )
+        signal_hint = _signal_hint_for_video(tags, "zbuyer")
 
         prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 real estate team in Virginia.
 
@@ -375,7 +456,7 @@ Direct. One ask.
 
 ━━━━ LENGTH ━━━━
 120-140 words. 35-40 seconds.
-
+{signal_hint}
 Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
         msg = client.messages.create(
@@ -414,6 +495,7 @@ def generate_buyer_video_script(
     most_viewed_street: str = None,
     strategy: str = "",
     view_count: int = 0,
+    tags: list = None,
 ) -> str:
     """
     Generate a 35-40 second video script for a buyer lead (Ylopo IDX / buyer drip).
@@ -475,6 +557,7 @@ def generate_buyer_video_script(
             if most_viewed_street and strategy in ("saved_property", "repeat_view")
             else f"{strategy_context}"
         )
+        signal_hint = _signal_hint_for_video(tags, "buyer")
 
         prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 real estate team in Virginia.
 
@@ -508,7 +591,7 @@ These are what every agent says. They kill credibility.
 
 ━━━━ LENGTH ━━━━
 130-150 words. 35-42 seconds.
-
+{signal_hint}
 Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
         msg = client.messages.create(
@@ -551,6 +634,7 @@ def generate_followup_video_script(
     first_name: str,
     city: str = "Hampton Roads",
     street: str = "",
+    tags: list = None,
 ) -> str:
     """
     Generate a 30-35 second follow-up video script for the SUIT avatar (Email 2).
@@ -630,6 +714,8 @@ def generate_followup_video_script(
         import anthropic
         client = anthropic.Anthropic()
 
+        signal_hint = _signal_hint_for_video(tags, lead_type)
+
         prompt = f"""Write a 30-35 second follow-up video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty.
 
 Context:
@@ -660,7 +746,7 @@ CLOSE (5-6 seconds): One easy ask. "{cta}"
 
 ━━━━ LENGTH ━━━━
 110-130 words. 30-35 seconds. Tighter than Email 1 — they're either interested or they're not.
-
+{signal_hint}
 Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
         msg = client.messages.create(
