@@ -239,11 +239,17 @@ CREATE TABLE IF NOT EXISTS daily_activity (
     agent_name          TEXT    NOT NULL REFERENCES agent_profiles(agent_name) ON DELETE CASCADE,
     activity_date       DATE    NOT NULL,
     calls_logged        INTEGER NOT NULL DEFAULT 0,
+    convos_logged       INTEGER NOT NULL DEFAULT 0,
     texts_logged        INTEGER NOT NULL DEFAULT 0,
     appts_logged        NUMERIC(4,1) NOT NULL DEFAULT 0,
     logged_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (agent_name, activity_date)
 );
+-- Add convos_logged if upgrading from older schema
+DO $$ BEGIN
+    ALTER TABLE daily_activity ADD COLUMN convos_logged INTEGER NOT NULL DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_da_agent_date ON daily_activity (agent_name, activity_date DESC);
 
 -- Streak tracking per agent (updated nightly by scheduler)
@@ -1387,11 +1393,13 @@ def log_daily_activity(agent_name, activity_date, calls=0, texts=0, appts=0):
         return False
 
 
-def upsert_daily_activity_fub(agent_name, activity_date, calls_fub=0, appts_fub=0):
+def upsert_daily_activity_fub(agent_name, activity_date, calls_fub=0, appts_fub=0, convos_fub=0):
     """
-    Write FUB-sourced activity for a date. Uses GREATEST so a manual entry
-    that is higher than the FUB number is never overwritten. Safe to call
-    repeatedly — if the agent already logged more calls manually, that wins.
+    Write FUB-sourced activity for a date.
+    - calls_fub  : outbound calls only (isIncoming==False)
+    - convos_fub : calls with duration >= CONVERSATION_THRESHOLD_SECONDS
+    - appts_fub  : appointments set
+    Uses GREATEST so a manual entry that is higher than FUB is never overwritten.
     """
     if not is_available():
         return False
@@ -1400,12 +1408,13 @@ def upsert_daily_activity_fub(agent_name, activity_date, calls_fub=0, appts_fub=
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO daily_activity
-                        (agent_name, activity_date, calls_logged, appts_logged, logged_at)
-                    VALUES (%s, %s, %s, %s, NOW())
+                        (agent_name, activity_date, calls_logged, convos_logged, appts_logged, logged_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (agent_name, activity_date) DO UPDATE SET
-                        calls_logged = GREATEST(daily_activity.calls_logged, EXCLUDED.calls_logged),
-                        appts_logged = GREATEST(daily_activity.appts_logged, EXCLUDED.appts_logged)
-                """, (agent_name, activity_date, calls_fub, appts_fub))
+                        calls_logged  = GREATEST(daily_activity.calls_logged,  EXCLUDED.calls_logged),
+                        convos_logged = GREATEST(daily_activity.convos_logged, EXCLUDED.convos_logged),
+                        appts_logged  = GREATEST(daily_activity.appts_logged,  EXCLUDED.appts_logged)
+                """, (agent_name, activity_date, calls_fub, convos_fub, appts_fub))
         return True
     except Exception as e:
         logger.warning("upsert_daily_activity_fub failed: %s", e)
@@ -1641,9 +1650,10 @@ def get_team_activity_yesterday():
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT ap.agent_name, ap.email,
-                           COALESCE(da.calls_logged, 0) AS calls,
-                           COALESCE(da.texts_logged, 0) AS texts,
-                           COALESCE(da.appts_logged, 0) AS appts
+                           COALESCE(da.calls_logged, 0)  AS calls,
+                           COALESCE(da.convos_logged, 0) AS convos,
+                           COALESCE(da.texts_logged, 0)  AS texts,
+                           COALESCE(da.appts_logged, 0)  AS appts
                     FROM   agent_profiles ap
                     LEFT   JOIN daily_activity da
                            ON  da.agent_name = ap.agent_name
@@ -1652,8 +1662,8 @@ def get_team_activity_yesterday():
                 """, (yesterday,))
                 rows = cur.fetchall()
         return {
-            r[0]: {"email": r[1], "calls": int(r[2] or 0),
-                   "texts": int(r[3] or 0), "appts": float(r[4] or 0)}
+            r[0]: {"email": r[1], "calls": int(r[2] or 0), "convos": int(r[3] or 0),
+                   "texts": int(r[4] or 0), "appts": float(r[5] or 0)}
             for r in rows
         }
     except Exception as e:
@@ -1674,9 +1684,10 @@ def get_team_activity_range(start_date, end_date):
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT ap.agent_name, ap.email,
-                           COALESCE(SUM(da.calls_logged), 0) AS calls,
-                           COALESCE(SUM(da.texts_logged), 0) AS texts,
-                           COALESCE(SUM(da.appts_logged), 0) AS appts
+                           COALESCE(SUM(da.calls_logged),  0) AS calls,
+                           COALESCE(SUM(da.convos_logged), 0) AS convos,
+                           COALESCE(SUM(da.texts_logged),  0) AS texts,
+                           COALESCE(SUM(da.appts_logged),  0) AS appts
                     FROM   agent_profiles ap
                     LEFT   JOIN daily_activity da
                            ON  da.agent_name = ap.agent_name
@@ -1686,8 +1697,8 @@ def get_team_activity_range(start_date, end_date):
                 """, (start_date, end_date))
                 rows = cur.fetchall()
         return {
-            r[0]: {"email": r[1], "calls": int(r[2] or 0),
-                   "texts": int(r[3] or 0), "appts": float(r[4] or 0)}
+            r[0]: {"email": r[1], "calls": int(r[2] or 0), "convos": int(r[3] or 0),
+                   "texts": int(r[4] or 0), "appts": float(r[5] or 0)}
             for r in rows
         }
     except Exception as e:

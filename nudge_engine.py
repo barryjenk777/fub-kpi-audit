@@ -427,17 +427,21 @@ def run_morning_nudges(dry_run: bool = False):
     team_avg_calls = round(sum(a["calls"] for a in leaderboard) / max(team_size, 1))
     top_agent      = leaderboard[0]
 
-    # Build weekly leaderboard for weekend reflection emails
+    # Build weekly leaderboard for weekend reflection emails.
+    # Score and rank by CONVERSATIONS (≥120s calls) — the metric that drives
+    # appointments and closings. Calls (raw dials) are shown for context.
     weekly_leaderboard = []
     if week_data:
         for name, d in week_data.items():
-            calls = int(d.get("calls", 0) or 0)
-            appts = int(d.get("appts", 0) or 0)
-            texts = int(d.get("texts", 0) or 0)
-            score = calls + texts + (appts * 3)
+            calls  = int(d.get("calls",  0) or 0)
+            convos = int(d.get("convos", 0) or 0)
+            appts  = int(d.get("appts",  0) or 0)
+            texts  = int(d.get("texts",  0) or 0)
+            # Primary sort: conversations (the metric that matters)
+            score  = convos * 2 + calls + texts + (appts * 5)
             weekly_leaderboard.append({
-                "name": name, "calls": calls, "appts": appts,
-                "texts": texts, "score": score,
+                "name": name, "calls": calls, "convos": convos,
+                "appts": appts, "texts": texts, "score": score,
             })
         weekly_leaderboard.sort(key=lambda x: x["score"], reverse=True)
 
@@ -460,7 +464,7 @@ def run_morning_nudges(dry_run: bool = False):
         selected_arc = None
 
         if is_weekend and not worked_weekend:
-            # Weekly reflection email — how was their week vs. the team
+            # Weekly reflection email — ranked by conversations, not raw calls
             weekly_rank = next(
                 (i + 1 for i, a in enumerate(weekly_leaderboard) if a["name"] == name),
                 rank
@@ -468,12 +472,14 @@ def run_morning_nudges(dry_run: bool = False):
             weekly_agent = next((a for a in weekly_leaderboard if a["name"] == name), agent)
             weekly_top   = weekly_leaderboard[0] if weekly_leaderboard else top_agent
             weekly_team_avg = round(
-                sum(a["calls"] for a in weekly_leaderboard) / max(len(weekly_leaderboard), 1)
+                sum(a["convos"] for a in weekly_leaderboard) / max(len(weekly_leaderboard), 1)
             )
             subject, body_text = _weekly_reflection_copy(
                 ctx=ctx,
                 weekly_rank=weekly_rank, team_size=team_size,
-                weekly_calls=weekly_agent["calls"], weekly_appts=weekly_agent["appts"],
+                weekly_calls=weekly_agent["calls"],
+                weekly_convos=weekly_agent["convos"],
+                weekly_appts=weekly_agent["appts"],
                 weekly_team_avg=weekly_team_avg, weekly_top=weekly_top,
                 day_name=day_name, goal_ctx=goal_ctx,
             )
@@ -770,11 +776,18 @@ def _weekend_warrior_copy(ctx, calls, appts, texts, day_name, goal_ctx, team_siz
 
 
 def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_appts,
-                             weekly_team_avg, weekly_top, day_name, goal_ctx):
+                             weekly_team_avg, weekly_top, day_name, goal_ctx,
+                             weekly_convos=None):
     """
     Weekend email when the agent didn't work yesterday.
     Looks back at the full week: how they ranked, what the numbers were,
     and what to do differently next week. Forward-looking, not punishing.
+
+    METRIC HIERARCHY (Barry's rule):
+    Conversations (≥2 min calls) → Appointments → Closings.
+    weekly_convos is the primary accountability metric.
+    weekly_calls (outbound dials) is shown for context.
+    weekly_team_avg is the team average for CONVERSATIONS.
     """
     first        = ctx["first"]
     who          = ctx["who"]
@@ -783,31 +796,35 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
     has_goals    = goal_ctx is not None
     tone         = random.choice(["funny", "serious"])
     top_first    = weekly_top["name"].split()[0]
-    top_calls    = weekly_top["calls"]
+    top_convos   = weekly_top.get("convos", weekly_top.get("calls", 0))
     is_top_week  = weekly_rank == 1
     is_bot_week  = weekly_rank == team_size
+
+    # weekly_convos is the headline number; fall back to calls if not available
+    w_convos = weekly_convos if weekly_convos is not None else weekly_calls
+    calls_note = f" ({weekly_calls} dials)" if weekly_calls > w_convos else ""
 
     # ── No-goals path: push them to set goals + recap the week ───────────────
     if not has_goals:
         setup_url   = ctx.get("dashboard_url", "")
         setup_line  = f"\n\nTakes 3 minutes: {setup_url}" if setup_url else ""
         from config import MIN_CONVERSATIONS
-        next_target = max(weekly_team_avg, MIN_CONVERSATIONS) if weekly_calls == 0 else min(
-            weekly_calls + max(round(weekly_calls * 0.25), 3), top_calls + 5
+        next_target = max(weekly_team_avg, MIN_CONVERSATIONS) if w_convos == 0 else min(
+            w_convos + max(round(w_convos * 0.25), 3), top_convos + 5
         )
 
-        if weekly_calls == 0:
+        if w_convos == 0:
             week_recap = (
-                f"The team averaged {weekly_team_avg} calls this week. "
-                f"{top_first} led with {top_calls}. "
+                f"The team averaged {weekly_team_avg} real conversations this week. "
+                f"{top_first} led with {top_convos}. "
                 f"Your activity didn't make it into the system — but the week is done and Monday is almost here."
             )
         else:
             week_recap = (
-                f"This week: {weekly_calls} call{'s' if weekly_calls != 1 else ''}"
+                f"This week: {w_convos} real conversation{'s' if w_convos != 1 else ''}{calls_note}"
                 f"{(', ' + str(weekly_appts) + ' appointment' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
                 f"#{weekly_rank} of {team_size} on the team. "
-                f"{top_first} led with {top_calls}. Team average: {weekly_team_avg}."
+                f"{top_first} led with {top_convos}. Team average: {weekly_team_avg}."
             )
 
         who_close = f"\n\n{who.capitalize()} is the whole reason the number matters. Set it." if who else ""
@@ -815,53 +832,53 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
         subject = random.choice([
             f"Before Monday hits — one thing, {first}",
             f"New week tomorrow. Your goals still aren't set, {first}.",
-            f"The team ran {weekly_team_avg} calls this week. Where are you headed, {first}?",
+            f"The team had {weekly_team_avg} real conversations this week. Where are you headed, {first}?",
         ])
         body = (
             f"{week_recap}\n\n"
             f"Here's what I've seen in the agents who have their biggest years: "
             f"they all had a specific number they were chasing. Not 'work harder' — an actual target. "
-            f"GCI goal, weekly call count, appointments per month. "
+            f"GCI goal, weekly conversations, appointments per month. "
             f"The agents without a number work hard but drift. "
             f"Effort without direction feels like a lot for results that don't add up.\n\n"
             f"You haven't set yours yet. Before Monday starts, take 3 minutes and do it.{setup_line}\n\n"
-            f"This week's anchor: {next_target} conversations. That's your only number. Go.{who_close}"
+            f"This week's anchor: {next_target} real conversations. That's your only number. Go.{who_close}"
         )
         return subject, body
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Goal section (weekly version)
+    # Goal section (weekly version) — conversations are the primary metric
     goal_section = ""
     if has_goals:
         calls_pace_pct = goal_ctx["calls_pace_pct"]
         gci_goal_fmt   = goal_ctx["gci_fmt"]
         daily_target   = goal_ctx["daily_target"]
-        week_target    = daily_target * 5
-        on_track_w = "Still in the green. Don't coast." if calls_pace_pct >= 85 else "Next week is where you close that gap."
+        week_target    = daily_target * 5   # weekly conversation target
+        on_track_w  = "Still in the green. Don't coast." if calls_pace_pct >= 85 else "Next week is where you close that gap."
         on_track_w2 = "You're doing it." if calls_pace_pct >= 85 else "You know what fixes this? Monday morning. That's literally it."
         if tone == "funny":
             goal_section = random.choice([
-                f"The {gci_goal_fmt} scoreboard: you needed ~{week_target} conversations this week, you had {weekly_calls}. YTD pace: {calls_pace_pct}%. {on_track_w}",
-                f"Quick {gci_goal_fmt} math: ~{week_target} calls needed this week, {weekly_calls} logged. Pace: {calls_pace_pct}%. {on_track_w2}",
+                f"The {gci_goal_fmt} scoreboard: you needed ~{week_target} real conversations this week, you had {w_convos}{calls_note}. YTD pace: {calls_pace_pct}%. {on_track_w}",
+                f"Quick {gci_goal_fmt} math: ~{week_target} conversations needed this week, {w_convos} logged{calls_note}. Pace: {calls_pace_pct}%. {on_track_w2}",
             ])
         else:
             goal_section = random.choice([
-                f"Your {gci_goal_fmt} goal needs roughly {week_target} conversations a week. This week you logged {weekly_calls}. YTD pace sits at {calls_pace_pct}% — {'on track' if calls_pace_pct >= 85 else 'behind where it needs to be'}. Next week is the correction.",
-                f"To hit {gci_goal_fmt} this year, the weekly call target is around {week_target}. You had {weekly_calls} this week, putting YTD pace at {calls_pace_pct}%. {'The foundation is solid.' if calls_pace_pct >= 85 else 'Each week is a chance to tighten the gap.'}",
+                f"Your {gci_goal_fmt} goal needs roughly {week_target} real conversations a week. This week you had {w_convos}{calls_note}. YTD pace sits at {calls_pace_pct}% — {'on track' if calls_pace_pct >= 85 else 'behind where it needs to be'}. Next week is the correction.",
+                f"To hit {gci_goal_fmt} this year, the weekly conversation target is around {week_target}. You had {w_convos} this week{calls_note}, putting YTD pace at {calls_pace_pct}%. {'The foundation is solid.' if calls_pace_pct >= 85 else 'Each week is a chance to tighten the gap.'}",
             ])
 
     goal_prefix    = f"{goal_section}\n\n" if has_goals else ""
     serious_opener = goal_prefix if has_goals else ""
 
-    # Next-week commitment line
+    # Next-week commitment line — based on conversations
     if weekly_rank == 1:
-        next_week_target = weekly_calls + 5
+        next_week_target = w_convos + 3
         next_week_line   = f"Next week: defend the top spot. Go for {next_week_target} conversations."
-    elif weekly_calls == 0:
-        next_week_target = max(weekly_team_avg, 10)
-        next_week_line   = f"Next week: one goal — {next_week_target} conversations. That's it. Just that."
+    elif w_convos == 0:
+        next_week_target = max(weekly_team_avg, 5)
+        next_week_line   = f"Next week: one goal — {next_week_target} real conversations. That's it. Just that."
     else:
-        next_week_target = min(weekly_calls + round(weekly_calls * 0.25) + 3, top_calls)
+        next_week_target = min(w_convos + max(round(w_convos * 0.35), 3), top_convos)
         next_week_line   = f"Next week: aim for {next_week_target} conversations. That moves you up the board."
 
     # Tone-specific who anchor
@@ -885,7 +902,7 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
             ])
             body = (
                 f"{goal_prefix}"
-                f"#1 for the week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}"
+                f"#1 for the week — {w_convos} conversation{'s' if w_convos != 1 else ''}{calls_note}"
                 f"{(', ' + str(weekly_appts) + ' appt' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
                 f"You ran laps around the team. The team has had the weekend to stew about it.\n\n"
                 f"Which means Monday, everyone's coming for your spot. Stay ready.\n\n"
@@ -899,8 +916,8 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
             ])
             body = (
                 f"{goal_prefix}"
-                f"Last on the team this week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}. "
-                f"{top_first} led with {top_calls}. I know, I know.\n\n"
+                f"Last on the team this week — {w_convos} conversation{'s' if w_convos != 1 else ''}{calls_note}. "
+                f"{top_first} led with {top_convos}. I know, I know.\n\n"
                 f"Here's the thing about last place: it's actually the best starting position for a comeback. "
                 f"You've got zero direction to go but up, a full week of data on what didn't work, and Monday morning sitting right there waiting for you.\n\n"
                 f"{next_week_line}\n\n{who_kicker}"
@@ -913,9 +930,9 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
             ])
             body = (
                 f"{goal_prefix}"
-                f"#{weekly_rank} of {team_size} this week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}"
+                f"#{weekly_rank} of {team_size} this week — {w_convos} conversation{'s' if w_convos != 1 else ''}{calls_note}"
                 f"{(', ' + str(weekly_appts) + ' appt' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
-                f"Team average: {weekly_team_avg}. {top_first} topped the board with {top_calls}.\n\n"
+                f"Team average: {weekly_team_avg}. {top_first} topped the board with {top_convos}.\n\n"
                 f"Not bad. Not great. Exactly the kind of week that gets fixed by one better Monday.\n\n"
                 f"{next_week_line}\n\n{who_kicker}"
             )
@@ -934,7 +951,7 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
             ])
             body = (
                 f"{serious_opener}{why_hook}"
-                f"#1 on the team this week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}"
+                f"#1 on the team this week — {w_convos} conversation{'s' if w_convos != 1 else ''}{calls_note}"
                 f"{(', ' + str(weekly_appts) + ' appt' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
                 f"That's {identity} showing up.\n\n"
                 f"The agents who hit their big years don't just have one good week — they string them together. "
@@ -949,7 +966,7 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
             ])
             body = (
                 f"{serious_opener}{why_hook}"
-                f"This week: #{weekly_rank} of {team_size}. {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}. "
+                f"This week: #{weekly_rank} of {team_size}. {w_convos} conversation{'s' if w_convos != 1 else ''}{calls_note}. "
                 f"{top_first} led with {top_calls}.\n\n"
                 f"One week doesn't define a career. What defines it is what you do next — and that starts Monday. "
                 f"{identity} doesn't stay at the bottom. This weekend, reset. Monday, show up differently.\n\n"
@@ -963,9 +980,9 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
             ])
             body = (
                 f"{serious_opener}{why_hook}"
-                f"#{weekly_rank} of {team_size} this week — {weekly_calls} conversation{'s' if weekly_calls != 1 else ''}"
+                f"#{weekly_rank} of {team_size} this week — {w_convos} conversation{'s' if w_convos != 1 else ''}{calls_note}"
                 f"{(', ' + str(weekly_appts) + ' appt' + ('s' if weekly_appts != 1 else '')) if weekly_appts > 0 else ''}. "
-                f"Team average: {weekly_team_avg}. {top_first} led with {top_calls}.\n\n"
+                f"Team average: {weekly_team_avg}. {top_first} led with {top_convos}.\n\n"
                 f"There's a clear path from #{weekly_rank} to the top half: consistency in the first hour of each day. "
                 f"That's not a secret — it's a decision.\n\n"
                 f"{next_week_line}{who_kicker}"

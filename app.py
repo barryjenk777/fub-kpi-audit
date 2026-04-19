@@ -5598,12 +5598,27 @@ def sync_daily_activity_from_fub(target_date=None):
         d_end_utc   = datetime.combine(target_date, datetime.max.time()).replace(tzinfo=ET).astimezone(timezone.utc)
 
         # ── Calls ──────────────────────────────────────────────────────
+        # Count outbound calls only (isIncoming==False) — matches FUB's "Calls Made" metric.
+        # Also count conversations separately (any direction, duration >= threshold).
+        # This mirrors count_calls_for_user() in kpi_audit.py so the nudge engine
+        # and the KPI dashboard always agree on the same numbers.
         all_calls = fub.get_calls(since=d_start_utc, until=d_end_utc)
-        calls_by_uid = {}
+        calls_by_uid  = {}   # outbound dials per user
+        convos_by_uid = {}   # conversations (≥ threshold) per user
+        _convo_thresh = config.CONVERSATION_THRESHOLD_SECONDS
+        _excl_uids    = config.EXCLUDED_CALL_USER_IDS
         for c in all_calls:
             uid = c.get("userId")
-            if uid:
+            if not uid or uid in _excl_uids:
+                continue
+            is_incoming = c.get("isIncoming", False)
+            duration    = c.get("duration", 0) or 0
+            # Outbound dials
+            if not is_incoming:
                 calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+            # Conversations: any call long enough to be real
+            if duration >= _convo_thresh:
+                convos_by_uid[uid] = convos_by_uid.get(uid, 0) + 1
 
         # ── Appointments ───────────────────────────────────────────────
         all_appts = fub.get_appointments(since=d_start_utc, until=d_end_utc)
@@ -5627,10 +5642,11 @@ def sync_daily_activity_from_fub(target_date=None):
             fub_uid = agent.get("fub_user_id")
             if not fub_uid:
                 continue
-            calls = calls_by_uid.get(fub_uid, 0)
-            appts = appts_by_uid.get(fub_uid, 0)
-            if calls > 0 or appts > 0:
-                _db.upsert_daily_activity_fub(agent["agent_name"], target_date, calls, appts)
+            calls  = calls_by_uid.get(fub_uid, 0)
+            convos = convos_by_uid.get(fub_uid, 0)
+            appts  = appts_by_uid.get(fub_uid, 0)
+            if calls > 0 or convos > 0 or appts > 0:
+                _db.upsert_daily_activity_fub(agent["agent_name"], target_date, calls, appts, convos)
                 updated += 1
 
         print(f"[ACTIVITY SYNC] Done — {updated} agents updated for {target_date} "
