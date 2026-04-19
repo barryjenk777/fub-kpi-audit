@@ -40,16 +40,11 @@ _API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 _BASE = "https://api.heygen.com"
 
 # Barry's avatar + voice IDs — confirmed working via API test
-AVATAR_CASUAL      = "fffc73aa581a49e4af8dcd304e76349b"   # Barry Jenkins (casual)
-AVATAR_SUIT        = "dc3bfe40aeaf4590b76ee12824d019dd"   # Barry Jenkins Suit
-AVATAR_MICROPHONE  = "622b6e55473e4b5e821c9cabc8830366"   # Barry Jenkins Suit + Microphone
-AVATAR_SELLER      = "7d8885ff83594a999dea9b7980517e3d"   # Warm & consultative — seller track ← DEFAULT
-AVATAR_ZBUYER      = "d67eb636d1674a908c39b09b055393c8"   # Placeholder until cash offer avatar recorded
+AVATAR_SELLER = "7d8885ff83594a999dea9b7980517e3d"   # Warm & consultative ← used for ALL tracks until cash offer avatar recorded
+# AVATAR_ZBUYER = pending — Barry will record the cash offer version and share the ID
 
-VOICE_CASUAL  = "b37262521af24a0e9245308e4045ac3f"   # Barry Jenkins voice
-VOICE_SUIT    = "850bdd18eb164cd8b5d540a88fdf862a"   # Barry Jenkins Suit voice ← DEFAULT for all
+VOICE_SUIT    = "850bdd18eb164cd8b5d540a88fdf862a"   # Barry Jenkins Suit voice
 
-# Defaults — seller avatar used until Z-buyer avatar is recorded
 DEFAULT_AVATAR = AVATAR_SELLER
 DEFAULT_VOICE  = VOICE_SUIT
 
