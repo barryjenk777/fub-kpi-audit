@@ -40,7 +40,7 @@ _API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 _BASE = "https://api.heygen.com"
 
 # Barry's avatar + voice IDs — confirmed working via API test
-DEFAULT_AVATAR = "c84cbe3e16914b0c81fc8ce57f75ab68"   # Barry Jenkins — current avatar
+DEFAULT_AVATAR = "4b314392e9b6441d97abaf6d83808de5"   # Barry Jenkins — Avatar 2 (confirmed best)
 DEFAULT_VOICE  = "b37262521af24a0e9245308e4045ac3f"   # Barry Jenkins — HeyGen native voice clone
 
 # Background endpoint hosted on Railway — generates branded background on-demand
@@ -176,22 +176,9 @@ def get_background_url(bg_type: str, address: str = "", city: str = "",
     """
     from urllib.parse import quote
 
-    # Static backgrounds — always the same, no generation needed at render time
-    if bg_type == "zbuyer":
-        return f"{RAILWAY_BASE_URL}/static/bg_zbuyer.jpg"
-    if bg_type == "buyer":
-        return f"{RAILWAY_BASE_URL}/static/bg_buyer.jpg"
-
-    # Seller — dynamic so the address appears on the background
-    base = f"{RAILWAY_BASE_URL}/api/heygen-bg"
-    params = [f"type={bg_type}"]
-    if address:
-        params.append(f"address={quote(address)}")
-    if city:
-        params.append(f"city={quote(city)}")
-    if price_band:
-        params.append(f"price_band={quote(price_band)}")
-    return base + "?" + "&".join(params)
+    # Circle avatar covers centered text — use solid color backgrounds for now.
+    # TODO: reposition text to top or bottom thirds once circle placement is confirmed.
+    return None
 
 
 # ---------------------------------------------------------------------------
