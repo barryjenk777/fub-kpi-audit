@@ -1780,6 +1780,41 @@ def get_team_activity_yesterday():
         return {}
 
 
+def get_ytd_from_daily_activity(agent_name: str, year: int = None) -> dict:
+    """
+    Compute YTD calls, convos, and appts for one agent by summing daily_activity rows.
+    Used as a fallback when agent_ytd_cache is empty (e.g. before the first goals sync runs).
+    """
+    if not is_available():
+        return {"calls_ytd": 0, "convos_ytd": 0, "appts_ytd": 0}
+    if year is None:
+        year = datetime.now().year
+    jan1 = date(year, 1, 1)
+    today = date.today()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COALESCE(SUM(calls_logged),  0),
+                           COALESCE(SUM(convos_logged), 0),
+                           COALESCE(SUM(appts_logged),  0)
+                    FROM   daily_activity
+                    WHERE  agent_name   = %s
+                      AND  activity_date BETWEEN %s AND %s
+                """, (agent_name, jan1, today))
+                row = cur.fetchone()
+        if row:
+            return {
+                "calls_ytd":  int(row[0] or 0),
+                "convos_ytd": int(row[1] or 0),
+                "appts_ytd":  int(row[2] or 0),
+            }
+        return {"calls_ytd": 0, "convos_ytd": 0, "appts_ytd": 0}
+    except Exception as e:
+        logger.warning("get_ytd_from_daily_activity failed for %s: %s", agent_name, e)
+        return {"calls_ytd": 0, "convos_ytd": 0, "appts_ytd": 0}
+
+
 def get_team_activity_range(start_date, end_date):
     """
     Return summed FUB activity for every active agent over a date range (inclusive).

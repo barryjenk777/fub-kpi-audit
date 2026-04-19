@@ -3711,8 +3711,19 @@ def api_meeting_brief(agent_name):
         why          = _db.get_agent_why(agent_name) or {}
         streak       = _db.get_streak(agent_name) or {}
         ytd_cache    = _db.get_ytd_cache(year=year)
-        agent_ytd    = ytd_cache.get(agent_name, {"calls_ytd": 0, "convos_ytd": 0, "appts_ytd": 0})
+        agent_ytd    = ytd_cache.get(agent_name, {})
         deal_summary = _db.get_deal_summary(agent_name, year=year)
+
+        # If YTD cache is empty for this agent (goals sync hasn't run yet, or agent is new),
+        # fall back to summing directly from the daily_activity table — same FUB data,
+        # just a different aggregation path that's always current.
+        _ytd_source = "cache"
+        if not agent_ytd or (agent_ytd.get("calls_ytd", 0) == 0
+                              and agent_ytd.get("convos_ytd", 0) == 0
+                              and agent_ytd.get("appts_ytd", 0) == 0):
+            agent_ytd = _db.get_ytd_from_daily_activity(agent_name, year=year)
+            _ytd_source = "daily_activity"
+            logger.info("meeting-brief: using daily_activity fallback for %s (ytd cache empty)", agent_name)
         all_deals    = _db.get_deal_summary(year=year)   # all agents for team rank
 
         targets = _db.compute_targets(goal) if goal else {}
@@ -3903,6 +3914,7 @@ Write in Barry's voice. Contractions. Short sentences. No 'feel free to', 'I'd l
             "streak":      streak,
             "brief":       brief,
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "ytd_source":   _ytd_source,
         })
 
     except Exception as e:

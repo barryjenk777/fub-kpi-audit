@@ -1598,6 +1598,7 @@ function buildMeetingBrief(d){
       <span>Week ${d.week_num} · ${now}</span>
       ${d.goal?`<span>Goal: ${fmtK(d.goal.gci_goal)} GCI</span>`:''}
       ${st.current_streak>0?`<span>🔥 ${st.current_streak}-day streak</span>`:''}
+      ${d.ytd_source==='daily_activity'?`<span style="font-size:.68rem;color:var(--muted)" title="YTD cache not yet populated — numbers from daily activity log">📊 activity log</span>`:''}
       ${isHistory?'<span style="font-size:.7rem;color:var(--yellow);background:var(--yellow-bg);border:1px solid var(--yellow);border-radius:20px;padding:.2rem .6rem">archived</span>':''}
     <span class="brief-regen" onclick="generateBrief()">↻ ${isHistory?'Generate New':'Regenerate'}</span>
     </div>
