@@ -3128,3 +3128,120 @@ def get_pond_mailer_job(job_id):
     except Exception as e:
         logger.warning("get_pond_mailer_job failed: %s", e)
         return None
+
+
+def get_pond_recent_activity():
+    """
+    Return a dashboard-friendly snapshot of pond mailer activity.
+    Reads from pond_email_log (always reliable) + pond_mailer_jobs (best-effort).
+    Called by /api/pond-mailer/recent so Barry can check status without Railway access.
+    """
+    from datetime import datetime, timezone, timedelta
+    from zoneinfo import ZoneInfo
+    ET = ZoneInfo("America/New_York")
+    now = datetime.now(timezone.utc)
+    now_et = now.astimezone(ET)
+    today_str = now_et.strftime("%Y-%m-%d")
+
+    out = {
+        "as_of": now_et.strftime("%Y-%m-%d %I:%M %p ET"),
+        "db_available": is_available(),
+        "today": {},
+        "last_7_days": {},
+        "recent_sends": [],
+        "recent_jobs": [],
+        "errors": [],
+    }
+
+    if not is_available():
+        out["errors"].append("DATABASE_URL not set — no DB access")
+        return out
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+
+                # Today's sends (ET date)
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE strategy != 'new_lead_immediate') AS sequence_emails,
+                        COUNT(*) FILTER (WHERE strategy = 'new_lead_immediate')  AS immediate_texts,
+                        COUNT(*) FILTER (WHERE dry_run = TRUE)                   AS dry_runs
+                    FROM pond_email_log
+                    WHERE sent_at AT TIME ZONE 'America/New_York' >= %s::date
+                """, (today_str,))
+                row = cur.fetchone()
+                out["today"] = {
+                    "sequence_emails": row[0],
+                    "immediate_texts": row[1],
+                    "dry_runs":        row[2],
+                }
+
+                # Last 7 days
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE strategy != 'new_lead_immediate' AND dry_run = FALSE),
+                        COUNT(*) FILTER (WHERE strategy = 'new_lead_immediate'  AND dry_run = FALSE),
+                        COUNT(DISTINCT person_id) FILTER (WHERE dry_run = FALSE)
+                    FROM pond_email_log
+                    WHERE sent_at > NOW() - INTERVAL '7 days'
+                """)
+                row = cur.fetchone()
+                out["last_7_days"] = {
+                    "sequence_emails": row[0],
+                    "immediate_texts": row[1],
+                    "unique_leads":    row[2],
+                }
+
+                # Most recent 20 sends
+                cur.execute("""
+                    SELECT person_id, person_name, subject, strategy, sequence_num,
+                           dry_run, sent_at AT TIME ZONE 'America/New_York' AS sent_et
+                    FROM pond_email_log
+                    ORDER BY sent_at DESC
+                    LIMIT 20
+                """)
+                rows = cur.fetchall()
+                out["recent_sends"] = [
+                    {
+                        "person_id":    r[0],
+                        "name":         r[1],
+                        "subject":      r[2],
+                        "strategy":     r[3],
+                        "sequence_num": r[4],
+                        "dry_run":      r[5],
+                        "sent_et":      r[6].strftime("%m/%d %I:%M %p") if r[6] else None,
+                    }
+                    for r in rows
+                ]
+
+                # Recent jobs from pond_mailer_jobs (may not exist yet)
+                try:
+                    cur.execute("""
+                        SELECT job_id, status, dry_run, error,
+                               started_at AT TIME ZONE 'America/New_York',
+                               finished_at AT TIME ZONE 'America/New_York'
+                        FROM pond_mailer_jobs
+                        ORDER BY started_at DESC
+                        LIMIT 10
+                    """)
+                    job_rows = cur.fetchall()
+                    out["recent_jobs"] = [
+                        {
+                            "job_id":      r[0],
+                            "status":      r[1],
+                            "dry_run":     r[2],
+                            "error":       (r[3] or "")[:200] if r[3] else None,
+                            "started_et":  r[4].strftime("%m/%d %I:%M %p") if r[4] else None,
+                            "finished_et": r[5].strftime("%m/%d %I:%M %p") if r[5] else None,
+                        }
+                        for r in job_rows
+                    ]
+                except Exception as je:
+                    out["recent_jobs"] = []
+                    out["errors"].append(f"pond_mailer_jobs table not yet created: {je}")
+
+    except Exception as e:
+        out["errors"].append(f"DB query failed: {e}")
+
+    return out

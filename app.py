@@ -4520,6 +4520,27 @@ def api_pond_mailer_status(job_id):
     return jsonify(job)
 
 
+@app.route("/api/pond-mailer/recent")
+def api_pond_mailer_recent():
+    """
+    Activity feed for the pond mailer — what's been sent, what's in the queue.
+    Reads from pond_email_log (reliable) and pond_mailer_jobs (best-effort).
+    Useful for checking status without Railway log access.
+    """
+    try:
+        import db as _db_local
+        from datetime import datetime, timezone, timedelta
+        from zoneinfo import ZoneInfo
+        ET = ZoneInfo("America/New_York")
+        now_et = datetime.now(ET)
+        today_et = now_et.date()
+
+        result = _db_local.get_pond_recent_activity()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/pond-mailer/clear-today", methods=["POST"])
 def api_pond_mailer_clear_today():
     """Admin: delete today's non-dry-run pond email log entries so the daily cap resets."""
@@ -6101,3 +6122,5 @@ else:
     _db.ensure_pond_reply_log_table()
     # Ensure calls cache table exists (incremental FUB sync)
     _db.ensure_calls_cache_table()
+    # Ensure pond mailer job tracking table exists at startup (not just on first run)
+    _db.ensure_pond_mailer_jobs_table()
