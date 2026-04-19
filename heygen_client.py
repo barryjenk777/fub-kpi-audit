@@ -493,7 +493,7 @@ def generate_buyer_video_script(
         import anthropic
         client = anthropic.Anthropic()
 
-        prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 real estate team in Virginia (850+ homes a year).
+        prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 real estate team in Virginia.
 
 Barry is recording this for {first_name}, a buyer searching for a {search_desc}.
 {strategy_context}
@@ -516,7 +516,7 @@ Pick 2-3 of these angles and make them specific — not vague:
 • Inventory reality: how much is actually available in that city/price range, and how fast it moves
 • Competition dynamics: are buyers seeing multiple offers? Is it softening? What price points are hottest?
 • What buyers get wrong going in — the mistake most make before working with an agent
-• What Barry's volume (850+ homes/year at Legacy Home Team) gives them that Zillow can't — pocket listings, relationships with listing agents, knowing what's coming before it's public
+• What Barry's volume at Legacy Home Team gives them that Zillow can't — pocket listings, relationships with listing agents, knowing what's coming before it's public. Say "we close a lot of homes here" not a specific number.
 • Something neighborhood-specific or price-tier-specific that sounds like inside knowledge
 • The rate/affordability reality if relevant — not a prediction, just what buyers are actually doing now
 
@@ -567,7 +567,7 @@ Return ONLY the script. No labels, no stage directions. Just Barry's words."""
             f"inventory is moving fast — homes in that price range are averaging a short window before "
             f"they're gone, and the buyers who win are the ones who are already set up and ready to move "
             f"when the right one hits. "
-            f"Our team closes 850-plus homes a year here in Hampton Roads, which means I'm hearing about "
+            f"Our team closes a lot of homes here in Hampton Roads, which means I'm hearing about "
             f"homes before they even hit the market.{viewed_line} "
             f"10 minutes on the phone and I can walk you through what's real in your search right now. "
             f"Just reply here."
