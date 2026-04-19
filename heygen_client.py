@@ -182,6 +182,43 @@ def get_background_url(bg_type: str, address: str = "", city: str = "",
 
 
 # ---------------------------------------------------------------------------
+# Address pronunciation — expand abbreviations so HeyGen reads them correctly
+# Without this: "Dr" → "Doctor", "St" → "Saint", "Rd" → "Road" (ok), etc.
+# ---------------------------------------------------------------------------
+
+def expand_address_for_speech(address: str) -> str:
+    """
+    Expand street-type abbreviations so HeyGen's TTS reads them correctly.
+    e.g. "412 Harbour View Dr" → "412 Harbour View Drive"
+         "123 Oak St"          → "123 Oak Street"
+    """
+    import re
+    # Only expand at word boundaries so "Dr" inside a word isn't touched.
+    # Street types only — not directionals (N/S/E/W) to avoid false matches.
+    suffixes = {
+        r'\bDr\b':    "Drive",
+        r'\bSt\b':    "Street",
+        r'\bAve\b':   "Avenue",
+        r'\bBlvd\b':  "Boulevard",
+        r'\bLn\b':    "Lane",
+        r'\bRd\b':    "Road",
+        r'\bCt\b':    "Court",
+        r'\bPl\b':    "Place",
+        r'\bPkwy\b':  "Parkway",
+        r'\bHwy\b':   "Highway",
+        r'\bCir\b':   "Circle",
+        r'\bTer\b':   "Terrace",
+        r'\bTerr\b':  "Terrace",
+        r'\bFwy\b':   "Freeway",
+        r'\bTrl\b':   "Trail",
+        r'\bWay\b':   "Way",   # already spoken correctly but included for completeness
+    }
+    for pattern, replacement in suffixes.items():
+        address = re.sub(pattern, replacement, address)
+    return address
+
+
+# ---------------------------------------------------------------------------
 # Script Generation — Claude writes the 35-second seller video script
 # ---------------------------------------------------------------------------
 
@@ -200,6 +237,9 @@ def generate_seller_video_script(first_name: str, street: str, city: str,
     - "while I was at it" = low pressure (not a formal presentation)
     - Market intel = instant credibility (he actually knows their area)
     """
+    # Expand abbreviations so HeyGen reads "Drive" not "Doctor", "Street" not "Saint"
+    street_spoken = expand_address_for_speech(street)
+
     try:
         import anthropic
         client = anthropic.Anthropic()
@@ -214,7 +254,7 @@ def generate_seller_video_script(first_name: str, street: str, city: str,
 
         prompt = f"""Write a 35-40 second video script for Barry Jenkins, #1 real estate team in Virginia.
 
-Barry is recording this for {first_name}, a homeowner at {street} in {city}.
+Barry is recording this for {first_name}, a homeowner at {street_spoken} in {city}.
 Context: they spoke with Barry's AI assistant about their home value and got transferred to his team.
 They are warm — they reached out first. This is Barry's human follow-up.
 
@@ -273,7 +313,6 @@ Return ONLY the script. No labels, no stage directions, no quotes around it. Jus
 
     except Exception as e:
         logger.warning("Claude script generation failed, using fallback: %s", e)
-        # Fallback preserves the same organic frame
         comp_line = f" {comp_snippet}" if comp_snippet else (
             f" Right now in {city}, homes are moving — sellers are getting strong offers "
             f"and the window is real."
@@ -281,7 +320,7 @@ Return ONLY the script. No labels, no stage directions, no quotes around it. Jus
         return (
             f"Hey {first_name} — so I was literally just finishing up a market video for one of my clients "
             f"over in {city} and I realized my assistant and I never actually followed up with you after "
-            f"that conversation about your place on {street}. So I figured, let me just do one for you "
+            f"that conversation about your place on {street_spoken}. So I figured, let me just do one for you "
             f"while I'm at it.{comp_line} "
             f"I can walk you through exactly what I'm seeing for homes like yours right now — "
             f"what sellers are actually netting, how fast things are moving. "
@@ -303,6 +342,9 @@ def generate_zbuyer_video_script(first_name: str, street: str, city: str,
     Same organic frame: Barry was already recording videos for clients.
     But the CONTENT pivots to the two-option pitch, not market intel.
     """
+    # Expand abbreviations so HeyGen reads "Drive" not "Doctor", etc.
+    street_spoken = expand_address_for_speech(street)
+
     try:
         import anthropic
         client = anthropic.Anthropic()
@@ -316,64 +358,54 @@ def generate_zbuyer_video_script(first_name: str, street: str, city: str,
             )
         )
 
-        prompt = f"""Write a 35-40 second video script for Barry Jenkins, #1 real estate team in Virginia.
+        prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 real estate team in Virginia.
 
-Barry is recording this for {first_name}, a homeowner at {street} in {city}.
+Barry is recording this for {first_name}, a homeowner at {street_spoken} in {city}.
 They submitted a CASH OFFER REQUEST online — they want to sell, they want speed,
 and their inbox is already flooded with "WE BUY HOUSES" pitches.
 
 ━━━━ THE FRAME (non-negotiable) ━━━━
-Same organic setup as his other client videos — Barry was already recording for clients,
-thought of this person, pulled one together. BUT the tone is different here.
+Barry was already recording client videos. Saw the request come in, pulled one together on the spot.
+Calm confidence. The "I can actually solve this" guy, not the "WE BUY HOUSES" guy.
 
-This lead took action. They're not curious — they're ready to move.
-The video needs ENERGY behind it. Not hype. Not desperate. More like:
-"I can actually solve this for you. Here's exactly how."
-
-━━━━ BARRY'S EDGE (the whole point) ━━━━
-Most investors can ONLY offer cash. Most agents can ONLY list.
-Barry can do BOTH — and he can show {first_name} which one nets more for their specific home.
-
-That's it. That's the differentiator. The video should land this clearly.
+━━━━ BARRY'S CREDENTIALS (weave in naturally) ━━━━
+- Realtor with Legacy Home Team at LPT Realty (say it this way, not just "licensed agent")
+- Almost 30 years serving this community
+- Can do BOTH: cash close OR list on MLS — whichever puts more money in {first_name}'s pocket
 
 ━━━━ SCRIPT STRUCTURE ━━━━
 
-OPEN (3-5 seconds): Start mid-thought, slightly more energized than the seller video.
-Good: "Hey {first_name} — so I was wrapping up a couple videos for some clients and your cash offer request came through..."
-Good: "Hey {first_name}, saw your request come in — was already recording some client videos so I figured let me just do one for you right now."
-Bad: "Hi, I'm Barry Jenkins and I'd like to talk about your home." (kills the energy)
+OPEN (3-5 seconds): Mid-thought, saw the request come in.
+Good: "Hey {first_name} — saw your cash offer request come through for your home at {street_spoken} in {city}..."
 
-THE PIVOT (5-7 seconds): Get to the point — you can actually do this.
-"I can close cash in as little as 7 days. Done. No showings, no stress, no financing falling through."
+THE PITCH (15-20 seconds): Cash option + the differentiator.
+"I can close cash in as little as 7 days — no showings, no stress, done.
+But here's what sets me apart: as a Realtor with Legacy Home Team at LPT Realty, I can also
+pull the MLS numbers and show you what listing might net. Sometimes that's significantly more.
+I've been serving this community for almost 30 years — I know this market."
 
-THE DIFFERENTIATOR (8-10 seconds): This is what separates him from every other response they got.
-"Here's what most of the other investors who reached out can't do: I'm also a licensed agent,
-so I can pull the MLS numbers and show you what listing might net — and sometimes that number
-is significantly higher. Most people don't know they can compare both options before deciding."
-
-MARKET CREDIBILITY (8-10 seconds): Ground it in {city}.
+MARKET CREDIBILITY (8-10 seconds):
 {comp_line}
-Barry knows this market. One specific insight about what cash buyers are paying vs. what sellers are listing for.
 
-CLOSE (5-7 seconds): Direct but not pushy. Make the call feel easy.
-Good: "10 minutes on the phone — I'll run both numbers for your specific address. That's it."
-Good: "Reply here or call me directly. Let's figure out which option actually makes more sense for you."
-Bad: "I'd love to schedule a consultation at your earliest convenience."
+CLOSE (5-7 seconds): Direct. Easy ask.
+"10 minutes on the phone — I'll run both numbers for your home at {street_spoken}. Just reply here."
 
-━━━━ TONE ━━━━
-Calm confidence, not hustle. The "I can actually solve this" guy, not the "WE BUY HOUSES" guy.
-Never: "I'd love to", "feel free to", "don't hesitate", "I'm happy to"
-Contractions throughout. Conversational pace. He's on camera — shorter sentences land better.
-No Ylopo, no platform names.
+━━━━ RULES ━━━━
+- Say "Realtor with Legacy Home Team at LPT Realty" — not "licensed agent"
+- Mention almost 30 years in the community
+- Reference the street address and city naturally
+- Never: "I'd love to", "feel free to", "don't hesitate"
+- Contractions throughout. Shorter sentences on camera.
+- No Ylopo, no platform names, no "AI"
 
 ━━━━ LENGTH ━━━━
-130-150 words. 35-42 seconds at normal pace.
+130-150 words. 35-42 seconds.
 
-Return ONLY the script. No labels, no stage directions, no quotes. Just Barry's words."""
+Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
         msg = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=300,
+            max_tokens=350,
             messages=[{"role": "user", "content": prompt}],
         )
         script = msg.content[0].text.strip()
@@ -384,15 +416,17 @@ Return ONLY the script. No labels, no stage directions, no quotes. Just Barry's 
         logger.warning("Claude Z-buyer script generation failed, using fallback: %s", e)
         comp_line = f" {comp_snippet}" if comp_snippet else ""
         return (
-            f"Hey {first_name} — saw your cash offer request come in and I was already "
-            f"recording some videos for clients so I figured let me do one for you right now. "
+            f"Hey {first_name} — saw your cash offer request come through for your home at "
+            f"{street_spoken} in {city}, and I was already recording some videos for clients "
+            f"so I pulled one together for you right now. "
             f"I can close cash in as little as 7 days — no showings, no financing falling through, done. "
-            f"Here's what most of the people who responded to you can't offer: "
-            f"I'm also a licensed agent, so I can pull the MLS numbers and show you "
+            f"But here's what separates me from everyone else who responded: "
+            f"I'm a Realtor with Legacy Home Team at LPT Realty, and I've been serving this "
+            f"community for almost 30 years. I can also pull the MLS numbers and show you "
             f"what listing your home might actually net.{comp_line} "
-            f"Sometimes that number is significantly higher than cash — sometimes it's not worth the wait. "
+            f"Sometimes that number is significantly higher than cash. "
             f"Either way, you deserve to see both before you decide. "
-            f"10 minutes on the phone and I'll run both numbers for your specific place on {street}. "
+            f"10 minutes on the phone and I'll run both numbers for your home on {street_spoken}. "
             f"Just reply here."
         )
 
