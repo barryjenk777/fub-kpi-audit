@@ -422,7 +422,6 @@ def generate_zbuyer_background_image(street: str, city: str,
 
 def submit_video(script: str, background_url: str = None,
                  avatar_id: str = None, voice_id: str = None,
-                 emotion: str = "Soothing",
                  title: str = "Barry Jenkins — Personal Message") -> str | None:
     """
     Submit a video generation job to HeyGen.
@@ -435,10 +434,6 @@ def submit_video(script: str, background_url: str = None,
                         If None, uses a dark navy color background.
         avatar_id:      Override avatar (defaults to AVATAR_SELLER)
         voice_id:       Override voice (defaults to VOICE_SUIT)
-        emotion:        HeyGen voice emotion — controls avatar mannerisms/expressiveness.
-                        Options: "Excited" | "Friendly" | "Serious" | "Soothing" | "Broadcaster"
-                        "Friendly" = warm, natural, consultative (seller track default)
-                        "Excited"  = higher energy (Z-buyer/cash offer track)
         title:          Video title (for HeyGen dashboard)
     """
     _avatar = avatar_id or DEFAULT_AVATAR
@@ -454,14 +449,13 @@ def submit_video(script: str, background_url: str = None,
             "character": {
                 "type": "avatar",
                 "avatar_id": _avatar,
-                "avatar_style": "normal",
+                "avatar_style": "closeUp",
             },
             "voice": {
                 "type": "text",
                 "voice_id": _voice,
                 "input_text": script,
                 "speed": 1.0,
-                "emotion": emotion,
             },
             "background": background,
         }],
@@ -535,7 +529,6 @@ def poll_video(video_id: str, timeout_seconds: int = 360,
 
 def generate_and_wait(script: str, background_url: str = None,
                       avatar_id: str = None, voice_id: str = None,
-                      emotion: str = "Soothing",
                       timeout_seconds: int = 180) -> dict | None:
     """
     Full pipeline: submit → poll → return result.
@@ -562,8 +555,7 @@ def generate_and_wait(script: str, background_url: str = None,
             background_url = None
 
     video_id = submit_video(script, background_url=background_url,
-                            avatar_id=avatar_id, voice_id=voice_id,
-                            emotion=emotion)
+                            avatar_id=avatar_id, voice_id=voice_id)
     if not video_id:
         return None
     return poll_video(video_id, timeout_seconds=timeout_seconds)
