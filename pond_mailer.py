@@ -2532,6 +2532,42 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
     logger.info("Found %d pond leads to evaluate (ponds %s)",
                 len(all_pond_leads), sorted(LEADSTREAM_ALLOWED_POND_IDS))
 
+    # ── HeyGen cost control: score-gated videos ───────────────────────────────
+    # HeyGen videos are expensive (~$40/day when sent to everyone). We only
+    # generate videos for leads in the top 50% by LeadStream score so we cut
+    # Heygen spend roughly in half while still targeting the highest-intent leads.
+    #
+    # Score is computed from tags already on the person object — same weights
+    # as LeadStream scoring (LEADSTREAM_SIGNAL_TAGS). No extra FUB API calls.
+    # Leads below the median still receive the text email, just without a video.
+    def _quick_ls_score(p):
+        """Sum LeadStream signal tag points for a lead — fast, no FUB call."""
+        from config import LEADSTREAM_SIGNAL_TAGS as _sig
+        tag_names = {
+            (t.get("name") or "").lower()
+            for t in (p.get("tags") or [])
+            if isinstance(t, dict)
+        }
+        return sum(pts for tag, pts in _sig.items() if tag.lower() in tag_names)
+
+    _all_scores = [_quick_ls_score(p) for p in all_pond_leads]
+    if _all_scores:
+        _sorted_scores = sorted(_all_scores, reverse=True)
+        # Top 50%: threshold is the score at the 50th percentile rank
+        _hg_video_threshold = _sorted_scores[max(0, len(_sorted_scores) // 2 - 1)]
+    else:
+        _hg_video_threshold = 0
+    logger.info(
+        "HeyGen score gate: threshold=%d (top 50%% of %d leads, score range %d–%d)",
+        _hg_video_threshold, len(_all_scores),
+        min(_all_scores) if _all_scores else 0,
+        max(_all_scores) if _all_scores else 0,
+    )
+    # Map person_id → score for fast lookup inside the loop
+    _lead_score_map = {
+        p.get("id"): _quick_ls_score(p) for p in all_pond_leads
+    }
+
     sent = 0
     skipped_cooldown = 0
     skipped_no_email = 0
@@ -2559,6 +2595,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         last  = person.get("lastName") or ""
         name  = f"{first} {last}".strip() or f"ID:{pid}"
         tags  = person.get("tags") or []
+
+        # Score gate: is this lead in the top 50% by LeadStream score?
+        _this_ls_score   = _lead_score_map.get(pid, 0)
+        _video_eligible  = _this_ls_score >= _hg_video_threshold
 
         # Get email address
         emails = person.get("emails") or []
@@ -2714,6 +2754,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         if _hg_slots_left == 0:
             logger.info("HeyGen daily cap of %d reached (%d used) — video skipped for %s",
                         _HG_CAP, _hg_used_today, name)
+        if not _video_eligible:
+            logger.info("HeyGen score gate: %s score=%d < threshold=%d — text-only email",
+                        name, _this_ls_score, _hg_video_threshold)
 
         # ── HeyGen personalized video — seller Email 1 only ─────────────────────
         # When video succeeds the ENTIRE email body is replaced with a short wrapper.
@@ -2728,7 +2771,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0:
+                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     # FUB addresses array is usually empty for Ylopo leads.
                     # Try standard address fields, then fall back to tag-derived city.
                     _addrs   = person.get("addresses") or []
@@ -2865,7 +2908,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0:
+                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     # FUB addresses array is usually empty for Ylopo leads.
                     # Try addresses array, then fall back to tag-derived city.
                     _addrs   = person.get("addresses") or []
@@ -3009,7 +3052,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0:
+                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     _beh_city      = (behavior.get("cities") or [])
                     _city_hg       = _beh_city[0] if _beh_city else (
                         _city_from_tags(tags) or "Hampton Roads"
@@ -3179,7 +3222,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0:
+                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     _addrs_fu   = person.get("addresses") or []
                     _addr0_fu   = _addrs_fu[0] if _addrs_fu else {}
                     _street_fu  = (_addr0_fu.get("street") or "").strip()
@@ -3308,7 +3351,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     render_video_email_block_simple,
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0:
+                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     _addrs_e4   = person.get("addresses") or []
                     _addr0_e4   = _addrs_e4[0] if _addrs_e4 else {}
                     _street_e4  = (_addr0_e4.get("street") or "").strip()
