@@ -613,7 +613,7 @@ LIVE_TRANSFER_NUMBER_RAW = "7579601491"
 
 
 def build_hype_email(agents, period_label, ai_text_count, ai_voice_count,
-                     fhalen_appts, fhalen_name="Fhalen"):
+                     fhalen_appts, fhalen_name="Fhalen", thresholds=None):
     """
     Build the weekly KPI hype email.
 
@@ -622,6 +622,7 @@ def build_hype_email(agents, period_label, ai_text_count, ai_voice_count,
     ai_text_count — leads with AI_NEEDS_FOLLOW_UP tag last week
     ai_voice_count— leads with AI_VOICE_NEEDS_FOLLOW_UP tag last week
     fhalen_appts  — ISA appointments set last week (int)
+    thresholds    — dict with min_calls, min_convos, max_ooc (from audit data)
 
     Returns HTML string.
     """
@@ -629,6 +630,12 @@ def build_hype_email(agents, period_label, ai_text_count, ai_voice_count,
 
     passing  = [a for a in agents if a["evaluation"]["overall_pass"]]
     n_agents = max(len(agents), 1)
+
+    # ── KPI thresholds (for congrats copy — read from saved settings) ────────
+    thresh      = thresholds or {}
+    min_calls   = thresh.get("min_calls",  30)
+    min_convos  = thresh.get("min_convos",  5)
+    max_ooc     = thresh.get("max_ooc",    50)
 
     # ── Team averages (all agents — honest comparison base) ─────────────────
     total_calls  = sum(a["metrics"]["outbound_calls"] for a in agents)
@@ -711,20 +718,35 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
 """
 
     # ── QUALIFYING AGENTS ────────────────────────────────────────────────────
-    html += f"""
-<div style="background:#0f172a;border-radius:10px;padding:16px 20px;margin-bottom:12px">
-  <h2 style="margin:0;color:#f59e0b;font-size:16px;font-weight:800;text-transform:uppercase;letter-spacing:1px">
-    🏆 On the Live Transfer Line This Week
+    n_passing = len(passing)
+    if n_passing > 0:
+        # Build first-name list for the congrats line
+        pass_first = [a["name"].split()[0] for a in passing]
+        if len(pass_first) > 1:
+            pass_names = ", ".join(pass_first[:-1]) + " and " + pass_first[-1]
+        else:
+            pass_names = pass_first[0]
+        agent_word = "agent has" if n_passing == 1 else f"{n_passing} agents have"
+
+        html += f"""
+<div style="background:#0f172a;border-radius:10px;padding:20px 24px;margin-bottom:12px">
+  <p style="margin:0 0 6px;color:#f59e0b;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px">🏆 This Week's Live Transfer Roster</p>
+  <h2 style="margin:0 0 10px;color:#ffffff;font-size:20px;font-weight:900;line-height:1.2">
+    Congrats, {pass_names}!
   </h2>
+  <p style="margin:0;color:rgba(255,255,255,0.8);font-size:14px;line-height:1.6">
+    {agent_word} earned direct routing of ISA appointments and AI live transfers
+    this week by hitting our KPI standards:
+    <strong style="color:#f59e0b">{min_calls} outbound calls</strong>,
+    <strong style="color:#f59e0b">{min_convos} conversations</strong>, and
+    <strong style="color:#f59e0b">fewer than {max_ooc} out-of-compliance leads</strong>.
+    That's the bar. You cleared it.
+  </p>
 </div>
 """
-
-    if passing:
         html += '<div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">'
         for a in passing:
             first, stat_line, convos, calls, convos_pct, calls_pct = agent_narrative(a)
-            best_pct = max(convos_pct, calls_pct, 0)
-            badge_color = "#16a34a" if best_pct >= 30 else "#0f172a"
             html += f"""
 <div style="background:#fff;border-radius:10px;border-left:4px solid #f59e0b;padding:16px 20px;display:flex;align-items:flex-start;gap:12px">
   <div style="background:#f59e0b;color:#0f172a;font-weight:900;font-size:18px;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;text-align:center;line-height:40px">
@@ -741,9 +763,12 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
         html += "</div>"
     else:
         html += f"""
-<div style="background:#fff;border-radius:10px;border:1px solid #e5e7eb;padding:20px 24px;margin-bottom:20px;text-align:center">
-  <p style="margin:0;font-size:15px;color:#6b7280">
-    No agents hit KPIs this week. The line resets Monday — it's wide open.
+<div style="background:#0f172a;border-radius:10px;padding:20px 24px;margin-bottom:12px">
+  <p style="margin:0 0 6px;color:#f59e0b;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px">🏆 This Week's Live Transfer Roster</p>
+  <h2 style="margin:0 0 10px;color:#ffffff;font-size:20px;font-weight:900">Nobody qualified this week.</h2>
+  <p style="margin:0;color:rgba(255,255,255,0.7);font-size:14px;line-height:1.6">
+    The standard is {min_calls} outbound calls, {min_convos} conversations,
+    and fewer than {max_ooc} out-of-compliance leads. The line resets Monday — it's wide open.
   </p>
 </div>
 """
@@ -850,7 +875,7 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
 
 
 def send_hype_email(agents, period_label, ai_text_count, ai_voice_count,
-                    fhalen_appts, fhalen_name, to_emails):
+                    fhalen_appts, fhalen_name, to_emails, thresholds=None):
     """
     Send the weekly KPI hype email to all team members.
     to_emails: list of (name, email) tuples from get_all_user_emails()
@@ -868,7 +893,7 @@ def send_hype_email(agents, period_label, ai_text_count, ai_voice_count,
 
     html_body = build_hype_email(
         agents, period_label, ai_text_count, ai_voice_count,
-        fhalen_appts, fhalen_name,
+        fhalen_appts, fhalen_name, thresholds=thresholds,
     )
 
     passing_count = sum(1 for a in agents if a["evaluation"]["overall_pass"])

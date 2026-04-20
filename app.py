@@ -2201,6 +2201,7 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
         "ai_voice_count": ai_voice_count,
         "fhalen_appts":   fhalen_appts,
         "fhalen_name":    fhalen_name,
+        "thresholds":     audit.get("thresholds", {}),
         "to_emails":      to_emails,
     }
 
@@ -2225,6 +2226,7 @@ def api_preview_hype_email():
             ai_voice_count=data["ai_voice_count"],
             fhalen_appts=data["fhalen_appts"],
             fhalen_name=data["fhalen_name"],
+            thresholds=data.get("thresholds", {}),
         )
         # Inject a preview banner so it's obvious this hasn't been sent yet
         banner = """
@@ -2271,6 +2273,7 @@ def api_send_hype_email():
             fhalen_appts=data["fhalen_appts"],
             fhalen_name=data["fhalen_name"],
             to_emails=data["to_emails"],
+            thresholds=data.get("thresholds", {}),
         )
         if success:
             logger.info("hype-email sent: %s", msg)
