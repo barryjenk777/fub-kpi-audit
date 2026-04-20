@@ -2316,37 +2316,63 @@ def api_send_appointment_email():
 
 # ---- Bounce Sync: tag FUB leads whose email hard-bounced in SendGrid ----
 
+def _fub_mark_email_unsubscribed(client, person, bounced_email):
+    """
+    Mark a specific email address as unsubscribed on a FUB person record.
+
+    Sets isUnsubscribed=True on the matching email object so FUB shows it
+    with a strikethrough and blocks it from all FUB automations / bulk email.
+    Returns True if the record was updated, False if it was already unsubscribed
+    or the address wasn't found on the person.
+    """
+    pid = person.get("id")
+    emails = person.get("emails") or []
+    updated = False
+    for email_obj in emails:
+        val = (email_obj.get("value") or "").strip().lower()
+        if val == bounced_email.lower():
+            if email_obj.get("isUnsubscribed"):
+                return False  # already marked
+            email_obj["isUnsubscribed"] = True
+            updated = True
+            break
+    if updated:
+        client._request("PUT", f"people/{pid}", json_data={"emails": emails})
+        logger.info("sync-bounces: marked %s isUnsubscribed in FUB (pid=%s)", bounced_email, pid)
+    return updated
+
+
+def _fetch_sendgrid_bounces():
+    """Fetch all hard bounces from SendGrid. Returns list of lowercase email strings."""
+    import requests as _req
+    sg_key = os.environ.get("SENDGRID_API_KEY", "")
+    if not sg_key:
+        raise RuntimeError("SENDGRID_API_KEY not set")
+    resp = _req.get(
+        "https://api.sendgrid.com/v3/suppression/bounces",
+        headers={"Authorization": f"Bearer {sg_key}", "Accept": "application/json"},
+        params={"limit": 500},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return [b["email"].strip().lower() for b in resp.json() if b.get("email")]
+
+
 @app.route("/api/sync-bounces", methods=["POST"])
 def api_sync_bounces():
     """
-    Fetch all hard bounces from SendGrid and tag matching FUB leads with BAD_EMAIL.
-
-    SendGrid already suppresses these addresses automatically — this job surfaces
-    them in FUB so agents see the BAD_EMAIL tag and know the address is dead.
+    Fetch all hard bounces from SendGrid and for each matching FUB lead:
+      1. Add BAD_EMAIL tag
+      2. Mark the specific email address as isUnsubscribed=True in FUB
 
     Returns JSON summary: { bounces_found, tagged, already_tagged, not_in_fub, errors }
     """
-    import requests as _req
-
-    sg_key = os.environ.get("SENDGRID_API_KEY", "")
-    if not sg_key:
-        return jsonify({"error": "SENDGRID_API_KEY not set"}), 500
-
-    # Fetch up to 500 hard bounces from SendGrid (all time)
     try:
-        sg_resp = _req.get(
-            "https://api.sendgrid.com/v3/suppression/bounces",
-            headers={"Authorization": f"Bearer {sg_key}", "Accept": "application/json"},
-            params={"limit": 500},
-            timeout=30,
-        )
-        sg_resp.raise_for_status()
-        bounces = sg_resp.json()  # list of {created, email, reason, status}
+        bounced_emails = _fetch_sendgrid_bounces()
     except Exception as sg_err:
         logger.error("sync-bounces: SendGrid fetch failed: %s", sg_err)
         return jsonify({"error": f"SendGrid error: {sg_err}"}), 500
 
-    bounced_emails = [b["email"].strip().lower() for b in bounces if b.get("email")]
     logger.info("sync-bounces: %d bounced addresses from SendGrid", len(bounced_emails))
 
     client = FUBClient()
@@ -2368,12 +2394,18 @@ def api_sync_bounces():
                     (t.get("name") or t if isinstance(t, dict) else t)
                     for t in raw_tags
                 ]
-                if config.BAD_EMAIL_TAG in existing:
+                already_done = config.BAD_EMAIL_TAG in existing
+                if already_done:
                     already_tagged.append(email)
                 else:
+                    # Add BAD_EMAIL tag
                     client.add_tag_fast(pid, config.BAD_EMAIL_TAG, existing)
                     tagged.append(email)
                     logger.info("sync-bounces: tagged %s (pid=%s) BAD_EMAIL", email, pid)
+
+                # Always try to mark isUnsubscribed in FUB (idempotent)
+                _fub_mark_email_unsubscribed(client, person, email)
+
         except Exception as e:
             logger.warning("sync-bounces: error on %s: %s", email, e)
             errors.append(email)
@@ -2394,21 +2426,7 @@ def scheduled_sync_bounces():
     """Scheduler wrapper for the nightly bounce sync."""
     try:
         with app.app_context():
-            sg_key = os.environ.get("SENDGRID_API_KEY", "")
-            if not sg_key:
-                logger.warning("scheduled_sync_bounces: SENDGRID_API_KEY not set — skipping")
-                return
-            import requests as _req
-            sg_resp = _req.get(
-                "https://api.sendgrid.com/v3/suppression/bounces",
-                headers={"Authorization": f"Bearer {sg_key}", "Accept": "application/json"},
-                params={"limit": 500},
-                timeout=30,
-            )
-            sg_resp.raise_for_status()
-            bounces = sg_resp.json()
-            bounced_emails = [b["email"].strip().lower() for b in bounces if b.get("email")]
-
+            bounced_emails = _fetch_sendgrid_bounces()
             client = FUBClient()
             tagged_count = 0
             for email in bounced_emails:
@@ -2421,6 +2439,8 @@ def scheduled_sync_bounces():
                         if config.BAD_EMAIL_TAG not in existing:
                             client.add_tag_fast(pid, config.BAD_EMAIL_TAG, existing)
                             tagged_count += 1
+                        # Mark email unsubscribed in FUB regardless of tag state
+                        _fub_mark_email_unsubscribed(client, person, email)
                 except Exception:
                     pass
             logger.info("scheduled_sync_bounces: tagged %d new BAD_EMAIL leads", tagged_count)
