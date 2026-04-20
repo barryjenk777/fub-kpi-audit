@@ -2314,6 +2314,120 @@ def api_send_appointment_email():
         return jsonify({"error": str(e)}), 500
 
 
+# ---- Bounce Sync: tag FUB leads whose email hard-bounced in SendGrid ----
+
+@app.route("/api/sync-bounces", methods=["POST"])
+def api_sync_bounces():
+    """
+    Fetch all hard bounces from SendGrid and tag matching FUB leads with BAD_EMAIL.
+
+    SendGrid already suppresses these addresses automatically — this job surfaces
+    them in FUB so agents see the BAD_EMAIL tag and know the address is dead.
+
+    Returns JSON summary: { bounces_found, tagged, already_tagged, not_in_fub, errors }
+    """
+    import requests as _req
+
+    sg_key = os.environ.get("SENDGRID_API_KEY", "")
+    if not sg_key:
+        return jsonify({"error": "SENDGRID_API_KEY not set"}), 500
+
+    # Fetch up to 500 hard bounces from SendGrid (all time)
+    try:
+        sg_resp = _req.get(
+            "https://api.sendgrid.com/v3/suppression/bounces",
+            headers={"Authorization": f"Bearer {sg_key}", "Accept": "application/json"},
+            params={"limit": 500},
+            timeout=30,
+        )
+        sg_resp.raise_for_status()
+        bounces = sg_resp.json()  # list of {created, email, reason, status}
+    except Exception as sg_err:
+        logger.error("sync-bounces: SendGrid fetch failed: %s", sg_err)
+        return jsonify({"error": f"SendGrid error: {sg_err}"}), 500
+
+    bounced_emails = [b["email"].strip().lower() for b in bounces if b.get("email")]
+    logger.info("sync-bounces: %d bounced addresses from SendGrid", len(bounced_emails))
+
+    client = FUBClient()
+    tagged = []
+    already_tagged = []
+    not_in_fub = []
+    errors = []
+
+    for email in bounced_emails:
+        try:
+            people = client.search_people_by_email(email)
+            if not people:
+                not_in_fub.append(email)
+                continue
+            for person in people:
+                pid = person.get("id")
+                raw_tags = person.get("tags") or []
+                existing = [
+                    (t.get("name") or t if isinstance(t, dict) else t)
+                    for t in raw_tags
+                ]
+                if config.BAD_EMAIL_TAG in existing:
+                    already_tagged.append(email)
+                else:
+                    client.add_tag_fast(pid, config.BAD_EMAIL_TAG, existing)
+                    tagged.append(email)
+                    logger.info("sync-bounces: tagged %s (pid=%s) BAD_EMAIL", email, pid)
+        except Exception as e:
+            logger.warning("sync-bounces: error on %s: %s", email, e)
+            errors.append(email)
+
+    result = {
+        "bounces_found": len(bounced_emails),
+        "tagged": len(tagged),
+        "already_tagged": len(already_tagged),
+        "not_in_fub": len(not_in_fub),
+        "errors": len(errors),
+        "tagged_emails": tagged,
+    }
+    logger.info("sync-bounces complete: %s", result)
+    return jsonify(result)
+
+
+def scheduled_sync_bounces():
+    """Scheduler wrapper for the nightly bounce sync."""
+    try:
+        with app.app_context():
+            sg_key = os.environ.get("SENDGRID_API_KEY", "")
+            if not sg_key:
+                logger.warning("scheduled_sync_bounces: SENDGRID_API_KEY not set — skipping")
+                return
+            import requests as _req
+            sg_resp = _req.get(
+                "https://api.sendgrid.com/v3/suppression/bounces",
+                headers={"Authorization": f"Bearer {sg_key}", "Accept": "application/json"},
+                params={"limit": 500},
+                timeout=30,
+            )
+            sg_resp.raise_for_status()
+            bounces = sg_resp.json()
+            bounced_emails = [b["email"].strip().lower() for b in bounces if b.get("email")]
+
+            client = FUBClient()
+            tagged_count = 0
+            for email in bounced_emails:
+                try:
+                    people = client.search_people_by_email(email)
+                    for person in people:
+                        pid = person.get("id")
+                        raw_tags = person.get("tags") or []
+                        existing = [(t.get("name") or t if isinstance(t, dict) else t) for t in raw_tags]
+                        if config.BAD_EMAIL_TAG not in existing:
+                            client.add_tag_fast(pid, config.BAD_EMAIL_TAG, existing)
+                            tagged_count += 1
+                except Exception:
+                    pass
+            logger.info("scheduled_sync_bounces: tagged %d new BAD_EMAIL leads", tagged_count)
+    except Exception as e:
+        logger.error("scheduled_sync_bounces crashed: %s", e)
+
+
 # ---- LeadStream: Dashboard ----
 
 _ls_dashboard_cache = {"data": None, "time": None}
@@ -6666,6 +6780,14 @@ def start_scheduler():
     # Appointment accountability email: Tuesday 9am ET
     _scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0, timezone=ET),
                        id="appt_email", name="Tuesday appointment email",
+                       max_instances=1, coalesce=True)
+
+    # Bounce sync: daily 5:50am ET
+    # Fetches all hard bounces from SendGrid and tags matching FUB leads with BAD_EMAIL.
+    # Runs before the morning mailer so dead addresses are already flagged.
+    _scheduler.add_job(scheduled_sync_bounces,
+                       CronTrigger(hour=5, minute=50, timezone=ET),
+                       id="bounce_sync", name="SendGrid bounce → FUB BAD_EMAIL tag (daily 5:50am)",
                        max_instances=1, coalesce=True)
 
     # Goals data sync: daily 5:45am ET

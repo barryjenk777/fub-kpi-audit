@@ -85,6 +85,11 @@ APT_SET_TAG = "APT_SET"
 APT_OUTCOME_NEEDED_TAG = "APT_OUTCOME_NEEDED"
 APT_STALE_TAG = "APT_STALE"
 
+# Tag applied to FUB leads whose email address hard-bounced in SendGrid.
+# These leads are auto-skipped by SendGrid already; the tag surfaces them
+# in FUB so agents know not to email them and can clean up the record.
+BAD_EMAIL_TAG = "BAD_EMAIL"
+
 # Escalation thresholds (hours since appointment start time)
 APT_TIER1_HOURS = 24    # Grace period — APT_SET applied
 APT_TIER2_HOURS = 48    # Escalate — APT_OUTCOME_NEEDED + FUB task created
@@ -297,6 +302,7 @@ POND_EMAIL_EXTRA_SUPPRESSION_TAGS = {
     "NO_EMAIL",                    # Agent-applied: no email of any kind
     "LISTING_ALERT_UNSUB",         # Ylopo alert unsubscribe
     "LISTING_ALERT_SUNSET",        # Ylopo alert sunsetted for inactivity
+    "BAD_EMAIL",                   # Hard bounce confirmed by SendGrid — address is dead
 }
 
 # IDX site visit recency scoring (hours_threshold: points)

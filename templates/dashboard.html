@@ -717,6 +717,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem">
         <button class="btn btn-ghost" onclick="runPondMailer()">▶ Run Now (Live)</button>
         <button class="btn btn-ghost" onclick="loadOutreach(true)">🔄 Refresh</button>
+        <button id="btnSyncBounces" class="btn btn-ghost" onclick="syncBounces()" title="Fetch all hard bounces from SendGrid and tag matching FUB leads with BAD_EMAIL">🚫 Sync Bounces → FUB</button>
       </div>
       <div id="loading-outreach" class="loading-pane"><span class="spinner"></span> Loading AI Outreach data…</div>
       <div id="dashboard-outreach" style="display:none"></div>
@@ -2101,6 +2102,26 @@ async function runPondMailer(){
     const d=await r.json();
     showToast(`Pond mailer running (job ${d.job_id}). Refresh in ~60s.`,'ok');
   }catch(e){showToast('Error: '+e.message,'err');}
+}
+
+async function syncBounces(){
+  const btn=document.getElementById('btnSyncBounces');
+  if(btn){btn.disabled=true;btn.textContent='⏳ Syncing…';}
+  try{
+    const r=await fetch('/api/sync-bounces',{method:'POST'});
+    const d=await r.json();
+    if(d.error){showToast('Error: '+d.error,'err');return;}
+    const msg=`✅ Bounce sync done — ${d.bounces_found} bounces from SendGrid, `+
+              `${d.tagged} newly tagged BAD_EMAIL in FUB, `+
+              `${d.already_tagged} already tagged, `+
+              `${d.not_in_fub} not found in FUB.`;
+    showToast(msg,'ok');
+    console.log('Bounce sync result:', d);
+  }catch(e){
+    showToast('Bounce sync failed: '+e.message,'err');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='🚫 Sync Bounces → FUB';}
+  }
 }
 
 // ── INIT ── load Goals first (it's the home tab)
