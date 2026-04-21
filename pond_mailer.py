@@ -488,6 +488,21 @@ SIGN_OFF = (
     "www.legacyhomesearch.com"
 )
 
+
+def _hg_watch_url(raw_mp4_url: str) -> str:
+    """
+    Wrap a HeyGen MP4 URL in the Railway /watch landing page.
+
+    Desktop email clients download raw .mp4 links instead of playing them.
+    Mobile native players work fine either way. This routes desktop clicks
+    through our HTML5 player page so the video plays inline everywhere.
+    """
+    import os as _os
+    from urllib.parse import quote as _q
+    _base = _os.environ.get("RAILWAY_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+    return f"{_base}/watch?url={_q(raw_mp4_url, safe='')}"
+
+
 # ---------------------------------------------------------------------------
 # Z-Buyer sequence guide — for cash-offer leads (ZLEAD / Z_BUYER / YLOPO_Z_BUYER)
 # These are homeowners who requested a cash offer, not buyers searching for homes.
@@ -2828,7 +2843,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         # Plain-text version (for email clients that strip HTML)
                         video_body_text = (
                             f"{_setup_sent}\n\n"
-                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
                             f"Would a quick 10-minute call make sense? Just reply here.\n\n"
                             + SIGN_OFF
                         )
@@ -2960,7 +2975,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
                         video_body_text = (
                             f"{_z_setup}\n\n"
-                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
                             f"10 minutes on the phone and I'll run both numbers for {_street_display}. "
                             f"Just reply here.\n\n"
                             + SIGN_OFF
@@ -3145,7 +3160,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         # Plain-text version
                         video_body_text = (
                             f"{_setup_text}\n\n"
-                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
                             f"{_cta_text}\n\n"
                             + SIGN_OFF
                         )
@@ -3284,7 +3299,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
                         video_body_text = (
                             f"{setup_line}\n\n"
-                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
                             f"{cta_line}\n\n" + SIGN_OFF
                         )
                         email_data["body_text"] = video_body_text
@@ -3426,7 +3441,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
                         video_body_text4 = (
                             f"{_setup4}\n\n"
-                            f"[Video — click to watch: {video_result['video_url']}]\n\n"
+                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
                             f"{_cta4}\n\n" + SIGN_OFF
                         )
                         email_data["body_text"] = video_body_text4

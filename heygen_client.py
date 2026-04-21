@@ -927,6 +927,19 @@ def generate_and_wait(script: str, background_url: str = None,
 # Email HTML Block — click-to-play thumbnail
 # ---------------------------------------------------------------------------
 
+def _watch_url(video_url: str) -> str:
+    """
+    Wrap a raw MP4 URL in our /watch landing page.
+
+    Desktop browsers/email clients download a direct .mp4 link instead of
+    playing it. Routing through /watch serves an HTML5 player page instead.
+    Mobile is unaffected — the native player intercepts the URL regardless.
+    """
+    from urllib.parse import quote as _quote
+    base = RAILWAY_BASE_URL.rstrip("/")
+    return f"{base}/watch?url={_quote(video_url, safe='')}"
+
+
 def render_video_email_block(video_url: str, thumbnail_url: str,
                               first_name: str = "") -> str:
     """
@@ -947,6 +960,8 @@ def render_video_email_block(video_url: str, thumbnail_url: str,
     """
     name_str = f" for {first_name}" if first_name else ""
     alt = f"Personal video message from Barry Jenkins{name_str} — click to watch"
+    # Route through /watch so desktop browsers open an HTML5 player instead of downloading
+    watch_href = _watch_url(video_url)
 
     # Play button overlay: a Unicode ▶ centered on the thumbnail using a table
     # Works across Gmail, Outlook, Apple Mail without CSS positioning tricks
@@ -954,7 +969,7 @@ def render_video_email_block(video_url: str, thumbnail_url: str,
 <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0;">
   <tr>
     <td align="center">
-      <a href="{video_url}" target="_blank" style="display:inline-block;text-decoration:none;">
+      <a href="{watch_href}" target="_blank" style="display:inline-block;text-decoration:none;">
         <div style="position:relative;display:inline-block;border-radius:8px;overflow:hidden;
                     box-shadow:0 4px 16px rgba(0,0,0,0.18);">
           <img src="{thumbnail_url}"
@@ -992,9 +1007,11 @@ def render_video_email_block_simple(video_url: str, thumbnail_url: str,
     name_str = f" for {first_name}" if first_name else ""
     alt = f"Personal video from Barry Jenkins{name_str} — click to watch"
     _caption = caption if caption else f"&#9654; Barry's personal video{name_str}"
+    # Route through /watch so desktop browsers open an HTML5 player instead of downloading
+    watch_href = _watch_url(video_url)
     return (
         f'<div style="margin:20px 0;text-align:center;">'
-        f'<a href="{video_url}" target="_blank" style="text-decoration:none;">'
+        f'<a href="{watch_href}" target="_blank" style="text-decoration:none;">'
         f'<img src="{thumbnail_url}" alt="{alt}" width="560" '
         f'style="display:block;margin:0 auto;border-radius:8px;'
         f'border:3px solid #e8e8e8;box-shadow:0 4px 12px rgba(0,0,0,0.12);max-width:100%;" />'

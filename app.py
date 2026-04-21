@@ -5335,6 +5335,71 @@ def api_heygen_background():
 _heygen_bg_cache: dict = {}
 
 
+@app.route("/watch")
+def watch_video():
+    """
+    HTML5 video player landing page for HeyGen email thumbnails.
+
+    Desktop email clients download a raw .mp4 link instead of playing it.
+    Mobile native players handle it fine, but desktop does not.
+
+    Fix: thumbnail hrefs in emails point here (/watch?url=<encoded_mp4>).
+    This page renders a full-screen HTML5 <video> player that autoplays
+    the clip inline — works across desktop Chrome, Safari, Firefox, Outlook.
+
+    Query param:
+      url — the HeyGen MP4 video URL (https:// only, URL-encoded)
+    """
+    import html as _html
+    from urllib.parse import unquote as _unquote
+    video_url = request.args.get("url", "").strip()
+    if not video_url:
+        return "Missing video URL.", 400
+    # Decode if the caller double-encoded (some email clients do this)
+    if video_url.startswith("http%"):
+        video_url = _unquote(video_url)
+    if not video_url.startswith("https://"):
+        return "Invalid video URL.", 400
+    safe_url = _html.escape(video_url)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <meta property="og:title" content="Barry Jenkins — Personal Message">
+  <meta property="og:type" content="video.other">
+  <meta property="og:video" content="{safe_url}">
+  <meta property="og:video:type" content="video/mp4">
+  <title>Barry Jenkins — Personal Message</title>
+  <style>
+    *{{margin:0;padding:0;box-sizing:border-box}}
+    body{{background:#0c1228;display:flex;flex-direction:column;
+         align-items:center;justify-content:center;min-height:100vh;
+         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}}
+    .wrap{{width:100%;max-width:900px;padding:16px}}
+    video{{width:100%;border-radius:10px;
+           box-shadow:0 8px 40px rgba(0,0,0,0.6);cursor:pointer}}
+    .brand{{margin-top:14px;text-align:center;
+            color:rgba(255,255,255,0.35);font-size:13px;letter-spacing:0.03em}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <video id="v" src="{safe_url}"
+           controls autoplay playsinline preload="auto">
+      <a href="{safe_url}" style="color:#fff">Download the video</a>
+    </video>
+    <p class="brand">Legacy Home Team &nbsp;&middot;&nbsp; Barry Jenkins, Realtor &nbsp;&middot;&nbsp; LPT Realty</p>
+  </div>
+  <script>
+    var v=document.getElementById('v');
+    v.play().catch(function(){{v.controls=true;}});
+    v.addEventListener('click',function(){{v.paused?v.play():v.pause();}});
+  </script>
+</body>
+</html>""", 200, {{"Content-Type": "text/html; charset=utf-8"}}
+
+
 @app.route("/api/pond-mailer/reply", methods=["POST"])
 def api_pond_mailer_reply():
     """
