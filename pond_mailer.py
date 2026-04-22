@@ -999,7 +999,8 @@ price point, or property type that it reads as insider knowledge, not generic ma
 Good examples (no em or en dashes):
   "Inventory south of Shore Drive is tight. Homes near [their street] tend to sit a few days longer though. That's leverage if you time it right."
   "Most buyers in the $400s in Chesapeake are getting pushed toward [area] right now. VB inventory is slim."
-  "There's a pocket near Great Neck that hits your price range. Rarely shows up in the main search filters."
+  "The Great Neck corridor is underpriced relative to the rest of VB right now. Most buyers skip it because it doesn't show up at the top of the price filters."
+  "Landstown is moving faster than the VB average right now. Worth being on the new listing alert for that zip."
 
 ━━ PARAGRAPH 3: One easy CTA ━━
 One question. Yes/no or answerable in 2-5 words.
@@ -1028,7 +1029,10 @@ Rules:
 - Frame the link as personal curation: "pulled these for you specifically" not "here are some listings"
 - Anchor text must be specific: "3bd homes in Chesapeake under $350k" not "click here" or "view listings"
 - One sentence of insider edge — something about that market or those homes they wouldn't get from Zillow
-- End with a single yes/no question: "Anything worth a closer look?" or "Want to tour any of these?"
+- End with a single yes/no question. Pick the strongest option for this specific lead:
+    "Anything worth a closer look?" — neutral, low commitment
+    "Want to tour any of these?" — slightly higher intent signal
+    "One of these stood out to me for your situation — want me to flag it?" — best when you can genuinely make a recommendation; raises curiosity without giving everything away and almost always gets a yes
 - DO NOT explain yourself. DO NOT mention email 1. DO NOT pad with agent intro.
 - The link IS the value. Get out of the way.
 
@@ -1066,27 +1070,50 @@ Or:
   "No worries if the search is on pause. I'll be here when it picks back up."
 """,
 
-    # ── Phase 2: Long-term Drip ───────────────────────────────────────────────
-    # Emails 4-9. 15-day cadence. Alternates content (4,6,8) and listing drops (5,7,9).
-    # Lead didn't engage with the sprint — now we play the long game.
+    # ── Phase 1.5: Bridge (email 4) ──────────────────────────────────────────
+    # 3-day cadence — fires on sprint timing, 3 days after Email 3 (the breakup).
+    # Not a drip email. A quiet re-entry that makes the breakup feel even MORE genuine.
+    # Email 4 has no CTA, no question — just a useful piece of intel that arrived.
 
-    4: """EMAIL 4 — First Drip (content). They didn't bite on the sprint. That's fine.
-Completely different gear now. No urgency. No gap. Just Barry being genuinely useful.
+    4: """EMAIL 4 — The Bridge. One thing I forgot to mention.
 
-This email is longer than the sprint emails — 90-120 words. It should feel like a
-note from someone who's been paying attention to the market on your behalf.
+They got the breakup. The door is technically closed. This email re-opens it with
+zero pressure — just something specific and useful that arrives 3 days later, as if
+Barry was thinking about something else and remembered a detail about their area.
+
+The effect: it makes the breakup feel even more real. Barry genuinely moved on.
+But then one specific market fact came to mind and he shared it anyway. That's the
+action of someone who actually knows the market — not someone chasing a commission.
 
 Rules:
-- Open with a specific market observation tied to their search area or price range
-- One useful insight — something they probably don't know — that makes them think
-- Soft question at the end. Not "what's your timeline?" — something more curious.
-  E.g. "What would have to change for it to make sense?" or "Still keeping an eye on Chesapeake?"
-- Warm, unhurried, confident. No pressure. Sounds like a smart friend, not a pitch.
-- No links. No P.S. No urgency language.
-- DO NOT reference the earlier emails.
+- 35-50 words max. This is NOT a drip email. Short is the point.
+- One hyper-local piece of market intelligence. Specific to their city, price range, or neighborhood.
+- NO CTA. No question. No "let me know." Just the intel, then nothing.
+- Tone: genuinely unbothered, almost offhand. Like a text Barry typed while thinking about something else.
+- DO NOT reference prior emails. Do not acknowledge the gap. Do not apologize for reaching out again.
+- Do NOT ask about their timeline, status, or readiness. That would undercut the whole energy.
+- No P.S. Silence is more powerful here.
 
-Voice: Barry's authentic teaching voice — "too nice for sales" but genuinely knows Hampton Roads.
+Subject line: should feel like an afterthought — "one more thing" or just the city name or a
+  specific detail. Not a sales hook. Not a question.
+
+Example tone (personalize to their city/price range — do not copy verbatim):
+  "[First name],
+
+  One thing worth knowing about [their area] right now — [specific market insight].
+
+  Thought you'd want to have that in your back pocket."
+
+Or:
+  "[First name],
+
+  Quick note — [specific local fact about their price range or neighborhood]. Not asking you
+  to do anything with it. Just thought you'd want to know."
 """,
+
+    # ── Phase 2: Long-term Drip ───────────────────────────────────────────────
+    # Emails 5-9. 10-day cadence. Alternates listing drops (5,7,9) and content (6,8).
+    # Lead didn't engage with the sprint or bridge — now we play the long game.
 
     5: """EMAIL 5 — First Listing Drop. Short. Direct. Here are homes. No fluff.
 
@@ -1324,8 +1351,10 @@ def generate_email(person, behavior, strategy, leadstream_tier,
     _lead_type = "z-buyer" if is_z else ("ylopo-seller" if is_seller else "")
     if sequence_num <= 3:
         phase_label = f"{(_lead_type + ' ') if _lead_type else ''}sprint #{sequence_num}/3"
+    elif sequence_num == 4:
+        phase_label = f"{(_lead_type + ' ') if _lead_type else ''}bridge"
     else:
-        drip_num = sequence_num - 3
+        drip_num = sequence_num - 4
         phase_label = f"{(_lead_type + ' ') if _lead_type else ''}drip #{drip_num} ({'listing' if listing_drop else 'content'})"
 
     if dry_run:
@@ -1380,6 +1409,12 @@ Total: 65-110 words. Specificity is worth every word. Short paragraphs, not shor
         length_rule = "20-35 words. The breakup. Short is the point. Never so clipped it reads as rude."
         link_rule   = "NO LINKS — ever. This is the breakup email. A link undercuts the message."
         max_tokens  = 400
+    elif sequence_num == 4:
+        # Bridge email — fires 3 days after the breakup, same sprint cadence.
+        # No CTA, no question. Pure intel. Makes the breakup feel real.
+        length_rule = "35-50 words. One specific market insight. No question, no CTA, no P.S. Offhand, like Barry just thought of something."
+        link_rule   = "NO LINKS — ever. A link would signal sales intent and undercut the entire energy of this email."
+        max_tokens  = 350
     elif listing_drop:
         length_rule = "40-55 words. Short. Get out of the way and let the link do the work."
         link_rule   = "INCLUDE the IDX link from the brief as [descriptive anchor text](url). This is the value."
@@ -1428,7 +1463,7 @@ he can give them real numbers — no pressure, no commitment required.
     else:
         lead_type_context = ""
 
-    _phase_label_str = "Z-Buyer Drip" if is_z else ("Ylopo Seller" if is_seller else ("Listing Drop" if listing_drop else ("Reply Sprint" if sequence_num <= 3 else "Long-term Drip")))
+    _phase_label_str = "Z-Buyer Drip" if is_z else ("Ylopo Seller" if is_seller else ("Listing Drop" if listing_drop else ("Reply Sprint" if sequence_num <= 3 else ("Bridge" if sequence_num == 4 else "Long-term Drip"))))
 
     prompt = f"""You are writing a nurture email from Barry Jenkins, realtor in Hampton Roads VA.
 {lead_type_context}
@@ -1611,7 +1646,8 @@ Rules:
     "P.S. Great Bridge is seeing multiple offers on anything under $375k right now."
     "P.S. Suffolk's Harbour View area has been moving fast. Worth a look if Chesapeake is on your list."
     "P.S. A lot of buyers in the $400s are getting pushed toward Newport News. VB inventory is tight."
-    "P.S. There's a pocket near Great Neck that hits your price range but rarely shows up in the main filters."
+    "P.S. The Great Neck corridor is underpriced relative to the rest of VB right now — most buyers skip it without knowing."
+    "P.S. Landstown is running hotter than the Virginia Beach average. Worth having new listing alerts set there if you haven't already."
     "P.S. Chesapeake schools are some of the best in Hampton Roads, if that's part of the decision."
 - BAD: "P.S. — The Hampton Roads market is moving fast right now." (generic, could go to anyone, has a dash)
 
@@ -2669,8 +2705,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
         sequence_num = history["sequence_num"]
 
-        # Phase-aware cooldown: sprint emails 1-3 = 3 days, drip emails 4-9 = 15 days
-        cooldown = DRIP_COOLDOWN_DAYS if sequence_num >= 4 else EMAIL_COOLDOWN_DAYS
+        # Phase-aware cooldown:
+        #   Sprint  emails 1-3 = 3 days (fast reply window)
+        #   Bridge  email  4   = 3 days (fires right after the breakup while the window is open)
+        #   Drip    emails 5-9 = 10 days (long game, unhurried)
+        cooldown = DRIP_COOLDOWN_DAYS if sequence_num >= 5 else EMAIL_COOLDOWN_DAYS
         days_ago = _db.days_since_last_pond_email(pid)
         if days_ago is not None and days_ago < cooldown:
             logger.debug("Skipping %s — emailed %.1f days ago (need %dd)", name, days_ago, cooldown)
