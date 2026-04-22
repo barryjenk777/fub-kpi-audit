@@ -527,13 +527,16 @@ What eats into the listing number:
 - Risk: financed buyers fall through — appraisal issues, loan denials, cold feet
 
 A cash offer at a slightly lower price can net MORE in total. Barry can show them that math.
+Barry's unique angle: he can do BOTH — show the cash number AND run the listing math in the same conversation. Most people in their inbox can only show one.
 
 Rules:
 - Don't make it a lecture. Make it a "here's something most people don't realize."
 - One key insight: net proceeds ≠ offer price
-- The CTA is the net sheet: "Want me to put together a side-by-side for your place?"
+- Weave in Barry's edge naturally: he shows both numbers, most can't
+- CTA must be a direct question: "Want me to put together a side-by-side for your place?"
 - 60-80 words. Teaching voice, not sales voice.
 - No urgency language. No pressure.
+- Last sentence ends with a question mark. Non-negotiable.
 """,
 
     3: """EMAIL 3 — The Timeline Check.
@@ -620,14 +623,19 @@ Rules:
 Markets move. It's been a couple months. Comparable sales in their area have shifted —
 either up or down — and their cash offer estimate AND listing estimate may have changed.
 
-Barry can give them fresh numbers with no commitment required.
+Barry can give them fresh numbers with no commitment required. Both numbers — cash AND what
+listing might net — because that's the comparison most people never see side by side.
 
 Rules:
 - Frame it as: "The market's moved since we first connected — wanted to give you a heads-up."
 - Don't make it sound like you're tracking them. Make it sound like you're paying attention to the market on their behalf.
-- Offer to pull updated comps: "If you want current numbers on your place, I can put them together in about 10 minutes."
+- Reference Barry's edge: he can run both numbers (cash offer AND listing estimate) in the same conversation. This is the differentiator. One sentence, natural, not a pitch.
 - 60-80 words. Light. No pressure.
-- CTA: "Want updated comps for your neighborhood?"
+- CTA MUST be a direct question ending with a question mark. Examples:
+    "Want me to pull fresh numbers on your place?"
+    "Worth a quick look at what both options net right now?"
+    "Want me to run the updated math on your place?"
+  DO NOT end with a statement like "Worth getting a fresh number if you're still weighing it." That is not a CTA. It's a sentence that lets them ignore you.
 """,
 
     8: """EMAIL 8 — The Comparison Nobody Makes.
@@ -1630,6 +1638,27 @@ WHAT GETS REPLIES (non-negotiable rules):
 2. A gap or a gift — leave something they want to close, or give them something real
 3. An easy question — answerable in 2–5 words, yes/no if possible
 
+━━━━ CTA ENFORCEMENT (mandatory — no exceptions) ━━━━
+Every email must end with a QUESTION. Not a statement. Not a passive observation. A question.
+Before outputting, read your last sentence. Does it end with a question mark? If not, rewrite it.
+
+WRONG — passive endings that kill replies:
+  "Worth getting a fresh number if you're still weighing it."
+  "Something to think about as you consider your options."
+  "Hampton Roads cash offers have tightened up since spring."
+  "Either way, I'm here when you're ready."
+  "Just wanted to touch base and see where things stand."
+  Any sentence that ends with a period and lets them off the hook.
+
+RIGHT — direct questions that make replying easier than not:
+  "Want me to pull fresh numbers on your place?"
+  "Still thinking about selling, or did something change?"
+  "Worth a quick call to look at both options?"
+  "Did the move end up happening, or is the timeline still open?"
+  "Want me to put together a side-by-side for your place?"
+  "Still searching in [city], or did something shift?"
+  The question should be answerable in one word. "Yes." "No." "Still looking." Done.
+
 ━━━━ LOCAL INSIDER P.S. ━━━━
 Email 1: include a P.S. ~70% of the time — it's the "I know this market cold" signal.
 Emails 2-3: include ~30% of the time — silence works here too.
@@ -1679,7 +1708,12 @@ OUTPUT (JSON only, no markdown fences, no code blocks):
 
 The first sentence of the body must reference something specific to this lead:
 their property address, the number of times they came back, their city, their price range.
-If you can't tell it was written for exactly this person, rewrite it."""
+If you can't tell it was written for exactly this person, rewrite it.
+
+FINAL QUALITY CHECK — run this before outputting:
+1. Last sentence ends with a question mark? If no, rewrite it.
+2. Could this exact email go to a different lead and still make sense? If yes, it's too generic — add the specific detail that makes it impossible to send to anyone else.
+3. Does any sentence sound like a marketing email? Strip it. Barry sounds like a knowledgeable friend who noticed something, not a system that sent a campaign."""
 
     response = client.messages.create(
         model="claude-opus-4-5",
