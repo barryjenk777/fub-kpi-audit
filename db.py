@@ -2912,7 +2912,7 @@ def log_pond_email(person_id, person_name, email_address, subject,
         return None
 
 
-def count_pond_emails_today_by_strategy(strategy, tz_name="US/Eastern"):
+def count_pond_emails_today_by_strategy(strategy, tz_name="America/New_York"):
     """Count real (non-dry-run) pond emails sent today for a specific strategy."""
     if not is_available():
         return 0
@@ -2933,7 +2933,7 @@ def count_pond_emails_today_by_strategy(strategy, tz_name="US/Eastern"):
         return 0
 
 
-def count_pond_emails_today(tz_name="US/Eastern"):
+def count_pond_emails_today(tz_name="America/New_York"):
     """Count real (non-dry-run) TEXT pond emails sent today (HeyGen excluded).
 
     HeyGen video emails are exempt from the main daily cap — they have their
@@ -2959,7 +2959,7 @@ def count_pond_emails_today(tz_name="US/Eastern"):
         return 0
 
 
-def count_heygen_today(tz_name="US/Eastern"):
+def count_heygen_today(tz_name="America/New_York"):
     """Count real (non-dry-run) HeyGen video emails sent today.
 
     HeyGen rows have avatar_used set to the avatar ID that rendered the video.
@@ -3002,7 +3002,7 @@ def has_received_new_lead_immediate(person_id):
         return False
 
 
-def delete_pond_emails_today(tz_name="US/Eastern"):
+def delete_pond_emails_today(tz_name="America/New_York"):
     """Delete today's real (non-dry-run) pond email log entries. Returns count deleted."""
     if not is_available():
         return 0
