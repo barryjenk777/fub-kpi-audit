@@ -13,9 +13,9 @@ All messages pull from the agent's stored 'why', 'identity', and activity data.
 Uses a 15-20 message template pool so emails never feel repetitive.
 
 Environment variables required:
-  SENDGRID_API_KEY
-  EMAIL_FROM      (e.g. barry@yourfriendlyagent.net)
-  BASE_URL        (for dashboard links)
+  POSTMARK_API_KEY  — Server API Token from postmarkapp.com
+  EMAIL_FROM        (e.g. barry@yourfriendlyagent.net)
+  BASE_URL          (for dashboard links)
 """
 
 import logging
@@ -39,20 +39,12 @@ EMAIL_FROM = os.environ.get("EMAIL_FROM", "barry@yourfriendlyagent.net")
 
 def _send_email(to_email: str, subject: str, text_body: str,
                 dashboard_url: str = "", dry_run: bool = False) -> dict:
-    """Send a nudge email via SendGrid. Returns {status} or raises."""
+    """Send a nudge email via Postmark. Returns {status} or raises."""
     if dry_run:
         logger.info("[DRY RUN] Email to %s | %s", to_email, subject)
         return {"status": "dry_run"}
 
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        raise RuntimeError("SENDGRID_API_KEY not set")
-
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail
-    except ImportError:
-        raise RuntimeError("sendgrid package not installed")
+    import postmark_client as _pm
 
     # Dashboard button (optional, shown on missed_day / streak_break)
     dashboard_btn = ""
@@ -90,20 +82,16 @@ def _send_email(to_email: str, subject: str, text_body: str,
 </div>
 </body></html>"""
 
-    from sendgrid.helpers.mail import Email as _Email
-    msg = Mail(
-        from_email=EMAIL_FROM,
-        to_emails=to_email,
-        subject=subject,
-        plain_text_content=text_body,
-        html_content=html_body,
-    )
     # Barry is always CC'd on every nudge so he sees exactly what agents receive
-    msg.personalizations[0].add_cc(_Email(EMAIL_FROM))
-
-    sg = SendGridAPIClient(api_key)
-    resp = sg.send(msg)
-    return {"status": "sent", "code": resp.status_code}
+    _pm.send(
+        to=to_email,
+        from_email=EMAIL_FROM,
+        subject=subject,
+        html=html_body,
+        text=text_body,
+        cc=EMAIL_FROM,
+    )
+    return {"status": "sent"}
 
 
 # ---------------------------------------------------------------------------
@@ -532,15 +520,12 @@ def run_morning_nudges(dry_run: bool = False):
 
         try:
             if not dry_run:
-                api_key = os.environ.get("SENDGRID_API_KEY")
-                from sendgrid import SendGridAPIClient
-                from sendgrid.helpers.mail import Mail, Email as _Email
-                msg = Mail(
-                    from_email=EMAIL_FROM, to_emails=email,
-                    subject=subject, plain_text_content=body_text, html_content=html,
+                import postmark_client as _pm
+                _pm.send(
+                    to=email, from_email=EMAIL_FROM,
+                    subject=subject, html=html, text=body_text,
+                    cc=EMAIL_FROM,
                 )
-                msg.personalizations[0].add_cc(_Email(EMAIL_FROM))
-                SendGridAPIClient(api_key).send(msg)
             send_status = "sent" if not dry_run else "dry_run"
             _db.log_nudge(name, "morning", subject, status=send_status, arc=selected_arc)
             logger.info("Morning nudge [#%d/%d] → %s | %s", rank, team_size, name, subject[:60])
@@ -617,15 +602,12 @@ def run_closing_milestones(dry_run=False):
 
             try:
                 if not dry_run:
-                    api_key = os.environ.get("SENDGRID_API_KEY")
-                    from sendgrid import SendGridAPIClient
-                    from sendgrid.helpers.mail import Mail, Email as _Email
-                    msg = Mail(
-                        from_email=EMAIL_FROM, to_emails=email,
-                        subject=subject, plain_text_content=body_text, html_content=html,
+                    import postmark_client as _pm
+                    _pm.send(
+                        to=email, from_email=EMAIL_FROM,
+                        subject=subject, html=html, text=body_text,
+                        cc=EMAIL_FROM,
                     )
-                    msg.personalizations[0].add_cc(_Email(EMAIL_FROM))
-                    SendGridAPIClient(api_key).send(msg)
                 _db.log_nudge(name, milestone_key, log_content,
                               status="sent" if not dry_run else "dry_run")
                 logger.info("Closing milestone → %s | %s | %s", name, deal_marker, subject[:60])

@@ -1,9 +1,10 @@
 """
-Send the weekly KPI audit report via SendGrid email.
+Send internal team emails via Postmark.
 Designed as a team leader weekly update with actionable insights.
 
-Requires: pip install sendgrid
-           export SENDGRID_API_KEY="SG.your_key_here"
+Requires:
+  POSTMARK_API_KEY  — Server API Token from postmarkapp.com
+                      (Settings → Servers → Legacy Internal → API Tokens)
 """
 
 import os
@@ -11,23 +12,7 @@ import random
 from datetime import datetime, timedelta
 
 import config
-
-
-def _disable_tracking(msg):
-    """Turn off SendGrid click + open tracking on any Mail object.
-
-    Tracking rewrites links through click.sendgrid.net and injects a 1×1 pixel
-    — both known spam-filter triggers.  Calling this on every outbound message
-    keeps our sending reputation clean.
-    """
-    try:
-        from sendgrid.helpers.mail import TrackingSettings, ClickTracking, OpenTracking
-        ts = TrackingSettings()
-        ts.click_tracking = ClickTracking(enable=False, enable_text=False)
-        ts.open_tracking = OpenTracking(enable=False)
-        msg.tracking_settings = ts
-    except Exception:
-        pass  # Older SDK — skip silently rather than crash sends
+import postmark_client as _pm
     return msg
 
 
@@ -558,17 +543,6 @@ def build_manager_email(manager_data, period_label):
 
 def send_manager_email(manager_data, period_label):
     """Send Joe's Monday morning coaching email. CC Barry."""
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        print("\n⚠  SENDGRID_API_KEY not set.")
-        return False
-
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, To
-    except ImportError:
-        return False
-
     html_body = build_manager_email(manager_data, period_label)
     cs = manager_data["coaching_summary"]
     meeting = cs["meeting_kpi"]
@@ -576,31 +550,18 @@ def send_manager_email(manager_data, period_label):
 
     subject = _catchy_subject("manager", {"meeting": meeting, "total": total})
 
-    # Joe + Barry (CC)
-    recipients = [
-        getattr(config, "MANAGER_EMAIL", "thejoefu@gmail.com"),
-    ] + list(config.EMAIL_RECIPIENTS)
-    # Deduplicate
+    # Joe + Barry — deduplicated
+    recipients = [getattr(config, "MANAGER_EMAIL", "thejoefu@gmail.com")] + list(config.EMAIL_RECIPIENTS)
     seen = set()
-    unique = []
-    for e in recipients:
-        if e not in seen:
-            seen.add(e)
-            unique.append(e)
-
-    to_list = [To(email) for email in unique]
-
-    message = Mail(
-        from_email=config.EMAIL_FROM,
-        to_emails=to_list,
-        subject=subject,
-        html_content=html_body,
-    )
-    _disable_tracking(message)
+    unique = [e for e in recipients if e not in seen and not seen.add(e)]
 
     try:
-        sg = SendGridAPIClient(api_key)
-        sg.send(message)
+        _pm.send(
+            to=", ".join(unique),
+            from_email=config.EMAIL_FROM,
+            subject=subject,
+            html=html_body,
+        )
         print(f"\n✅ Manager email sent to {len(unique)} recipients")
         return True
     except Exception as e:
@@ -881,16 +842,6 @@ def send_hype_email(agents, period_label, ai_text_count, ai_voice_count,
     to_emails: list of (name, email) tuples from get_all_user_emails()
     Returns (success: bool, message: str)
     """
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        return False, "SENDGRID_API_KEY not set"
-
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, To
-    except ImportError:
-        return False, "sendgrid package not installed"
-
     html_body = build_hype_email(
         agents, period_label, ai_text_count, ai_voice_count,
         fhalen_appts, fhalen_name, thresholds=thresholds,
@@ -909,47 +860,29 @@ def send_hype_email(agents, period_label, ai_text_count, ai_voice_count,
     import random as _random
     subject = _random.choice(subjects)
 
-    to_list = [To(email=email, name=name) for name, email in to_emails if email]
-    if not to_list:
+    valid = [(name, email) for name, email in to_emails if email]
+    if not valid:
         return False, "No valid email recipients found"
 
-    message = Mail(
-        from_email=config.EMAIL_FROM,
-        to_emails=to_list,
-        subject=subject,
-        html_content=html_body,
-    )
-    _disable_tracking(message)
-
     try:
-        sg = SendGridAPIClient(api_key)
-        sg.send(message)
-        return True, f"Sent to {len(to_list)} recipients"
+        _pm.send(
+            to=", ".join(f"{name} <{email}>" for name, email in valid),
+            from_email=config.EMAIL_FROM,
+            subject=subject,
+            html=html_body,
+        )
+        return True, f"Sent to {len(valid)} recipients"
     except Exception as e:
         return False, str(e)
 
 
 def send_report(results, period_start, period_end):
-    """Send the audit report via SendGrid."""
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        print("\n⚠  SENDGRID_API_KEY not set. Skipping email.")
-        print("   Set it with: export SENDGRID_API_KEY=\"SG.your_key_here\"")
-        return False
-
+    """Send the audit report via Postmark."""
     if not config.EMAIL_RECIPIENTS:
         print("\n⚠  No EMAIL_RECIPIENTS configured. Skipping email.")
         return False
 
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, To
-    except ImportError:
-        print("\n⚠  sendgrid package not installed. Run: pip install sendgrid")
-        return False
-
     html_body = build_html_report(results, period_start, period_end)
-    period = f"{period_start.strftime('%b %d')} — {period_end.strftime('%b %d, %Y')}"
 
     passed = sum(1 for d in results.values() if d["evaluation"]["overall_pass"])
     total = len(results)
@@ -961,19 +894,13 @@ def send_report(results, period_start, period_end):
     if admin_email and admin_email not in all_recipients:
         all_recipients.append(admin_email)
 
-    to_list = [To(email) for email in all_recipients]
-
-    message = Mail(
-        from_email=config.EMAIL_FROM,
-        to_emails=to_list,
-        subject=subject,
-        html_content=html_body,
-    )
-    _disable_tracking(message)
-
     try:
-        sg = SendGridAPIClient(api_key)
-        response = sg.send(message)
+        _pm.send(
+            to=", ".join(all_recipients),
+            from_email=config.EMAIL_FROM,
+            subject=subject,
+            html=html_body,
+        )
         print(f"\n✅ Weekly update emailed to {len(all_recipients)} recipients:")
         for email in all_recipients:
             label = " (Live Calls admin)" if email == admin_email else ""
@@ -1119,16 +1046,6 @@ def build_isa_email(isa_data):
 
 def send_isa_email(isa_data):
     """Send Fhalen's Monday morning ISA performance email."""
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        return False
-
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, To
-    except ImportError:
-        return False
-
     html_body = build_isa_email(isa_data)
     c = isa_data.get("current", {})
     subject = _catchy_subject("isa", {"calls": c.get("calls", 0), "convos": c.get("convos", 0)})
@@ -1139,23 +1056,15 @@ def send_isa_email(isa_data):
         recipients.append(admin_email)
 
     seen = set()
-    unique = []
-    for e in recipients:
-        if e not in seen:
-            seen.add(e)
-            unique.append(e)
-
-    message = Mail(
-        from_email=config.EMAIL_FROM,
-        to_emails=[To(e) for e in unique],
-        subject=subject,
-        html_content=html_body,
-    )
-    _disable_tracking(message)
+    unique = [e for e in recipients if e not in seen and not seen.add(e)]
 
     try:
-        sg = SendGridAPIClient(api_key)
-        sg.send(message)
+        _pm.send(
+            to=", ".join(unique),
+            from_email=config.EMAIL_FROM,
+            subject=subject,
+            html=html_body,
+        )
         print(f"\n✅ ISA email sent to {len(unique)} recipients")
         return True
     except Exception as e:
@@ -1384,25 +1293,13 @@ def build_agent_appointment_email(appt_data, agent_name, agent_open):
 
 
 def send_appointment_email(appt_data, subject_override=None):
-    """Send per-agent appointment accountability emails via SendGrid.
+    """Send per-agent appointment accountability emails via Postmark.
 
     Each agent with open appointments gets their own email (only their leads).
     Barry, Joe, and Fhalen are CC'd on every agent email.
     A manager summary email goes to the CC list as well.
     subject_override replaces both the agent and manager subject lines when set.
     """
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        print("\n⚠  SENDGRID_API_KEY not set. Skipping email.")
-        return False
-
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, To, Cc
-    except ImportError:
-        print("\n⚠  sendgrid package not installed.")
-        return False
-
     # Pull agent emails from FUB
     try:
         from fub_client import FUBClient
@@ -1420,8 +1317,7 @@ def send_appointment_email(appt_data, subject_override=None):
         if a.get("is_past") and not a.get("outcome") and a.get("tier"):
             agent_open[a.get("assigned_agent", "Unknown")].append(a)
 
-    sg = SendGridAPIClient(api_key)
-    cc_list = [Cc(e) for e in config.APT_EMAIL_CC]
+    cc_emails = [e for e in config.APT_EMAIL_CC]
     sent = 0
     skipped = 0
 
@@ -1446,20 +1342,17 @@ def send_appointment_email(appt_data, subject_override=None):
         else:
             subject = f"Action Needed: {no_out} Appointment{'s' if no_out != 1 else ''} {'Need' if no_out != 1 else 'Needs'} an Outcome"
 
-        message = Mail(
-            from_email=config.EMAIL_FROM,
-            to_emails=[To(email)],
-            subject=subject,
-            html_content=html_body,
-        )
-        # Add CC — skip if agent is already in the CC list
-        for cc in cc_list:
-            if cc.email != email:
-                message.add_cc(cc)
-        _disable_tracking(message)
+        # CC everyone except the agent themselves
+        cc = [e for e in cc_emails if e != email]
 
         try:
-            sg.send(message)
+            _pm.send(
+                to=email,
+                from_email=config.EMAIL_FROM,
+                subject=subject,
+                html=html_body,
+                cc=cc,
+            )
             print(f"  ✅ Sent to {agent_name} <{email}> ({no_out} open)")
             sent += 1
         except Exception as e:
@@ -1474,15 +1367,13 @@ def send_appointment_email(appt_data, subject_override=None):
         "completion_rate": t.get("completion_rate", 0),
     })
     mgr_recipients = list(dict.fromkeys(config.APT_EMAIL_CC))
-    mgr_message = Mail(
-        from_email=config.EMAIL_FROM,
-        to_emails=[To(e) for e in mgr_recipients],
-        subject=f"[Team Summary] {summary_subject}",
-        html_content=summary_html,
-    )
-    _disable_tracking(mgr_message)
     try:
-        sg.send(mgr_message)
+        _pm.send(
+            to=", ".join(mgr_recipients),
+            from_email=config.EMAIL_FROM,
+            subject=f"[Team Summary] {summary_subject}",
+            html=summary_html,
+        )
         print(f"\n✅ Manager summary sent to {mgr_recipients}")
     except Exception as e:
         print(f"\n❌ Manager summary failed: {e}")
@@ -1596,16 +1487,6 @@ def send_goal_onboarding_reminder(agent_name, first_name, email, setup_url, day=
     day=3: gentle nudge
     day=7: more direct, mentions Barry is watching
     """
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        return False
-
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, To
-    except ImportError:
-        return False
-
     if day == 3:
         subject = f"{first_name}, still waiting on your goals (2 min setup)"
         body = f"""Hey {first_name},
@@ -1633,15 +1514,14 @@ If you've got questions or want to talk through your goal, reply to this email o
 
 — Barry"""
 
-    message = Mail(
-        from_email=config.EMAIL_FROM,
-        to_emails=[To(email)],
-        subject=subject,
-        plain_text_content=body,
-    )
-
     try:
-        SendGridAPIClient(api_key).send(message)
+        _pm.send(
+            to=email,
+            from_email=config.EMAIL_FROM,
+            subject=subject,
+            html=body.replace("\n", "<br>"),
+            text=body,
+        )
         print(f"[ONBOARDING REMINDER] Day {day} sent to {agent_name} <{email}>")
         return True
     except Exception as e:
@@ -1654,32 +1534,16 @@ def send_goal_onboarding_email(agent_name, first_name, email, setup_url, dashboa
     Send the goal setup onboarding email to a new agent.
     Triggered automatically by the FUB roster sync when a new agent is detected.
     """
-    api_key = os.environ.get("SENDGRID_API_KEY")
-    if not api_key:
-        print(f"[ONBOARDING EMAIL] SENDGRID_API_KEY not set — skipping for {agent_name}")
-        return False
-
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, To
-    except ImportError:
-        print("[ONBOARDING EMAIL] sendgrid package not installed")
-        return False
-
     html_body = build_goal_onboarding_email(first_name, setup_url, dashboard_url=dashboard_url)
     subject = f"{first_name}, your goals are waiting — 5 minutes to set them up 🎯"
 
-    message = Mail(
-        from_email=config.EMAIL_FROM,
-        to_emails=[To(email)],
-        subject=subject,
-        html_content=html_body,
-    )
-    _disable_tracking(message)
-
     try:
-        sg = SendGridAPIClient(api_key)
-        sg.send(message)
+        _pm.send(
+            to=email,
+            from_email=config.EMAIL_FROM,
+            subject=subject,
+            html=html_body,
+        )
         print(f"[ONBOARDING EMAIL] ✅ Sent to {agent_name} <{email}>")
         return True
     except Exception as e:
