@@ -2345,6 +2345,7 @@ def _fub_mark_email_unsubscribed(client, person, bounced_email):
 def _fetch_sendgrid_bounces():
     """Fetch all hard bounces from SendGrid. Returns list of lowercase email strings."""
     import requests as _req
+    from requests.exceptions import HTTPError as _HTTPError
     sg_key = os.environ.get("SENDGRID_API_KEY", "")
     if not sg_key:
         raise RuntimeError("SENDGRID_API_KEY not set")
@@ -2354,7 +2355,15 @@ def _fetch_sendgrid_bounces():
         params={"limit": 500},
         timeout=30,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except _HTTPError as http_err:
+        if resp.status_code == 403:
+            raise RuntimeError(
+                "SendGrid API key is missing 'Suppression Management → Read Access' permission. "
+                "Fix: SendGrid → Settings → API Keys → edit your key → add Suppression Management (Read Access)."
+            ) from http_err
+        raise
     return [b["email"].strip().lower() for b in resp.json() if b.get("email")]
 
 
