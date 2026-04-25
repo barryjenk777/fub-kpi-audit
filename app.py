@@ -5404,6 +5404,111 @@ def watch_video():
     return _R(html_out, status=200, mimetype="text/html")
 
 
+@app.route("/unsubscribe", methods=["GET"])
+def pond_unsubscribe():
+    """
+    One-click unsubscribe for pond nurture emails.
+
+    URL format: /unsubscribe?e=BASE64URL_EMAIL
+    - Decodes the email address from the token
+    - Looks up the lead in pond_email_log
+    - Tags them PondMailer_Unsubscribed in FUB (suppresses future sends)
+    - Shows a plain confirmation page
+
+    RFC 8058 / Gmail one-click compliant — no email compose required.
+    """
+    import base64 as _b64
+    from flask import Response as _R
+
+    raw_token = request.args.get("e", "").strip()
+    if not raw_token:
+        return _R("<h2>Invalid unsubscribe link.</h2>", status=400, mimetype="text/html")
+
+    # Decode email — base64url, padding-tolerant
+    try:
+        padded = raw_token + "=" * (-len(raw_token) % 4)
+        email  = _b64.urlsafe_b64decode(padded).decode("utf-8").strip().lower()
+        if "@" not in email:
+            raise ValueError("not an email")
+    except Exception:
+        return _R("<h2>Invalid unsubscribe link.</h2>", status=400, mimetype="text/html")
+
+    # Look up person_id from pond_email_log
+    person_id, person_name, _ = _db.get_pond_email_person_by_email(email)
+    already_done = False
+
+    if person_id:
+        try:
+            from fub_client import FUBClient
+            fub = FUBClient()
+            fub.add_tag(person_id, "PondMailer_Unsubscribed")
+            logger.info("One-click unsubscribe: tagged %s (ID %s) PondMailer_Unsubscribed", email, person_id)
+        except Exception as exc:
+            logger.warning("One-click unsubscribe: FUB tag failed for %s: %s", email, exc)
+    else:
+        # Email not in pond log — may have already been unsubscribed or never emailed
+        already_done = True
+        logger.info("One-click unsubscribe: no pond record for %s", email)
+
+    # Log the unsubscribe in pond_reply_log so it shows in the dashboard
+    if person_id:
+        try:
+            _db.log_pond_reply(
+                person_id=person_id,
+                person_name=person_name or email,
+                reply_from=email,
+                reply_text="[One-click unsubscribe via email footer link]",
+                sentiment="negative",
+                sentiment_score=1.0,
+                routed=False,
+                fub_task_id=None,
+            )
+        except Exception:
+            pass
+
+    # Confirmation page
+    display = person_name.split()[0] if person_name else "there"
+    page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unsubscribed — Legacy Home Team</title>
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: #f8f8f8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }}
+    .card {{
+      background: #fff;
+      border-radius: 12px;
+      padding: 40px 48px;
+      max-width: 480px;
+      text-align: center;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+    }}
+    h1 {{ font-size: 22px; color: #1a1a1a; margin-bottom: 12px; }}
+    p  {{ font-size: 15px; color: #555; line-height: 1.6; margin-bottom: 8px; }}
+    .check {{ font-size: 48px; margin-bottom: 16px; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="check">✅</div>
+    <h1>You've been unsubscribed</h1>
+    <p>Hey {display} — you're all set. We won't send you any more emails from this list.</p>
+    <p style="color:#aaa;font-size:13px;margin-top:24px;">Legacy Home Team &nbsp;·&nbsp; Barry Jenkins</p>
+  </div>
+</body>
+</html>"""
+    return _R(page, status=200, mimetype="text/html")
+
+
 @app.route("/api/pond-mailer/reply", methods=["POST"])
 def api_pond_mailer_reply():
     """

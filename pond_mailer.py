@@ -192,6 +192,20 @@ PHYSICAL_ADDRESS = "LPT Realty · 1545 Crossways Blvd Chesapeake, VA 23320"
 FROM_EMAIL = "barry@yourfriendlyagent.net"
 FROM_NAME  = "Barry Jenkins | Legacy Home Team"
 
+# Base URL for one-click unsubscribe links (uses BASE_URL env var, same as Railway public URL)
+_APP_BASE_URL = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+
+
+def _unsub_url(email: str) -> str:
+    """Return a one-click unsubscribe URL for the given email address.
+    Encodes the email as base64url so it survives email client link mangling.
+    The /unsubscribe endpoint in app.py decodes it, tags PondMailer_Unsubscribed
+    in FUB, and shows a confirmation page — no compose window required.
+    """
+    import base64
+    token = base64.urlsafe_b64encode(email.lower().encode()).decode().rstrip("=")
+    return f"{_APP_BASE_URL}/unsubscribe?e={token}"
+
 
 # ---------------------------------------------------------------------------
 # Behavior Analyzer
@@ -1980,7 +1994,7 @@ def _md_links_to_html(text):
     )
 
 
-def _render_html(body_text):
+def _render_html(body_text, to_email=""):  # to_email kept for backwards compat, placeholder used below
     """
     Render a personal-email style HTML — NOT a marketing template.
 
@@ -2037,7 +2051,7 @@ def _render_html(body_text):
       <a href="https://www.legacyhomesearch.com"
          style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
       1545 Crossways Blvd, Chesapeake, VA 23320<br>
-      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
+      <a href="__UNSUB_URL__"
          style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
     </p>
   </div>
@@ -2064,6 +2078,16 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
     from sendgrid.helpers.mail import (
         Mail, Email as SgEmail, Bcc,
         TrackingSettings, ClickTracking, OpenTracking,
+    )
+
+    # Inject one-click unsubscribe URL — replaces __UNSUB_URL__ placeholder set by
+    # _render_html(), and also fixes any inline templates that still use the old mailto:.
+    _recipient = to_email.lower().strip() if isinstance(to_email, str) else ""
+    _unsub     = _unsub_url(_recipient) if _recipient else "#"
+    body_html  = body_html.replace("__UNSUB_URL__", _unsub)
+    body_html  = body_html.replace(
+        "mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe",
+        _unsub,
     )
 
     msg = Mail(
