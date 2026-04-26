@@ -198,11 +198,11 @@ MORNING_TEMPLATES = [
 ]
 
 MISSED_DAY_TEMPLATES = [
-    "{first}, afternoon push — still time to make calls today. Even 5 conversations keeps the momentum going.",
+    "{first}, afternoon push — still time to make calls today. Even 5 dials keeps the momentum going.",
     "Halfway through the day, {first}. Whatever the morning looked like, the afternoon is yours. Pick up the phone.",
-    "{first} — don't let today slip. One conversation can change a week. Go make it.",
+    "{first} — don't let today slip. One call can change a week. Go make it.",
     "The agents who win the week find a way to make calls even late in the day. That's you, {first}. Go.",
-    "{first}, the day isn't over. Stack a few more conversations and sleep better tonight.",
+    "{first}, the day isn't over. Stack a few more calls and sleep better tonight.",
 ]
 
 STREAK_BREAK_TEMPLATES = [

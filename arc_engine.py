@@ -317,7 +317,7 @@ def _goal_section(ctx, goal_ctx, tone):
         ]
     else:
         opts = [
-            f"Your {gci_goal_fmt} goal needs {daily_target} conversations a day. YTD pace: {calls_pace_pct}% — {pace_label} ({calls_ytd} calls vs. a target of {calls_target_ytd} at this point in the year).",
+            f"Your {gci_goal_fmt} goal needs {daily_target} calls a day. YTD pace: {calls_pace_pct}% — {pace_label} ({calls_ytd} calls vs. a target of {calls_target_ytd} at this point in the year).",
             f"To reach {gci_goal_fmt} this year, the daily target is {daily_target} calls. You're sitting at {calls_pace_pct}% of pace YTD — {pace_label}. The gap closes one day at a time.",
         ]
     return random.choice(opts)
@@ -659,7 +659,7 @@ def _arc_scoreboard(ctx, situation, goal_ctx, deal_summary, tone, top_agent, tea
                     f"The math takes care of itself when you take care of the reps."
                 ),
                 (
-                    f"Your {gci_goal_fmt} goal needs {daily_target} conversations a day. {pace_line}\n\n"
+                    f"Your {gci_goal_fmt} goal needs {daily_target} calls a day. {pace_line}\n\n"
                     f"Every great agent I've watched build a big year had one thing in common — "
                     f"when they saw a gap, they didn't look away. They looked straight at it and then went to work.\n\n"
                     f"Look straight at it today, {first}. Then pick up the phone."
@@ -689,7 +689,10 @@ def _arc_compound(ctx, situation, goal_ctx, deal_summary, tone, top_agent, team_
     """
     first    = ctx["first"]
     who      = ctx.get("who") or "the people you love"
-    calls_t  = ctx.get("daily_calls", 20)
+    # Use the goal-derived daily call target when available — this is what the
+    # GCI math is actually built on. ctx["daily_calls"] is the agent's own
+    # self-reported number (stored in agent_profiles) and may be stale/wrong.
+    calls_t  = goal_ctx["daily_target"] if goal_ctx else ctx.get("daily_calls", 20)
     gci_fmt  = ctx.get("gci_fmt") or "your goal"
     identity = ctx.get("identity") or "a top producer"
     has_goals = goal_ctx is not None
@@ -715,8 +718,8 @@ def _arc_compound(ctx, situation, goal_ctx, deal_summary, tone, top_agent, team_
             (
                 f"{goal_block}"
                 f"Let me give you the math that nobody talks about.\n\n"
-                f"{calls_t} calls a day × {days_remaining} working days left = {total_calls:,} conversations.\n"
-                f"At a 10% connect-to-appointment rate, that's {total_appts} appointments.\n\n"
+                f"{calls_t} calls a day × {days_remaining} working days left = {total_calls:,} calls.\n"
+                f"At a 10% calls-to-appointment rate, that's {total_appts} appointments.\n\n"
                 f"You are not skipping a phone call today. "
                 f"You are skipping {total_appts} appointments that could change your year.\n\n"
                 f"Atomic Habits calls this the plateau of latent potential — it looks like nothing is happening, "
@@ -736,7 +739,7 @@ def _arc_compound(ctx, situation, goal_ctx, deal_summary, tone, top_agent, team_
             ),
             (
                 f"{goal_block}"
-                f"{calls_t} calls × {days_remaining} days = {total_calls:,} conversations. "
+                f"{calls_t} calls × {days_remaining} days = {total_calls:,} total calls. "
                 f"At your conversion rate, that's a very different year-end number than zero calls today.\n\n"
                 f"The compound effect doesn't reward intensity. It rewards consistency. "
                 f"It doesn't care if you crushed it last week and coast this week. "
@@ -762,8 +765,8 @@ def _arc_compound(ctx, situation, goal_ctx, deal_summary, tone, top_agent, team_
             (
                 f"{goal_block}"
                 f"Here's what {calls_t} calls a day actually builds:\n\n"
-                f"{calls_t}/day × {days_remaining} working days left = {total_calls:,} conversations. "
-                f"At 10% to appointment, that's {total_appts} shots at a closing.\n\n"
+                f"{calls_t}/day × {days_remaining} working days left = {total_calls:,} total calls. "
+                f"At 10% calls-to-appointment, that's {total_appts} shots at a closing.\n\n"
                 f"That's not a number you manufacture in a sprint. That's a number you build one morning at a time.\n\n"
                 f"James Clear calls it the plateau of latent potential — effort builds silently before results show loudly. "
                 f"You're in the plateau right now, {first}. The work is invisible. "
