@@ -3792,7 +3792,8 @@ def api_admin_expire_isa_transfers():
         from fub_client import FUBClient
         client = FUBClient(api_key)
         removed, failed = 0, []
-        for person_id in expired:
+        for row in expired:
+            person_id = row["person_id"]
             try:
                 client.remove_tag(person_id, ISA_TRANSFER_FRESH_TAG)
                 _db.delete_isa_transfer(person_id)
@@ -6298,38 +6299,113 @@ def scheduled_sync_appointment_tags():
         _db.release_job_lock("appt_tag_sync")
 
 
-def scheduled_expire_isa_transfers():
-    """Daily 6:05am ET — remove ISA_TRANSFER_FRESH tag from leads older than 7 days.
+def _isa_sync_stages(client, active_transfers):
+    """Move any ISA transfer lead still in 'Lead' stage → 'Warm'.
 
-    Barry's FUB automation adds ISA_TRANSFER_FRESH when ISA hands a lead to an
-    agent. This job finds leads where the tag has been present for 7+ days (tracked
-    in our isa_transfers table) and removes it via the FUB API so LeadStream
-    resumes normal aging for those leads.
+    Called by the daily ISA transfer job. Runs before expiry so newly-tagged
+    leads get the stage bump on their first day, not just at the 7-day mark.
+    """
+    from config import ISA_TRANSFER_WARM_STAGE
+    moved = 0
+    for row in active_transfers:
+        person_id = row["person_id"]
+        try:
+            person = client.get_person(person_id)
+            if (person.get("stage") or "").strip().lower() == "lead":
+                client._request("PUT", f"people/{person_id}",
+                                json_data={"stage": ISA_TRANSFER_WARM_STAGE})
+                moved += 1
+                print(f"[ISA] Stage: {row.get('lead_name', person_id)} Lead → {ISA_TRANSFER_WARM_STAGE}")
+        except Exception as e:
+            print(f"[ISA] Stage sync failed for {person_id}: {e}")
+    return moved
+
+
+def _isa_create_escalation_task(client, row):
+    """Create a FUB task on the agent for an unworked ISA transfer at day 7.
+
+    Only fires if the lead is still in Lead/Warm stage — if the agent advanced
+    it to Hot or beyond, we assume they connected and skip the escalation.
+    Task is assigned to the agent so it appears in their FUB task list.
+    """
+    person_id  = row["person_id"]
+    lead_name  = row.get("lead_name") or "this lead"
+    agent_name = row.get("agent_name") or "the agent"
+    try:
+        person           = client.get_person(person_id)
+        stage            = (person.get("stage") or "").strip().lower()
+        assigned_user_id = person.get("assignedUserId")
+        if not assigned_user_id:
+            return False
+        # Only escalate if still in early stages
+        if stage in ("lead", "warm", ""):
+            client.create_task(
+                person_id=person_id,
+                assigned_user_id=assigned_user_id,
+                name=(f"⚠️ ISA Transfer — 7 days, no connection: {lead_name}"),
+                description=(
+                    f"{lead_name} was handed to you by ISA 7 days ago after "
+                    f"Ylopo's AI confirmed they were ready. No connected call "
+                    f"recorded yet. Reach out today or flag for Barry."
+                ),
+            )
+            print(f"[ISA] Escalation task created for {lead_name} ({agent_name})")
+            return True
+    except Exception as e:
+        print(f"[ISA] Escalation task failed for {person_id}: {e}")
+    return False
+
+
+def scheduled_expire_isa_transfers():
+    """Daily 6:05am ET — three-step ISA transfer maintenance:
+
+    1. Stage sync: move any fresh-transfer lead still in 'Lead' → 'Warm'
+       (runs on ALL active transfers, so newly-tagged leads get bumped today)
+    2. Expiry: remove ISA_TRANSFER_FRESH tag from leads 7+ days old so
+       LeadStream resumes normal aging
+    3. Day-8 escalation: for each expired lead still in Lead/Warm stage
+       (agent never connected), create a FUB task as a coaching trigger
     """
     if not _db.try_acquire_job_lock("isa_transfer_expire"):
         return
     try:
         from config import ISA_TRANSFER_FRESH_TAG, ISA_TRANSFER_FRESH_DAYS
+        api_key = _os.environ.get("FUB_API_KEY", "")
+        from fub_client import FUBClient
+        client = FUBClient(api_key)
+
+        # ── Step 1: Stage sync (all active transfers) ──────────────────────
+        active = _db.get_all_isa_transfers()
+        stage_moved = _isa_sync_stages(client, active) if active else 0
+        print(f"[SCHEDULER] ISA stage sync: {stage_moved} leads moved to Warm")
+
+        # ── Step 2: Expire old tags ─────────────────────────────────────────
         expired = _db.get_expired_isa_transfers(days=ISA_TRANSFER_FRESH_DAYS)
         if not expired:
             print("[SCHEDULER] ISA transfer expire: no expired transfers")
             _record_fired("isa_transfer_expire")
             return
 
-        print(f"[SCHEDULER] ISA transfer expire: removing tag from {len(expired)} leads")
-        api_key = _os.environ.get("FUB_API_KEY", "")
-        from fub_client import FUBClient
-        client = FUBClient(api_key)
+        print(f"[SCHEDULER] ISA transfer expire: {len(expired)} leads at day 7+")
         removed, failed = 0, 0
-        for person_id in expired:
+        for row in expired:
+            person_id = row["person_id"]
             try:
                 client.remove_tag(person_id, ISA_TRANSFER_FRESH_TAG)
                 _db.delete_isa_transfer(person_id)
                 removed += 1
             except Exception as e:
                 failed += 1
-                print(f"[SCHEDULER] ISA transfer expire: failed for {person_id}: {e}")
-        print(f"[SCHEDULER] ISA transfer expire: {removed} removed, {failed} failed")
+                print(f"[SCHEDULER] ISA expire failed for {person_id}: {e}")
+
+        # ── Step 3: Day-8 escalation — create FUB task if still unworked ──
+        escalated = 0
+        for row in expired:
+            if _isa_create_escalation_task(client, row):
+                escalated += 1
+
+        print(f"[SCHEDULER] ISA transfer expire: {removed} removed, "
+              f"{failed} failed, {escalated} escalation tasks created")
         _record_fired("isa_transfer_expire")
     except Exception as e:
         _alert_on_job_failure("isa_transfer_expire", str(e))

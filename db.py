@@ -351,9 +351,14 @@ CREATE INDEX IF NOT EXISTS idx_api_cache_day ON api_cache (day_key DESC);
 -- Records the first time we see ISA_TRANSFER_FRESH on a lead so the daily
 -- cleanup job knows when to expire it (after ISA_TRANSFER_FRESH_DAYS days).
 CREATE TABLE IF NOT EXISTS isa_transfers (
-    person_id    TEXT        PRIMARY KEY,
-    transfer_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    person_id     TEXT        PRIMARY KEY,
+    transfer_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    lead_name     TEXT,
+    agent_name    TEXT
 );
+-- Migration: add columns to existing deployments
+ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS lead_name  TEXT;
+ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS agent_name TEXT;
 """
 
 
@@ -1003,10 +1008,13 @@ def classify_stage(stage_raw: str) -> "str | None":
 # ISA Transfer Fresh Tag
 # ---------------------------------------------------------------------------
 
-def record_isa_transfer(person_id: str) -> bool:
+def record_isa_transfer(person_id: str, lead_name: str = None,
+                        agent_name: str = None) -> bool:
     """Record the first time ISA_TRANSFER_FRESH is seen on a lead.
     Uses ON CONFLICT DO NOTHING so repeated calls are safe — the original
     transfer_date is preserved and won't be overwritten by later scoring runs.
+    lead_name / agent_name are stored so the morning nudge can query by agent
+    without additional FUB API calls.
     Returns True if a new row was inserted, False if already recorded."""
     if not is_available():
         return False
@@ -1014,10 +1022,10 @@ def record_isa_transfer(person_id: str) -> bool:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO isa_transfers (person_id)
-                       VALUES (%s)
+                    """INSERT INTO isa_transfers (person_id, lead_name, agent_name)
+                       VALUES (%s, %s, %s)
                        ON CONFLICT (person_id) DO NOTHING""",
-                    (str(person_id),)
+                    (str(person_id), lead_name, agent_name)
                 )
                 return cur.rowcount > 0
     except Exception as e:
@@ -1025,19 +1033,86 @@ def record_isa_transfer(person_id: str) -> bool:
         return False
 
 
-def get_expired_isa_transfers(days: int = 7) -> list:
-    """Return person_ids whose ISA_TRANSFER_FRESH tag is older than `days` days."""
+def get_agent_isa_transfers(agent_name: str) -> list:
+    """Return active ISA transfers for an agent — leads still within the 7-day window.
+    Used by the morning nudge to name specific leads in the email.
+    Returns list of dicts: {person_id, lead_name, transfer_date, days_since}."""
     if not is_available():
         return []
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT person_id FROM isa_transfers
+                    """SELECT person_id, lead_name, transfer_date,
+                              EXTRACT(EPOCH FROM (NOW() - transfer_date)) / 86400 AS days_since
+                       FROM isa_transfers
+                       WHERE agent_name = %s
+                         AND transfer_date >= NOW() - INTERVAL '8 days'
+                       ORDER BY transfer_date DESC""",
+                    (agent_name,)
+                )
+                rows = cur.fetchall()
+                return [
+                    {
+                        "person_id":    r[0],
+                        "lead_name":    r[1] or "Unknown",
+                        "transfer_date": r[2].isoformat() if r[2] else None,
+                        "days_since":   round(float(r[3]), 1) if r[3] is not None else 0,
+                    }
+                    for r in rows
+                ]
+    except Exception as e:
+        logger.warning("get_agent_isa_transfers failed for %s: %s", agent_name, e)
+        return []
+
+
+def get_all_isa_transfers() -> list:
+    """Return all active ISA transfers across all agents (for dashboard + Barry view).
+    Returns list of dicts: {person_id, lead_name, agent_name, transfer_date, days_since}."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT person_id, lead_name, agent_name, transfer_date,
+                              EXTRACT(EPOCH FROM (NOW() - transfer_date)) / 86400 AS days_since
+                       FROM isa_transfers
+                       WHERE transfer_date >= NOW() - INTERVAL '8 days'
+                       ORDER BY agent_name, transfer_date DESC"""
+                )
+                rows = cur.fetchall()
+                return [
+                    {
+                        "person_id":    r[0],
+                        "lead_name":    r[1] or "Unknown",
+                        "agent_name":   r[2] or "Unassigned",
+                        "transfer_date": r[3].isoformat() if r[3] else None,
+                        "days_since":   round(float(r[4]), 1) if r[4] is not None else 0,
+                    }
+                    for r in rows
+                ]
+    except Exception as e:
+        logger.warning("get_all_isa_transfers failed: %s", e)
+        return []
+
+
+def get_expired_isa_transfers(days: int = 7) -> list:
+    """Return full rows for transfers older than `days` days (for expiry + escalation)."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT person_id, lead_name, agent_name FROM isa_transfers
                        WHERE transfer_date < NOW() - INTERVAL '%s days'""",
                     (days,)
                 )
-                return [row[0] for row in cur.fetchall()]
+                return [
+                    {"person_id": r[0], "lead_name": r[1], "agent_name": r[2]}
+                    for r in cur.fetchall()
+                ]
     except Exception as e:
         logger.warning("get_expired_isa_transfers failed: %s", e)
         return []

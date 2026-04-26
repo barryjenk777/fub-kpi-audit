@@ -448,9 +448,10 @@ def run_morning_nudges(dry_run: bool = False):
         if _db.get_nudge_counts_today(name).get("morning", 0) > 0:
             continue
 
-        ctx   = _ctx(name)
-        leads = _db.get_leadstream_top_leads(name, limit=3)
-        goal_ctx = _build_goal_ctx(name, all_goals, ytd_cache, agent["calls"])
+        ctx          = _ctx(name)
+        leads        = _db.get_leadstream_top_leads(name, limit=3)
+        isa_transfers = _db.get_agent_isa_transfers(name)
+        goal_ctx     = _build_goal_ctx(name, all_goals, ytd_cache, agent["calls"])
 
         worked_weekend = is_weekend and agent["score"] > 0
 
@@ -522,7 +523,8 @@ def run_morning_nudges(dry_run: bool = False):
                 rank, team_size, name, selected_arc, tone,
             )
 
-        html = _build_morning_html(body_text, leads, ctx.get("dashboard_url", ""))
+        html = _build_morning_html(body_text, leads, ctx.get("dashboard_url", ""),
+                                   isa_transfers=isa_transfers)
 
         try:
             if not dry_run:
@@ -1233,7 +1235,8 @@ def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
     return subject, body
 
 
-def _build_morning_html(body_text: str, leads: list, dashboard_url: str) -> str:
+def _build_morning_html(body_text: str, leads: list, dashboard_url: str,
+                        isa_transfers: list = None) -> str:
     """Build the full branded HTML email for the morning nudge."""
     FUB_PERSON_URL = "https://yourfriendlyagent.followupboss.com/2/people/view/{person_id}"
     FUB_LIST_URL   = "https://yourfriendlyagent.followupboss.com/2/people?smart-list=leadstream"
@@ -1241,6 +1244,35 @@ def _build_morning_html(body_text: str, leads: list, dashboard_url: str) -> str:
     html_body = "<p>" + body_text.replace("\n\n", "</p><p>").replace("\n", "<br>") + "</p>"
 
     # LeadStream leads section
+    # ISA transfer block — shown above LeadStream leads if any active transfers exist
+    isa_html = ""
+    if isa_transfers:
+        FUB_PERSON_URL = "https://yourfriendlyagent.followupboss.com/2/people/view/{person_id}"
+        isa_rows = ""
+        for t in isa_transfers:
+            pid   = t.get("person_id", "")
+            lname = t.get("lead_name", "Unknown")
+            days  = t.get("days_since", 0)
+            age   = f"Day {int(days) + 1}" if days < 1 else f"Day {int(days) + 1}"
+            url   = FUB_PERSON_URL.format(person_id=pid) if pid else "#"
+            isa_rows += f"""
+            <tr>
+              <td style="padding:10px 0;border-bottom:1px solid #fed7d7">
+                <a href="{url}" style="font-size:15px;font-weight:700;color:#1a1a2e;text-decoration:none">{lname}</a>
+                <span style="margin-left:8px;font-size:11px;font-weight:700;color:#e53e3e;background:#fff5f5;padding:2px 8px;border-radius:10px">{age}</span>
+              </td>
+              <td style="padding:10px 0;border-bottom:1px solid #fed7d7;text-align:right;vertical-align:middle">
+                <a href="{url}" style="font-size:12px;font-weight:700;color:#e53e3e;text-decoration:none">Call Now →</a>
+              </td>
+            </tr>"""
+        isa_html = f"""
+  <div style="background:#fff5f5;border:2px solid #fed7d7;border-radius:10px;padding:20px 24px;margin:24px 0">
+    <p style="margin:0 0 6px;font-size:12px;font-weight:800;color:#e53e3e;letter-spacing:1px;text-transform:uppercase">🔴 ISA Transfers — Call These First</p>
+    <p style="margin:0 0 14px;font-size:13px;color:#718096;line-height:1.5">These leads already talked to Ylopo's AI. ISA confirmed they're ready for a human. Hit them before anything else today.</p>
+    <table width="100%" cellpadding="0" cellspacing="0">{isa_rows}
+    </table>
+  </div>"""
+
     leads_html = ""
     if leads:
         lead_rows = ""
@@ -1288,6 +1320,7 @@ def _build_morning_html(body_text: str, leads: list, dashboard_url: str) -> str:
   </div>
   <div style="padding:28px 32px 12px">
     <div style="font-size:16px;line-height:1.75;color:#2d3748">{html_body}</div>
+    {isa_html}
     {leads_html}
     {dash_btn}
   </div>

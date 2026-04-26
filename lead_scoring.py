@@ -486,12 +486,17 @@ class LeadScorer:
             if score > 0:
                 scored.append((person, score, tier, breakdown))
             # Record the moment we first see ISA_TRANSFER_FRESH so the daily
-            # cleanup job knows when to expire it. ON CONFLICT DO NOTHING means
-            # the original transfer_date is preserved across scoring runs.
+            # cleanup job knows when to expire it, and so the morning nudge can
+            # list this lead by name without extra FUB API calls.
+            # ON CONFLICT DO NOTHING preserves the original transfer_date.
             if ISA_TRANSFER_FRESH_TAG in (person.get("tags") or []):
                 try:
                     import db as _db_module
-                    _db_module.record_isa_transfer(person["id"])
+                    _db_module.record_isa_transfer(
+                        person["id"],
+                        lead_name=person.get("name"),
+                        agent_name=agent_name,
+                    )
                 except Exception:
                     pass  # DB unavailable — scoring continues unaffected
 
