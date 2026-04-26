@@ -346,6 +346,14 @@ CREATE TABLE IF NOT EXISTS api_cache (
     data        JSONB       NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_api_cache_day ON api_cache (day_key DESC);
+
+-- ISA transfer fresh tag tracking
+-- Records the first time we see ISA_TRANSFER_FRESH on a lead so the daily
+-- cleanup job knows when to expire it (after ISA_TRANSFER_FRESH_DAYS days).
+CREATE TABLE IF NOT EXISTS isa_transfers (
+    person_id    TEXT        PRIMARY KEY,
+    transfer_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """
 
 
@@ -989,6 +997,67 @@ def classify_stage(stage_raw: str) -> "str | None":
     if any(k in s for k in ("contract", "pending", "under")):
         return "contract"
     return None
+
+
+# ---------------------------------------------------------------------------
+# ISA Transfer Fresh Tag
+# ---------------------------------------------------------------------------
+
+def record_isa_transfer(person_id: str) -> bool:
+    """Record the first time ISA_TRANSFER_FRESH is seen on a lead.
+    Uses ON CONFLICT DO NOTHING so repeated calls are safe — the original
+    transfer_date is preserved and won't be overwritten by later scoring runs.
+    Returns True if a new row was inserted, False if already recorded."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO isa_transfers (person_id)
+                       VALUES (%s)
+                       ON CONFLICT (person_id) DO NOTHING""",
+                    (str(person_id),)
+                )
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("record_isa_transfer failed for %s: %s", person_id, e)
+        return False
+
+
+def get_expired_isa_transfers(days: int = 7) -> list:
+    """Return person_ids whose ISA_TRANSFER_FRESH tag is older than `days` days."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT person_id FROM isa_transfers
+                       WHERE transfer_date < NOW() - INTERVAL '%s days'""",
+                    (days,)
+                )
+                return [row[0] for row in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_expired_isa_transfers failed: %s", e)
+        return []
+
+
+def delete_isa_transfer(person_id: str) -> bool:
+    """Remove a person from the isa_transfers table after the tag is expired."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM isa_transfers WHERE person_id = %s",
+                    (str(person_id),)
+                )
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("delete_isa_transfer failed for %s: %s", person_id, e)
+        return False
 
 
 def upsert_deal(fub_deal_id, agent_name, deal_name, sale_price, stage_raw,

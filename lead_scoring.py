@@ -30,6 +30,8 @@ logger = logging.getLogger("leadstream")
 
 from config import (
     EXCLUDED_USERS,
+    ISA_TRANSFER_FRESH_TAG,
+    ISA_TRANSFER_FRESH_FLOOR,
     LEADSTREAM_AGING_NEW_POINTS,
     LEADSTREAM_ALLOWED_POND_IDS,
     LEADSTREAM_API_KEY_ENV,
@@ -106,6 +108,12 @@ class LeadScorer:
         score = 0
         tier = "NONE"
         breakdown = []
+        # ISA fresh transfer: tag applied by Barry's FUB automation when AI
+        # converts a lead and ISA hands it off. Bypasses the 48h attempt
+        # suppression (agents should keep calling daily until they connect)
+        # and floors the score at ISA_TRANSFER_FRESH_FLOOR for 7 days.
+        is_fresh_transfer = ISA_TRANSFER_FRESH_TAG in tags
+        isa_convo_resolved = False  # set to True if agent has a real connected call
 
         # --- 0. Source exclusion (e.g., Courted.io) ---
         source = person.get("source", "")
@@ -172,6 +180,7 @@ class LeadScorer:
                         f"{best_tag} present but agent had 2+ min call — signal resolved"
                     )
                     signal_scores = []  # clear so we fall through to stale/aging tiers
+                    isa_convo_resolved = True  # suppress fresh-transfer floor too
                 elif recent_attempt_hours is not None and recent_attempt_hours <= 504:
                     # Agent attempted contact within 7 days but didn't reach them.
                     # Score the signal at 20 (not full points) — still worth a retry
@@ -270,7 +279,9 @@ class LeadScorer:
         # Skipped for pond leads — they use a 2-hour contacted_ids pre-filter
         # in score_pond_leads instead. Doing per-lead personId API calls for
         # 2000+ pond leads would take 13+ minutes (800+ API requests).
-        if not skip_suppression:
+        # Also skipped for ISA fresh transfers — agents need to keep calling
+        # these daily until they connect, not wait out a 48h cooldown window.
+        if not skip_suppression and not is_fresh_transfer:
             suppress_hours = LEADSTREAM_SUPPRESS_HOURS
             last_attempt_hours = self._hours_since_last_attempt(
                 person_id, agent_calls, agent_texts
@@ -282,6 +293,19 @@ class LeadScorer:
                 if not had_conversation:
                     breakdown.append(f"attempted {last_attempt_hours:.0f}h ago, suppressed")
                     return 0, "SUPPRESSED", breakdown
+
+        # --- 7. ISA fresh transfer floor ---
+        # If Barry's automation added ISA_TRANSFER_FRESH and the agent hasn't
+        # had a real connected call yet, floor the score at ISA_TRANSFER_FRESH_FLOOR
+        # so the lead stays in the top half of the agent's 20-slot list for 7 days.
+        if is_fresh_transfer and not isa_convo_resolved and score < ISA_TRANSFER_FRESH_FLOOR:
+            score = ISA_TRANSFER_FRESH_FLOOR
+            breakdown.append(
+                f"ISA_TRANSFER_FRESH: floor at +{ISA_TRANSFER_FRESH_FLOOR} "
+                f"(fresh transfer, keep in top half until connected)"
+            )
+            if tier == "NONE":
+                tier = "ISA_TRANSFER_FRESH"
 
         return score, tier, breakdown
 
@@ -461,6 +485,15 @@ class LeadScorer:
             score, tier, breakdown = self.score_lead(person, calls, texts)
             if score > 0:
                 scored.append((person, score, tier, breakdown))
+            # Record the moment we first see ISA_TRANSFER_FRESH so the daily
+            # cleanup job knows when to expire it. ON CONFLICT DO NOTHING means
+            # the original transfer_date is preserved across scoring runs.
+            if ISA_TRANSFER_FRESH_TAG in (person.get("tags") or []):
+                try:
+                    import db as _db_module
+                    _db_module.record_isa_transfer(person["id"])
+                except Exception:
+                    pass  # DB unavailable — scoring continues unaffected
 
         # Sort by score descending, take top N
         scored.sort(key=lambda x: x[1], reverse=True)

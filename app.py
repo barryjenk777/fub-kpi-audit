@@ -3780,6 +3780,30 @@ def api_admin_update_phones():
     return jsonify({"success": True, "results": results})
 
 
+@app.route("/api/admin/expire-isa-transfers", methods=["POST"])
+def api_admin_expire_isa_transfers():
+    """Manually trigger ISA_TRANSFER_FRESH expiry — same logic as the daily 6am job."""
+    try:
+        from config import ISA_TRANSFER_FRESH_TAG, ISA_TRANSFER_FRESH_DAYS
+        expired = _db.get_expired_isa_transfers(days=ISA_TRANSFER_FRESH_DAYS)
+        if not expired:
+            return jsonify({"success": True, "removed": 0, "message": "No expired transfers"})
+        api_key = _os.environ.get("FUB_API_KEY", "")
+        from fub_client import FUBClient
+        client = FUBClient(api_key)
+        removed, failed = 0, []
+        for person_id in expired:
+            try:
+                client.remove_tag(person_id, ISA_TRANSFER_FRESH_TAG)
+                _db.delete_isa_transfer(person_id)
+                removed += 1
+            except Exception as e:
+                failed.append({"person_id": person_id, "error": str(e)})
+        return jsonify({"success": True, "removed": removed, "failed": failed})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/admin/update-emails", methods=["POST"])
 def api_admin_update_emails():
     """Batch-update agent email addresses. Body: {emails: {agent_name: email, ...}}"""
@@ -6274,6 +6298,47 @@ def scheduled_sync_appointment_tags():
         _db.release_job_lock("appt_tag_sync")
 
 
+def scheduled_expire_isa_transfers():
+    """Daily 6:05am ET — remove ISA_TRANSFER_FRESH tag from leads older than 7 days.
+
+    Barry's FUB automation adds ISA_TRANSFER_FRESH when ISA hands a lead to an
+    agent. This job finds leads where the tag has been present for 7+ days (tracked
+    in our isa_transfers table) and removes it via the FUB API so LeadStream
+    resumes normal aging for those leads.
+    """
+    if not _db.try_acquire_job_lock("isa_transfer_expire"):
+        return
+    try:
+        from config import ISA_TRANSFER_FRESH_TAG, ISA_TRANSFER_FRESH_DAYS
+        expired = _db.get_expired_isa_transfers(days=ISA_TRANSFER_FRESH_DAYS)
+        if not expired:
+            print("[SCHEDULER] ISA transfer expire: no expired transfers")
+            _record_fired("isa_transfer_expire")
+            return
+
+        print(f"[SCHEDULER] ISA transfer expire: removing tag from {len(expired)} leads")
+        api_key = _os.environ.get("FUB_API_KEY", "")
+        from fub_client import FUBClient
+        client = FUBClient(api_key)
+        removed, failed = 0, 0
+        for person_id in expired:
+            try:
+                client.remove_tag(person_id, ISA_TRANSFER_FRESH_TAG)
+                _db.delete_isa_transfer(person_id)
+                removed += 1
+            except Exception as e:
+                failed += 1
+                print(f"[SCHEDULER] ISA transfer expire: failed for {person_id}: {e}")
+        print(f"[SCHEDULER] ISA transfer expire: {removed} removed, {failed} failed")
+        _record_fired("isa_transfer_expire")
+    except Exception as e:
+        _alert_on_job_failure("isa_transfer_expire", str(e))
+        print(f"[SCHEDULER] ISA transfer expire error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("isa_transfer_expire")
+
+
 def scheduled_send_appointment_email():
     """Tuesday 9am ET — send appointment accountability email."""
     if _already_fired_recently("appt_email", within_hours=20):
@@ -6890,6 +6955,13 @@ def start_scheduler():
     # Appointment tag sync: 3x/day at 7am, 1pm, 7pm ET
     _scheduler.add_job(scheduled_sync_appointment_tags, CronTrigger(hour="7,13,19", minute=0, timezone=ET),
                        id="appt_tag_sync", name="Appointment tag sync (3x/day)")
+
+    # ISA transfer fresh tag expiry: daily 6:05am ET
+    # Removes ISA_TRANSFER_FRESH from leads where Barry's FUB automation added it
+    # 7+ days ago, so LeadStream resumes normal scoring after the priority window.
+    _scheduler.add_job(scheduled_expire_isa_transfers, CronTrigger(hour=6, minute=5, timezone=ET),
+                       id="isa_transfer_expire", name="ISA transfer fresh tag expiry (daily 6:05am)",
+                       max_instances=1, misfire_grace_time=600)
 
     # Joe's coaching email: Sunday 3pm ET
     # No misfire_grace_time: if server is down at send time, skip it — never retry.

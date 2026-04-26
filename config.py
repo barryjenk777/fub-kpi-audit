@@ -214,6 +214,16 @@ LEADSTREAM_API_KEY_ENV = "FUB_LEADSTREAM_API_KEY"
 LEADSTREAM_TAG = "LeadStream"
 LEADSTREAM_POND_TAG = "LeadStream_Pond"
 
+# ISA Fresh Transfer protection
+# Barry's FUB automation adds ISA_TRANSFER_FRESH when AI converts a lead and
+# ISA hands it to an agent. For 7 days, LeadStream floors the score at 75 so
+# the lead stays in the top half of the agent's 20-slot list regardless of
+# how many unanswered call attempts have been made. Our daily cleanup job
+# removes the tag after ISA_TRANSFER_FRESH_DAYS.
+ISA_TRANSFER_FRESH_TAG   = "ISA_TRANSFER_FRESH"
+ISA_TRANSFER_FRESH_DAYS  = 7    # days before the tag is auto-removed
+ISA_TRANSFER_FRESH_FLOOR = 75   # minimum score while tag is present
+
 # How many leads to tag per agent / for the pond
 LEADSTREAM_LIMIT = 20
 LEADSTREAM_POND_LIMIT = 80
