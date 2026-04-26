@@ -223,7 +223,7 @@ LEADSTREAM_POND_TAG = "LeadStream_Pond"
 ISA_TRANSFER_FRESH_TAG   = "ISA_TRANSFER_FRESH"
 ISA_TRANSFER_FRESH_DAYS  = 7    # days before the tag is auto-removed
 ISA_TRANSFER_FRESH_FLOOR = 75   # minimum score while tag is present
-ISA_TRANSFER_WARM_STAGE  = "B- Warm 3-6 Months"  # FUB stage applied on transfer
+ISA_TRANSFER_WARM_STAGE  = "A - Hot 1-3 Months"  # FUB stage applied on ISA transfer (change to "B - Warm 3-6 Months" if preferred)
 
 # How many leads to tag per agent / for the pond
 LEADSTREAM_LIMIT = 20
