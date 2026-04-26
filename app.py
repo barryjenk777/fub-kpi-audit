@@ -1822,7 +1822,7 @@ def api_tag_followup():
 def api_isa_transfers():
     """ISA Transfer panel — query FUB directly by ISA_TRANSFER_FRESH tag, use DB for transfer dates."""
     import datetime as _dt
-    api_key = _os.environ.get("FUB_API_KEY", "")
+    api_key = os.environ.get("FUB_API_KEY", "")
     from fub_client import FUBClient
     client = FUBClient(api_key)
     from config import ISA_TRANSFER_WARM_STAGE, ISA_TRANSFER_FRESH_TAG
