@@ -1551,56 +1551,92 @@ async function loadIsaTransfers(){
 
 function buildIsaTransfers(d){
   if(!d||!d.agents||d.agents.length===0)return'';
-  const t=d.totals||{};
-  const total=t.total||0;
-  const unchanged=t.unchanged||0;
-  const changed=t.stage_changed||0;
-  const FUB='https://yourfriendlyagent.followupboss.com/2/people/view/';
 
-  let h=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:4px">`;
-  h+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">`;
-  h+=`<div style="font-size:13px;font-weight:800;color:var(--text);letter-spacing:.3px">🔴 ISA TRANSFERS — ACTIVE WINDOW</div>`;
-  h+=`<button class="btn btn-ghost btn-sm" onclick="loadIsaTransfers()">↻ Refresh</button>`;
-  h+=`</div>`;
-
-  // Summary chips
-  h+=`<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">`;
-  h+=`<div style="background:var(--surface2);border-radius:8px;padding:10px 16px;text-align:center;min-width:80px"><div style="font-size:22px;font-weight:800;color:var(--text)">${total}</div><div style="font-size:11px;color:var(--muted);font-weight:600;margin-top:2px">TOTAL</div></div>`;
-  h+=`<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:8px;padding:10px 16px;text-align:center;min-width:80px"><div style="font-size:22px;font-weight:800;color:var(--red)">${unchanged}</div><div style="font-size:11px;color:var(--red);font-weight:600;margin-top:2px">NO STAGE MOVE</div></div>`;
-  h+=`<div style="background:var(--green-bg);border:1px solid var(--green);border-radius:8px;padding:10px 16px;text-align:center;min-width:80px"><div style="font-size:22px;font-weight:800;color:var(--green)">${changed}</div><div style="font-size:11px;color:var(--green);font-weight:600;margin-top:2px">STAGE MOVED</div></div>`;
-  h+=`</div>`;
-
-  // Per-agent blocks
-  d.agents.forEach(agent=>{
-    const pct=agent.total>0?Math.round(agent.stage_changed/agent.total*100):0;
-    const barColor=pct>=80?'var(--green)':pct>=40?'var(--yellow)':'var(--red)';
-    h+=`<div style="margin-bottom:16px">`;
-    // Agent header row
-    h+=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">`;
-    h+=`<div style="font-size:14px;font-weight:700;color:var(--text)">${agent.agent_name}</div>`;
-    h+=`<div style="flex:1;background:var(--surface3);border-radius:4px;height:6px;overflow:hidden"><div style="width:${pct}%;background:${barColor};height:100%;border-radius:4px;transition:width .4s"></div></div>`;
-    h+=`<div style="font-size:12px;font-weight:700;color:${barColor};white-space:nowrap">${agent.stage_changed}/${agent.total} moved</div>`;
-    h+=`</div>`;
-    // Lead rows
-    h+=`<div style="display:flex;flex-direction:column;gap:4px">`;
-    agent.leads.forEach(lead=>{
-      const days=Math.floor(lead.days_since||0);
-      const dayLabel=days===0?'Today':days===1?'Day 1':`Day ${days+1}`;
-      const urgency=days>=5?'var(--red)':days>=3?'var(--yellow)':'var(--green)';
-      const stageDisplay=lead.stage_changed
-        ?`<span style="color:var(--green);font-size:11px;font-weight:600">✓ ${lead.stage}</span>`
-        :`<span style="color:var(--muted);font-size:11px">⏳ No stage move</span>`;
-      h+=`<div style="display:flex;align-items:center;gap:10px;background:var(--surface2);border-radius:6px;padding:8px 12px">`;
-      h+=`<span style="font-size:11px;font-weight:800;color:${urgency};min-width:44px">${dayLabel}</span>`;
-      h+=`<a href="${lead.fub_url}" target="_blank" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;flex:1">${lead.lead_name}</a>`;
-      h+=stageDisplay;
-      h+=`<a href="${lead.fub_url}" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:none;white-space:nowrap">Open →</a>`;
-      h+=`</div>`;
-    });
-    h+=`</div></div>`;
+  // Compute urgency per agent
+  const agents=d.agents.map(agent=>{
+    const unworked=agent.leads.filter(l=>!l.stage_changed);
+    const oldestDays=unworked.reduce((mx,l)=>Math.max(mx,Math.floor(l.days_since||0)),0);
+    const daysLeft=Math.max(0,7-oldestDays);
+    const expiringNow=unworked.filter(l=>Math.floor(l.days_since||0)>=5).length;
+    let status,sColor,sBg,sMsg;
+    if(unworked.length===0){
+      status='ON IT';sColor='var(--green)';sBg='var(--green-bg)';
+      sMsg=`All ${agent.total} transfer${agent.total!==1?'s':''} being worked ✓`;
+    }else if(oldestDays>=5){
+      status='CRITICAL';sColor='var(--red)';sBg='var(--red-bg)';
+      sMsg=`${expiringNow} lead${expiringNow!==1?'s':''} burning — only ${daysLeft} day${daysLeft!==1?'s':''} left in priority window`;
+    }else if(oldestDays>=3){
+      status='AT RISK';sColor='var(--yellow)';sBg='rgba(234,179,8,.08)';
+      sMsg=`${unworked.length} unworked · oldest is Day ${oldestDays} · ${daysLeft} days before it falls off LeadStream priority`;
+    }else{
+      status='WATCH';sColor='#60a5fa';sBg='rgba(96,165,250,.08)';
+      sMsg=`${unworked.length} transfer${unworked.length!==1?'s':''} need a first touch`;
+    }
+    return{...agent,status,sColor,sBg,sMsg,unworked,oldestDays,daysLeft,expiringNow};
   });
 
-  h+=`<div style="font-size:11px;color:var(--muted);margin-top:8px;text-align:right">Stage moved = agent advanced beyond A - Hot · Refreshes daily at 6am</div>`;
+  const order={CRITICAL:0,'AT RISK':1,WATCH:2,'ON IT':3};
+  agents.sort((a,b)=>(order[a.status]||9)-(order[b.status]||9));
+
+  const nCritical=agents.filter(a=>a.status==='CRITICAL').length;
+  const nRisk=agents.filter(a=>a.status==='AT RISK'||a.status==='WATCH').length;
+  const nOnIt=agents.filter(a=>a.status==='ON IT').length;
+  const totalExpiring=agents.reduce((s,a)=>s+a.expiringNow,0);
+
+  let h=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:4px">`;
+
+  // Header
+  h+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">`;
+  h+=`<div style="font-size:11px;font-weight:800;color:var(--muted);letter-spacing:.8px;text-transform:uppercase">AI Transfer Accountability · 7-day window</div>`;
+  h+=`<button class="btn btn-ghost btn-sm" onclick="loadIsaTransfers()" style="font-size:11px">↻</button>`;
+  h+=`</div>`;
+
+  // Status strip — only show what matters
+  h+=`<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">`;
+  if(nCritical>0) h+=`<span style="background:var(--red-bg);border:1px solid var(--red);border-radius:5px;padding:3px 10px;font-size:11px;font-weight:800;color:var(--red)">🔥 ${nCritical} CRITICAL</span>`;
+  if(nRisk>0)     h+=`<span style="background:rgba(234,179,8,.1);border:1px solid var(--yellow);border-radius:5px;padding:3px 10px;font-size:11px;font-weight:800;color:var(--yellow)">⚠️ ${nRisk} AT RISK</span>`;
+  if(totalExpiring>0) h+=`<span style="background:rgba(249,115,22,.1);border:1px solid #f97316;border-radius:5px;padding:3px 10px;font-size:11px;font-weight:800;color:#f97316">⏰ ${totalExpiring} expiring this week</span>`;
+  if(nOnIt>0)     h+=`<span style="background:var(--green-bg);border:1px solid var(--green);border-radius:5px;padding:3px 10px;font-size:11px;font-weight:800;color:var(--green)">✓ ${nOnIt} working it</span>`;
+  h+=`</div>`;
+
+  // One card per agent
+  agents.forEach((agent,idx)=>{
+    const cardId=`isa-details-${idx}`;
+    const borderColor=agent.status==='CRITICAL'?'var(--red)':agent.status==='AT RISK'?'var(--yellow)':agent.status==='WATCH'?'#60a5fa':'var(--border)';
+    h+=`<div style="border-left:3px solid ${borderColor};border-radius:0 6px 6px 0;padding:10px 12px;margin-bottom:8px;background:${agent.sBg}">`;
+
+    // Agent row
+    h+=`<div style="display:flex;align-items:center;gap:10px">`;
+    h+=`<span style="font-size:10px;font-weight:800;color:${agent.sColor};border:1px solid ${agent.sColor};border-radius:4px;padding:2px 6px;letter-spacing:.3px;white-space:nowrap">${agent.status}</span>`;
+    h+=`<span style="font-size:14px;font-weight:700;color:var(--text);flex:1">${agent.agent_name}</span>`;
+    h+=`<span style="font-size:11px;color:var(--muted)">${agent.stage_changed}/${agent.total} worked</span>`;
+    if(agent.unworked.length>0){
+      h+=`<button onclick="var el=document.getElementById('${cardId}');el.style.display=el.style.display==='none'?'block':'none'" style="background:none;border:none;color:var(--muted);font-size:11px;cursor:pointer;padding:2px 4px;margin-left:4px">details ▾</button>`;
+    }
+    h+=`</div>`;
+
+    // Status message — this is the coaching line
+    h+=`<div style="font-size:12px;color:${agent.sColor};margin-top:5px;font-weight:600">${agent.sMsg}</div>`;
+
+    // Collapsed detail — only unworked leads
+    if(agent.unworked.length>0){
+      h+=`<div id="${cardId}" style="display:none;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">`;
+      agent.unworked.forEach(lead=>{
+        const days=Math.floor(lead.days_since||0);
+        const dl=7-days;
+        const uc=days>=5?'var(--red)':days>=3?'var(--yellow)':'var(--muted)';
+        h+=`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">`;
+        h+=`<span style="font-size:11px;font-weight:700;color:${uc};min-width:72px">Day ${days} · ${dl}d left</span>`;
+        h+=`<span style="font-size:12px;color:var(--text);flex:1">${lead.lead_name}</span>`;
+        h+=`<a href="${lead.fub_url}" target="_blank" style="font-size:11px;color:#60a5fa;text-decoration:none;white-space:nowrap">Open →</a>`;
+        h+=`</div>`;
+      });
+      h+=`</div>`;
+    }
+    h+=`</div>`;
+  });
+
+  h+=`<div style="font-size:10px;color:var(--muted);margin-top:4px;text-align:right">Worked = stage moved beyond A-Hot</div>`;
   h+=`</div>`;
   return h;
 }
