@@ -3780,6 +3780,19 @@ def api_admin_update_phones():
     return jsonify({"success": True, "results": results})
 
 
+@app.route("/api/admin/update-emails", methods=["POST"])
+def api_admin_update_emails():
+    """Batch-update agent email addresses. Body: {emails: {agent_name: email, ...}}"""
+    if not _db.is_available():
+        return jsonify({"error": "DB not available"}), 503
+    emails = (request.json or {}).get("emails", {})
+    results = {}
+    for name, email in emails.items():
+        ok = _db.upsert_agent_profile(name, email=email.strip().lower())
+        results[name] = "ok" if ok else "failed"
+    return jsonify({"success": True, "results": results})
+
+
 @app.route("/api/goals/sync-roster", methods=["POST"])
 def api_sync_fub_roster():
     """Manually trigger a FUB roster sync. Detects new agents and sends onboarding emails."""
