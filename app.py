@@ -1820,42 +1820,72 @@ def api_tag_followup():
 
 @app.route("/api/isa-transfers")
 def api_isa_transfers():
-    """ISA Transfer panel — active ISA_TRANSFER_FRESH leads grouped by agent."""
-    transfers = _db.get_all_isa_transfers()
-    if not transfers:
-        return jsonify({"agents": [], "totals": {"total": 0, "stage_changed": 0, "unchanged": 0}})
-
+    """ISA Transfer panel — query FUB directly by ISA_TRANSFER_FRESH tag, use DB for transfer dates."""
+    import datetime as _dt
     api_key = _os.environ.get("FUB_API_KEY", "")
     from fub_client import FUBClient
     client = FUBClient(api_key)
-    from config import ISA_TRANSFER_WARM_STAGE  # "A - Hot 1-3 Months"
+    from config import ISA_TRANSFER_WARM_STAGE, ISA_TRANSFER_FRESH_TAG
+
+    # Pull DB records for transfer dates (person_id → row dict)
+    db_rows = {r["person_id"]: r for r in (_db.get_all_isa_transfers() or [])}
+
+    # Query FUB directly for everyone carrying the tag right now
+    try:
+        people = client.get_people(tag=ISA_TRANSFER_FRESH_TAG, limit=200)
+    except Exception as e:
+        return jsonify({"error": str(e), "agents": [], "totals": {"total": 0, "stage_changed": 0, "unchanged": 0}})
+
+    if not people:
+        return jsonify({"agents": [], "totals": {"total": 0, "stage_changed": 0, "unchanged": 0}})
 
     FUB_BASE = "https://yourfriendlyagent.followupboss.com/2/people/view/{}"
+    now_utc = _dt.datetime.now(_dt.timezone.utc)
     enriched = []
-    for t in transfers:
-        try:
-            person = client.get_person(t["person_id"])
-            stage  = (person.get("stage") or "Lead").strip()
-        except Exception:
-            stage = "Unknown"
-        # "stage_changed" = agent moved the stage beyond what we auto-set
+    for person in people:
+        pid   = str(person.get("id", ""))
+        stage = (person.get("stage") or "Lead").strip()
         stage_changed = stage not in ("Lead", ISA_TRANSFER_WARM_STAGE, "", "Unknown")
+
+        # Agent name from FUB assignedPondId / assignedUserId doesn't give name directly;
+        # use the "assignedTo" field (display name) if present
+        agent_name = (person.get("assignedTo") or "Unassigned").strip() or "Unassigned"
+        lead_name  = (person.get("name") or "Unknown").strip() or "Unknown"
+
+        # Transfer date: prefer DB record, fall back to today
+        db_row = db_rows.get(pid, {})
+        if db_row.get("transfer_date"):
+            td_str = db_row["transfer_date"]
+            try:
+                # transfer_date is stored as ISO string from Postgres
+                td = _dt.datetime.fromisoformat(td_str.replace("Z", "+00:00"))
+                if td.tzinfo is None:
+                    td = td.replace(tzinfo=_dt.timezone.utc)
+                days_since = (now_utc - td).days
+            except Exception:
+                days_since = 0
+        else:
+            days_since = 0
+            # Opportunistically record in DB so future runs have a date
+            try:
+                _db.record_isa_transfer(pid, lead_name=lead_name, agent_name=agent_name)
+            except Exception:
+                pass
+
         enriched.append({
-            "person_id":    t["person_id"],
-            "lead_name":    t["lead_name"] or "Unknown",
-            "agent_name":   t["agent_name"] or "Unassigned",
-            "days_since":   t["days_since"],
-            "transfer_date":t["transfer_date"],
+            "person_id":    pid,
+            "lead_name":    lead_name,
+            "agent_name":   agent_name,
+            "days_since":   days_since,
             "stage":        stage,
             "stage_changed":stage_changed,
-            "fub_url":      FUB_BASE.format(t["person_id"]),
+            "fub_url":      FUB_BASE.format(pid),
         })
 
     # Group by agent, sort each agent's leads by days_since desc (oldest first)
     by_agent = {}
     for t in enriched:
-        a = t["agent_name"]
-        by_agent.setdefault(a, []).append(t)
+        by_agent.setdefault(t["agent_name"], []).append(t)
     for a in by_agent:
         by_agent[a].sort(key=lambda x: x["days_since"], reverse=True)
 
@@ -1872,7 +1902,7 @@ def api_isa_transfers():
     # Sort: most unchanged (needs work) first
     agents.sort(key=lambda x: x["unchanged"], reverse=True)
 
-    total_changed  = sum(a["stage_changed"] for a in agents)
+    total_changed   = sum(a["stage_changed"] for a in agents)
     total_unchanged = sum(a["unchanged"] for a in agents)
     return jsonify({
         "agents": agents,
