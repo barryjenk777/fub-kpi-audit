@@ -752,6 +752,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 
     <!-- ══════════════════════════════════════ ISA TAB -->
     <div class="tab-pane" id="tab-isa">
+      <div id="isa-transfers-panel" style="margin-bottom:12px"></div>
       <div id="loading-isa" class="loading-pane"><span class="spinner"></span> Loading Fhalen's data… (takes ~30s first load)</div>
       <div id="dashboard-isa" style="display:none"></div>
     </div>
@@ -846,7 +847,7 @@ function switchTab(name){
     else if(name==='manager')     loadManager();
     else if(name==='appointments') loadAppointments();
     else if(name==='meeting')     loadMeetingAgents();
-    else if(name==='isa')         loadIsa();
+    else if(name==='isa'){loadIsaTransfers();loadIsa();}
     else if(name==='outreach')    loadOutreach();
   }
 }
@@ -1535,6 +1536,75 @@ function buildIsa(d){
   return h;
 }
 async function loadIsa(){const ld=document.getElementById('loading-isa'),db=document.getElementById('dashboard-isa');ld.style.display='flex';db.style.display='none';try{const r=await fetch('/api/isa',{signal:AbortSignal.timeout(240000)});const txt=await r.text();try{const d=JSON.parse(txt);if(d.error)db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Error</div><div class="alert-body">${d.error}</div></div></div>`;else{isaData=d;db.innerHTML=buildIsa(d);}}catch(pe){db.innerHTML=`<div class="alert yellow"><span class="alert-icon">⏱️</span><div><div class="alert-title">Still warming up</div><div class="alert-body">Wait 30s and retry.<br><button class="btn btn-ghost btn-sm" onclick="loadIsa()" style="margin-top:.5rem">↻ Retry</button></div></div></div>`;}}catch(e){db.innerHTML=`<div class="alert red"><span class="alert-icon">⏱️</span><div><div class="alert-title">Timeout</div><div class="alert-body"><button class="btn btn-ghost btn-sm" onclick="loadIsa()">↻ Retry</button></div></div></div>`;}ld.style.display='none';db.style.display='block';}
+async function loadIsaTransfers(){
+  const panel=document.getElementById('isa-transfers-panel');
+  if(!panel)return;
+  panel.innerHTML='<div style="color:var(--muted);font-size:12px;padding:4px 0">Loading transfers…</div>';
+  try{
+    const r=await fetch('/api/isa-transfers',{signal:AbortSignal.timeout(30000)});
+    const d=await r.json();
+    panel.innerHTML=buildIsaTransfers(d);
+  }catch(e){
+    panel.innerHTML='';
+  }
+}
+
+function buildIsaTransfers(d){
+  if(!d||!d.agents||d.agents.length===0)return'';
+  const t=d.totals||{};
+  const total=t.total||0;
+  const unchanged=t.unchanged||0;
+  const changed=t.stage_changed||0;
+  const FUB='https://yourfriendlyagent.followupboss.com/2/people/view/';
+
+  let h=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:4px">`;
+  h+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">`;
+  h+=`<div style="font-size:13px;font-weight:800;color:var(--text);letter-spacing:.3px">🔴 ISA TRANSFERS — ACTIVE WINDOW</div>`;
+  h+=`<button class="btn btn-ghost btn-sm" onclick="loadIsaTransfers()">↻ Refresh</button>`;
+  h+=`</div>`;
+
+  // Summary chips
+  h+=`<div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">`;
+  h+=`<div style="background:var(--surface2);border-radius:8px;padding:10px 16px;text-align:center;min-width:80px"><div style="font-size:22px;font-weight:800;color:var(--text)">${total}</div><div style="font-size:11px;color:var(--muted);font-weight:600;margin-top:2px">TOTAL</div></div>`;
+  h+=`<div style="background:var(--red-bg);border:1px solid var(--red);border-radius:8px;padding:10px 16px;text-align:center;min-width:80px"><div style="font-size:22px;font-weight:800;color:var(--red)">${unchanged}</div><div style="font-size:11px;color:var(--red);font-weight:600;margin-top:2px">NO STAGE MOVE</div></div>`;
+  h+=`<div style="background:var(--green-bg);border:1px solid var(--green);border-radius:8px;padding:10px 16px;text-align:center;min-width:80px"><div style="font-size:22px;font-weight:800;color:var(--green)">${changed}</div><div style="font-size:11px;color:var(--green);font-weight:600;margin-top:2px">STAGE MOVED</div></div>`;
+  h+=`</div>`;
+
+  // Per-agent blocks
+  d.agents.forEach(agent=>{
+    const pct=agent.total>0?Math.round(agent.stage_changed/agent.total*100):0;
+    const barColor=pct>=80?'var(--green)':pct>=40?'var(--yellow)':'var(--red)';
+    h+=`<div style="margin-bottom:16px">`;
+    // Agent header row
+    h+=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">`;
+    h+=`<div style="font-size:14px;font-weight:700;color:var(--text)">${agent.agent_name}</div>`;
+    h+=`<div style="flex:1;background:var(--surface3);border-radius:4px;height:6px;overflow:hidden"><div style="width:${pct}%;background:${barColor};height:100%;border-radius:4px;transition:width .4s"></div></div>`;
+    h+=`<div style="font-size:12px;font-weight:700;color:${barColor};white-space:nowrap">${agent.stage_changed}/${agent.total} moved</div>`;
+    h+=`</div>`;
+    // Lead rows
+    h+=`<div style="display:flex;flex-direction:column;gap:4px">`;
+    agent.leads.forEach(lead=>{
+      const days=Math.floor(lead.days_since||0);
+      const dayLabel=days===0?'Today':days===1?'Day 1':`Day ${days+1}`;
+      const urgency=days>=5?'var(--red)':days>=3?'var(--yellow)':'var(--green)';
+      const stageDisplay=lead.stage_changed
+        ?`<span style="color:var(--green);font-size:11px;font-weight:600">✓ ${lead.stage}</span>`
+        :`<span style="color:var(--muted);font-size:11px">⏳ No stage move</span>`;
+      h+=`<div style="display:flex;align-items:center;gap:10px;background:var(--surface2);border-radius:6px;padding:8px 12px">`;
+      h+=`<span style="font-size:11px;font-weight:800;color:${urgency};min-width:44px">${dayLabel}</span>`;
+      h+=`<a href="${lead.fub_url}" target="_blank" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;flex:1">${lead.lead_name}</a>`;
+      h+=stageDisplay;
+      h+=`<a href="${lead.fub_url}" target="_blank" style="font-size:11px;color:var(--muted);text-decoration:none;white-space:nowrap">Open →</a>`;
+      h+=`</div>`;
+    });
+    h+=`</div></div>`;
+  });
+
+  h+=`<div style="font-size:11px;color:var(--muted);margin-top:8px;text-align:right">Stage moved = agent advanced beyond A - Hot · Refreshes daily at 6am</div>`;
+  h+=`</div>`;
+  return h;
+}
+
 async function tagFollowup(ids){if(!confirm(`Tag ${ids.length} leads with ISA_Followup?`))return;try{const r=await fetch('/api/isa/tag-followup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({person_ids:ids})});const d=await r.json();if(d.success){showToast(`Tagged ${d.tagged} leads`,'ok');loadIsa();}else showToast('Error: '+d.error,'err');}catch(e){showToast('Error: '+e.message,'err');}}
 
 /* ════════════════════════════════════════════════

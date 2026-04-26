@@ -1818,6 +1818,72 @@ def api_tag_followup():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/isa-transfers")
+def api_isa_transfers():
+    """ISA Transfer panel — active ISA_TRANSFER_FRESH leads grouped by agent."""
+    transfers = _db.get_all_isa_transfers()
+    if not transfers:
+        return jsonify({"agents": [], "totals": {"total": 0, "stage_changed": 0, "unchanged": 0}})
+
+    api_key = _os.environ.get("FUB_API_KEY", "")
+    from fub_client import FUBClient
+    client = FUBClient(api_key)
+    from config import ISA_TRANSFER_WARM_STAGE  # "A - Hot 1-3 Months"
+
+    FUB_BASE = "https://yourfriendlyagent.followupboss.com/2/people/view/{}"
+    enriched = []
+    for t in transfers:
+        try:
+            person = client.get_person(t["person_id"])
+            stage  = (person.get("stage") or "Lead").strip()
+        except Exception:
+            stage = "Unknown"
+        # "stage_changed" = agent moved the stage beyond what we auto-set
+        stage_changed = stage not in ("Lead", ISA_TRANSFER_WARM_STAGE, "", "Unknown")
+        enriched.append({
+            "person_id":    t["person_id"],
+            "lead_name":    t["lead_name"] or "Unknown",
+            "agent_name":   t["agent_name"] or "Unassigned",
+            "days_since":   t["days_since"],
+            "transfer_date":t["transfer_date"],
+            "stage":        stage,
+            "stage_changed":stage_changed,
+            "fub_url":      FUB_BASE.format(t["person_id"]),
+        })
+
+    # Group by agent, sort each agent's leads by days_since desc (oldest first)
+    by_agent = {}
+    for t in enriched:
+        a = t["agent_name"]
+        by_agent.setdefault(a, []).append(t)
+    for a in by_agent:
+        by_agent[a].sort(key=lambda x: x["days_since"], reverse=True)
+
+    agents = []
+    for agent_name, leads in sorted(by_agent.items()):
+        changed = sum(1 for l in leads if l["stage_changed"])
+        agents.append({
+            "agent_name":   agent_name,
+            "total":        len(leads),
+            "stage_changed":changed,
+            "unchanged":    len(leads) - changed,
+            "leads":        leads,
+        })
+    # Sort: most unchanged (needs work) first
+    agents.sort(key=lambda x: x["unchanged"], reverse=True)
+
+    total_changed  = sum(a["stage_changed"] for a in agents)
+    total_unchanged = sum(a["unchanged"] for a in agents)
+    return jsonify({
+        "agents": agents,
+        "totals": {
+            "total":         len(enriched),
+            "stage_changed": total_changed,
+            "unchanged":     total_unchanged,
+        }
+    })
+
+
 # ---- Appointment Accountability ----
 
 
