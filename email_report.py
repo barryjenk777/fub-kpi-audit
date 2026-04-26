@@ -13,7 +13,6 @@ from datetime import datetime, timedelta
 
 import config
 import postmark_client as _pm
-    return msg
 
 
 def _catchy_subject(email_type, data=None):
