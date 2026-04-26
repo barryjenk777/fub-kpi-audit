@@ -32,6 +32,12 @@ BASE_URL  = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway
 LOGO_URL  = f"{BASE_URL}/static/logo-white.png"
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "barry@yourfriendlyagent.net")
 
+# Hard-coded email overrides — used when DB address is unreachable (iCloud blacklist, etc.)
+# Update the DB record when convenient; these are the definitive delivery addresses.
+AGENT_EMAIL_OVERRIDES: dict[str, str] = {
+    "Matt Moubray": "mattmoubray83@gmail.com",
+}
+
 
 # ---------------------------------------------------------------------------
 # Email send
@@ -436,7 +442,7 @@ def run_morning_nudges(dry_run: bool = False):
     sent = 0
     for rank, agent in enumerate(leaderboard, 1):
         name  = agent["name"]
-        email = agent["email"]
+        email = AGENT_EMAIL_OVERRIDES.get(name) or agent["email"]
         if not email:
             continue
         if _db.get_nudge_counts_today(name).get("morning", 0) > 0:
@@ -561,7 +567,7 @@ def run_closing_milestones(dry_run=False):
 
     for profile in profiles:
         name  = profile["agent_name"]
-        email = profile["email"]
+        email = AGENT_EMAIL_OVERRIDES.get(name) or profile.get("email")
         if not email:
             continue
 
@@ -1304,7 +1310,7 @@ def run_afternoon_push(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
-        email = p.get("email")
+        email = AGENT_EMAIL_OVERRIDES.get(p["agent_name"]) or p.get("email")
         if not email:
             continue
         if nudge_agent(name, "missed_day", email, dry_run=dry_run):
@@ -1323,7 +1329,7 @@ def run_streak_break_check(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
-        email = p.get("email")
+        email = AGENT_EMAIL_OVERRIDES.get(p["agent_name"]) or p.get("email")
         if not email:
             continue
         streak = _db.get_streak(name)
@@ -1347,7 +1353,7 @@ def run_weekly_summary(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
-        email = p.get("email")
+        email = AGENT_EMAIL_OVERRIDES.get(p["agent_name"]) or p.get("email")
         if not email:
             continue
 
@@ -1390,7 +1396,7 @@ def run_plateau_check(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
-        email = p.get("email")
+        email = AGENT_EMAIL_OVERRIDES.get(p["agent_name"]) or p.get("email")
         if not email:
             continue
         activity = _db.get_daily_activity(name, days=21)
@@ -1432,7 +1438,7 @@ def run_post_closing_followups(dry_run: bool = False):
     sent = 0
     for item in due:
         name   = item["agent_name"]
-        email  = (profiles.get(name) or {}).get("email")
+        email  = AGENT_EMAIL_OVERRIDES.get(name) or (profiles.get(name) or {}).get("email")
         client = item["client_name"] or "your recent client"
         for days in item["due_days"]:
             ctx = _ctx(name)
