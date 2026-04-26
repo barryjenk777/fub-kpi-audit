@@ -34,7 +34,7 @@ EMAIL_FROM = os.environ.get("EMAIL_FROM", "barry@yourfriendlyagent.net")
 
 # Hard-coded email overrides — used when DB address is unreachable (iCloud blacklist, etc.)
 # Update the DB record when convenient; these are the definitive delivery addresses.
-AGENT_EMAIL_OVERRIDES: dict[str, str] = {
+AGENT_EMAIL_OVERRIDES = {
     "Matt Moubray": "mattmoubray83@gmail.com",
 }
 
