@@ -3857,7 +3857,7 @@ def api_admin_nudge_audit():
         "emails_present":  sum(1 for a in agents if a["email"]),
         "tokens_present":  sum(1 for a in agents if a["has_token"]),
         "nudge_sent_today":sum(1 for a in agents if a["nudge_sent_today"]),
-        "sendgrid_key_present": bool(_os.environ.get("SENDGRID_API_KEY")),
+        "sendgrid_key_present": bool(os.environ.get("SENDGRID_API_KEY")),
         "nudge_schedule":  "8:00am ET daily",
         "agents":          agents,
     })
@@ -3884,7 +3884,7 @@ def api_admin_expire_isa_transfers():
         expired = _db.get_expired_isa_transfers(days=ISA_TRANSFER_FRESH_DAYS)
         if not expired:
             return jsonify({"success": True, "removed": 0, "message": "No expired transfers"})
-        api_key = _os.environ.get("FUB_API_KEY", "")
+        api_key = os.environ.get("FUB_API_KEY", "")
         from fub_client import FUBClient
         client = FUBClient(api_key)
         removed, failed = 0, []
@@ -6466,7 +6466,7 @@ def scheduled_expire_isa_transfers():
         return
     try:
         from config import ISA_TRANSFER_FRESH_TAG, ISA_TRANSFER_FRESH_DAYS
-        api_key = _os.environ.get("FUB_API_KEY", "")
+        api_key = os.environ.get("FUB_API_KEY", "")
         from fub_client import FUBClient
         client = FUBClient(api_key)
 
