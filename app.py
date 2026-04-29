@@ -5542,6 +5542,95 @@ def watch_video():
     return _R(html_out, status=200, mimetype="text/html")
 
 
+@app.route("/privacy-policy")
+def privacy_policy():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy Policy — Legacy Home Team</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:700px;margin:40px auto;padding:0 24px;color:#1a1a1a;line-height:1.7}
+  h1{font-size:1.6rem;margin-bottom:4px}
+  h2{font-size:1.1rem;margin-top:32px;margin-bottom:8px}
+  p,li{font-size:.95rem}
+  .updated{color:#666;font-size:.85rem;margin-bottom:32px}
+</style>
+</head>
+<body>
+<h1>Privacy Policy</h1>
+<p class="updated">Legacy Home Team (Friend in Realty LLC) &mdash; Last updated April 2026</p>
+
+<h2>1. Who We Are</h2>
+<p>Legacy Home Team, operating as Friend in Realty LLC, is a licensed real estate team based in Hampton Roads, Virginia. This policy covers our internal team communication program used to send coaching, performance, and goal-tracking messages to our licensed agents via SMS.</p>
+
+<h2>2. Information We Collect</h2>
+<p>We collect and use the following information solely for internal team communications:</p>
+<ul>
+  <li>Agent name and cell phone number (provided directly by the agent upon joining the team)</li>
+  <li>Performance data including call counts, appointment totals, and GCI figures</li>
+</ul>
+
+<h2>3. How We Use Your Information</h2>
+<p>Phone numbers and performance data are used exclusively to send internal coaching messages, daily goal updates, weekly KPI summaries, and motivational content from team leader Barry Jenkins. This information is never sold, rented, or shared with third parties for marketing purposes.</p>
+
+<h2>4. SMS Communications</h2>
+<p>All SMS recipients are licensed agents who are active team members and who have explicitly consented to receive team communications. Recipients may opt out at any time by replying <strong>STOP</strong> to any message. For help, reply <strong>HELP</strong>.</p>
+
+<h2>5. Data Retention</h2>
+<p>Agent contact information is retained for the duration of active employment with the team and removed upon departure.</p>
+
+<h2>6. Contact</h2>
+<p>Questions about this policy: barry@yourfriendlyagent.net &mdash; Legacy Home Team, Hampton Roads, Virginia.</p>
+</body>
+</html>""", 200, {"Content-Type": "text/html"}
+
+
+@app.route("/terms")
+def terms_and_conditions():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Terms &amp; Conditions — Legacy Home Team SMS</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:700px;margin:40px auto;padding:0 24px;color:#1a1a1a;line-height:1.7}
+  h1{font-size:1.6rem;margin-bottom:4px}
+  h2{font-size:1.1rem;margin-top:32px;margin-bottom:8px}
+  p,li{font-size:.95rem}
+  .updated{color:#666;font-size:.85rem;margin-bottom:32px}
+  strong{font-weight:700}
+</style>
+</head>
+<body>
+<h1>SMS Terms &amp; Conditions</h1>
+<p class="updated">Legacy Home Team (Friend in Realty LLC) &mdash; Last updated April 2026</p>
+
+<h2>Program Description</h2>
+<p>Legacy Home Team operates an internal SMS coaching program that sends performance updates, goal tracking, KPI summaries, and motivational coaching messages to licensed real estate agents employed by Friend in Realty LLC in Hampton Roads, Virginia.</p>
+
+<h2>Who Receives Messages</h2>
+<p>Only licensed agents who are active team members and who have provided their personal cell phone number directly to team leader Barry Jenkins are included. Participation requires explicit consent at the time of joining the team.</p>
+
+<h2>Message Frequency</h2>
+<p>Agents may receive up to 2&ndash;3 SMS messages per day. Frequency varies based on performance milestones, daily coaching cycles, and weekly summaries.</p>
+
+<h2>Message &amp; Data Rates</h2>
+<p>Message and data rates may apply. Contact your wireless carrier for details about your plan.</p>
+
+<h2>How to Opt Out</h2>
+<p>Reply <strong>STOP</strong> to any message at any time to unsubscribe. You will receive a confirmation message and no further SMS will be sent.</p>
+
+<h2>How to Get Help</h2>
+<p>Reply <strong>HELP</strong> to any message or contact us at barry@yourfriendlyagent.net.</p>
+
+<h2>Support Contact</h2>
+<p>Barry Jenkins &mdash; Legacy Home Team<br>barry@yourfriendlyagent.net<br>Hampton Roads, Virginia</p>
+
+<h2>Privacy</h2>
+<p>Your information is never sold or shared with third parties. See our full <a href="/privacy-policy">Privacy Policy</a>.</p>
+</body>
+</html>""", 200, {"Content-Type": "text/html"}
+
+
 @app.route("/unsubscribe", methods=["GET"])
 def pond_unsubscribe():
     """
