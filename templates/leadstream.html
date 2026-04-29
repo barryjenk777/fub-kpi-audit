@@ -512,9 +512,9 @@ function renderPond(pond) {
       <span style="font-size:.83rem;color:var(--muted)">${actioned} of ${tagged} pond leads actioned</span>
       <div class="bar-track" style="flex:1;margin:0"><div class="bar-fill ${barCls}" style="width:${rate}%"></div></div>
       <span style="font-size:.83rem;font-weight:700;color:var(--text)">${rate}%</span>
-      <span class="pond-toggle-arrow">▼ Show ${tagged} leads</span>
+      <span class="pond-toggle-arrow">▲ Hide leads</span>
     </div>
-    <div class="pond-body" id="pond-body">
+    <div class="pond-body open" id="pond-body">
       <div class="table-wrap">
         <table>
           <thead><tr>
