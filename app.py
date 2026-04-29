@@ -1825,7 +1825,7 @@ def api_isa_transfers():
     api_key = os.environ.get("FUB_API_KEY", "")
     from fub_client import FUBClient
     client = FUBClient(api_key)
-    from config import ISA_TRANSFER_WARM_STAGE, ISA_TRANSFER_FRESH_TAG
+    from config import ISA_TRANSFER_WARM_STAGE, ISA_TRANSFER_FRESH_TAG, EXCLUDED_USERS
 
     # Pull DB records for transfer dates (person_id → row dict)
     db_rows = {r["person_id"]: r for r in (_db.get_all_isa_transfers() or [])}
@@ -1841,15 +1841,19 @@ def api_isa_transfers():
 
     FUB_BASE = "https://yourfriendlyagent.followupboss.com/2/people/view/{}"
     now_utc = _dt.datetime.now(_dt.timezone.utc)
+    # Names that should never appear in agent accountability panels
+    excluded = {n.lower() for n in EXCLUDED_USERS}
     enriched = []
     for person in people:
         pid   = str(person.get("id", ""))
         stage = (person.get("stage") or "Lead").strip()
         stage_changed = stage not in ("Lead", ISA_TRANSFER_WARM_STAGE, "", "Unknown")
 
-        # Agent name from FUB assignedPondId / assignedUserId doesn't give name directly;
-        # use the "assignedTo" field (display name) if present
         agent_name = (person.get("assignedTo") or "Unassigned").strip() or "Unassigned"
+
+        # Skip team leaders, ISA, and admins — they're not being held accountable here
+        if agent_name.lower() in excluded:
+            continue
         lead_name  = (person.get("name") or "Unknown").strip() or "Unknown"
 
         # Transfer date: prefer DB record, fall back to today
