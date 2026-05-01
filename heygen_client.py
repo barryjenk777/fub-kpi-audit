@@ -822,6 +822,10 @@ def submit_video(script: str, background_url: str = None,
         "dimension": {"width": 1920, "height": 1080},
         "title": title,
         "quality": "high",
+        # Avatar IV — HeyGen's latest motion engine (2025).
+        # Photorealistic micro-expressions, tone/emotion-aware lip sync,
+        # natural head tilts + pauses. Drop-in upgrade, same /v2/ endpoint.
+        "use_avatar_iv_model": True,
     }
 
     try:

@@ -2085,6 +2085,11 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
             _unsub,
         )
 
+    # Always append unsubscribe to plain text — required for CAN-SPAM compliance.
+    # The HTML version gets it via the footer template; plain-text-only sends need it here.
+    if body_text and "unsubscribe" not in body_text.lower():
+        body_text = body_text.rstrip("\n") + f"\n\n--\nTo stop receiving these emails: {_unsub}"
+
     msg = Mail(
         from_email=SgEmail(FROM_EMAIL, FROM_NAME),
         to_emails=to_email,
