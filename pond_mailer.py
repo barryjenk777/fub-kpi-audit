@@ -505,16 +505,14 @@ SIGN_OFF = (
 
 def _hg_watch_url(raw_mp4_url: str) -> str:
     """
-    Wrap a HeyGen MP4 URL in the Railway /watch landing page.
+    Wrap a HeyGen MP4 URL in the Railway /v/<token> landing page.
 
-    Desktop email clients download raw .mp4 links instead of playing them.
-    Mobile native players work fine either way. This routes desktop clicks
-    through our HTML5 player page so the video plays inline everywhere.
+    Uses base64url token so heygen.com never appears in email bodies —
+    a significant spam signal since heygen.com is a known bulk-video SaaS.
+    Desktop and mobile both get our HTML5 player page.
     """
-    import os as _os
-    from urllib.parse import quote as _q
-    _base = _os.environ.get("RAILWAY_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
-    return f"{_base}/watch?url={_q(raw_mp4_url, safe='')}"
+    from heygen_client import make_video_landing_url as _make_landing
+    return _make_landing(raw_mp4_url)
 
 
 # ---------------------------------------------------------------------------
@@ -1755,14 +1753,10 @@ FINAL QUALITY CHECK — run this before outputting:
     )
     body_text = body_text_clean + "\n\n" + SIGN_OFF
 
-    # HTML: render Claude body only — the HTML template has its own signature footer
-    # so we do NOT include SIGN_OFF here, which would create a double signature.
-    body_html = _render_html(claude_body)
-
     return {
         "subject":      subject,
         "body_text":    body_text,
-        "body_html":    body_html,
+        "body_html":    None,   # plain-text-only — HTML template removed for deliverability
         "all_subjects": subject_options,
     }
 
@@ -2492,8 +2486,8 @@ def run_new_lead_mailer(dry_run=True):
         subject = subject_options[0] if subject_options else f"Quick question — {first or 'you'}"
         body_text = email_data.get("body", "")
 
-        # Build HTML version (same as drip mailer)
-        body_html = _render_html(body_text)
+        # Plain-text-only send — HTML removed for deliverability
+        body_html = None
 
         print(f"\n  [NEW LEAD] {name} (ID: {pid})")
         print(f"    Email: {to_email}")
@@ -2881,7 +2875,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_seller_video_script,
                     generate_and_wait,
                     get_background_url,
-                    render_video_email_block_simple,
+                    make_video_plain_text,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -2909,16 +2903,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         _city_display   = _city_hg or "Hampton Roads"
                         _street_display = _street or "your home"
 
-                        video_block = render_video_email_block_simple(
-                            video_url=video_result["video_url"],
-                            thumbnail_url=video_result["thumbnail_url"],
-                            first_name=first_name,
-                            caption=f"&#9654; Barry's take on {_street_display} — for {first_name}",
-                        )
-
-                        # One line above + thumbnail + one line below.
+                        # One line above + video link + one CTA line.
                         # If lead got an overnight text, briefly acknowledge it — same human, next step.
-
                         if _imm_ctx == "late_night":
                             _setup_sent = (
                                 f"{first_name} — we reached out late last night and I knew I'd be "
@@ -2938,53 +2924,15 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                                 f"Put together a quick recording for you."
                             )
 
-                        # Plain-text version (for email clients that strip HTML)
+                        # Plain-text-only — /v/<token> link hides heygen.com from email body
                         video_body_text = (
                             f"{_setup_sent}\n\n"
-                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
                             f"Would a quick 10-minute call make sense? Just reply here.\n\n"
                             + SIGN_OFF
                         )
-
-                        # HTML version — setup paragraph, video thumbnail, CTA
-                        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-                        setup_html = f'<p style="{_p}">{_setup_sent}</p>'
-                        cta_html = (
-                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-                            f"Would a quick 10-minute call make sense? Just reply here.</p>"
-                        )
-                        video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
-
-                        # Build the video email HTML directly — same shell as _render_html
-                        # but with pre-built HTML content (not markdown → <p> conversion,
-                        # which would double-wrap our already-HTML video block).
                         email_data["body_text"] = video_body_text
-                        email_data["body_html"] = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-</head>
-<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
-<div style="max-width:560px;margin:0 auto;padding:32px 24px">
-  <div style="color:#222;font-size:15px;line-height:1.8">
-    {video_body_inner}
-  </div>
-  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
-    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
-         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
-    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
-      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
-      (757) 919-8874 &nbsp;|&nbsp;
-      <a href="https://www.legacyhomesearch.com"
-         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
-      1545 Crossways Blvd, Chesapeake, VA 23320<br>
-      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
-         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
-    </p>
-  </div>
-</div>
-</body></html>"""
+                        email_data["body_html"] = None  # plain-text-only send
 
                         # Subject: first name + address = most personalized signal in inbox.
                         # Lowercase feels like a text, not a blast. Under 45 chars when possible.
@@ -3018,7 +2966,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_zbuyer_video_script,
                     generate_and_wait,
                     get_background_url,
-                    render_video_email_block_simple,
+                    make_video_plain_text,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -3047,13 +2995,6 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         _city_display   = _city_hg or "Hampton Roads"
                         _street_display = _street or "your home"
 
-                        video_block = render_video_email_block_simple(
-                            video_url=video_result["video_url"],
-                            thumbnail_url=video_result["thumbnail_url"],
-                            first_name=first_name,
-                            caption=f"&#9654; Barry's video for {first_name} — {_street_display}",
-                        )
-
                         if _imm_ctx == "late_night":
                             _z_setup = (
                                 f"{first_name} — got your request late last night and wanted to get you "
@@ -3071,50 +3012,16 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                                 f"come through. Put together a quick recording for you."
                             )
 
+                        # Plain-text-only — /v/<token> link hides heygen.com from email body
                         video_body_text = (
                             f"{_z_setup}\n\n"
-                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
                             f"10 minutes on the phone and I'll run both numbers for {_street_display}. "
                             f"Just reply here.\n\n"
                             + SIGN_OFF
                         )
-
-                        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-                        setup_html = f'<p style="{_p}">{_z_setup}</p>'
-                        cta_html = (
-                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-                            f'10 minutes on the phone and I\'ll run both numbers for {_street_display}. '
-                            f'Just reply here.</p>'
-                        )
-                        video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
-
                         email_data["body_text"] = video_body_text
-                        email_data["body_html"] = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-</head>
-<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
-<div style="max-width:560px;margin:0 auto;padding:32px 24px">
-  <div style="color:#222;font-size:15px;line-height:1.8">
-    {video_body_inner}
-  </div>
-  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
-    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
-         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
-    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
-      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
-      (757) 919-8874 &nbsp;|&nbsp;
-      <a href="https://www.legacyhomesearch.com"
-         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
-      1545 Crossways Blvd, Chesapeake, VA 23320<br>
-      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
-         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
-    </p>
-  </div>
-</div>
-</body></html>"""
+                        email_data["body_html"] = None  # plain-text-only send
 
                         # Z-buyer subject — name + address, personal feel, lowercase
                         # When no street is known, avoid "your home on your home"
@@ -3162,7 +3069,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_buyer_video_script,
                     generate_and_wait,
                     get_background_url,
-                    render_video_email_block_simple,
+                    make_video_plain_text,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -3248,57 +3155,15 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             )
                             _buyer_subj = f"{first_name} — your {_city_display} search"
 
-                        video_block = render_video_email_block_simple(
-                            video_url=video_result["video_url"],
-                            thumbnail_url=video_result["thumbnail_url"],
-                            first_name=first_name,
-                            caption=_buyer_caption,
-                        )
-
-                        # Plain-text version
+                        # Plain-text-only — /v/<token> link hides heygen.com from email body
                         video_body_text = (
                             f"{_setup_text}\n\n"
-                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
                             f"{_cta_text}\n\n"
                             + SIGN_OFF
                         )
-
-                        # HTML version — lean wrapper: setup → video → CTA
-                        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-                        setup_html = f'<p style="{_p}">{_setup_text}</p>'
-                        cta_html = (
-                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-                            f'{_cta_text}</p>'
-                        )
-                        video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
-
                         email_data["body_text"] = video_body_text
-                        email_data["body_html"] = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-</head>
-<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
-<div style="max-width:560px;margin:0 auto;padding:32px 24px">
-  <div style="color:#222;font-size:15px;line-height:1.8">
-    {video_body_inner}
-  </div>
-  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
-    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
-         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
-    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
-      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
-      (757) 919-8874 &nbsp;|&nbsp;
-      <a href="https://www.legacyhomesearch.com"
-         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
-      1545 Crossways Blvd, Chesapeake, VA 23320<br>
-      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
-         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
-    </p>
-  </div>
-</div>
-</body></html>"""
+                        email_data["body_html"] = None  # plain-text-only send
 
                         # Subject: name + specific search detail for max open rate
                         _subj_options = [
@@ -3332,7 +3197,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_followup_video_script,
                     generate_and_wait,
                     get_background_url,
-                    render_video_email_block_simple,
+                    make_video_plain_text,
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -3381,52 +3246,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             cta_line = f"Reply here and we'll find 10 minutes to walk through it."
                             _fu_subj   = f"{first_name} — one more thing about {_street_fu}"
 
-                        video_block = render_video_email_block_simple(
-                            video_url=video_result["video_url"],
-                            thumbnail_url=video_result["thumbnail_url"],
-                            first_name=first_name,
-                            caption=_fu_caption,
-                        )
-
-                        setup_html = f'<p style="{_p}">{setup_line}</p>'
-                        cta_html   = (
-                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-                            f'{cta_line}</p>'
-                        )
-                        video_body_inner = setup_html + "\n" + video_block + "\n" + cta_html
-
+                        # Plain-text-only — /v/<token> link hides heygen.com from email body
                         video_body_text = (
                             f"{setup_line}\n\n"
-                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
                             f"{cta_line}\n\n" + SIGN_OFF
                         )
                         email_data["body_text"] = video_body_text
-                        email_data["body_html"] = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-</head>
-<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
-<div style="max-width:560px;margin:0 auto;padding:32px 24px">
-  <div style="color:#222;font-size:15px;line-height:1.8">
-    {video_body_inner}
-  </div>
-  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
-    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
-         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
-    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
-      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
-      (757) 919-8874 &nbsp;|&nbsp;
-      <a href="https://www.legacyhomesearch.com"
-         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
-      1545 Crossways Blvd, Chesapeake, VA 23320<br>
-      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
-         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
-    </p>
-  </div>
-</div>
-</body></html>"""
+                        email_data["body_html"] = None  # plain-text-only send
 
                         # Subject: name + specific address — "one more thing" alone is too vague
                         _subj_options = [
@@ -3461,7 +3288,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_followup_video_script,
                     generate_and_wait,
                     get_background_url,
-                    render_video_email_block_simple,
+                    make_video_plain_text,
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -3524,51 +3351,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             )
                             _e4_subj    = f"{first_name} — {_city_e4} market update"
 
-                        video_block = render_video_email_block_simple(
-                            video_url=video_result["video_url"],
-                            thumbnail_url=video_result["thumbnail_url"],
-                            first_name=first_name,
-                            caption=_e4_caption,
-                        )
-                        setup_html4 = f'<p style="{_p4}">{_setup4}</p>'
-                        cta_html4   = (
-                            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-                            f'{_cta4}</p>'
-                        )
-                        video_body_inner4 = setup_html4 + "\n" + video_block + "\n" + cta_html4
-
+                        # Plain-text-only — /v/<token> link hides heygen.com from email body
                         video_body_text4 = (
                             f"{_setup4}\n\n"
-                            f"[Video — click to watch: {_hg_watch_url(video_result['video_url'])}]\n\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
                             f"{_cta4}\n\n" + SIGN_OFF
                         )
                         email_data["body_text"] = video_body_text4
-                        email_data["body_html"] = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-</head>
-<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
-<div style="max-width:560px;margin:0 auto;padding:32px 24px">
-  <div style="color:#222;font-size:15px;line-height:1.8">
-    {video_body_inner4}
-  </div>
-  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
-    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
-         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
-    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
-      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
-      (757) 919-8874 &nbsp;|&nbsp;
-      <a href="https://www.legacyhomesearch.com"
-         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
-      1545 Crossways Blvd, Chesapeake, VA 23320<br>
-      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
-         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
-    </p>
-  </div>
-</div>
-</body></html>"""
+                        email_data["body_html"] = None  # plain-text-only send
 
                         _subj_options4 = [
                             _e4_subj,
