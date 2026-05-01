@@ -940,6 +940,39 @@ def _watch_url(video_url: str) -> str:
     return f"{base}/watch?url={_quote(video_url, safe='')}"
 
 
+def make_video_landing_url(video_url: str) -> str:
+    """
+    Build a clean /v/<token> landing URL that hides heygen.com from the email.
+
+    Token is the base64url-encoded video URL with padding stripped so the URL
+    is safe in email clients and SMS. The /v/<token> route in app.py decodes it
+    and renders the same HTML5 player as /watch — but from our domain, not
+    heygen.com, which is a significant spam / reputation signal for Gmail.
+
+    Example:
+        make_video_landing_url("https://files.heygen.ai/...")
+        → "https://web-production-3363cc.up.railway.app/v/aHR0cHM6Ly..."
+    """
+    import base64
+    token = base64.urlsafe_b64encode(video_url.encode()).decode().rstrip("=")
+    return f"{RAILWAY_BASE_URL.rstrip('/')}/v/{token}"
+
+
+def make_video_plain_text(video_url: str, first_name: str = "") -> str:
+    """
+    Return a clean plain-text video line for plain-text-only emails.
+
+    Hides heygen.com by routing through /v/<token> on our Railway domain.
+    Used instead of the HTML thumbnail block in deliverability-optimized sends.
+
+    Example output:
+        "I recorded a short video for Sarah:\n\n→ https://our-domain.up.railway.app/v/...\n"
+    """
+    landing_url = make_video_landing_url(video_url)
+    name_part = f" for {first_name}" if first_name else ""
+    return f"I recorded a short video{name_part}:\n\n→ {landing_url}\n"
+
+
 def render_video_email_block(video_url: str, thumbnail_url: str,
                               first_name: str = "") -> str:
     """

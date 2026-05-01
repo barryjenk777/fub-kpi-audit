@@ -551,6 +551,75 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
   flex-shrink: 0;
 }
 .cc-bullet-gold { color: #d4a843; }
+
+/* ── ASK CLAUDE ── */
+.cc-ask-block {
+  background: var(--surface2);
+  border: 1px solid rgba(212,168,67,0.25);
+  border-radius: 8px;
+  padding: 18px 20px;
+  margin-top: 18px;
+}
+.cc-ask-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #d4a843;
+  margin-bottom: 10px;
+}
+.cc-ask-textarea {
+  width: 100%;
+  min-height: 72px;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.875rem;
+  font-family: inherit;
+  padding: 10px 12px;
+  resize: vertical;
+  box-sizing: border-box;
+  line-height: 1.5;
+}
+.cc-ask-textarea:focus {
+  outline: none;
+  border-color: rgba(212,168,67,0.5);
+}
+.cc-ask-textarea::placeholder { color: var(--muted); }
+.cc-ask-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+.cc-ask-btn {
+  background: #d4a843;
+  color: #0c1228;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 8px 18px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity .15s;
+}
+.cc-ask-btn:hover { opacity: 0.88; }
+.cc-ask-btn:disabled { opacity: 0.5; cursor: default; }
+.cc-ask-hint { font-size: 0.72rem; color: var(--muted); }
+.cc-ask-answer {
+  margin-top: 14px;
+  background: var(--surface3);
+  border-left: 3px solid #d4a843;
+  border-radius: 0 6px 6px 0;
+  padding: 12px 14px;
+  font-size: 0.875rem;
+  color: #d0d0d0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  display: none;
+}
 </style>
 </head>
 <body>
@@ -933,11 +1002,75 @@ function buildCommandCenter(d){
     h+=`</div>`;
   }
 
+  // ── Ask Claude ──────────────────────────────────────────────────────────────
+  h+=`<div class="cc-ask-block">
+    <div class="cc-ask-label">🤖 Ask Claude about this data</div>
+    <textarea id="cc-ask-input" class="cc-ask-textarea"
+      placeholder="e.g. What should I focus on to teach my agents this week? Why is our appointment show rate so low? Who should I have a 1-on-1 with first?"></textarea>
+    <div class="cc-ask-row">
+      <button class="cc-ask-btn" id="cc-ask-btn" onclick="askClaude()">Ask →</button>
+      <span class="cc-ask-hint">Sends the current briefing data as context</span>
+    </div>
+    <div class="cc-ask-answer" id="cc-ask-answer"></div>
+  </div>`;
+
   // ── Refresh footer ──────────────────────────────────────────────────────────
   const ts=d.cached_at?new Date(d.cached_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'';
   h+=`<div class="cc-refresh">Last updated ${ts} &nbsp;·&nbsp; <a href="#" onclick="loadCommandCenter(true);return false" style="color:var(--gold)">Force Refresh</a></div>`;
   return h;
 }
+
+/* ════════════════════════════════════════════════
+   ASK CLAUDE — Command Center Q&A
+════════════════════════════════════════════════ */
+async function askClaude(){
+  const inp=document.getElementById('cc-ask-input');
+  const btn=document.getElementById('cc-ask-btn');
+  const ans=document.getElementById('cc-ask-answer');
+  const question=(inp?.value||'').trim();
+  if(!question){inp?.focus();return;}
+
+  // Build a compact context string from the current briefing visible on screen
+  const briefingEl=document.querySelector('.cc-briefing-text');
+  const insightsEl=document.querySelector('.cc-insights-block');
+  const guidanceEl=document.querySelector('.cc-guidance-action');
+  let ctx='';
+  if(briefingEl)ctx+='Briefing: '+briefingEl.innerText+'\n';
+  if(guidanceEl)ctx+='Guidance: '+guidanceEl.innerText+'\n';
+  if(insightsEl)ctx+='Insights: '+insightsEl.innerText+'\n';
+
+  btn.disabled=true;
+  btn.textContent='Thinking…';
+  ans.style.display='none';
+  ans.textContent='';
+
+  try{
+    const r=await fetch('/api/ask-claude',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({question,context:ctx}),
+      signal:AbortSignal.timeout(30000),
+    });
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    ans.textContent=d.answer||'(no response)';
+    ans.style.display='block';
+  }catch(e){
+    ans.textContent='Error: '+(e.message||'Unknown error');
+    ans.style.display='block';
+  }finally{
+    btn.disabled=false;
+    btn.textContent='Ask →';
+  }
+}
+
+// Allow Cmd/Ctrl+Enter to submit
+document.addEventListener('keydown',function(e){
+  if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){
+    const inp=document.getElementById('cc-ask-input');
+    if(document.activeElement===inp)askClaude();
+  }
+});
 
 // ── HELPERS ──
 function fmtK(n){n=parseFloat(n)||0;if(n>=1e6)return'$'+(n/1e6).toFixed(1)+'M';if(n>=1e3)return'$'+Math.round(n/1e3)+'K';return'$'+Math.round(n)}

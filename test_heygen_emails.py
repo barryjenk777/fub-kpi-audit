@@ -1,9 +1,15 @@
 """
-Test: Send HeyGen video emails to Barry only.
+Test: Send HeyGen video emails to Barry only — plain text format.
+
+Plain text eliminates the HTML template spam signals that were hurting
+deliverability (logo image, newsletter footer, tracking-style URL patterns).
+The video link routes through /v/<token> on our Railway domain so heygen.com
+never appears in the email body.
 
 Two test leads:
   Sarah — Ylopo Prospecting seller, 412 Harbour View Dr, Suffolk
   Marcus — Z-buyer (cash offer), 2218 Kempsville Rd, Virginia Beach
+  Jordan — Buyer searching in Chesapeake, $380k-$450k, 3br
 
 No real leads are emailed. All sends go to barry@yourfriendlyagent.net.
 """
@@ -31,7 +37,6 @@ logger = logging.getLogger("test_heygen")
 
 TEST_EMAIL = "barry@yourfriendlyagent.net"
 
-LOGO_URL = "https://web-production-3363cc.up.railway.app/static/logo-blue.png"
 SIGN_OFF = (
     "Barry Jenkins\n"
     "Legacy Home Team | LPT Realty\n"
@@ -40,18 +45,20 @@ SIGN_OFF = (
 )
 
 
-def send_test_email(subject, body_text, body_html, label):
+def send_test_email(subject, body_text, label):
+    """Send plain-text-only email. No HTML body — cleaner deliverability."""
     from pond_mailer import send_email
     print(f"\n{'='*60}")
     print(f"  Sending test email: {label}")
     print(f"  To: {TEST_EMAIL}")
     print(f"  Subject: {subject}")
+    print(f"  Format: plain text only (no HTML)")
     print(f"{'='*60}")
     result = send_email(
         to_email=TEST_EMAIL,
         subject=f"[TEST] {subject}",
         body_text=body_text,
-        body_html=body_html,
+        body_html=None,   # plain-text-only — no HTML part
         dry_run=False,
     )
     if result:
@@ -59,35 +66,6 @@ def send_test_email(subject, body_text, body_html, label):
     else:
         print(f"  ✗ Send failed — check SendGrid logs")
     return result
-
-
-def build_email_html(body_inner):
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-</head>
-<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
-<div style="max-width:560px;margin:0 auto;padding:32px 24px">
-  <div style="color:#222;font-size:15px;line-height:1.8">
-    {body_inner}
-  </div>
-  <div style="margin-top:32px;padding-top:20px;border-top:1px solid #e8e8e8">
-    <img src="{LOGO_URL}" alt="Legacy Home Team" width="90"
-         style="display:block;margin:0 0 10px;height:auto;opacity:0.9">
-    <p style="margin:0;font-size:13px;color:#666;line-height:1.6">
-      Barry Jenkins, Realtor &nbsp;|&nbsp; LPT Realty<br>
-      (757) 919-8874 &nbsp;|&nbsp;
-      <a href="https://www.legacyhomesearch.com"
-         style="color:#666;text-decoration:none">www.legacyhomesearch.com</a><br>
-      1545 Crossways Blvd, Chesapeake, VA 23320<br>
-      <a href="mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe"
-         style="color:#999;font-size:11px;text-decoration:none">Unsubscribe</a>
-    </p>
-  </div>
-</div>
-</body></html>"""
 
 
 def test_seller_email():
@@ -101,7 +79,7 @@ def test_seller_email():
         generate_seller_video_script,
         generate_and_wait,
         get_background_url,
-        render_video_email_block_simple,
+        make_video_plain_text,
         DEFAULT_AVATAR, DEFAULT_VOICE,
     )
 
@@ -120,57 +98,32 @@ def test_seller_email():
                                      avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE, timeout_seconds=360)
 
     if not video_result or not video_result.get("video_url"):
-        print("  ✗ HeyGen video failed — sending text-only fallback")
-        # Text-only fallback — same copy as production
+        print("  ✗ HeyGen video failed — sending text-only fallback (no video link)")
         body_text = (
-            f"{first_name} — I was pulling recent sale numbers for a few of my clients "
-            f"in {city} when your place on {street} came up. "
-            f"Put together a quick recording for you.\n\n"
+            f"{first_name} —\n\n"
+            f"I was pulling recent sale numbers for a few of my clients in {city} "
+            f"when your place on {street} came up.\n\n"
             f"Would a quick 10-minute call make sense? Just reply here.\n\n"
             + SIGN_OFF
         )
-        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-        body_inner = (
-            f'<p style="{_p}">{first_name} — I was pulling recent sale numbers for a few of my '
-            f'clients in {city} when your place on {street} came up. '
-            f'Put together a quick recording for you.</p>'
-            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-            f"Would a quick 10-minute call make sense? Just reply here.</p>"
-        )
         return send_test_email(
-            subject=f"{first_name} — quick video for {street}",
+            subject=f"{first_name} — quick note about {street}",
             body_text=body_text,
-            body_html=build_email_html(body_inner),
             label=f"Seller (text-only fallback) — {first_name}",
         )
 
     print(f"  ✓ Video ready: {video_result['video_url'][:80]}...")
     print(f"  Duration: {video_result.get('duration', '?')}s")
 
-    video_block = render_video_email_block_simple(
-        video_url=video_result["video_url"],
-        thumbnail_url=video_result["thumbnail_url"],
-        first_name=first_name,
-        caption=f"&#9654; Barry's take on {street} — for {first_name}",
-    )
-
-    _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-    setup_html = (
-        f'<p style="{_p}">{first_name} — I was pulling recent sale numbers for a few of my '
-        f'clients in {city} when your place on {street} came up. '
-        f'Put together a quick recording for you.</p>'
-    )
-    cta_html = (
-        f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-        f"Would a quick 10-minute call make sense? Just reply here.</p>"
-    )
-    body_inner = setup_html + "\n" + video_block + "\n" + cta_html
+    # Plain-text video link — /v/<token> hides heygen.com domain
+    video_line = make_video_plain_text(video_result["video_url"], first_name=first_name)
 
     body_text = (
-        f"{first_name} — I was pulling recent sale numbers for a few of my clients "
-        f"in {city} when your place on {street} came up. "
-        f"Put together a quick recording for you.\n\n"
-        f"[Video — click to watch: {video_result['video_url']}]\n\n"
+        f"{first_name} —\n\n"
+        f"I was pulling recent sale numbers for a few of my clients in {city} "
+        f"when your place on {street} came up. "
+        f"Put together a short video for you.\n\n"
+        f"{video_line}\n"
         f"Would a quick 10-minute call make sense? Just reply here.\n\n"
         + SIGN_OFF
     )
@@ -178,8 +131,7 @@ def test_seller_email():
     return send_test_email(
         subject=f"{first_name} — quick video for {street}",
         body_text=body_text,
-        body_html=build_email_html(body_inner),
-        label=f"Seller (HeyGen video) — {first_name}",
+        label=f"Seller (HeyGen video, plain text) — {first_name}",
     )
 
 
@@ -194,7 +146,7 @@ def test_zbuyer_email():
         generate_zbuyer_video_script,
         generate_and_wait,
         get_background_url,
-        render_video_email_block_simple,
+        make_video_plain_text,
         DEFAULT_AVATAR, DEFAULT_VOICE,
     )
 
@@ -215,60 +167,37 @@ def test_zbuyer_email():
     if not video_result or not video_result.get("video_url"):
         print("  ✗ HeyGen video failed — sending text-only fallback")
         body_text = (
-            f"{first_name} — saw your cash offer request for {street} come through. "
-            f"Put together a quick recording for you.\n\n"
-            f"10 minutes on the phone and I'll run both numbers for {street}. "
+            f"{first_name} —\n\n"
+            f"Saw your cash offer request for {street} come through.\n\n"
+            f"10 minutes on the phone and I'll run both numbers for you. "
             f"Just reply here.\n\n"
             + SIGN_OFF
-        )
-        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-        body_inner = (
-            f'<p style="{_p}">{first_name} — saw your cash offer request for {street} come through. '
-            f'Put together a quick recording for you.</p>'
-            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-            f"10 minutes on the phone and I'll run both numbers for {street}. Just reply here.</p>"
         )
         return send_test_email(
             subject=f"{first_name} — your home on {street}",
             body_text=body_text,
-            body_html=build_email_html(body_inner),
             label=f"Z-Buyer (text-only fallback) — {first_name}",
         )
 
     print(f"  ✓ Video ready: {video_result['video_url'][:80]}...")
     print(f"  Duration: {video_result.get('duration', '?')}s")
 
-    video_block = render_video_email_block_simple(
-        video_url=video_result["video_url"],
-        thumbnail_url=video_result["thumbnail_url"],
-        first_name=first_name,
-        caption=f"&#9654; Barry's video for {first_name} — {street}",
-    )
-
-    _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-    setup_html = (
-        f'<p style="{_p}">{first_name} — saw your cash offer request for {street} come through. '
-        f'Put together a quick recording for you.</p>'
-    )
-    cta_html = (
-        f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">'
-        f"10 minutes on the phone and I'll run both numbers for {street}. Just reply here.</p>"
-    )
-    body_inner = setup_html + "\n" + video_block + "\n" + cta_html
+    video_line = make_video_plain_text(video_result["video_url"], first_name=first_name)
 
     body_text = (
-        f"{first_name} — saw your cash offer request for {street} come through. "
-        f"Put together a quick recording for you.\n\n"
-        f"[Video — click to watch: {video_result['video_url']}]\n\n"
-        f"10 minutes on the phone and I'll run both numbers for {street}. Just reply here.\n\n"
+        f"{first_name} —\n\n"
+        f"Saw your cash offer request for {street} come through. "
+        f"Put together a short video for you.\n\n"
+        f"{video_line}\n"
+        f"10 minutes on the phone and I'll run both numbers for {street}. "
+        f"Just reply here.\n\n"
         + SIGN_OFF
     )
 
     return send_test_email(
         subject=f"{first_name} — your home on {street}",
         body_text=body_text,
-        body_html=build_email_html(body_inner),
-        label=f"Z-Buyer (HeyGen video) — {first_name}",
+        label=f"Z-Buyer (HeyGen video, plain text) — {first_name}",
     )
 
 
@@ -289,7 +218,7 @@ def test_buyer_email():
         generate_buyer_video_script,
         generate_and_wait,
         get_background_url,
-        render_video_email_block_simple,
+        make_video_plain_text,
         DEFAULT_AVATAR, DEFAULT_VOICE,
     )
 
@@ -319,64 +248,47 @@ def test_buyer_email():
                                      avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
                                      timeout_seconds=360)
 
-    # Personalize based on whether they've been circling a specific home
+    # Copy depends on whether they've been circling a specific home
     if mv_street and strategy in ("saved_property", "repeat_view"):
-        _caption    = f"&#9654; Barry's notes on {mv_street} — for {first_name}"
         _setup_text = (
-            f"{first_name} — saw you've been looking in {city} and circling back to {mv_street}. "
-            f"Put together a quick recording for you."
+            f"{first_name} —\n\n"
+            f"Saw you've been looking in {city} and circling back to {mv_street}. "
+            f"Put together a short video for you."
         )
-        _cta_text   = (
+        _cta_text = (
             f"10 minutes and I can walk you through what I'm actually seeing on that one "
             f"— and your search overall. Just reply here."
         )
-        _subj       = f"{first_name} — I looked into {mv_street}"
+        _subj = f"{first_name} — I looked into {mv_street}"
     else:
-        _caption    = f"&#9654; Barry's take on {city} homes for {first_name}"
         _setup_text = (
-            f"{first_name} — saw your search come through for homes in {city}. "
-            f"Put together a quick recording for you."
+            f"{first_name} —\n\n"
+            f"Saw your search come through for homes in {city}. "
+            f"Put together a short video for you."
         )
-        _cta_text   = (
+        _cta_text = (
             f"10 minutes and I can walk you through exactly what I'm seeing right now. "
             f"Just reply here."
         )
-        _subj       = f"{first_name} — your {city} search"
+        _subj = f"{first_name} — your {city} search"
 
     if not video_result or not video_result.get("video_url"):
         print("  ✗ HeyGen video failed — sending text-only fallback")
-        _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-        body_inner = (
-            f'<p style="{_p}">{_setup_text}</p>'
-            f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">{_cta_text}</p>'
-        )
+        body_text = f"{_setup_text}\n\n{_cta_text}\n\n" + SIGN_OFF
         return send_test_email(
             subject=_subj,
-            body_text=f"{_setup_text}\n\n{_cta_text}\n\n" + SIGN_OFF,
-            body_html=build_email_html(body_inner),
+            body_text=body_text,
             label=f"Buyer (text-only fallback) — {first_name}",
         )
 
     print(f"  ✓ Video ready: {video_result['video_url'][:80]}...")
     print(f"  Duration: {video_result.get('duration', '?')}s")
 
-    video_block = render_video_email_block_simple(
-        video_url=video_result["video_url"],
-        thumbnail_url=video_result["thumbnail_url"],
-        first_name=first_name,
-        caption=_caption,
-    )
-
-    _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
-    setup_html = f'<p style="{_p}">{_setup_text}</p>'
-    cta_html   = (
-        f'<p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#222">{_cta_text}</p>'
-    )
-    body_inner = setup_html + "\n" + video_block + "\n" + cta_html
+    video_line = make_video_plain_text(video_result["video_url"], first_name=first_name)
 
     body_text = (
         f"{_setup_text}\n\n"
-        f"[Video — click to watch: {video_result['video_url']}]\n\n"
+        f"{video_line}\n"
         f"{_cta_text}\n\n"
         + SIGN_OFF
     )
@@ -384,14 +296,15 @@ def test_buyer_email():
     return send_test_email(
         subject=_subj,
         body_text=body_text,
-        body_html=build_email_html(body_inner),
-        label=f"Buyer (HeyGen video) — {first_name}",
+        label=f"Buyer (HeyGen video, plain text) — {first_name}",
     )
 
 
 if __name__ == "__main__":
     print(f"\n{'#'*60}")
     print(f"  HeyGen Test — sending to {TEST_EMAIL} only")
+    print(f"  Format: plain text only (no HTML, no images, no footer)")
+    print(f"  Video links: /v/<token> on Railway domain (heygen.com hidden)")
     print(f"  NO real leads will be contacted.")
     print(f"{'#'*60}")
 

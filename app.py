@@ -5542,6 +5542,133 @@ def watch_video():
     return _R(html_out, status=200, mimetype="text/html")
 
 
+@app.route("/v/<token>")
+def video_landing(token):
+    """
+    Clean video landing page — hides heygen.com from email bodies.
+
+    The token is a base64url-encoded HeyGen MP4 URL (padding stripped).
+    Encoding: base64.urlsafe_b64encode(video_url.encode()).decode().rstrip('=')
+
+    Renders the same HTML5 player as /watch but via a short URL on our domain,
+    so heygen.com never appears in plain-text email bodies — a significant spam
+    signal for Gmail since heygen.com is a known bulk-video SaaS domain.
+
+    Usage in emails:
+        token = base64.urlsafe_b64encode(video_url.encode()).decode().rstrip('=')
+        url   = f"https://our-domain.railway.app/v/{token}"
+    """
+    import base64
+    import html as _html
+    try:
+        # Restore stripped padding (base64 requires length % 4 == 0)
+        padding = 4 - len(token) % 4
+        token_padded = token + ("=" * (padding if padding != 4 else 0))
+        video_url = base64.urlsafe_b64decode(token_padded).decode("utf-8", errors="strict")
+    except Exception:
+        return "Not found.", 404
+    if not video_url.startswith("https://"):
+        return "Not found.", 404
+
+    safe_url = _html.escape(video_url)
+    html_out = (
+        "<!DOCTYPE html>"
+        "<html lang='en'><head>"
+        "<meta charset='UTF-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1.0'>"
+        "<title>Barry Jenkins — Personal Message</title>"
+        "<style>"
+        "*{margin:0;padding:0;box-sizing:border-box}"
+        "body{background:#0c1228;display:flex;flex-direction:column;"
+        "align-items:center;justify-content:center;min-height:100vh;"
+        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}"
+        ".wrap{width:100%;max-width:900px;padding:16px}"
+        "video{width:100%;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,0.6);cursor:pointer}"
+        ".brand{margin-top:14px;text-align:center;"
+        "color:rgba(255,255,255,0.35);font-size:13px;letter-spacing:0.03em}"
+        "</style></head><body>"
+        "<div class='wrap'>"
+        f"<video id='v' src='{safe_url}' controls autoplay playsinline preload='auto'>"
+        f"<a href='{safe_url}' style='color:#fff'>Download the video</a>"
+        "</video>"
+        "<p class='brand'>Legacy Home Team &nbsp;&middot;&nbsp; Barry Jenkins, Realtor"
+        " &nbsp;&middot;&nbsp; LPT Realty</p>"
+        "</div>"
+        "<script>"
+        "var v=document.getElementById('v');"
+        "v.play().catch(function(){v.controls=true;});"
+        "v.addEventListener('click',function(){v.paused?v.play():v.pause();});"
+        "</script>"
+        "</body></html>"
+    )
+    from flask import Response as _R
+    return _R(html_out, status=200, mimetype="text/html")
+
+
+@app.route("/api/ask-claude", methods=["POST"])
+def api_ask_claude():
+    """
+    Command Center AI Q&A — Barry asks a question about the data he sees.
+
+    Accepts:
+        { "question": str, "context": str (optional — data snippet from the UI) }
+
+    Returns:
+        { "answer": str }
+
+    The endpoint injects a system prompt that frames Claude as Barry's
+    coaching partner, gives it team context (role, style, Virginia market),
+    and passes the question + optional data context. Responses are conversational,
+    actionable, and aligned with Barry's "too nice" coaching philosophy.
+    """
+    import anthropic as _anthropic
+    body = request.get_json(force=True, silent=True) or {}
+    question = (body.get("question") or "").strip()
+    extra_ctx = (body.get("context") or "").strip()
+
+    if not question:
+        return jsonify({"error": "question is required"}), 400
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({"error": "ANTHROPIC_API_KEY not configured"}), 500
+
+    system_prompt = (
+        "You are Barry Jenkins' real estate coaching partner. "
+        "Barry leads Legacy Home Team in Virginia Beach/Chesapeake/Suffolk — "
+        "Virginia's #1 real estate team, closing 850+ homes per year. "
+        "He runs a small team of agents and tracks their KPIs (calls, conversations, "
+        "appointment set rate, show rate, contract rate) weekly. "
+        "He uses a coaching philosophy from his book 'Too Nice for Sales': "
+        "never shame agents, always reframe, teaching over pushing, story-first, "
+        "conversational tone, actionable endings. "
+        "His ISA (Inside Sales Agent) is Joe — handles call volume accountability. "
+        "Conversion gaps (opener, ask, close) are Barry's domain. "
+        "When answering, be direct and specific. No fluff. "
+        "Give 2-4 bullet points of actionable coaching advice max. "
+        "Keep responses under 250 words. Plain text, no markdown headers. "
+        "If the question references specific data, use it directly in your answer."
+    )
+
+    user_content = question
+    if extra_ctx:
+        user_content = f"Current dashboard data:\n{extra_ctx}\n\nQuestion: {question}"
+
+    try:
+        client = _anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=512,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        answer = msg.content[0].text if msg.content else "No response generated."
+        return jsonify({"answer": answer})
+    except Exception as e:
+        logger.error("ask-claude error: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/privacy-policy")
 def privacy_policy():
     return """<!DOCTYPE html>

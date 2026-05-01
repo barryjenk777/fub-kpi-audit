@@ -2084,18 +2084,19 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
     # _render_html(), and also fixes any inline templates that still use the old mailto:.
     _recipient = to_email.lower().strip() if isinstance(to_email, str) else ""
     _unsub     = _unsub_url(_recipient) if _recipient else "#"
-    body_html  = body_html.replace("__UNSUB_URL__", _unsub)
-    body_html  = body_html.replace(
-        "mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe",
-        _unsub,
-    )
+    if body_html:
+        body_html = body_html.replace("__UNSUB_URL__", _unsub)
+        body_html = body_html.replace(
+            "mailto:reply@inbound.yourfriendlyagent.net?subject=Unsubscribe",
+            _unsub,
+        )
 
     msg = Mail(
         from_email=SgEmail(FROM_EMAIL, FROM_NAME),
         to_emails=to_email,
         subject=subject,
         plain_text_content=body_text,
-        html_content=body_html,
+        html_content=body_html or None,  # None = plain-text-only send (no HTML part)
     )
     # Reply-to: SendGrid inbound parse intercepts replies for sentiment routing
     msg.reply_to = SgEmail("reply@inbound.yourfriendlyagent.net", FROM_NAME)
