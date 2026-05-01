@@ -2938,13 +2938,15 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             f"{_cta_sent}\n\n"
                             + SIGN_OFF
                         )
-                        # Slim HTML — thumbnail image + /v/<token> href, no newsletter chrome
+                        # Slim HTML — thumbnail with play button baked in, curiosity-gap caption
                         video_body_html = make_video_email_html(
                             setup_text=_setup_sent,
                             video_url=video_result["video_url"],
                             thumbnail_url=video_result["thumbnail_url"],
                             cta_text=_cta_sent,
                             first_name=first_name,
+                            caption=f"I looked into {_street_display} before I hit record. Here's what stood out.",
+                            duration=video_result.get("duration", 0),
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3042,6 +3044,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             thumbnail_url=video_result["thumbnail_url"],
                             cta_text=_z_cta,
                             first_name=first_name,
+                            caption=f"cash offer vs. listing — I ran both numbers for {_street_display}.",
+                            duration=video_result.get("duration", 0),
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3185,12 +3189,19 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             f"{_cta_text}\n\n"
                             + SIGN_OFF
                         )
+                        _buyer_caption = (
+                            f"what I actually think about {_mv_street}."
+                            if _mv_street and strategy in ("saved_property", "repeat_view")
+                            else f"what the {_city_display} market actually looks like right now."
+                        )
                         video_body_html = make_video_email_html(
                             setup_text=_setup_text,
                             video_url=video_result["video_url"],
                             thumbnail_url=video_result["thumbnail_url"],
                             cta_text=_cta_text,
                             first_name=first_name,
+                            caption=_buyer_caption,
+                            duration=video_result.get("duration", 0),
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3288,6 +3299,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             thumbnail_url=video_result["thumbnail_url"],
                             cta_text=cta_line,
                             first_name=first_name,
+                            caption="one more thing I didn't say in my last video.",
+                            duration=video_result.get("duration", 0),
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3400,6 +3413,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             thumbnail_url=video_result["thumbnail_url"],
                             cta_text=_cta4,
                             first_name=first_name,
+                            caption="had a thought on this I wanted to say out loud.",
+                            duration=video_result.get("duration", 0),
                         )
                         email_data["body_text"] = video_body_text4
                         email_data["body_html"] = video_body_html4

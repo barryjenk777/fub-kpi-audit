@@ -5481,6 +5481,147 @@ def api_heygen_background():
 # PIL regenerates on every request which takes 300-500ms.
 _heygen_bg_cache: dict = {}
 
+# ---------------------------------------------------------------------------
+# Video thumbnail proxy — composites play button + duration badge onto the
+# HeyGen thumbnail JPEG at open time, served from our Railway domain.
+#
+# This means heygen.com never appears in the email at all — not in href
+# (handled by /v/<token>) and not in img src (handled here).
+#
+# The composited image shows Barry's face + a centered play button circle
+# + a duration badge in the bottom-right corner, exactly like BombBomb/Vidyard.
+# The play button is baked IN so it renders identically in every email client
+# including Outlook (which strips CSS overlays).
+# ---------------------------------------------------------------------------
+_thumb_cache: dict = {}
+
+
+@app.route("/thumb")
+def video_thumb():
+    """
+    Proxy + composite a HeyGen thumbnail.
+
+    Query params:
+      t — base64url-encoded thumbnail URL (no padding)
+      d — video duration in seconds (int, optional, default 0)
+
+    Returns: JPEG with play button + duration badge composited in.
+    """
+    import base64, io, requests as _req
+    from flask import Response as _R, abort as _abort
+    from urllib.parse import unquote as _unquote
+
+    raw_t = request.args.get("t", "").strip()
+    dur   = max(0, int(request.args.get("d", 0) or 0))
+
+    if not raw_t:
+        _abort(400)
+
+    cache_key = f"{raw_t}|{dur}"
+    cached = _thumb_cache.get(cache_key)
+    if cached:
+        return _R(cached, mimetype="image/jpeg",
+                  headers={"Cache-Control": "public, max-age=86400"})
+
+    # Decode thumbnail URL
+    try:
+        padding = 4 - len(raw_t) % 4
+        padded  = raw_t + ("=" * (padding if padding != 4 else 0))
+        thumb_url = base64.urlsafe_b64decode(padded).decode("utf-8")
+    except Exception:
+        _abort(400)
+
+    if not thumb_url.startswith("https://"):
+        _abort(400)
+
+    # Fetch original thumbnail from HeyGen CDN
+    try:
+        resp = _req.get(thumb_url, timeout=8)
+        resp.raise_for_status()
+        img_bytes = resp.content
+    except Exception as e:
+        logger.warning("thumb proxy fetch failed: %s", e)
+        _abort(502)
+
+    # Composite play button + duration badge using PIL
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        import math
+
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        w, h = img.size
+
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        # ── Play button circle ──────────────────────────────────────────────
+        # Semi-transparent dark circle, centered
+        cx, cy = w // 2, h // 2
+        r = min(w, h) // 9          # radius scales with image size
+        # Outer dark circle (semi-transparent)
+        draw.ellipse(
+            [cx - r, cy - r, cx + r, cy + r],
+            fill=(0, 0, 0, 160),
+        )
+        # White play triangle — pointing right, centered in circle
+        tri_size = int(r * 0.52)
+        tx = cx - int(tri_size * 0.35)   # slight left-offset to visually center the triangle
+        ty = cy
+        triangle = [
+            (tx,              ty - tri_size),
+            (tx,              ty + tri_size),
+            (tx + tri_size * 2, ty),
+        ]
+        draw.polygon(triangle, fill=(255, 255, 255, 240))
+
+        # ── Duration badge ──────────────────────────────────────────────────
+        if dur > 0:
+            mins  = dur // 60
+            secs  = dur % 60
+            dur_str = f"{mins}:{secs:02d}"
+
+            # Try to load a font; fall back to PIL default
+            font = None
+            for fp in [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/Library/Fonts/Arial.ttf",
+            ]:
+                try:
+                    font = ImageFont.truetype(fp, size=max(14, h // 22))
+                    break
+                except Exception:
+                    continue
+            if font is None:
+                font = ImageFont.load_default()
+
+            bbox    = draw.textbbox((0, 0), dur_str, font=font)
+            tw, th  = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            pad     = max(5, h // 55)
+            margin  = max(8, h // 45)
+            bx      = w - tw - pad * 2 - margin
+            by      = h - th - pad * 2 - margin
+            # Dark pill background
+            draw.rounded_rectangle(
+                [bx, by, bx + tw + pad * 2, by + th + pad * 2],
+                radius=4, fill=(0, 0, 0, 200),
+            )
+            draw.text((bx + pad, by + pad), dur_str,
+                      fill=(255, 255, 255, 255), font=font)
+
+        # Re-encode as JPEG
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        result = buf.getvalue()
+
+    except Exception as e:
+        logger.warning("thumb composite failed: %s — serving original", e)
+        result = img_bytes   # fall back to un-composited thumbnail
+
+    _thumb_cache[cache_key] = result
+    return _R(result, mimetype="image/jpeg",
+              headers={"Cache-Control": "public, max-age=86400"})
+
 
 @app.route("/watch")
 def watch_video():

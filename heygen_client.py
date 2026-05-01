@@ -977,41 +977,88 @@ def make_video_plain_text(video_url: str, first_name: str = "") -> str:
     return f"I recorded a short video{name_part}:\n\n→ {landing_url}\n"
 
 
+def make_thumb_proxy_url(thumbnail_url: str, duration_seconds: float = 0) -> str:
+    """
+    Build a /thumb?t=<token>&d=<seconds> URL served from our Railway domain.
+
+    The /thumb endpoint fetches the HeyGen thumbnail, composites a play button
+    circle + duration badge onto it using PIL, and serves the result.
+
+    This means heygen.com never appears anywhere in the email — not in href
+    (handled by /v/<token>) and not in img src (handled here). The play button
+    is baked INTO the JPEG so it renders identically in every email client
+    including Outlook (which strips CSS position:absolute overlays).
+    """
+    import base64
+    token = base64.urlsafe_b64encode(thumbnail_url.encode()).decode().rstrip("=")
+    dur   = max(0, int(duration_seconds))
+    base  = RAILWAY_BASE_URL.rstrip("/")
+    return f"{base}/thumb?t={token}&d={dur}"
+
+
 def make_video_email_html(setup_text: str, video_url: str,
                            thumbnail_url: str, cta_text: str,
-                           first_name: str = "") -> str:
+                           first_name: str = "",
+                           caption: str = "",
+                           duration: float = 0) -> str:
     """
-    Build a slim HTML email body with a clickable video thumbnail.
+    Build a cutting-edge video email body — personal feel, engineered to click.
 
-    Deliberately NOT a newsletter template — no logo, no branded footer,
-    no max-width centering tricks. Just clean paragraphs + a linked image.
-    This is the sweet spot: compelling enough to click, invisible enough to
-    not trip spam filters.
-
-    Key deliverability wins kept:
-    - Video href routes through /v/<token> — heygen.com never appears
-    - No logo image in footer (was the single biggest spam signal)
-    - No newsletter chrome (dividers, color blocks, address footer)
+    Design principles (based on BombBomb/Vidyard best practices + deliverability research):
+    - Play button baked INTO the thumbnail JPEG via /thumb proxy — renders in
+      ALL clients including Outlook (which strips CSS overlays)
+    - heygen.com never appears: video href → /v/<token>, img src → /thumb
+    - Table-based layout for Outlook compatibility (no flexbox, no position:absolute)
+    - Caption = curiosity-gap copy specific to the lead's address/situation
+      Not "Click to watch" — that's what mass email looks like
+    - Duration badge on the thumbnail (bottom-right) lowers commitment friction
+    - No logo, no newsletter template, no branded footer chrome
     - Unsubscribe injected by send_email() via __UNSUB_URL__ placeholder
-    - Signature is plain text at bottom, not an image
 
     Args:
-        setup_text:     Opening paragraph (already personalized)
-        video_url:      Raw HeyGen MP4 URL — encoded to /v/<token> internally
-        thumbnail_url:  Thumbnail JPEG from HeyGen
-        cta_text:       Closing paragraph / call to action
-        first_name:     Used in alt text
+        setup_text:   Opening paragraph — already personalized to lead
+        video_url:    Raw HeyGen MP4 URL — encoded internally to /v/<token>
+        thumbnail_url: HeyGen thumbnail JPEG URL — proxied internally via /thumb
+        cta_text:     Closing line / soft call to action
+        first_name:   Used in alt text
+        caption:      Short curiosity-gap line shown below the thumbnail.
+                      Defaults to a general fallback if not provided.
+                      Best practice: specific to address + hint at video content.
+                      e.g. "I looked into 412 Harbour View before I hit record."
+        duration:     Video duration in seconds — composited as badge on thumbnail
+                      and shown in the caption line for commitment-lowering effect.
     """
     import html as _h
-    landing = make_video_landing_url(video_url)
+
+    landing    = make_video_landing_url(video_url)
+    proxy_thumb = make_thumb_proxy_url(thumbnail_url, duration_seconds=duration)
     safe_landing = _h.escape(landing)
-    safe_thumb   = _h.escape(thumbnail_url)
+    safe_thumb   = _h.escape(proxy_thumb)
     safe_setup   = setup_text.replace("\n", "<br>")
     safe_cta     = cta_text.replace("\n", "<br>")
     name_str     = f" for {first_name}" if first_name else ""
 
+    # Duration string for caption — "0:35" or "1:15"
+    if duration > 0:
+        mins, secs = int(duration) // 60, int(duration) % 60
+        dur_str = f"{mins}:{secs:02d}"
+    else:
+        dur_str = ""
+
+    # Caption: caller provides specific copy; fallback is generic but still personal
+    if caption:
+        safe_caption = _h.escape(caption)
+    elif dur_str:
+        safe_caption = _h.escape(f"recorded this for you — {dur_str}")
+    else:
+        safe_caption = "recorded this for you"
+
+    # Duration suffix — added after caption if present and not already in it
+    if dur_str and dur_str not in safe_caption:
+        safe_caption = f"{safe_caption} &nbsp;·&nbsp; {dur_str}"
+
     return f"""<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1019,16 +1066,29 @@ def make_video_email_html(setup_text: str, video_url: str,
 <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
 <div style="max-width:560px;padding:28px 20px">
 
-  <p style="margin:0 0 18px;font-size:15px;line-height:1.8;color:#222">{safe_setup}</p>
+  <p style="margin:0 0 20px;font-size:15px;line-height:1.8;color:#222">{safe_setup}</p>
 
-  <a href="{safe_landing}" target="_blank" style="display:block;text-decoration:none;margin:0 0 18px">
-    <img src="{safe_thumb}" alt="Click to watch Barry's video{name_str}"
-         width="560" style="display:block;width:100%;max-width:560px;border-radius:8px;border:0;
-         box-shadow:0 2px 12px rgba(0,0,0,0.12)">
-    <p style="margin:7px 0 0;font-size:13px;color:#888;text-align:center">
-      &#9654; Click to watch
-    </p>
-  </a>
+  <!-- Video thumbnail — table-based for Outlook compatibility -->
+  <!-- Play button + duration are baked into the JPEG via /thumb proxy -->
+  <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 6px">
+    <tr>
+      <td>
+        <a href="{safe_landing}" target="_blank" style="display:block;text-decoration:none">
+          <img src="{safe_thumb}"
+               alt="Barry Jenkins — personal video{name_str}"
+               width="560"
+               border="0"
+               style="display:block;width:100%;max-width:560px;border-radius:8px;border:0">
+        </a>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Caption — curiosity-gap copy, not generic CTA -->
+  <p style="margin:0 0 22px;font-size:13px;color:#888;line-height:1.5">
+    <a href="{safe_landing}" target="_blank"
+       style="color:#888;text-decoration:none">{safe_caption}</a>
+  </p>
 
   <p style="margin:0 0 24px;font-size:15px;line-height:1.8;color:#222">{safe_cta}</p>
 

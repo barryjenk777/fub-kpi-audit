@@ -131,6 +131,8 @@ def test_seller_email():
         thumbnail_url=video_result["thumbnail_url"],
         cta_text=_cta,
         first_name=first_name,
+        caption=f"I looked into {street} before I hit record. Here's what stood out.",
+        duration=video_result.get("duration", 0),
     )
 
     return send_test_email(
@@ -204,6 +206,8 @@ def test_zbuyer_email():
         thumbnail_url=video_result["thumbnail_url"],
         cta_text=_cta,
         first_name=first_name,
+        caption=f"cash offer vs. listing — I ran both numbers for {street}.",
+        duration=video_result.get("duration", 0),
     )
 
     return send_test_email(
@@ -304,12 +308,19 @@ def test_buyer_email():
         f"{_cta_text}\n\n"
         + SIGN_OFF
     )
+    _caption = (
+        f"what I actually think about {mv_street}."
+        if mv_street and strategy in ("saved_property", "repeat_view")
+        else f"what the {city} market actually looks like right now."
+    )
     body_html = make_video_email_html(
         setup_text=_setup_text,
         video_url=video_result["video_url"],
         thumbnail_url=video_result["thumbnail_url"],
         cta_text=_cta_text,
         first_name=first_name,
+        caption=_caption,
+        duration=video_result.get("duration", 0),
     )
 
     return send_test_email(
