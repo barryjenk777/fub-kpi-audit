@@ -45,20 +45,20 @@ SIGN_OFF = (
 )
 
 
-def send_test_email(subject, body_text, label):
-    """Send plain-text-only email. No HTML body — cleaner deliverability."""
+def send_test_email(subject, body_text, body_html=None, label=""):
+    """Send test email — HTML has slim thumbnail block, plain text is fallback."""
     from pond_mailer import send_email
     print(f"\n{'='*60}")
     print(f"  Sending test email: {label}")
     print(f"  To: {TEST_EMAIL}")
     print(f"  Subject: {subject}")
-    print(f"  Format: plain text only (no HTML)")
+    print(f"  Format: {'HTML (slim thumbnail) + plain text' if body_html else 'plain text only'}")
     print(f"{'='*60}")
     result = send_email(
         to_email=TEST_EMAIL,
         subject=f"[TEST] {subject}",
         body_text=body_text,
-        body_html=None,   # plain-text-only — no HTML part
+        body_html=body_html,
         dry_run=False,
     )
     if result:
@@ -80,6 +80,7 @@ def test_seller_email():
         generate_and_wait,
         get_background_url,
         make_video_plain_text,
+        make_video_email_html,
         DEFAULT_AVATAR, DEFAULT_VOICE,
     )
 
@@ -115,23 +116,28 @@ def test_seller_email():
     print(f"  ✓ Video ready: {video_result['video_url'][:80]}...")
     print(f"  Duration: {video_result.get('duration', '?')}s")
 
-    # Plain-text video link — /v/<token> hides heygen.com domain
-    video_line = make_video_plain_text(video_result["video_url"], first_name=first_name)
+    _setup = (f"{first_name} — I was pulling recent sale numbers for a few of my clients "
+              f"in {city} when your place on {street} came up. Put together a short video for you.")
+    _cta   = "Would a quick 10-minute call make sense? Just reply here."
 
     body_text = (
-        f"{first_name} —\n\n"
-        f"I was pulling recent sale numbers for a few of my clients in {city} "
-        f"when your place on {street} came up. "
-        f"Put together a short video for you.\n\n"
-        f"{video_line}\n"
-        f"Would a quick 10-minute call make sense? Just reply here.\n\n"
-        + SIGN_OFF
+        f"{_setup}\n\n"
+        f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+        f"{_cta}\n\n" + SIGN_OFF
+    )
+    body_html = make_video_email_html(
+        setup_text=_setup,
+        video_url=video_result["video_url"],
+        thumbnail_url=video_result["thumbnail_url"],
+        cta_text=_cta,
+        first_name=first_name,
     )
 
     return send_test_email(
         subject=f"{first_name} — quick video for {street}",
         body_text=body_text,
-        label=f"Seller (HeyGen video, plain text) — {first_name}",
+        body_html=body_html,
+        label=f"Seller (HeyGen video + thumbnail) — {first_name}",
     )
 
 
@@ -147,6 +153,7 @@ def test_zbuyer_email():
         generate_and_wait,
         get_background_url,
         make_video_plain_text,
+        make_video_email_html,
         DEFAULT_AVATAR, DEFAULT_VOICE,
     )
 
@@ -182,22 +189,28 @@ def test_zbuyer_email():
     print(f"  ✓ Video ready: {video_result['video_url'][:80]}...")
     print(f"  Duration: {video_result.get('duration', '?')}s")
 
-    video_line = make_video_plain_text(video_result["video_url"], first_name=first_name)
+    _setup = (f"{first_name} — saw your cash offer request for {street} come through. "
+              f"Put together a short video for you.")
+    _cta   = f"10 minutes on the phone and I'll run both numbers for {street}. Just reply here."
 
     body_text = (
-        f"{first_name} —\n\n"
-        f"Saw your cash offer request for {street} come through. "
-        f"Put together a short video for you.\n\n"
-        f"{video_line}\n"
-        f"10 minutes on the phone and I'll run both numbers for {street}. "
-        f"Just reply here.\n\n"
-        + SIGN_OFF
+        f"{_setup}\n\n"
+        f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+        f"{_cta}\n\n" + SIGN_OFF
+    )
+    body_html = make_video_email_html(
+        setup_text=_setup,
+        video_url=video_result["video_url"],
+        thumbnail_url=video_result["thumbnail_url"],
+        cta_text=_cta,
+        first_name=first_name,
     )
 
     return send_test_email(
         subject=f"{first_name} — your home on {street}",
         body_text=body_text,
-        label=f"Z-Buyer (HeyGen video, plain text) — {first_name}",
+        body_html=body_html,
+        label=f"Z-Buyer (HeyGen video + thumbnail) — {first_name}",
     )
 
 
@@ -219,6 +232,7 @@ def test_buyer_email():
         generate_and_wait,
         get_background_url,
         make_video_plain_text,
+        make_video_email_html,
         DEFAULT_AVATAR, DEFAULT_VOICE,
     )
 
@@ -284,19 +298,25 @@ def test_buyer_email():
     print(f"  ✓ Video ready: {video_result['video_url'][:80]}...")
     print(f"  Duration: {video_result.get('duration', '?')}s")
 
-    video_line = make_video_plain_text(video_result["video_url"], first_name=first_name)
-
     body_text = (
         f"{_setup_text}\n\n"
-        f"{video_line}\n"
+        f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
         f"{_cta_text}\n\n"
         + SIGN_OFF
+    )
+    body_html = make_video_email_html(
+        setup_text=_setup_text,
+        video_url=video_result["video_url"],
+        thumbnail_url=video_result["thumbnail_url"],
+        cta_text=_cta_text,
+        first_name=first_name,
     )
 
     return send_test_email(
         subject=_subj,
         body_text=body_text,
-        label=f"Buyer (HeyGen video, plain text) — {first_name}",
+        body_html=body_html,
+        label=f"Buyer (HeyGen video + thumbnail) — {first_name}",
     )
 
 

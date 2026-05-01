@@ -977,6 +977,76 @@ def make_video_plain_text(video_url: str, first_name: str = "") -> str:
     return f"I recorded a short video{name_part}:\n\n→ {landing_url}\n"
 
 
+def make_video_email_html(setup_text: str, video_url: str,
+                           thumbnail_url: str, cta_text: str,
+                           first_name: str = "") -> str:
+    """
+    Build a slim HTML email body with a clickable video thumbnail.
+
+    Deliberately NOT a newsletter template — no logo, no branded footer,
+    no max-width centering tricks. Just clean paragraphs + a linked image.
+    This is the sweet spot: compelling enough to click, invisible enough to
+    not trip spam filters.
+
+    Key deliverability wins kept:
+    - Video href routes through /v/<token> — heygen.com never appears
+    - No logo image in footer (was the single biggest spam signal)
+    - No newsletter chrome (dividers, color blocks, address footer)
+    - Unsubscribe injected by send_email() via __UNSUB_URL__ placeholder
+    - Signature is plain text at bottom, not an image
+
+    Args:
+        setup_text:     Opening paragraph (already personalized)
+        video_url:      Raw HeyGen MP4 URL — encoded to /v/<token> internally
+        thumbnail_url:  Thumbnail JPEG from HeyGen
+        cta_text:       Closing paragraph / call to action
+        first_name:     Used in alt text
+    """
+    import html as _h
+    landing = make_video_landing_url(video_url)
+    safe_landing = _h.escape(landing)
+    safe_thumb   = _h.escape(thumbnail_url)
+    safe_setup   = setup_text.replace("\n", "<br>")
+    safe_cta     = cta_text.replace("\n", "<br>")
+    name_str     = f" for {first_name}" if first_name else ""
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+<div style="max-width:560px;padding:28px 20px">
+
+  <p style="margin:0 0 18px;font-size:15px;line-height:1.8;color:#222">{safe_setup}</p>
+
+  <a href="{safe_landing}" target="_blank" style="display:block;text-decoration:none;margin:0 0 18px">
+    <img src="{safe_thumb}" alt="Click to watch Barry's video{name_str}"
+         width="560" style="display:block;width:100%;max-width:560px;border-radius:8px;border:0;
+         box-shadow:0 2px 12px rgba(0,0,0,0.12)">
+    <p style="margin:7px 0 0;font-size:13px;color:#888;text-align:center">
+      &#9654; Click to watch
+    </p>
+  </a>
+
+  <p style="margin:0 0 24px;font-size:15px;line-height:1.8;color:#222">{safe_cta}</p>
+
+  <p style="margin:0;font-size:14px;color:#444;line-height:1.7">
+    Barry Jenkins<br>
+    Legacy Home Team | LPT Realty<br>
+    (757) 919-8874<br>
+    www.legacyhomesearch.com
+  </p>
+
+  <p style="margin:14px 0 0;font-size:11px;color:#bbb">
+    <a href="__UNSUB_URL__" style="color:#bbb;text-decoration:none">Unsubscribe</a>
+  </p>
+
+</div>
+</body></html>"""
+
+
 def render_video_email_block(video_url: str, thumbnail_url: str,
                               first_name: str = "") -> str:
     """

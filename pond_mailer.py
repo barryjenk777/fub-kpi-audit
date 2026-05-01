@@ -2881,6 +2881,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_and_wait,
                     get_background_url,
                     make_video_plain_text,
+                    make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -2929,15 +2930,24 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                                 f"Put together a quick recording for you."
                             )
 
-                        # Plain-text-only — /v/<token> link hides heygen.com from email body
+                        _cta_sent = "Would a quick 10-minute call make sense? Just reply here."
+                        # Plain text (for spam scoring + fallback)
                         video_body_text = (
                             f"{_setup_sent}\n\n"
                             f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
-                            f"Would a quick 10-minute call make sense? Just reply here.\n\n"
+                            f"{_cta_sent}\n\n"
                             + SIGN_OFF
                         )
+                        # Slim HTML — thumbnail image + /v/<token> href, no newsletter chrome
+                        video_body_html = make_video_email_html(
+                            setup_text=_setup_sent,
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            cta_text=_cta_sent,
+                            first_name=first_name,
+                        )
                         email_data["body_text"] = video_body_text
-                        email_data["body_html"] = None  # plain-text-only send
+                        email_data["body_html"] = video_body_html
 
                         # Subject: first name + address = most personalized signal in inbox.
                         # Lowercase feels like a text, not a blast. Under 45 chars when possible.
@@ -2972,6 +2982,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_and_wait,
                     get_background_url,
                     make_video_plain_text,
+                    make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -3017,16 +3028,23 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                                 f"come through. Put together a quick recording for you."
                             )
 
-                        # Plain-text-only — /v/<token> link hides heygen.com from email body
+                        _z_cta = (f"10 minutes on the phone and I'll run both numbers for "
+                                  f"{_street_display}. Just reply here.")
                         video_body_text = (
                             f"{_z_setup}\n\n"
                             f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
-                            f"10 minutes on the phone and I'll run both numbers for {_street_display}. "
-                            f"Just reply here.\n\n"
+                            f"{_z_cta}\n\n"
                             + SIGN_OFF
                         )
+                        video_body_html = make_video_email_html(
+                            setup_text=_z_setup,
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            cta_text=_z_cta,
+                            first_name=first_name,
+                        )
                         email_data["body_text"] = video_body_text
-                        email_data["body_html"] = None  # plain-text-only send
+                        email_data["body_html"] = video_body_html
 
                         # Z-buyer subject — name + address, personal feel, lowercase
                         # When no street is known, avoid "your home on your home"
@@ -3075,6 +3093,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_and_wait,
                     get_background_url,
                     make_video_plain_text,
+                    make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -3160,15 +3179,21 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             )
                             _buyer_subj = f"{first_name} — your {_city_display} search"
 
-                        # Plain-text-only — /v/<token> link hides heygen.com from email body
                         video_body_text = (
                             f"{_setup_text}\n\n"
                             f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
                             f"{_cta_text}\n\n"
                             + SIGN_OFF
                         )
+                        video_body_html = make_video_email_html(
+                            setup_text=_setup_text,
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            cta_text=_cta_text,
+                            first_name=first_name,
+                        )
                         email_data["body_text"] = video_body_text
-                        email_data["body_html"] = None  # plain-text-only send
+                        email_data["body_html"] = video_body_html
 
                         # Subject: name + specific search detail for max open rate
                         _subj_options = [
@@ -3203,6 +3228,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_and_wait,
                     get_background_url,
                     make_video_plain_text,
+                    make_video_email_html,
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -3251,14 +3277,20 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             cta_line = f"Reply here and we'll find 10 minutes to walk through it."
                             _fu_subj   = f"{first_name} — one more thing about {_street_fu}"
 
-                        # Plain-text-only — /v/<token> link hides heygen.com from email body
                         video_body_text = (
                             f"{setup_line}\n\n"
                             f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
                             f"{cta_line}\n\n" + SIGN_OFF
                         )
+                        video_body_html = make_video_email_html(
+                            setup_text=setup_line,
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            cta_text=cta_line,
+                            first_name=first_name,
+                        )
                         email_data["body_text"] = video_body_text
-                        email_data["body_html"] = None  # plain-text-only send
+                        email_data["body_html"] = video_body_html
 
                         # Subject: name + specific address — "one more thing" alone is too vague
                         _subj_options = [
@@ -3294,6 +3326,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                     generate_and_wait,
                     get_background_url,
                     make_video_plain_text,
+                    make_video_email_html,
                     AVATAR_SUIT, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
@@ -3356,14 +3389,20 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             )
                             _e4_subj    = f"{first_name} — {_city_e4} market update"
 
-                        # Plain-text-only — /v/<token> link hides heygen.com from email body
                         video_body_text4 = (
                             f"{_setup4}\n\n"
                             f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
                             f"{_cta4}\n\n" + SIGN_OFF
                         )
+                        video_body_html4 = make_video_email_html(
+                            setup_text=_setup4,
+                            video_url=video_result["video_url"],
+                            thumbnail_url=video_result["thumbnail_url"],
+                            cta_text=_cta4,
+                            first_name=first_name,
+                        )
                         email_data["body_text"] = video_body_text4
-                        email_data["body_html"] = None  # plain-text-only send
+                        email_data["body_html"] = video_body_html4
 
                         _subj_options4 = [
                             _e4_subj,
