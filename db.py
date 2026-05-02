@@ -3295,6 +3295,136 @@ def days_since_last_pond_email(person_id):
         return None
 
 
+# ---------------------------------------------------------------------------
+# Pond SMS log — parallel to pond_email_log for the SMS nurture channel
+# ---------------------------------------------------------------------------
+
+def ensure_pond_sms_log_table():
+    """Create pond_sms_log table if it doesn't exist."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pond_sms_log (
+                        id              SERIAL PRIMARY KEY,
+                        person_id       INTEGER NOT NULL,
+                        person_name     VARCHAR(255),
+                        phone_number    VARCHAR(20),
+                        body            TEXT,
+                        strategy        VARCHAR(100),
+                        leadstream_tier VARCHAR(50),
+                        sent_at         TIMESTAMP DEFAULT NOW(),
+                        dry_run         BOOLEAN DEFAULT FALSE,
+                        twilio_sid      VARCHAR(64),
+                        status          VARCHAR(20) DEFAULT 'queued',
+                        channel         VARCHAR(20) DEFAULT 'sms_only'
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_pond_sms_person
+                    ON pond_sms_log(person_id, sent_at DESC)
+                """)
+    except Exception as e:
+        logger.warning("ensure_pond_sms_log_table failed: %s", e)
+
+
+def log_pond_sms(person_id, person_name, phone_number, body,
+                 strategy, leadstream_tier="POND",
+                 dry_run=False, twilio_sid=None,
+                 status="queued", channel="sms_only"):
+    """
+    Record a sent pond SMS. Returns the inserted row id or None.
+
+    channel values:
+        "sms_only"   — lead had no email; SMS was the only outreach
+        "dual"       — high-priority lead got both email and SMS same send
+        "new_lead"   — immediate SMS on new lead entry
+    """
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO pond_sms_log
+                        (person_id, person_name, phone_number, body,
+                         strategy, leadstream_tier, dry_run, twilio_sid,
+                         status, channel)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
+                """, (person_id, person_name, phone_number, body,
+                      strategy, leadstream_tier, dry_run, twilio_sid,
+                      status, channel))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("log_pond_sms failed for person %s: %s", person_id, e)
+        return None
+
+
+def days_since_last_pond_sms(person_id):
+    """Return days since last SMS to this lead, or None if never texted."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT MAX(sent_at) FROM pond_sms_log
+                    WHERE person_id = %s AND dry_run = FALSE
+                """, (person_id,))
+                row = cur.fetchone()
+        if row and row[0]:
+            from datetime import datetime, timezone
+            last = row[0].replace(tzinfo=timezone.utc)
+            delta = datetime.now(timezone.utc) - last
+            return delta.total_seconds() / 86400
+        return None
+    except Exception as e:
+        logger.warning("days_since_last_pond_sms failed for %s: %s", person_id, e)
+        return None
+
+
+def has_received_pond_sms(person_id):
+    """Return True if this lead has received any pond SMS (non-dry-run)."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM pond_sms_log
+                    WHERE person_id = %s AND dry_run = FALSE
+                    LIMIT 1
+                """, (person_id,))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("has_received_pond_sms failed for %s: %s", person_id, e)
+        return False
+
+
+def count_pond_sms_today(tz_name="America/New_York"):
+    """Count live (non-dry-run) pond SMS sent today in the given timezone."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM pond_sms_log
+                    WHERE dry_run = FALSE
+                      AND sent_at >= (NOW() AT TIME ZONE %s)::DATE
+                      AND sent_at <  (NOW() AT TIME ZONE %s)::DATE + INTERVAL '1 day'
+                """, (tz_name, tz_name))
+                row = cur.fetchone()
+                return row[0] if row else 0
+    except Exception as e:
+        logger.warning("count_pond_sms_today failed: %s", e)
+        return 0
+
+
 def ensure_pond_reply_log_table():
     """Create pond_reply_log table if it doesn't exist."""
     if not is_available():

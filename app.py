@@ -7700,9 +7700,10 @@ else:
     _load_cooldown_state()
     warmup_cache()
     start_scheduler()
-    # Ensure pond email/reply log tables exist
+    # Ensure pond email/reply/SMS log tables exist
     _db.ensure_pond_email_log_table()
     _db.ensure_pond_reply_log_table()
+    _db.ensure_pond_sms_log_table()
     # Ensure calls cache table exists (incremental FUB sync)
     _db.ensure_calls_cache_table()
     # Ensure pond mailer job tracking table exists at startup (not just on first run)

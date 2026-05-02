@@ -2580,6 +2580,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
     from config import LEADSTREAM_ALLOWED_POND_IDS, BARRY_FUB_USER_ID
 
     _db.ensure_pond_email_log_table()
+    _db.ensure_pond_sms_log_table()
 
     # Daily cap enforcement — count emails already sent today (ET) and reduce
     # this run's limit to stay within the daily ceiling.
@@ -2678,12 +2679,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
     }
 
     sent = 0
+    sms_only_sent = 0
+    dual_sms_sent = 0
     skipped_cooldown = 0
     skipped_no_email = 0
     skipped_no_activity = 0
     skipped_no_strategy = 0
     skipped_generation_error = 0
     max_to_process = limit or MAX_PER_RUN
+
+    import twilio_client as _tc
+    _sms_ready = _tc.is_available()
 
     # Hard cap on how many leads we'll check per run — prevents runaway loops
     # on large ponds (each event fetch = 1 API call at 0.35s rate limit).
@@ -2718,8 +2724,13 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         if not to_email:
             to_email = emails[0]["value"] if emails else None
 
-        if not to_email:
-            logger.debug("Skipping %s — no email address", name)
+        # Get phone for SMS channel (parallel to email)
+        to_phone = _tc.get_primary_phone(person) if _sms_ready else None
+        _sms_blocked = _tc.sms_suppressed_by_tags(tags) if to_phone else []
+        _sms_eligible = bool(to_phone and not _sms_blocked)
+
+        if not to_email and not _sms_eligible:
+            logger.debug("Skipping %s — no email, no SMS-eligible phone", name)
             skipped_no_email += 1
             continue
 
@@ -2744,10 +2755,83 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # explicitly or implicitly asked us to stop reaching out.
         _blocking = _email_suppression_tags(tags)
         if _blocking:
-            logger.info("Skipping %s — email suppressed by tag(s): %s",
-                        name, ", ".join(_blocking))
-            skipped_cooldown += 1
-            continue
+            # Email-specific suppression: if SMS is still eligible, fall through
+            # to the SMS-only fork below; otherwise skip entirely.
+            if not _sms_eligible or not to_phone:
+                logger.info("Skipping %s — suppressed by tag(s): %s", name, ", ".join(_blocking))
+                skipped_cooldown += 1
+                continue
+            # Email blocked but SMS still open — clear to_email so we drop into SMS-only fork
+            to_email = None
+
+        # ── SMS-only path ─────────────────────────────────────────────────────
+        # Lead has no email address (or email was just suppressed) but has a
+        # valid opted-in phone number. Run the same behavior/strategy/generation
+        # pipeline but send a condensed SMS instead of an email.
+        if not to_email and _sms_eligible:
+            _sms_days = _db.days_since_last_pond_sms(pid)
+            if _sms_days is not None and _sms_days < EMAIL_COOLDOWN_DAYS:
+                logger.debug("Skipping %s (SMS-only) — texted %.1fd ago", name, _sms_days)
+                skipped_cooldown += 1
+                continue
+
+            _is_ylopo_s2  = _is_ylopo_prospecting_seller(person, tags)
+            _is_z2        = _is_z_buyer(tags, person)
+            _first2       = first or "there"
+
+            if _is_ylopo_s2:
+                _beh2 = analyze_behavior([], tags)
+                _strat2 = "ylopo_prospecting"
+                _tier2  = "AI_NEEDS_FOLLOW_UP" if "AI_NEEDS_FOLLOW_UP" in tags else "POND"
+            else:
+                candidates_checked += 1
+                _ev2 = client.get_events_for_person(pid, days=60, limit=100)
+                if len([e for e in _ev2 if e.get("type")]) < MIN_EVENTS_TO_EMAIL:
+                    logger.debug("Skipping %s (SMS-only) — insufficient IDX events", name)
+                    skipped_no_activity += 1
+                    continue
+                _beh2 = analyze_behavior(_ev2, tags)
+                _tier2 = "POND"
+                for _tt in ("AI_NEEDS_FOLLOW_UP", "HANDRAISER", "YPRIORITY", "Y_HOME_3_VIEW"):
+                    if _tt in tags:
+                        _tier2 = _tt
+                        break
+                _strat2, _pri2 = select_strategy(_beh2, _tier2, tags)
+                if _strat2 == "none" or _pri2 < 20:
+                    logger.debug("Skipping %s (SMS-only) — no strategy", name)
+                    skipped_no_strategy += 1
+                    continue
+
+            print(f"\n  [SMS-ONLY] {name} (ID: {pid}) · {to_phone}")
+            print(f"    Tier: {_tier2} | Strategy: {_strat2}")
+
+            try:
+                _edata2 = generate_email(person, _beh2, _strat2, _tier2,
+                                         sequence_num=1, dry_run=dry_run)
+            except Exception as _eg:
+                logger.error("SMS-only generation failed for %s: %s", name, _eg)
+                skipped_generation_error += 1
+                continue
+
+            _sms_body = _tc.email_to_sms(_edata2.get("body", ""), first_name=_first2)
+            if not _sms_body:
+                logger.warning("SMS-only body empty for %s — skipping", name)
+                continue
+
+            _sms_result = _tc.send_sms(to_phone, _sms_body, dry_run=dry_run)
+            if _sms_result.get("success"):
+                _db.log_pond_sms(pid, name, to_phone, _sms_body,
+                                 strategy=_strat2, leadstream_tier=_tier2,
+                                 dry_run=dry_run,
+                                 twilio_sid=_sms_result.get("twilio_sid"),
+                                 status=_sms_result.get("status", "queued"),
+                                 channel="sms_only")
+                print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} SMS ({len(_sms_body)+52} chars)")
+                sms_only_sent += 1
+                sent += 1
+            else:
+                logger.error("SMS-only send failed for %s: %s", name, _sms_result.get("error"))
+            continue  # Done — don't fall through to email path
 
         # Sequence check — max 3 emails without a reply, then 30-day quiet period
         history = _db.get_lead_email_history(pid)
@@ -3492,6 +3576,29 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         if result.get("sg_message_id") and log_id:
             _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
 
+        # ── Dual-channel SMS ─────────────────────────────────────────────────
+        # High-priority leads (AI_NEEDS_FOLLOW_UP, HANDRAISER, etc.) also get
+        # a condensed SMS the same day — email + text = 2x surface area.
+        # SMS cooldown is checked independently of email cooldown.
+        if _sms_eligible and any(t in tags for t in _tc.DUAL_CHANNEL_TAGS):
+            _dual_sms_days = _db.days_since_last_pond_sms(pid)
+            if _dual_sms_days is None or _dual_sms_days >= EMAIL_COOLDOWN_DAYS:
+                _dual_body = _tc.email_to_sms(email_data.get("body_text", ""),
+                                              first_name=first_name)
+                if _dual_body:
+                    _dual_result = _tc.send_sms(to_phone, _dual_body, dry_run=dry_run)
+                    if _dual_result.get("success"):
+                        _db.log_pond_sms(pid, name, to_phone, _dual_body,
+                                         strategy=strategy, leadstream_tier=leadstream_tier,
+                                         dry_run=dry_run,
+                                         twilio_sid=_dual_result.get("twilio_sid"),
+                                         status=_dual_result.get("status", "queued"),
+                                         channel="dual")
+                        print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} dual SMS ({len(_dual_body)+52} chars)")
+                        dual_sms_sent += 1
+                    else:
+                        logger.warning("Dual SMS failed for %s: %s", name, _dual_result.get("error"))
+
         # Log the outbound email to FUB timeline as a structured 📧 note.
         # Agents see email number, type, what it does, and clear next-action.
         # (FUB /v1/emails is blocked for API integrations — notes work fine.)
@@ -3547,21 +3654,25 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # Brief pause between leads to stay friendly to FUB rate limits
         import time as _t; _t.sleep(1.5)
 
+    _sms_total = sms_only_sent + dual_sms_sent
     print(f"\n{'='*60}")
-    print(f"  Done: {sent} {'would send' if dry_run else 'sent'} | "
-          f"Cooldown: {skipped_cooldown} | No activity: {skipped_no_activity} | "
-          f"No email: {skipped_no_email} | No strategy: {skipped_no_strategy} | "
+    print(f"  Done: {sent} {'would send' if dry_run else 'sent'} "
+          f"({'email only' if _sms_total == 0 else f'{sms_only_sent} SMS-only + {dual_sms_sent} dual-channel'})")
+    print(f"  Cooldown: {skipped_cooldown} | No activity: {skipped_no_activity} | "
+          f"No contact: {skipped_no_email} | No strategy: {skipped_no_strategy} | "
           f"Generation error: {skipped_generation_error}")
     print(f"{'='*60}\n")
 
     return {
-        "sent":                 sent,
+        "sent":                      sent,
+        "sms_only_sent":             sms_only_sent,
+        "dual_sms_sent":             dual_sms_sent,
         "skipped_cooldown":          skipped_cooldown,
         "skipped_no_email":          skipped_no_email,
         "skipped_no_activity":       skipped_no_activity,
         "skipped_no_strategy":       skipped_no_strategy,
         "skipped_generation_error":  skipped_generation_error,
-        "dry_run":              dry_run,
+        "dry_run":                   dry_run,
     }
 
 
