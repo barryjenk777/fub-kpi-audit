@@ -24,6 +24,8 @@ Usage:
             # result = {"success": True, "twilio_sid": "SMxxx", "status": "queued"}
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import re
