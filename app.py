@@ -64,7 +64,10 @@ def _cache_key(endpoint):
 
 def cache_get(endpoint):
     """
-    Get cached data for today.
+    Get cached data for today. Returns a shallow copy so callers can safely
+    annotate the response (e.g. add from_cache, cache_age) without mutating
+    the stored object.
+
     Tier 1: in-memory (fastest — same worker)
     Tier 2: disk (local dev only)
     Tier 3: Postgres (shared across all gunicorn workers; survives Railway restarts)
@@ -72,7 +75,7 @@ def cache_get(endpoint):
     key = _cache_key(endpoint)
     # Tier 1: memory
     if key in _cache:
-        return _cache[key]
+        return dict(_cache[key])   # shallow copy — callers must not mutate nested lists
     # Tier 2: disk (local dev)
     try:
         path = os.path.join(CACHE_DIR, f"{key.replace(':', '_')}.json")
@@ -80,7 +83,7 @@ def cache_get(endpoint):
             with open(path) as f:
                 data = json.load(f)
                 _cache[key] = data  # Promote to memory
-                return data
+                return dict(data)
     except Exception:
         pass
     # Tier 3: Postgres (Railway / multi-worker)
@@ -89,7 +92,7 @@ def cache_get(endpoint):
         if data:
             _cache[key] = data  # Promote to memory so this worker reuses it
             logger.info("cache_get(%s): served from DB tier (post-restart or cross-worker hit)", endpoint)
-            return data
+            return dict(data)
     except Exception as _dbe:
         logger.debug("cache_get DB tier failed: %s", _dbe)
     return None
@@ -115,7 +118,12 @@ def cache_set(endpoint, data):
 
 
 def cache_clear(endpoint=None):
-    """Clear cache. If endpoint given, clear just that; otherwise clear all."""
+    """Clear cache for one endpoint or all. Wipes memory, disk, AND Postgres.
+
+    Bug fix: previously only cleared memory + disk. Postgres tier was untouched,
+    so cache_warm() would re-read yesterday's Postgres data and store it back
+    as today's — perpetually serving stale KPI/ISA/Manager numbers.
+    """
     global _cache
     if endpoint:
         key = _cache_key(endpoint)
@@ -125,6 +133,10 @@ def cache_clear(endpoint=None):
             os.remove(path)
         except OSError:
             pass
+        try:
+            _db.db_cache_clear(endpoint)   # wipe Postgres row for this endpoint
+        except Exception:
+            pass
     else:
         _cache.clear()
         try:
@@ -132,6 +144,10 @@ def cache_clear(endpoint=None):
             if os.path.exists(CACHE_DIR):
                 shutil.rmtree(CACHE_DIR)
         except OSError:
+            pass
+        try:
+            _db.db_cache_clear()           # wipe entire Postgres api_cache table
+        except Exception:
             pass
 
 
@@ -6727,6 +6743,7 @@ def scheduled_new_lead_check():
         result = run_new_lead_mailer(dry_run=False)
         if result.get("sent", 0) > 0:
             print(f"[SCHEDULER] New lead mailer: sent {result['sent']} immediate email(s)")
+        _record_fired("new_lead_check")
     except Exception as e:
         print(f"[SCHEDULER] New lead mailer error: {e}")
 
@@ -6742,6 +6759,7 @@ def scheduled_serendipity():
         sent      = process.get("sent", 0)
         if triggered or sent:
             print(f"[SERENDIPITY] {triggered} trigger(s) queued, {sent} email(s) sent")
+        _record_fired("serendipity")
     except Exception as e:
         print(f"[SERENDIPITY] Scheduler error: {e}")
 
@@ -6767,6 +6785,7 @@ def scheduled_run_pond_mailer(daily_cap=45):
             result = resp.get_json() or {}
             job_id = result.get("job_id", "unknown")
             print(f"[SCHEDULER] Pond mailer started — job_id: {job_id}")
+        _record_fired("pond_mailer")
     except Exception as e:
         print(f"[SCHEDULER] Pond mailer error: {e}")
 
@@ -7424,25 +7443,6 @@ def scheduled_gone_dark_alert():
         _alert_on_job_failure("gone_dark_alert", str(e))
     finally:
         _db.release_job_lock("gone_dark_alert")
-
-
-def scheduled_pond_mailer():
-    """
-    Daily job (Mon-Fri 9:15am ET): send up to 10 personalized emails to
-    Shark Tank pond leads based on their IDX browsing behavior.
-    Emails are written by Claude, sent via SendGrid.
-    """
-    if not _db.try_acquire_job_lock("pond_mailer"):
-        return
-    try:
-        from pond_mailer import run_pond_mailer
-        result = run_pond_mailer(dry_run=False)
-        sent = result.get("sent", 0)
-        print(f"[POND MAILER] Run complete — {sent} emails sent")
-    except Exception as e:
-        _alert_on_job_failure("pond_mailer", str(e))
-    finally:
-        _db.release_job_lock("pond_mailer")
 
 
 def _run_morning_jobs():

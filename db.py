@@ -4121,6 +4121,28 @@ def get_serendipity_stats(days=30):
 # Cross-worker API cache  (survives Railway restarts + gunicorn worker misses)
 # ---------------------------------------------------------------------------
 
+def db_cache_clear(cache_key: str = None) -> bool:
+    """
+    Delete one or all entries from api_cache.
+    Called by cache_clear() so the Postgres tier is wiped alongside memory/disk.
+    Without this, cache_warm() would read stale Postgres data and re-store it
+    instead of fetching fresh data from FUB.
+    """
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if cache_key:
+                    cur.execute("DELETE FROM api_cache WHERE cache_key = %s", (cache_key,))
+                else:
+                    cur.execute("DELETE FROM api_cache")
+        return True
+    except Exception as e:
+        logger.warning("db_cache_clear(%s) failed: %s", cache_key or "ALL", e)
+        return False
+
+
 def db_cache_set(cache_key: str, data: dict) -> bool:
     """
     Persist a JSON payload to api_cache under cache_key.
@@ -4171,4 +4193,3 @@ def db_cache_get(cache_key: str, max_age_hours: int = 24):
     except Exception as e:
         logger.warning("db_cache_get(%s) failed: %s", cache_key, e)
         return None
-        return {}
