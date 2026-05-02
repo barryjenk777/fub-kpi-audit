@@ -869,6 +869,7 @@ def poll_video(video_id: str, timeout_seconds: int = 360,
 
             if status == "completed":
                 result = {
+                    "video_id":       video_id,
                     "video_url":      data.get("video_url", ""),
                     "thumbnail_url":  data.get("thumbnail_url", ""),
                     "duration":       data.get("duration", 0),
@@ -944,35 +945,44 @@ def _watch_url(video_url: str) -> str:
     return f"{base}/watch?url={_quote(video_url, safe='')}"
 
 
-def make_video_landing_url(video_url: str) -> str:
+def make_video_landing_url(video_url: str, video_id: str = "") -> str:
     """
-    Build a clean /v/<token> landing URL that hides heygen.com from the email.
+    Build a clean /v/<id> landing URL that hides heygen.com from the email.
 
-    Token is the base64url-encoded video URL with padding stripped so the URL
-    is safe in email clients and SMS. The /v/<token> route in app.py decodes it
-    and renders the same HTML5 player as /watch — but from our domain, not
-    heygen.com, which is a significant spam / reputation signal for Gmail.
+    Preferred: uses HeyGen video_id (32-char hex UUID) as the path segment.
+    The /v/<video_id> route calls the HeyGen API at click-time to get a fresh
+    signed URL — avoids the massive base64 token and URLs never expire.
 
-    Example:
-        make_video_landing_url("https://files.heygen.ai/...")
-        → "https://web-production-3363cc.up.railway.app/v/aHR0cHM6Ly..."
+    Example (preferred):
+        make_video_landing_url("https://files.heygen.ai/...", video_id="726f98a0...")
+        → "https://web-production-3363cc.up.railway.app/v/726f98a0..."  (79 chars)
+
+    Fallback (no video_id): base64-encodes the raw URL.
+        → "https://web-production-3363cc.up.railway.app/v/aHR0cHM6Ly..."  (250+ chars)
     """
-    import base64
-    token = base64.urlsafe_b64encode(video_url.encode()).decode().rstrip("=")
-    return f"{RAILWAY_BASE_URL.rstrip('/')}/v/{token}"
+    import re
+    base = RAILWAY_BASE_URL.rstrip("/")
+    # Use video_id if it looks like a HeyGen UUID (32 lowercase hex chars)
+    if video_id and re.match(r'^[0-9a-f]{32}$', video_id.lower()):
+        return f"{base}/v/{video_id.lower()}"
+    # Fall back to base64-encoded URL
+    import base64 as _b64
+    token = _b64.urlsafe_b64encode(video_url.encode()).decode().rstrip("=")
+    return f"{base}/v/{token}"
 
 
-def make_video_plain_text(video_url: str, first_name: str = "") -> str:
+def make_video_plain_text(video_url: str, first_name: str = "", video_id: str = "") -> str:
     """
     Return a clean plain-text video line for plain-text-only emails.
 
-    Hides heygen.com by routing through /v/<token> on our Railway domain.
-    Used instead of the HTML thumbnail block in deliverability-optimized sends.
+    Hides heygen.com by routing through /v/<id> on our Railway domain.
+    When video_id is provided (preferred), the URL is short (79 chars).
+    Without video_id it falls back to a long base64 URL.
 
-    Example output:
-        "I recorded a short video for Sarah:\n\n→ https://our-domain.up.railway.app/v/...\n"
+    Example output (with video_id):
+        "I recorded a short video for Sarah:\n\n→ https://our-domain.railway.app/v/726f98a0...\n"
     """
-    landing_url = make_video_landing_url(video_url)
+    landing_url = make_video_landing_url(video_url, video_id=video_id)
     name_part = f" for {first_name}" if first_name else ""
     return f"I recorded a short video{name_part}:\n\n→ {landing_url}\n"
 
@@ -1000,7 +1010,8 @@ def make_video_email_html(setup_text: str, video_url: str,
                            thumbnail_url: str, cta_text: str,
                            first_name: str = "",
                            caption: str = "",
-                           duration: float = 0) -> str:
+                           duration: float = 0,
+                           video_id: str = "") -> str:
     """
     Build a cutting-edge video email body — personal feel, engineered to click.
 
@@ -1030,7 +1041,7 @@ def make_video_email_html(setup_text: str, video_url: str,
     """
     import html as _h
 
-    landing    = make_video_landing_url(video_url)
+    landing    = make_video_landing_url(video_url, video_id=video_id)
     proxy_thumb = make_thumb_proxy_url(thumbnail_url, duration_seconds=duration)
     safe_landing = _h.escape(landing)
     safe_thumb   = _h.escape(proxy_thumb)

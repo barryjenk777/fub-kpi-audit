@@ -122,7 +122,7 @@ def test_seller_email():
 
     body_text = (
         f"{_setup}\n\n"
-        f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+        f"{make_video_plain_text(video_result['video_url'], first_name=first_name, video_id=video_result.get('video_id', ''))}\n"
         f"{_cta}\n\n" + SIGN_OFF
     )
     body_html = make_video_email_html(
@@ -133,6 +133,7 @@ def test_seller_email():
         first_name=first_name,
         caption=f"I looked into {street} before I hit record. Here's what stood out.",
         duration=video_result.get("duration", 0),
+        video_id=video_result.get("video_id", ""),
     )
 
     return send_test_email(
@@ -197,7 +198,7 @@ def test_zbuyer_email():
 
     body_text = (
         f"{_setup}\n\n"
-        f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+        f"{make_video_plain_text(video_result['video_url'], first_name=first_name, video_id=video_result.get('video_id', ''))}\n"
         f"{_cta}\n\n" + SIGN_OFF
     )
     body_html = make_video_email_html(
@@ -208,6 +209,7 @@ def test_zbuyer_email():
         first_name=first_name,
         caption=f"cash offer vs. listing — I ran both numbers for {street}.",
         duration=video_result.get("duration", 0),
+        video_id=video_result.get("video_id", ""),
     )
 
     return send_test_email(
@@ -304,7 +306,7 @@ def test_buyer_email():
 
     body_text = (
         f"{_setup_text}\n\n"
-        f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+        f"{make_video_plain_text(video_result['video_url'], first_name=first_name, video_id=video_result.get('video_id', ''))}\n"
         f"{_cta_text}\n\n"
         + SIGN_OFF
     )
@@ -321,6 +323,7 @@ def test_buyer_email():
         first_name=first_name,
         caption=_caption,
         duration=video_result.get("duration", 0),
+        video_id=video_result.get("video_id", ""),
     )
 
     return send_test_email(

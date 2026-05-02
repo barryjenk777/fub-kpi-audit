@@ -5688,30 +5688,63 @@ def video_landing(token):
     """
     Clean video landing page — hides heygen.com from email bodies.
 
-    The token is a base64url-encoded HeyGen MP4 URL (padding stripped).
-    Encoding: base64.urlsafe_b64encode(video_url.encode()).decode().rstrip('=')
+    Two URL formats are supported:
+      /v/<video_id>  — preferred: token is a 32-char HeyGen video UUID.
+                       Route calls HeyGen API to get a fresh signed URL.
+                       Produced by make_video_landing_url(url, video_id=id).
+                       Example URL: /v/726f98a0956d434889663419f22c4060  (79 chars)
 
-    Renders the same HTML5 player as /watch but via a short URL on our domain,
-    so heygen.com never appears in plain-text email bodies — a significant spam
-    signal for Gmail since heygen.com is a known bulk-video SaaS domain.
+      /v/<b64token>  — fallback: token is a base64url-encoded raw MP4 URL.
+                       Used for older emails generated without video_id.
+                       Example URL: /v/aHR0cHM6Ly9maW...  (250+ chars)
 
-    Usage in emails:
-        token = base64.urlsafe_b64encode(video_url.encode()).decode().rstrip('=')
-        url   = f"https://our-domain.railway.app/v/{token}"
+    Performance notes:
+      - video_id path adds one HeyGen API call (~200ms) but gets a fresh URL
+      - preload='metadata' so the page renders instantly; video buffers only what's needed
+      - poster=thumbnail so the frame shows immediately while video initialises
     """
-    import base64
-    import html as _html
-    try:
-        # Restore stripped padding (base64 requires length % 4 == 0)
-        padding = 4 - len(token) % 4
-        token_padded = token + ("=" * (padding if padding != 4 else 0))
-        video_url = base64.urlsafe_b64decode(token_padded).decode("utf-8", errors="strict")
-    except Exception:
-        return "Not found.", 404
-    if not video_url.startswith("https://"):
+    import re, base64, html as _html
+
+    video_url     = None
+    thumbnail_url = None
+    duration      = 0
+
+    # ── Path 1: HeyGen video_id (32 lowercase hex chars) ──────────────────
+    if re.match(r'^[0-9a-f]{32}$', token.lower()):
+        try:
+            import requests as _req
+            _hg_key = os.environ.get("HEYGEN_API_KEY", "")
+            if _hg_key:
+                r = _req.get(
+                    "https://api.heygen.com/v1/video_status.get",
+                    headers={"X-Api-Key": _hg_key, "Content-Type": "application/json"},
+                    params={"video_id": token.lower()},
+                    timeout=8,
+                )
+                if r.status_code == 200:
+                    _data = r.json().get("data", {})
+                    if _data.get("status") == "completed":
+                        video_url     = _data.get("video_url", "")
+                        thumbnail_url = _data.get("thumbnail_url", "")
+                        duration      = _data.get("duration", 0)
+        except Exception as _e:
+            logger.warning("video_landing HeyGen lookup failed: %s", _e)
+
+    # ── Path 2: base64url-encoded raw URL (legacy / fallback) ─────────────
+    if not video_url:
+        try:
+            padding      = 4 - len(token) % 4
+            token_padded = token + ("=" * (padding if padding != 4 else 0))
+            video_url    = base64.urlsafe_b64decode(token_padded).decode("utf-8", errors="strict")
+        except Exception:
+            return "Not found.", 404
+
+    if not video_url or not video_url.startswith("https://"):
         return "Not found.", 404
 
-    safe_url = _html.escape(video_url)
+    safe_url   = _html.escape(video_url)
+    poster_attr = f"poster=\"{_html.escape(thumbnail_url)}\"" if thumbnail_url else ""
+
     html_out = (
         "<!DOCTYPE html>"
         "<html lang='en'><head>"
@@ -5729,7 +5762,7 @@ def video_landing(token):
         "color:rgba(255,255,255,0.35);font-size:13px;letter-spacing:0.03em}"
         "</style></head><body>"
         "<div class='wrap'>"
-        f"<video id='v' src='{safe_url}' controls autoplay playsinline preload='auto'>"
+        f"<video id='v' src='{safe_url}' {poster_attr} controls autoplay playsinline preload='metadata'>"
         f"<a href='{safe_url}' style='color:#fff'>Download the video</a>"
         "</video>"
         "<p class='brand'>Legacy Home Team &nbsp;&middot;&nbsp; Barry Jenkins, Realtor"

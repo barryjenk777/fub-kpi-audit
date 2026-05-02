@@ -2934,7 +2934,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         # Plain text (for spam scoring + fallback)
                         video_body_text = (
                             f"{_setup_sent}\n\n"
-                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name, video_id=video_result.get('video_id', ''))}\n"
                             f"{_cta_sent}\n\n"
                             + SIGN_OFF
                         )
@@ -2947,6 +2947,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             first_name=first_name,
                             caption=f"I looked into {_street_display} before I hit record. Here's what stood out.",
                             duration=video_result.get("duration", 0),
+                            video_id=video_result.get("video_id", ""),
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3034,7 +3035,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                                   f"{_street_display}. Just reply here.")
                         video_body_text = (
                             f"{_z_setup}\n\n"
-                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name, video_id=video_result.get('video_id', ''))}\n"
                             f"{_z_cta}\n\n"
                             + SIGN_OFF
                         )
@@ -3046,6 +3047,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             first_name=first_name,
                             caption=f"cash offer vs. listing — I ran both numbers for {_street_display}.",
                             duration=video_result.get("duration", 0),
+                            video_id=video_result.get("video_id", ""),
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3185,7 +3187,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
                         video_body_text = (
                             f"{_setup_text}\n\n"
-                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name, video_id=video_result.get('video_id', ''))}\n"
                             f"{_cta_text}\n\n"
                             + SIGN_OFF
                         )
@@ -3202,6 +3204,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             first_name=first_name,
                             caption=_buyer_caption,
                             duration=video_result.get("duration", 0),
+                            video_id=video_result.get("video_id", ""),
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3290,7 +3293,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
                         video_body_text = (
                             f"{setup_line}\n\n"
-                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name, video_id=video_result.get('video_id', ''))}\n"
                             f"{cta_line}\n\n" + SIGN_OFF
                         )
                         video_body_html = make_video_email_html(
@@ -3301,6 +3304,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             first_name=first_name,
                             caption="one more thing I didn't say in my last video.",
                             duration=video_result.get("duration", 0),
+                            video_id=video_result.get("video_id", ""),
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3404,7 +3408,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
                         video_body_text4 = (
                             f"{_setup4}\n\n"
-                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name)}\n"
+                            f"{make_video_plain_text(video_result['video_url'], first_name=first_name, video_id=video_result.get('video_id', ''))}\n"
                             f"{_cta4}\n\n" + SIGN_OFF
                         )
                         video_body_html4 = make_video_email_html(
@@ -3415,6 +3419,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                             first_name=first_name,
                             caption="had a thought on this I wanted to say out loud.",
                             duration=video_result.get("duration", 0),
+                            video_id=video_result.get("video_id", ""),
                         )
                         email_data["body_text"] = video_body_text4
                         email_data["body_html"] = video_body_html4
