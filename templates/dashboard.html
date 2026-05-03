@@ -787,7 +787,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
     <!-- ══════════════════════════════════════ AI OUTREACH TAB -->
     <div class="tab-pane" id="tab-outreach">
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem">
-        <button class="btn btn-ghost" onclick="runPondMailer()">▶ Run Now (Live)</button>
+        <button class="btn btn-ghost" onclick="runPondMailer()">▶ Run Now</button>
         <button class="btn btn-ghost" onclick="loadOutreach(true)">🔄 Refresh</button>
         <button id="btnSyncBounces" class="btn btn-ghost" onclick="syncBounces()" title="Fetch all hard bounces from SendGrid and tag matching FUB leads with BAD_EMAIL">🚫 Sync Bounces → FUB</button>
       </div>
@@ -2221,68 +2221,137 @@ async function loadOutreach(force, _attempt){
 function buildOutreach(d){
   const esc=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const f=d.funnel||{};
-  const sent=f.sent||0, replied=f.replied||0, positive=f.positive||0, routed=f.routed||0;
-  const replyRate=sent>0?Math.round(replied/sent*100):0;
-  const interestRate=replied>0?Math.round(positive/replied*100):0;
-  const routeRate=positive>0?Math.round(routed/positive*100):0;
   const chart=d.daily_chart||[];
-  const maxChart=Math.max(...chart.map(c=>c.count),1);
   const leads=d.routed_leads||[];
   const replies=d.recent_replies||[];
 
+  // Channel helpers
+  const eS=f.emails_sent||0, eR=f.email_replied||0, eP=f.email_positive||0, eRo=f.email_routed||0;
+  const tS=f.sms_sent||0,    tR=f.sms_replied||0,   tP=f.sms_positive||0,   tRo=f.sms_routed||0;
+  const totSent=eS+tS, totReplied=eR+tR, totPositive=eP+tP, totRouted=eRo+tRo;
+  const replyRate=totSent>0?+(totReplied/totSent*100).toFixed(1):0;
+  const convRate=totSent>0?+(totRouted/totSent*100).toFixed(1):0;
+
+  const maxChart=Math.max(...chart.map(c=>c.count),1);
   let h='';
 
-  // ── Funnel ──────────────────────────────────────────────────────────
-  h+=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-bottom:1.4rem;border:1px solid var(--border);border-radius:var(--r);overflow:hidden">`;
-  const fsteps=[
-    {label:'Emails Sent',val:sent,sub:'last 30 days',color:'var(--text)'},
-    {label:'Replied',val:replied,sub:replyRate+'% reply rate',color:replied>0?'var(--gold)':'var(--muted)'},
-    {label:'Interested',val:positive,sub:interestRate+'% of replies',color:positive>0?'var(--green)':'var(--muted)'},
-    {label:'Routed to Agent',val:routed,sub:routeRate+'% converted',color:routed>0?'var(--green)':'var(--muted)'},
-  ];
-  fsteps.forEach((s,i)=>{
-    h+=`<div style="background:var(--surface);padding:1.1rem 1rem;text-align:center;${i>0?'border-left:1px solid var(--border)':''}position:relative">`;
-    if(i>0)h+=`<div style="position:absolute;left:-10px;top:50%;transform:translateY(-50%);font-size:1.2rem;color:var(--muted);z-index:1">›</div>`;
-    h+=`<div style="font-size:.58rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem">${s.label}</div>`;
-    h+=`<div style="font-size:2.2rem;font-weight:800;color:${s.color};line-height:1;margin-bottom:.25rem">${s.val}</div>`;
-    h+=`<div style="font-size:.65rem;color:var(--subtle)">${s.sub}</div>`;
-    h+='</div>';
-  });
+  // ── TOP STATS: 2 channel cards + 2 combined totals ────────────────────
+  h+=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.7rem;margin-bottom:1.2rem">`;
+
+  // Email card
+  const eReplyR=eS>0?Math.round(eR/eS*100):0;
+  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.1rem">`;
+  h+=`<div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.65rem">`;
+  h+=`<span style="font-size:.8rem">📧</span>`;
+  h+=`<span style="font-size:.58rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Email</span>`;
   h+='</div>';
+  h+=`<div style="font-size:2rem;font-weight:800;line-height:1;margin-bottom:.2rem">${eS}</div>`;
+  h+=`<div style="font-size:.65rem;color:var(--muted)">sent · ${eReplyR}% reply rate</div>`;
+  h+=`<div style="margin-top:.7rem;display:flex;justify-content:space-between;font-size:.72rem">`;
+  h+=`<span style="color:var(--gold)">${eR} replied</span>`;
+  h+=`<span style="color:var(--green)">${eRo} routed</span>`;
+  h+='</div></div>';
 
-  // ── Two-column: chart + sentiment breakdown ──────────────────────────
-  h+=`<div style="display:grid;grid-template-columns:2fr 1fr;gap:.75rem;margin-bottom:1.4rem">`;
+  // SMS card
+  const tReplyR=tS>0?Math.round(tR/tS*100):0;
+  const smsColor=tS>0?'var(--text)':'var(--muted)';
+  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.1rem">`;
+  h+=`<div style="display:flex;align-items:center;gap:.4rem;margin-bottom:.65rem">`;
+  h+=`<span style="font-size:.8rem">📱</span>`;
+  h+=`<span style="font-size:.58rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">SMS</span>`;
+  if(tS===0)h+=`<span style="font-size:.55rem;color:var(--subtle);margin-left:auto">not active</span>`;
+  h+='</div>';
+  h+=`<div style="font-size:2rem;font-weight:800;line-height:1;margin-bottom:.2rem;color:${smsColor}">${tS}</div>`;
+  h+=`<div style="font-size:.65rem;color:var(--muted)">${tS>0?`sent · ${tReplyR}% reply rate`:'add TWILIO_* env vars to activate'}</div>`;
+  h+=`<div style="margin-top:.7rem;display:flex;justify-content:space-between;font-size:.72rem">`;
+  h+=`<span style="color:var(--gold)">${tR} replied</span>`;
+  h+=`<span style="color:var(--green)">${tRo} routed</span>`;
+  h+='</div></div>';
 
-  // 14-day send chart
+  // Combined: reply rate
+  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.1rem">`;
+  h+=`<div style="font-size:.58rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:.65rem">Reply Rate</div>`;
+  h+=`<div style="font-size:2rem;font-weight:800;line-height:1;margin-bottom:.2rem;color:${totReplied>0?'var(--gold)':'var(--muted)'}">${replyRate}%</div>`;
+  h+=`<div style="font-size:.65rem;color:var(--muted)">${totReplied} of ${totSent} contacts</div>`;
+  h+=`<div style="margin-top:.7rem;display:flex;gap:.5rem;flex-wrap:wrap;font-size:.68rem">`;
+  h+=`<span style="color:var(--green)">${f.email_positive||0+f.sms_positive||0} interested</span>`;
+  h+=`<span style="color:var(--muted)">·</span>`;
+  h+=`<span style="color:var(--red)">${(f.email_negative||0)+(f.sms_negative||0)} opted out</span>`;
+  h+='</div></div>';
+
+  // Combined: conversions
+  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.1rem">`;
+  h+=`<div style="font-size:.58rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:.65rem">Conversion Rate</div>`;
+  h+=`<div style="font-size:2rem;font-weight:800;line-height:1;margin-bottom:.2rem;color:${totRouted>0?'var(--green)':'var(--muted)'}">${convRate}%</div>`;
+  h+=`<div style="font-size:.65rem;color:var(--muted)">${totRouted} routed to agents</div>`;
+  h+=`<div style="margin-top:.7rem;font-size:.68rem">`;
+  if(eRo>0)h+=`<span style="color:var(--muted)">📧 ${eRo} email</span>`;
+  if(eRo>0&&tRo>0)h+=`<span style="color:var(--muted);margin:0 .3rem">·</span>`;
+  if(tRo>0)h+=`<span style="color:var(--muted)">📱 ${tRo} sms</span>`;
+  if(!eRo&&!tRo)h+=`<span style="color:var(--subtle)">none yet</span>`;
+  h+='</div></div>';
+
+  h+='</div>'; // end top stats grid
+
+  // ── 14-DAY ACTIVITY CHART + SENTIMENT BREAKDOWN ───────────────────────
+  h+=`<div style="display:grid;grid-template-columns:2fr 1fr;gap:.75rem;margin-bottom:1.2rem">`;
+
+  // Chart — stacked email + SMS bars
   h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem">`;
-  h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.9rem">Emails Sent — Last 14 Days</div>`;
+  h+=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.8rem">`;
+  h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">Activity — Last 14 Days</div>`;
+  h+=`<div style="display:flex;gap:.8rem;font-size:.6rem;color:var(--muted)">`;
+  h+=`<span><span style="display:inline-block;width:8px;height:8px;background:var(--gold);border-radius:2px;margin-right:3px;vertical-align:middle"></span>Email</span>`;
+  h+=`<span><span style="display:inline-block;width:8px;height:8px;background:#60a5fa;border-radius:2px;margin-right:3px;vertical-align:middle"></span>SMS</span>`;
+  h+='</div></div>';
   h+=`<div style="display:flex;align-items:flex-end;gap:3px;height:64px">`;
   chart.forEach(c=>{
-    const ht=c.count>0?Math.max(6,Math.round(c.count/maxChart*60)):2;
-    const bg=c.count>0?'var(--gold)':'var(--surface3)';
-    h+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:2px" title="${c.date}: ${c.count} emails">`;
-    h+=`<div style="width:100%;height:${ht}px;background:${bg};border-radius:2px 2px 0 0;transition:.2s"></div>`;
+    const tot=c.count||0; const em=c.email||0; const sm=c.sms||0;
+    const totalH=tot>0?Math.max(8,Math.round(tot/maxChart*56)):2;
+    const emH=tot>0?Math.round(em/tot*totalH):0;
+    const smH=totalH-emH;
+    const tip=`${c.date}: ${em} email${em!==1?'s':''}${sm>0?' + '+sm+' SMS':''}`;
+    h+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:2px" title="${tip}">`;
+    if(tot>0){
+      h+=`<div style="width:100%;display:flex;flex-direction:column;height:${totalH}px;border-radius:2px 2px 0 0;overflow:hidden">`;
+      if(sm>0)h+=`<div style="height:${smH}px;background:#60a5fa;flex-shrink:0"></div>`;
+      if(em>0)h+=`<div style="height:${emH}px;background:var(--gold);flex:1"></div>`;
+      h+='</div>';
+    } else {
+      h+=`<div style="width:100%;height:2px;background:var(--surface3);border-radius:1px"></div>`;
+    }
     h+=`<div style="font-size:.5rem;color:var(--subtle);transform:rotate(-35deg);transform-origin:top right;white-space:nowrap">${c.label}</div>`;
     h+='</div>';
   });
   h+='</div></div>';
 
-  // Sentiment breakdown
+  // Sentiment breakdown — combined across channels
   h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem">`;
-  h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.9rem">Reply Sentiment</div>`;
-  [{label:'Interested',val:f.positive||0,color:'var(--green)'},{label:'Neutral',val:f.neutral||0,color:'var(--gold)'},{label:'Opted Out',val:f.negative||0,color:'var(--red)'}].forEach(s=>{
+  h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.9rem">Reply Breakdown</div>`;
+  const sentRows=[
+    {label:'Interested',val:(f.email_positive||0)+(f.sms_positive||0),color:'var(--green)'},
+    {label:'Neutral',   val:(f.email_neutral||0)+(f.sms_neutral||0),  color:'var(--gold)'},
+    {label:'Opted Out', val:(f.email_negative||0)+(f.sms_negative||0),color:'var(--red)'},
+  ];
+  sentRows.forEach(s=>{
     h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">`;
     h+=`<span style="font-size:.72rem;color:var(--muted)">${s.label}</span>`;
     h+=`<span style="font-size:1.4rem;font-weight:800;color:${s.color}">${s.val}</span>`;
     h+='</div>';
   });
+  // SMS opt-out note
+  if(tS>0){
+    h+=`<div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border);font-size:.62rem;color:var(--subtle)">`;
+    h+=`📧 ${f.email_negative||0} email opt-outs<br>📱 ${f.sms_negative||0} SMS opt-outs`;
+    h+='</div>';
+  }
   h+='</div>';
   h+='</div>'; // end 2-col
 
-  // ── Routed Leads — agent accountability ─────────────────────────────
+  // ── ROUTED LEADS — agent accountability ───────────────────────────────
   h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1rem">`;
   h+=`<div style="padding:.85rem 1.2rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">`;
-  h+=`<span style="font-weight:700;font-size:.85rem">🎯 Routed Leads — Agent Follow-Up Accountability</span>`;
+  h+=`<span style="font-weight:700;font-size:.85rem">🎯 Routed Leads — Agent Follow-Up</span>`;
   const dropped=leads.filter(l=>l.status==='dropped').length;
   if(dropped>0)h+=`<span style="background:rgba(239,68,68,.15);color:var(--red);font-size:.68rem;font-weight:700;padding:.2rem .6rem;border-radius:99px">${dropped} dropped</span>`;
   h+='</div>';
@@ -2290,7 +2359,7 @@ function buildOutreach(d){
   if(leads.length===0){
     h+=`<div style="padding:2rem;text-align:center;color:var(--muted);font-size:.8rem">No leads routed yet — pond mailer runs Mon–Fri at 9:15am ET</div>`;
   } else {
-    h+='<div class="tbl-wrap"><table><thead><tr><th>Lead</th><th>Replied</th><th>Agent</th><th>Stage</th><th>Calls Since</th><th>Status</th></tr></thead><tbody>';
+    h+='<div class="tbl-wrap"><table><thead><tr><th>Lead</th><th>Via</th><th>Replied</th><th>Agent</th><th>Stage</th><th>Calls</th><th>Status</th></tr></thead><tbody>';
     leads.forEach(l=>{
       const dt=l.received_at?new Date(l.received_at):null;
       const dateStr=dt?dt.toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
@@ -2298,49 +2367,55 @@ function buildOutreach(d){
         contacted:{bg:'rgba(16,185,129,.15)',color:'var(--green)',label:'✓ Called'},
         pending:  {bg:'rgba(245,166,35,.15)', color:'var(--gold)', label:'⏳ Pending'},
         dropped:  {bg:'rgba(239,68,68,.15)',  color:'var(--red)',  label:'🔴 No Contact'},
-      }[l.status]||{bg:'',color:'var(--muted)',label:l.status};
+      }[l.status]||{bg:'',color:'var(--muted)',label:l.status||'—'};
       const callsDisplay=l.calls_since>0
-        ?`<span style="color:var(--green);font-weight:700">${l.calls_since} call${l.calls_since!==1?'s':''}</span>`
+        ?`<span style="color:var(--green);font-weight:700">${l.calls_since}</span>`
         :`<span style="color:var(--muted)">—</span>`;
-      // Reply snippet tooltip
-      const snippet=esc(l.reply_text);
+      const channelBadge=l.channel==='sms'
+        ?`<span style="background:rgba(96,165,250,.15);color:#60a5fa;font-size:.6rem;font-weight:700;padding:.15rem .45rem;border-radius:99px">📱 SMS</span>`
+        :`<span style="background:rgba(245,166,35,.12);color:var(--gold);font-size:.6rem;font-weight:700;padding:.15rem .45rem;border-radius:99px">📧 Email</span>`;
+      const snippet=esc(l.reply_text||'');
       h+=`<tr>`;
-      h+=`<td style="font-weight:600" title="${snippet}">${l.person_name}</td>`;
+      h+=`<td style="font-weight:600" title="${snippet}">${esc(l.person_name)}</td>`;
+      h+=`<td>${channelBadge}</td>`;
       h+=`<td style="font-size:.72rem;color:var(--muted)">${dateStr}</td>`;
-      h+=`<td style="font-size:.78rem">${l.agent_name}</td>`;
-      h+=`<td style="font-size:.72rem;color:var(--muted)">${l.stage}</td>`;
+      h+=`<td style="font-size:.78rem">${esc(l.agent_name||'—')}</td>`;
+      h+=`<td style="font-size:.72rem;color:var(--muted)">${esc(l.stage||'—')}</td>`;
       h+=`<td>${callsDisplay}</td>`;
       h+=`<td><span style="background:${statusCfg.bg};color:${statusCfg.color};font-size:.65rem;font-weight:700;padding:.2rem .55rem;border-radius:99px;white-space:nowrap">${statusCfg.label}</span></td>`;
       h+='</tr>';
-      // Reply preview row
       if(l.reply_text){
-        const replyPreview=esc(l.reply_text).slice(0,180);
-        h+=`<tr><td colspan="6" style="padding:.3rem 1rem .6rem;font-size:.7rem;color:var(--muted);font-style:italic;border-top:none;overflow-wrap:break-word">"${replyPreview}${l.reply_text.length>180?'…':''}"</td></tr>`;
+        const replyPreview=esc(l.reply_text).slice(0,200);
+        h+=`<tr><td colspan="7" style="padding:.3rem 1rem .6rem;font-size:.7rem;color:var(--muted);font-style:italic;border-top:none;overflow-wrap:break-word">"${replyPreview}${l.reply_text.length>200?'…':''}"</td></tr>`;
       }
     });
     h+='</tbody></table></div>';
   }
   h+='</div>';
 
-  // ── Recent Replies feed (collapsible) ───────────────────────────────
+  // ── RECENT REPLIES — combined email + SMS feed ────────────────────────
   if(replies.length>0){
-    h+=`<div class="panel open"><div class="panel-hdr" onclick="this.parentElement.classList.toggle('open')"><span class="panel-title">💬 All Recent Replies (${replies.length})</span><span class="panel-chevron">▼</span></div>`;
+    h+=`<div class="panel open"><div class="panel-hdr" onclick="this.parentElement.classList.toggle('open')">`;
+    h+=`<span class="panel-title">💬 Recent Replies (${replies.length})</span>`;
+    h+=`<span class="panel-chevron">▼</span></div>`;
     h+=`<div class="panel-body">`;
     replies.forEach(r=>{
       const sentCfg={
-        positive:{bg:'rgba(16,185,129,.12)', color:'var(--green)', icon:'✅'},
-        neutral: {bg:'rgba(245,166,35,.1)',   color:'var(--gold)',  icon:'➡️'},
-        negative:{bg:'rgba(239,68,68,.1)',    color:'var(--red)',   icon:'🚫'},
+        positive:{bg:'rgba(16,185,129,.12)',color:'var(--green)', icon:'✅'},
+        neutral: {bg:'rgba(245,166,35,.1)', color:'var(--gold)',  icon:'➡️'},
+        negative:{bg:'rgba(239,68,68,.1)',  color:'var(--red)',   icon:'🚫'},
       }[r.sentiment]||{bg:'',color:'var(--muted)',icon:'💬'};
       const dt=r.received_at?new Date(r.received_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';;
-      const replyEscaped=esc(r.reply_text);
-      const replyTrunc=replyEscaped.slice(0,200)+(replyEscaped.length>200?'…':'');
+      const replyTrunc=esc(r.reply_text||'').slice(0,200)+(((r.reply_text||'').length>200)?'…':'');
+      const chBadge=r.channel==='sms'
+        ?`<span style="font-size:.58rem;background:rgba(96,165,250,.15);color:#60a5fa;padding:.1rem .35rem;border-radius:99px;font-weight:700">📱</span>`
+        :`<span style="font-size:.58rem;background:rgba(245,166,35,.12);color:var(--gold);padding:.1rem .35rem;border-radius:99px;font-weight:700">📧</span>`;
       h+=`<div style="background:${sentCfg.bg};border-radius:8px;padding:.75rem 1rem;margin-bottom:.6rem;display:flex;gap:.75rem;align-items:flex-start">`;
       h+=`<span style="font-size:1.1rem;flex-shrink:0;margin-top:.05rem">${sentCfg.icon}</span>`;
       h+=`<div style="flex:1;min-width:0;overflow:hidden">`;
-      h+=`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:.35rem;gap:.5rem">`;
-      h+=`<span style="font-weight:700;font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.person_name)}</span>`;
-      h+=`<span style="font-size:.67rem;color:var(--muted);white-space:nowrap;flex-shrink:0">${dt}${r.routed?' · <span style="color:var(--green)">routed</span>':''}</span>`;
+      h+=`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:.35rem;gap:.5rem;flex-wrap:wrap">`;
+      h+=`<span style="font-weight:700;font-size:.82rem">${esc(r.person_name)} ${chBadge}</span>`;
+      h+=`<span style="font-size:.67rem;color:var(--muted);white-space:nowrap">${dt}${r.routed?' · <span style="color:var(--green)">routed</span>':''}</span>`;
       h+='</div>';
       h+=`<div style="font-size:.78rem;line-height:1.5;color:var(--text);overflow-wrap:break-word;word-break:break-word">${replyTrunc}</div>`;
       h+='</div></div>';
@@ -2352,7 +2427,7 @@ function buildOutreach(d){
 }
 
 async function runPondMailer(){
-  if(!confirm('Send up to 10 live emails to pond leads now?\n\nThis uses your real SendGrid account.'))return;
+  if(!confirm('Run live AI outreach now (up to 10 emails + SMS where eligible)?\n\nThis uses your real SendGrid + Twilio accounts.'))return;
   showToast('Starting pond mailer…','ok');
   try{
     const r=await fetch('/api/pond-mailer/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dry_run:false,limit:10})});

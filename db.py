@@ -3629,14 +3629,20 @@ def get_pond_reply_stats(days=30):
 
 
 def get_pond_dashboard_data(days=30):
-    """All data needed for the AI Outreach dashboard tab."""
+    """All data needed for the AI Outreach dashboard tab.
+
+    Returns combined email + SMS stats so the frontend can show a unified
+    channel view. SMS tables may not exist yet on first deploy — each query
+    is guarded with a try/except so email stats still load if SMS tables are
+    missing.
+    """
     if not is_available():
         return {}
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
 
-                # ── Funnel ──────────────────────────────────────────────────
+                # ── Email funnel ─────────────────────────────────────────────
                 cur.execute("""
                     SELECT
                         COUNT(*) FILTER (WHERE NOT dry_run)                     AS sent,
@@ -3645,8 +3651,8 @@ def get_pond_dashboard_data(days=30):
                     WHERE sent_at >= NOW() - INTERVAL '%s days'
                 """ % days)
                 row = cur.fetchone()
-                sent         = row[0] if row else 0
-                unique_leads = row[1] if row else 0
+                emails_sent   = row[0] if row else 0
+                unique_emails = row[1] if row else 0
 
                 cur.execute("""
                     SELECT
@@ -3659,13 +3665,55 @@ def get_pond_dashboard_data(days=30):
                     WHERE received_at >= NOW() - INTERVAL '%s days'
                 """ % days)
                 row = cur.fetchone()
-                replies  = row[0] if row else 0
-                positive = row[1] if row else 0
-                neutral  = row[2] if row else 0
-                negative = row[3] if row else 0
-                routed   = row[4] if row else 0
+                email_replied  = row[0] if row else 0
+                email_positive = row[1] if row else 0
+                email_neutral  = row[2] if row else 0
+                email_negative = row[3] if row else 0
+                email_routed   = row[4] if row else 0
 
-                # ── Daily sends — last 14 days ───────────────────────────
+                # ── SMS funnel ───────────────────────────────────────────────
+                sms_sent     = 0
+                unique_sms   = 0
+                sms_replied  = 0
+                sms_positive = 0
+                sms_neutral  = 0
+                sms_negative = 0
+                sms_routed   = 0
+                try:
+                    cur.execute("""
+                        SELECT
+                            COUNT(*) FILTER (WHERE NOT dry_run)                  AS sent,
+                            COUNT(DISTINCT person_id) FILTER (WHERE NOT dry_run) AS unique_leads
+                        FROM pond_sms_log
+                        WHERE sent_at >= NOW() - INTERVAL '%s days'
+                    """ % days)
+                    row = cur.fetchone()
+                    sms_sent   = row[0] if row else 0
+                    unique_sms = row[1] if row else 0
+                except Exception:
+                    pass  # table may not exist yet
+
+                try:
+                    cur.execute("""
+                        SELECT
+                            COUNT(*)                                     AS replies,
+                            COUNT(*) FILTER (WHERE sentiment='positive') AS positive,
+                            COUNT(*) FILTER (WHERE sentiment='neutral')  AS neutral,
+                            COUNT(*) FILTER (WHERE sentiment='negative') AS negative,
+                            COUNT(*) FILTER (WHERE routed=TRUE)          AS routed
+                        FROM pond_sms_reply_log
+                        WHERE received_at >= NOW() - INTERVAL '%s days'
+                    """ % days)
+                    row = cur.fetchone()
+                    sms_replied  = row[0] if row else 0
+                    sms_positive = row[1] if row else 0
+                    sms_neutral  = row[2] if row else 0
+                    sms_negative = row[3] if row else 0
+                    sms_routed   = row[4] if row else 0
+                except Exception:
+                    pass
+
+                # ── Daily sends — last 14 days (email + SMS) ────────────────
                 cur.execute("""
                     SELECT DATE(sent_at AT TIME ZONE 'America/New_York') AS day,
                            COUNT(*) AS cnt
@@ -3674,9 +3722,23 @@ def get_pond_dashboard_data(days=30):
                       AND sent_at >= NOW() - INTERVAL '14 days'
                     GROUP BY 1 ORDER BY 1
                 """)
-                daily_map = {str(r[0]): r[1] for r in cur.fetchall()}
+                email_daily_map = {str(r[0]): r[1] for r in cur.fetchall()}
 
-                # ── Routed leads (enriched by caller) ────────────────────
+                sms_daily_map = {}
+                try:
+                    cur.execute("""
+                        SELECT DATE(sent_at AT TIME ZONE 'America/New_York') AS day,
+                               COUNT(*) AS cnt
+                        FROM pond_sms_log
+                        WHERE NOT dry_run
+                          AND sent_at >= NOW() - INTERVAL '14 days'
+                        GROUP BY 1 ORDER BY 1
+                    """)
+                    sms_daily_map = {str(r[0]): r[1] for r in cur.fetchall()}
+                except Exception:
+                    pass
+
+                # ── Routed leads (email channel) ─────────────────────────────
                 cur.execute("""
                     SELECT person_id, person_name, reply_from,
                            reply_text, sentiment, received_at, fub_task_id
@@ -3688,29 +3750,63 @@ def get_pond_dashboard_data(days=30):
                 """ % days)
                 routed_rows = cur.fetchall()
 
-                # ── Recent replies feed ───────────────────────────────────
+                # ── Routed leads (SMS channel) ────────────────────────────────
+                sms_routed_rows = []
+                try:
+                    cur.execute("""
+                        SELECT person_id, person_name, phone_number,
+                               reply_text, sentiment, received_at, twilio_message_sid
+                        FROM pond_sms_reply_log
+                        WHERE routed = TRUE
+                          AND received_at >= NOW() - INTERVAL '%s days'
+                        ORDER BY received_at DESC
+                        LIMIT 40
+                    """ % days)
+                    sms_routed_rows = cur.fetchall()
+                except Exception:
+                    pass
+
+                # ── Recent replies — combined (last 25 across both channels) ─
+                # Email replies
                 cur.execute("""
                     SELECT person_id, person_name, reply_from,
-                           reply_text, sentiment, received_at, routed
+                           reply_text, sentiment, received_at, routed, 'email' AS channel
                     FROM pond_reply_log
                     WHERE received_at >= NOW() - INTERVAL '%s days'
                     ORDER BY received_at DESC
                     LIMIT 25
                 """ % days)
-                reply_rows = cur.fetchall()
+                email_reply_rows = cur.fetchall()
 
-        # ── Build daily chart (fill gaps with 0) ─────────────────────────
+                sms_reply_rows = []
+                try:
+                    cur.execute("""
+                        SELECT person_id, person_name, phone_number,
+                               reply_text, sentiment, received_at, routed, 'sms' AS channel
+                        FROM pond_sms_reply_log
+                        WHERE received_at >= NOW() - INTERVAL '%s days'
+                        ORDER BY received_at DESC
+                        LIMIT 25
+                    """ % days)
+                    sms_reply_rows = cur.fetchall()
+                except Exception:
+                    pass
+
+        # ── Build daily chart (fill gaps with 0) ─────────────────────────────
         today = date.today()
         daily_chart = []
         for i in range(13, -1, -1):
             d = today - timedelta(days=i)
             daily_chart.append({
-                "date":  str(d),
-                "label": d.strftime("%-m/%-d"),
-                "count": daily_map.get(str(d), 0),
+                "date":      str(d),
+                "label":     d.strftime("%-m/%-d"),
+                "email":     email_daily_map.get(str(d), 0),
+                "sms":       sms_daily_map.get(str(d), 0),
+                "count":     email_daily_map.get(str(d), 0) + sms_daily_map.get(str(d), 0),
             })
 
-        routed_leads = [
+        # ── Merge and sort routed leads ───────────────────────────────────────
+        all_routed = [
             {
                 "person_id":   r[0],
                 "person_name": r[1] or r[2] or "Unknown",
@@ -3720,35 +3816,84 @@ def get_pond_dashboard_data(days=30):
                 "received_at": r[5].isoformat() if r[5] else None,
                 "received_ts": r[5].timestamp() if r[5] else 0,
                 "fub_task_id": r[6],
+                "channel":     "email",
             }
             for r in routed_rows
+        ] + [
+            {
+                "person_id":   r[0],
+                "person_name": r[1] or r[2] or "Unknown",
+                "reply_from":  r[2],
+                "reply_text":  (r[3] or "")[:280],
+                "sentiment":   r[4],
+                "received_at": r[5].isoformat() if r[5] else None,
+                "received_ts": r[5].timestamp() if r[5] else 0,
+                "fub_task_id": None,
+                "channel":     "sms",
+            }
+            for r in sms_routed_rows
         ]
+        all_routed.sort(key=lambda x: x["received_ts"], reverse=True)
 
-        recent_replies = [
+        # ── Merge and sort recent replies ─────────────────────────────────────
+        all_replies = [
             {
                 "person_id":   r[0],
                 "person_name": r[1] or r[2] or "Unknown",
                 "reply_text":  (r[3] or "")[:200],
                 "sentiment":   r[4],
                 "received_at": r[5].isoformat() if r[5] else None,
+                "received_ts": r[5].timestamp() if r[5] else 0,
                 "routed":      r[6],
+                "channel":     "email",
             }
-            for r in reply_rows
+            for r in email_reply_rows
+        ] + [
+            {
+                "person_id":   r[0],
+                "person_name": r[1] or r[2] or "Unknown",
+                "reply_text":  (r[3] or "")[:200],
+                "sentiment":   r[4],
+                "received_at": r[5].isoformat() if r[5] else None,
+                "received_ts": r[5].timestamp() if r[5] else 0,
+                "routed":      r[6],
+                "channel":     "sms",
+            }
+            for r in sms_reply_rows
         ]
+        all_replies.sort(key=lambda x: x["received_ts"], reverse=True)
+        all_replies = all_replies[:30]
 
         return {
             "funnel": {
-                "sent":     sent,
-                "unique":   unique_leads,
-                "replied":  replies,
-                "positive": positive,
-                "neutral":  neutral,
-                "negative": negative,
-                "routed":   routed,
+                # Email channel
+                "emails_sent":   emails_sent,
+                "email_unique":  unique_emails,
+                "email_replied": email_replied,
+                "email_positive": email_positive,
+                "email_neutral":  email_neutral,
+                "email_negative": email_negative,
+                "email_routed":  email_routed,
+                # SMS channel
+                "sms_sent":      sms_sent,
+                "sms_unique":    unique_sms,
+                "sms_replied":   sms_replied,
+                "sms_positive":  sms_positive,
+                "sms_neutral":   sms_neutral,
+                "sms_negative":  sms_negative,
+                "sms_routed":    sms_routed,
+                # Combined (legacy keys kept for any existing callers)
+                "sent":      emails_sent + sms_sent,
+                "unique":    unique_emails,
+                "replied":   email_replied + sms_replied,
+                "positive":  email_positive + sms_positive,
+                "neutral":   email_neutral + sms_neutral,
+                "negative":  email_negative + sms_negative,
+                "routed":    email_routed + sms_routed,
             },
             "daily_chart":    daily_chart,
-            "routed_leads":   routed_leads,
-            "recent_replies": recent_replies,
+            "routed_leads":   all_routed,
+            "recent_replies": all_replies,
         }
     except Exception as e:
         logger.warning("get_pond_dashboard_data failed: %s", e)
