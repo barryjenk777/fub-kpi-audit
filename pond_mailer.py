@@ -1762,6 +1762,318 @@ FINAL QUALITY CHECK — run this before outputting:
 
 
 # ---------------------------------------------------------------------------
+# SMS Body Generator (Claude-powered, purpose-built for text engagement)
+# ---------------------------------------------------------------------------
+
+def generate_sms_body(person, behavior, strategy, leadstream_tier,
+                      tags=None, is_seller=False, is_z=False,
+                      channel="sms_only", dry_run=False):
+    """
+    Generate a standalone SMS body (25-40 words) via Claude.
+
+    This is NOT a condensed email. It's written from scratch specifically for
+    the SMS channel — two sentences, curiosity gap, yes/no CTA, reads like
+    Barry typed it from his truck in 30 seconds.
+
+    channel values:
+        "sms_only"  — this is the ONLY outreach (lead has no email address)
+        "dual"      — SMS alongside an email on the same day (high-priority leads)
+        "new_lead"  — immediate text to a brand new lead at peak interest
+    """
+    tags = tags or []
+    first_name = person.get("firstName") or "there"
+
+    if dry_run:
+        tier_label = "Z-buyer" if is_z else ("Seller" if is_seller else "Buyer")
+        return f"[DRY RUN SMS — {tier_label} / {strategy} / {channel}]"
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
+
+    try:
+        import anthropic as _ant
+    except ImportError:
+        raise RuntimeError("anthropic package not installed")
+
+    # ── Build a tight, SMS-relevant brief ────────────────────────────────────
+    brief_lines = [f"LEAD: {first_name}"]
+
+    if is_z:
+        street = person.get("streetAddress") or person.get("street") or ""
+        city   = person.get("city") or ""
+        if street and city:
+            brief_lines.append(f"PROPERTY: {street}, {city}")
+        elif street:
+            brief_lines.append(f"PROPERTY: {street}")
+        brief_lines.append("ACTION: Submitted a cash offer request on this property.")
+        brief_lines.append("NOTE: They want to know what their home is worth in cash vs. listing.")
+
+    elif is_seller:
+        street = person.get("streetAddress") or person.get("street") or ""
+        city   = person.get("city") or ""
+        if street and city:
+            brief_lines.append(f"HOME: {street}, {city}")
+        elif city:
+            brief_lines.append(f"AREA: {city}")
+        brief_lines.append("LEAD TYPE: Homeowner who engaged with Barry's AI assistant about home value. NOT a buyer.")
+        # Surface the most specific engagement signal — this drives the text angle
+        if "ISA_TRANSFER_UNSUCCESSFUL" in tags or "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE" in tags or "DECLINED_BY_REALTOR" in tags:
+            brief_lines.append("CONVERSATION STATE: Was ready for live transfer to Barry — call dropped on our end. Missed connection. Text acknowledges this and offers easy retry.")
+        elif "CALLBACK_SCHEDULED" in tags:
+            brief_lines.append("CONVERSATION STATE: Explicitly scheduled a callback. Text is a light confirmation, not a new pitch.")
+        elif "AI_VOICE_NEEDS_FOLLOW_UP" in tags:
+            brief_lines.append("CONVERSATION STATE: Had a VOICE CALL with AI assistant about home value. Very warm. Barry is the human follow-up to that call.")
+        elif "AI_NEEDS_FOLLOW_UP" in tags or "AI_RESPONDED" in tags or "AI_ENGAGED" in tags:
+            brief_lines.append("CONVERSATION STATE: Had a TEXT CONVERSATION with AI assistant about home value. Warm lead. Barry is the human following up on that text exchange.")
+        elif "NURTURE" in tags:
+            brief_lines.append("CONVERSATION STATE: Interested in selling but not ready yet. Nurture mode — useful market update, not a listing pitch.")
+        elif "VOICEMAIL" in tags:
+            brief_lines.append("CONVERSATION STATE: Previous call went to voicemail. Low-pressure re-open. Easier to text than play phone tag.")
+        else:
+            brief_lines.append("CONVERSATION STATE: Engaged with Barry's platform about home value. Warm, not cold.")
+
+    else:
+        # Buyer — lead with the most specific data point available
+        b = behavior
+        if b.get("most_viewed") and b.get("most_viewed_ct", 0) >= 2:
+            p = b["most_viewed"]
+            addr = f"{p.get('street')}, {p.get('city')}" if p.get("city") else p.get("street", "")
+            brief_lines.append(f"REPEAT VIEWER: {addr} — viewed {b['most_viewed_ct']} times. High attachment.")
+        elif b.get("saves"):
+            p = b["saves"][0]
+            addr = f"{p.get('street')}, {p.get('city')}" if p.get("city") else p.get("street", "")
+            price_str = f" (${_safe_int(p.get('price')):,})" if p.get("price") else ""
+            brief_lines.append(f"SAVED: {addr}{price_str} — highest intent signal.")
+        elif b.get("views"):
+            p = b["views"][0]
+            addr = f"{p.get('street')}, {p.get('city')}" if p.get("city") else p.get("street", "")
+            brief_lines.append(f"REGISTERED ON / FIRST VIEWED: {addr}")
+
+        cities = list(b.get("cities") or [])
+        if cities:
+            brief_lines.append(f"SEARCHING IN: {', '.join(cities[:3])}")
+
+        if b.get("price_min") and b.get("price_max"):
+            brief_lines.append(f"PRICE RANGE: ${b['price_min']:,}–${b['price_max']:,}")
+
+        beds = b.get("beds_seen")
+        if beds:
+            brief_lines.append(f"BEDS: {min(beds)}-{max(beds)}br range" if len(beds) > 1 else f"BEDS: {list(beds)[0]}br")
+
+        if b.get("hours_since_last") is not None:
+            hrs = b["hours_since_last"]
+            if hrs < 2:
+                brief_lines.append("RECENCY: active RIGHT NOW (within 2 hours)")
+            elif hrs < 24:
+                brief_lines.append(f"RECENCY: active {int(hrs)}h ago — hot window")
+            elif hrs < 48:
+                brief_lines.append("RECENCY: active yesterday")
+            else:
+                brief_lines.append(f"RECENCY: last active {int(hrs/24)} days ago")
+
+        if b.get("sell_before_buy"):
+            brief_lines.append("NOTE: Needs to sell current home first. Don't ignore this — it's actually workable.")
+
+    brief = "\n".join(brief_lines)
+
+    # ── Channel context ───────────────────────────────────────────────────────
+    channel_notes = {
+        "sms_only": (
+            "SMS-ONLY: No email is going out. This text IS the outreach. Make it count.\n"
+            "They haven't heard from Barry yet — this is first contact via phone."
+        ),
+        "dual": (
+            "DUAL-CHANNEL: They're also receiving a longer email today. The SMS hits their phone "
+            "BEFORE they see the email. Take a DIFFERENT angle — don't summarize the email. "
+            "The SMS is the tap on the shoulder. The email is the follow-through."
+        ),
+        "new_lead": (
+            "NEW LEAD: Just registered. This is FIRST CONTACT at peak interest — they're looking "
+            "at homes right now. Fast, warm, specific. Match their energy."
+        ),
+    }
+    channel_note = channel_notes.get(channel, channel_notes["sms_only"])
+
+    # ── Lead type context ─────────────────────────────────────────────────────
+    if is_z:
+        lead_context = (
+            "Z-BUYER SELLER: Owns the property listed above. Requested a cash offer. "
+            "NOT a buyer. Barry's edge: he can show them the cash offer AND the listing option. "
+            "Most cash buyers can only show one number. Barry can show the full picture."
+        )
+    elif is_seller:
+        # Determine the specific conversation state so Claude writes the right angle
+        _had_text_convo   = "AI_NEEDS_FOLLOW_UP" in tags or "AI_RESPONDED" in tags or "AI_ENGAGED" in tags
+        _had_voice_convo  = "AI_VOICE_NEEDS_FOLLOW_UP" in tags
+        _missed_transfer  = "ISA_TRANSFER_UNSUCCESSFUL" in tags or "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE" in tags or "DECLINED_BY_REALTOR" in tags
+        _callback_sched   = "CALLBACK_SCHEDULED" in tags
+        _future_seller    = "NURTURE" in tags
+        _voicemail        = "VOICEMAIL" in tags
+
+        if _missed_transfer:
+            _convo_note = (
+                "CRITICAL: This person was actively connected or nearly connected to Barry on a live call — "
+                "it dropped or didn't go through on our end. That is a MISS on Barry's side, not theirs. "
+                "The text must acknowledge it directly and offer a simple path to try again. "
+                "Tone: apologetic but not groveling. 'We missed each other' energy, not 'sorry to bother you' energy."
+            )
+        elif _callback_sched:
+            _convo_note = (
+                "This person explicitly scheduled a callback. "
+                "The text should feel like a light confirmation — 'just making sure we're still on.' "
+                "Not a new pitch. The conversation is already in motion."
+            )
+        elif _had_voice_convo:
+            _convo_note = (
+                "This person had a VOICE CALL with Barry's AI assistant about their home value. "
+                "They SPOKE with the AI — this is a very warm lead. "
+                "Barry is the human following up on that voice conversation. "
+                "The text should feel like a natural handoff: 'I heard you spoke with my assistant — I'm the person behind it.'"
+            )
+        elif _had_text_convo:
+            _convo_note = (
+                "This person had a TEXT CONVERSATION with Barry's AI assistant about their home value. "
+                "They are WARM — they engaged. They know they're talking to a real estate agent's AI. "
+                "Barry is the human following up on that conversation. "
+                "The text should feel like: 'I'm the person behind that conversation — I pulled the real numbers.'"
+            )
+        elif _future_seller:
+            _convo_note = (
+                "This person said they're interested in selling but NOT ready yet. "
+                "Long-game nurture. No urgency, no hard pitch. "
+                "The text is a useful market update, not a 'ready to list?' ask. "
+                "Tone: friend who keeps an eye on things. 'Thought you'd want to know.'"
+            )
+        elif _voicemail:
+            _convo_note = (
+                "A previous call attempt went to voicemail. "
+                "The text should be casual and low-pressure — not 'I've been trying to reach you' desperation. "
+                "Just a light re-open: 'easier to text than play phone tag.'"
+            )
+        else:
+            _convo_note = (
+                "This homeowner engaged with Barry's platform about their home value. "
+                "They're warm — not a cold prospect. Barry is following up as the human agent. "
+                "The text should feel like: 'I saw your home came up and wanted to reach out personally.'"
+            )
+
+        lead_context = f"""YLOPO PROSPECTING SELLER — HOMEOWNER (not a buyer):
+This person OWNS the home at the address in the brief. They are NOT browsing for homes to buy.
+Do NOT reference IDX, home searches, listings for sale, or buying homes. Ever.
+
+THIS IS A WARM LEAD — NOT COLD OUTREACH:
+{_convo_note}
+
+Barry's role: he is the real human agent behind the AI assistant. The AI started the conversation.
+Barry closes the loop with real, specific market data the AI couldn't provide.
+
+His value to this homeowner: he knows their specific street, he knows what homes like theirs
+are actually selling for right now, and he can give them a real number — no pressure, no commitment.
+
+TONE: Warm, competent, personal. Like the friend who happens to be Hampton Roads' top agent.
+Teaching voice. Market intel as a gift. Never pushy. Never "WE BUY HOUSES" energy.
+Reference "my assistant" to tie back to the AI conversation they remember."""
+    else:
+        lead_context = (
+            "BUYER: Browsing homes on legacyhomesearch.com in Hampton Roads. "
+            "Looking to purchase — cities like Virginia Beach, Chesapeake, Norfolk, Suffolk, "
+            "Portsmouth, Hampton, Newport News."
+        )
+
+    # ── The prompt ────────────────────────────────────────────────────────────
+    prompt = f"""Write a 25-40 word text message from Barry Jenkins, Hampton Roads realtor.
+
+WHO THIS PERSON IS:
+{lead_context}
+
+CHANNEL:
+{channel_note}
+
+━━ SMS RULES (these are absolute) ━━
+
+LENGTH: 25-40 words. Never more. Two sentences MAX.
+
+SENTENCE 1 — The curiosity gap:
+This is EVERYTHING. Create tension between what you know and what they don't yet.
+Mention something SPECIFIC — property address, their exact price range + city, their
+neighborhood. Then imply you have something they need to know without giving it away.
+The specific detail proves you're not a bot. The withholding makes them reply.
+
+SENTENCE 2 — One CTA:
+One yes/no question only. Answerable in a single word.
+Make replying feel easier than ignoring.
+
+OPENING: Start with their first name followed by a comma. Example: "Jordan," or "Sarah,"
+No em dashes. No "Hey" or "Hi". Just the name then a comma.
+
+NO LINKS. NO sign-off (added automatically). NO credentials.
+
+NEVER USE:
+- "just checking in" / "reaching out" / "following up" / "circling back"
+- "I noticed" — lead with the observation, not yourself
+- "I'd love to" / "happy to help" / "feel free to"
+- "dream home" / "perfect fit" / "hot market"
+- Anything that could apply to a different person
+
+━━ WHAT MAKES A GREAT REAL ESTATE TEXT ━━
+
+The CURIOSITY GAP is the whole game. You hint at something specific to their situation
+but don't give it away. They reply to get the answer. That's the conversion.
+
+GREAT examples by lead type (personalize to actual data — do not copy verbatim):
+
+BUYER (IDX browser):
+  "Jordan, went back to 812 Copperfield three times and I think I know what's holding you up. Worth a call?"
+  "Brittany, inventory under $450k in Virginia Beach just shifted. What you were seeing two weeks ago is different now. Still looking?"
+  "Marcus, the homes you saved in Chesapeake are moving faster than the calendar shows. Worth a quick conversation?"
+
+SELLER — YLOPO PROSPECTING (warm handoff from AI — THESE LEADS ALREADY TALKED TO THE AI):
+  The text CONTINUES the AI conversation. Barry is the human following up.
+  NEVER write cold market intel as if they've never heard from us.
+  "Sarah, my assistant mentioned your place on Harbour View. I pulled the actual numbers on your street. Worth a quick call to go through them?"
+  "Sarah, picking up where my assistant left off on your home value question. The numbers on Harbour View are more interesting than I expected. Have a few minutes?"
+  "David, my assistant flagged your place on Wythe Creek. I looked into it — something in that area is worth knowing about. Want me to share?"
+
+SELLER — MISSED TRANSFER (they were ready, call dropped on our end):
+  "David, we tried to connect you with Barry after your home value conversation and the call dropped on our end. Sorry about that. Want to try again?"
+
+SELLER — FUTURE SELLER (not ready yet, nurture):
+  "Sarah, keeping an eye on the Harbour View market like I mentioned. Something shifted this month I thought you'd want to know about."
+
+Z-BUYER (cash offer request):
+  "Marcus, got your request on Kempsville. Before I give you that number there's something you should hear first. Got 5 minutes?"
+  "Lisa, ran your place on Shore Drive. The gap between cash and listed is smaller than most sellers expect right now. Want to see both numbers?"
+
+BAD examples (these kill engagement):
+  "Hi Jordan, I saw you were looking at homes in Chesapeake. I'd love to help you find your dream home! Let me know if you'd like to chat."
+  "Sarah, just checking in on your home value question. I'm a top Hampton Roads agent and would love to help. Feel free to reach out!"
+  "Marcus, I noticed you submitted a cash offer request. I can help you with that process. Just reach out when you're ready."
+
+━━ LEAD DATA ━━
+{brief}
+
+Output ONLY the raw SMS body text. No explanation. No subject line. No sign-off. Just the text."""
+
+    ant_client = _ant.Anthropic(api_key=api_key)
+    response = ant_client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=120,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    sms_text = response.content[0].text.strip()
+
+    # Strip any accidental sign-off Claude might add
+    for stop_phrase in ("Barry Jenkins", "Barry\nLegacy", "— Barry", "Legacy Home Team"):
+        idx = sms_text.find(stop_phrase)
+        if idx > 0:
+            sms_text = sms_text[:idx].strip()
+
+    return sms_text
+
+
+# ---------------------------------------------------------------------------
 # IDX Search URL Builder
 # ---------------------------------------------------------------------------
 
@@ -2806,14 +3118,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             print(f"    Tier: {_tier2} | Strategy: {_strat2}")
 
             try:
-                _edata2 = generate_email(person, _beh2, _strat2, _tier2,
-                                         sequence_num=1, dry_run=dry_run)
+                _sms_body = generate_sms_body(
+                    person=person, behavior=_beh2, strategy=_strat2,
+                    leadstream_tier=_tier2, tags=tags,
+                    is_seller=_is_ylopo_s2, is_z=_is_z2,
+                    channel="sms_only", dry_run=dry_run,
+                )
             except Exception as _eg:
                 logger.error("SMS-only generation failed for %s: %s", name, _eg)
                 skipped_generation_error += 1
                 continue
 
-            _sms_body = _tc.email_to_sms(_edata2.get("body", ""), first_name=_first2)
             if not _sms_body:
                 logger.warning("SMS-only body empty for %s — skipping", name)
                 continue
@@ -3578,13 +3893,23 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
         # ── Dual-channel SMS ─────────────────────────────────────────────────
         # High-priority leads (AI_NEEDS_FOLLOW_UP, HANDRAISER, etc.) also get
-        # a condensed SMS the same day — email + text = 2x surface area.
+        # a purpose-written SMS the same day — different angle than the email,
+        # hits the phone BEFORE they open their inbox.
         # SMS cooldown is checked independently of email cooldown.
         if _sms_eligible and any(t in tags for t in _tc.DUAL_CHANNEL_TAGS):
             _dual_sms_days = _db.days_since_last_pond_sms(pid)
             if _dual_sms_days is None or _dual_sms_days >= EMAIL_COOLDOWN_DAYS:
-                _dual_body = _tc.email_to_sms(email_data.get("body_text", ""),
-                                              first_name=first_name)
+                try:
+                    _dual_body = generate_sms_body(
+                        person=person, behavior=behavior, strategy=strategy,
+                        leadstream_tier=leadstream_tier, tags=tags,
+                        is_seller=is_ylopo_seller, is_z=is_z,
+                        channel="dual", dry_run=dry_run,
+                    )
+                except Exception as _dsms_err:
+                    logger.warning("Dual SMS generation failed for %s: %s", name, _dsms_err)
+                    _dual_body = None
+
                 if _dual_body:
                     _dual_result = _tc.send_sms(to_phone, _dual_body, dry_run=dry_run)
                     if _dual_result.get("success"):
