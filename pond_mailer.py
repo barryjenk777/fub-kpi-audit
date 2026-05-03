@@ -851,6 +851,53 @@ def _get_ylopo_seller_seq_guide(sequence_num):
     return cycle[sequence_num % 3]
 
 
+def _is_seller_lead(tags):
+    """Return True if this lead has clear seller intent — no automated SMS.
+
+    Covers two seller populations in the Shark Tank:
+
+    1. Ylopo Prospecting (rAIya) sellers — caught by _is_ylopo_prospecting_seller()
+       which checks source + AI conversation tags. Included here via AI conversation
+       tags so this function is self-contained for SMS gating.
+
+    2. Ylopo Seller Experience leads — registered as buyers but interacted with the
+       home value / seller report tools. Tags like Y_SELLER_REPORT_ENGAGED indicate
+       they're actively thinking about selling, not just browsing for homes.
+
+    `Y_SELLER_REPORT_VIEWED` alone is intentionally excluded — any homeowner can
+    click their home value out of curiosity without seriously considering selling.
+    Engagement actions (CTAs, cash offer, tuning the estimate) are the threshold.
+
+    Barry follows up with seller leads personally or via the seller email sequence.
+    Automated SMS would be out of place and redundant.
+    """
+    seller_tags = {
+        # Explicit registration-time self-ID
+        "SELLER",
+        "LISTING_LEAD",
+        # Ylopo Seller Experience 2.0 — engagement actions (not just a view)
+        "Y_SELLER_REPORT_ENGAGED",
+        "Y_SELLER_3_VIEW",
+        "Y_SELLER_CASH_OFFER_REQUESTED",
+        "Y_SELLER_LEARN_MORE_EQUITY",
+        "Y_SELLER_TUNE_HOME_VALUE",
+        "Y_SELLER_UNDERSTAND_TREND",
+        "Y_SELLER_NEW_HOME_UPGRADES",
+        "Y_SELLER_EMAIL_AGENT",
+        "Y_SELLER_CALL_AGENT",
+        "SELLER_ALERT",
+        # rAIya / AI voice conversation — Ylopo Prospecting handoff signals
+        "AI_NEEDS_FOLLOW_UP",
+        "AI_VOICE_NEEDS_FOLLOW_UP",
+        "ISA_TRANSFER_UNSUCCESSFUL",
+        "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE",
+        "ISA_ATTEMPTED_TRANSFER",
+        "DECLINED_BY_REALTOR",
+        "CALLBACK_SCHEDULED",
+    }
+    return any(t in seller_tags for t in (tags or []))
+
+
 def _is_ylopo_prospecting_seller(person, tags):
     """Return True if this is a valid Ylopo Prospecting rAIya-converted seller lead.
 
@@ -3041,10 +3088,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             to_email = emails[0]["value"] if emails else None
 
         # Get phone for SMS channel (parallel to email)
-        # SMS is gated to Shark Tank (pond 4) only — other ponds have different
-        # workflows and Barry hasn't opted them in to automated texting.
-        _in_shark_tank = person.get("_pond_id") == SHARK_TANK_POND_ID
-        to_phone = _tc.get_primary_phone(person) if (_sms_ready and _in_shark_tank) else None
+        # Three gates must all pass before a lead is SMS-eligible:
+        #   1. Shark Tank (pond 4) only — other ponds have different workflows
+        #   2. Buyer leads only — seller leads (SELLER tag, Y_SELLER_* engagement,
+        #      rAIya AI conversation tags) are excluded; Barry follows up personally
+        #   3. No suppression tags (opt-outs, wrong number, DO_NOT_CALL, etc.)
+        _in_shark_tank  = person.get("_pond_id") == SHARK_TANK_POND_ID
+        _is_seller      = _is_seller_lead(tags)
+        to_phone = _tc.get_primary_phone(person) if (_sms_ready and _in_shark_tank and not _is_seller) else None
         _sms_blocked = _tc.sms_suppressed_by_tags(tags) if to_phone else []
         _sms_eligible = bool(to_phone and not _sms_blocked)
 
@@ -3094,17 +3145,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                 skipped_cooldown += 1
                 continue
 
-            _is_ylopo_s2  = _is_ylopo_prospecting_seller(person, tags)
-            _is_z2        = _is_z_buyer(tags, person)
-            _first2       = first or "there"
-
-            # Ylopo Prospecting seller leads already had an AI conversation
-            # (rAIya text or voice call). Barry follows up personally — no
-            # additional automated SMS. Skip SMS-only path for these leads.
-            if _is_ylopo_s2:
-                logger.debug("Skipping %s (SMS-only) — Ylopo Prospecting seller, no auto-SMS", name)
-                skipped_no_email += 1
-                continue
+            # Seller leads are excluded at _sms_eligible — if we reach this path
+            # the lead is already confirmed buyer (non-seller, Shark Tank only).
+            _is_z2  = _is_z_buyer(tags, person)
+            _first2 = first or "there"
 
             candidates_checked += 1
             _ev2 = client.get_events_for_person(pid, days=60, limit=100)
@@ -3921,7 +3965,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # hits the phone BEFORE they open their inbox.
         # Ylopo Prospecting sellers are excluded — Barry follows up personally.
         # SMS cooldown is checked independently of email cooldown.
-        if _sms_eligible and not is_ylopo_seller and any(t in tags for t in _tc.DUAL_CHANNEL_TAGS):
+        if _sms_eligible and any(t in tags for t in _tc.DUAL_CHANNEL_TAGS):
             _dual_sms_days = _db.days_since_last_pond_sms(pid)
             if _dual_sms_days is None or _dual_sms_days >= EMAIL_COOLDOWN_DAYS:
                 try:
