@@ -1928,6 +1928,22 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
             "NEW LEAD: Just registered. This is FIRST CONTACT at peak interest — they're looking "
             "at homes right now. Fast, warm, specific. Match their energy."
         ),
+        "cross": (
+            "CROSS-CHANNEL NUDGE: Barry just sent this person an email with a video. "
+            "This iMessage arrives alongside it — a short, personal note that gives them ONE "
+            "specific, useful data point tied to their actual search, then naturally bridges "
+            "to the email. The goal: make them want to open the email AND the video.\n\n"
+            "Structure (3 short sentences):\n"
+            "  1. Lead with something specific to their search — address they viewed, city + "
+            "price range, what's moved in their market. Prove you looked them up. "
+            "One concrete fact or observation.\n"
+            "  2. Drop one market insight that actually matters to them right now — inventory "
+            "reality, price shift, competition level, what buyers/sellers in their range are "
+            "experiencing. Useful, not generic.\n"
+            "  3. Bridge to the email naturally. 'Sent you more on this in the email' or "
+            "'put the full picture in the email I just sent' — easy, not salesy. "
+            "The video plays inline directly below — do NOT mention a video, link, or attachment."
+        ),
     }
     channel_note = channel_notes.get(channel, channel_notes["sms_only"])
 
@@ -2018,7 +2034,12 @@ Reference "my assistant" to tie back to the AI conversation they remember."""
         )
 
     # ── TCPA opt-out section (first text ever, or every 5th) ─────────────────
-    word_limit = "25-50" if needs_optout else "25-40"
+    # Cross-channel nudges run slightly longer — they're packing real data context
+    # plus the email bridge, so 40-65 words instead of the 25-40 SMS-only cap.
+    if channel == "cross":
+        word_limit = "50-70" if needs_optout else "40-65"
+    else:
+        word_limit = "25-50" if needs_optout else "25-40"
     optout_section = ""
     if needs_optout:
         optout_section = """
@@ -2045,17 +2066,35 @@ Word limit for this message: up to 50 words (normal messages max out at 40).
 """
 
     # ── The prompt ────────────────────────────────────────────────────────────
-    prompt = f"""Write a {word_limit} word text message from Barry Jenkins, Hampton Roads realtor.
+    # Cross-channel gets a different sentence structure — data + market insight + email bridge
+    if channel == "cross":
+        sentence_rules = f"""━━ MESSAGE RULES ({word_limit} words) ━━
 
-WHO THIS PERSON IS:
-{lead_context}
+LENGTH: {word_limit} words. Three short sentences. No more.
 
-CHANNEL:
-{channel_note}
+SENTENCE 1 — Specific data hook:
+Lead with something from their actual search. Property address they viewed repeatedly,
+their city + price range combo, or a specific market signal in their area.
+One concrete fact. Proves you looked this person up, not a blast.
 
-━━ SMS RULES (these are absolute) ━━
+SENTENCE 2 — Market insight that matters:
+One genuinely useful piece of context tied to their search — inventory reality,
+price movement in their range, what's selling vs. sitting, competition level.
+Real and specific. Not "it's a great time to buy/sell."
 
-LENGTH: 25-40 words. Never more. Two sentences MAX.
+SENTENCE 3 — Bridge to the email:
+Natural, low-key. "Sent you more on this in the email" or "put the full breakdown
+in the email I just sent" or "dropped the details in an email too." Easy, not salesy.
+Do NOT mention a video, link, or attachment — the video plays inline below this text.
+
+OPENING: Start with their first name followed by a comma. Example: "Jordan," or "Sarah,"
+No em dashes. No "Hey" or "Hi". Just the name then a comma.
+
+NO LINKS. NO sign-off (added automatically). NO credentials."""
+    else:
+        sentence_rules = f"""━━ SMS RULES (these are absolute) ━━
+
+LENGTH: {word_limit} words. Never more. Two sentences MAX.
 
 SENTENCE 1 — The curiosity gap:
 This is EVERYTHING. Create tension between what you know and what they don't yet.
@@ -2070,7 +2109,17 @@ Make replying feel easier than ignoring.
 OPENING: Start with their first name followed by a comma. Example: "Jordan," or "Sarah,"
 No em dashes. No "Hey" or "Hi". Just the name then a comma.
 
-NO LINKS. NO sign-off (added automatically). NO credentials.
+NO LINKS. NO sign-off (added automatically). NO credentials."""
+
+    prompt = f"""Write a {word_limit} word text message from Barry Jenkins, Hampton Roads realtor.
+
+WHO THIS PERSON IS:
+{lead_context}
+
+CHANNEL:
+{channel_note}
+
+{sentence_rules}
 
 NEVER USE:
 - "just checking in" / "reaching out" / "following up" / "circling back"
@@ -2108,6 +2157,11 @@ Z-BUYER (cash offer request):
   "Marcus, got your request on Kempsville. Before I give you that number there's something you should hear first. Got 5 minutes?"
   "Lisa, ran your place on Shore Drive. The gap between cash and listed is smaller than most sellers expect right now. Want to see both numbers?"
 
+CROSS-CHANNEL (sent alongside email + video — 3 sentences, data hook + market insight + email bridge):
+  "Jordan, you've been back to 812 Copperfield four times — inventory under $425k in Virginia Beach just tightened, and that one's priced below what's moving right now. Put the full breakdown in the email I just sent."
+  "Sarah, the Chesapeake search you've been running — homes in the $350-$400k range are getting multiple offers again after a slow February. Sent you more on what that means for your timeline in the email."
+  "Marcus, your price range in Norfolk is sitting at about 3 weeks on market right now, which is tighter than it looks on Zillow. Dropped the specifics in the email I just sent over."
+
 BAD examples (these kill engagement):
   "Hi Jordan, I saw you were looking at homes in Chesapeake. I'd love to help you find your dream home! Let me know if you'd like to chat."
   "Sarah, just checking in on your home value question. I'm a top Hampton Roads agent and would love to help. Feel free to reach out!"
@@ -2119,9 +2173,14 @@ BAD examples (these kill engagement):
 Output ONLY the raw SMS body text. No explanation. No subject line. No sign-off. Just the text."""
 
     ant_client = _ant.Anthropic(api_key=api_key)
+    # Cross-channel needs more tokens — 3 sentences with data context + email bridge
+    if channel == "cross":
+        _max_tok = 220 if needs_optout else 180
+    else:
+        _max_tok = 160 if needs_optout else 120
     response = ant_client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=160 if needs_optout else 120,  # extra headroom for opt-out clause
+        max_tokens=_max_tok,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -4047,24 +4106,22 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     except Exception as _dsms_err:
                         logger.warning("Dual SMS generation failed for %s: %s", name, _dsms_err)
                 else:
-                    # Standard drip: cross-channel nudge — warm, short, personal
-                    # When video is attached it plays inline right below this text —
-                    # no link needed, so we don't mention one.
-                    _has_vid = bool(video_result and video_result.get("video_id"))
-                    if _has_vid:
-                        _dual_body = (
-                            f"Hey {first_name} — I sent you an email too with a quick "
-                            f"video I put together for you. Didn't want it to get buried 👇"
+                    # Standard drip: Claude writes a data-rich cross-channel nudge —
+                    # specific property/city/price context + market insight + email bridge.
+                    # Video attaches inline below, no extra HeyGen credit.
+                    try:
+                        _dual_body = generate_sms_body(
+                            person=person, behavior=behavior, strategy=strategy,
+                            leadstream_tier=leadstream_tier, tags=tags,
+                            is_seller=is_ylopo_seller, is_z=is_z,
+                            channel="cross", needs_optout=_dual_needs_optout, dry_run=dry_run,
                         )
-                    else:
-                        _condensed = _tc.email_to_sms(
-                            email_data.get("body_text", ""), first_name=first_name
-                        )
-                        _dual_body = (
-                            f"Hey {first_name} — sent you an email too. {_condensed}"
-                        ).strip()
-                    if _dual_needs_optout:
-                        _dual_body += "\n\nReply STOP to opt out."
+                    except Exception as _csms_err:
+                        logger.warning("Cross-channel SMS generation failed for %s: %s", name, _csms_err)
+                        # Graceful fallback so we still send something
+                        _dual_body = f"Hey {first_name} — sent you an email too with a quick video I put together for you."
+                        if _dual_needs_optout:
+                            _dual_body += "\n\nReply STOP to opt out."
 
                 if _dual_body:
                     # Attach the HeyGen video — same render as the email, zero extra credits.
