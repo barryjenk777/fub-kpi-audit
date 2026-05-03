@@ -6970,6 +6970,59 @@ def api_pond_mailer_reply_stats():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/test-mapbox", methods=["GET", "POST"])
+def api_test_mapbox():
+    """
+    Quick test: geocode an address → build Mapbox satellite URL → optionally submit
+    a HeyGen test video.  Returns the map URL so Barry can preview it immediately.
+
+    GET/POST params:
+        address  — street address (default: "5308 Summer Crescent")
+        city     — city (default: "Virginia Beach")
+        video    — "true" to also submit a HeyGen test video (takes ~2 min to render)
+    """
+    from flask import request
+    try:
+        from heygen_client import get_background_url, generate_and_wait
+        address = request.values.get("address", "5308 Summer Crescent")
+        city    = request.values.get("city", "Virginia Beach")
+        do_vid  = request.values.get("video", "false").lower() == "true"
+
+        bg_url = get_background_url("seller", address=address, city=city)
+        if not bg_url:
+            return jsonify({"error": "Mapbox geocoding failed — check MAPBOX_ACCESS_TOKEN"}), 400
+
+        result = {
+            "map_url":  bg_url,
+            "address":  f"{address}, {city}, VA",
+            "preview":  f"Open this URL to preview the map: {bg_url}",
+        }
+
+        if do_vid:
+            script = (
+                f"Hi, I'm Barry Jenkins with Legacy Home Team. "
+                f"I wanted to personally reach out about the market in {city}. "
+                f"Values are shifting fast — let me know if you'd like a quick update on your area."
+            )
+            video = generate_and_wait(
+                script=script,
+                background_url=bg_url,
+                avatar_style="circle",
+                timeout_seconds=180,
+            )
+            if video:
+                result["video_id"]     = video.get("video_id")
+                result["video_status"] = video.get("status")
+                result["video_url"]    = video.get("video_url")
+            else:
+                result["video_error"] = "HeyGen video generation timed out or failed"
+
+        return jsonify(result)
+    except Exception as e:
+        logger.exception("api_test_mapbox failed")
+        return jsonify({"error": str(e)}), 500
+
+
 # ---- Scheduler: cache warming + email delivery ----
 _scheduler_started = False
 _scheduler = None          # global ref so health endpoint can inspect jobs
