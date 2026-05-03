@@ -7301,6 +7301,21 @@ def api_test_heygen_status(video_id: str):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/test-sms", methods=["POST"])
+def api_test_sms():
+    """
+    Send a test SMS or MMS via Twilio. Admin/dev use only.
+    Body: { "to": "+1...", "body": "...", "media_url": "https://..." (optional) }
+    """
+    from twilio_client import send_sms as _send_sms, is_within_sms_quiet_hours
+    data      = request.json or {}
+    to        = data.get("to", "+17578164037")
+    body      = data.get("body", "Test from Legacy Home Team system.")
+    media_url = data.get("media_url")
+    result    = _send_sms(to, body, media_url=media_url, dry_run=False)
+    return jsonify(result)
+
+
 # ---- Scheduler: cache warming + email delivery ----
 _scheduler_started = False
 _scheduler = None          # global ref so health endpoint can inspect jobs
