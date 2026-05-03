@@ -3995,12 +3995,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
 
         # ── Dual-channel SMS ─────────────────────────────────────────────────
-        # High-priority leads (AI_NEEDS_FOLLOW_UP, HANDRAISER, etc.) also get
-        # a purpose-written SMS the same day — different angle than the email,
-        # hits the phone BEFORE they open their inbox.
+        # High-priority leads (AI_NEEDS_FOLLOW_UP, HANDRAISER, etc.) AND all
+        # Zbuyer leads also get a purpose-written SMS the same day — different
+        # angle than the email, hits the phone before they open their inbox.
+        # Zbuyer = urgent distressed sellers requesting cash offers; speed of
+        # contact matters most so dual-channel is always warranted.
         # Ylopo Prospecting sellers are excluded — Barry follows up personally.
         # SMS cooldown is checked independently of email cooldown.
-        if _sms_eligible and any(t in tags for t in _tc.DUAL_CHANNEL_TAGS):
+        if _sms_eligible and (is_z or any(t in tags for t in _tc.DUAL_CHANNEL_TAGS)):
             _dual_sms_days = _db.days_since_last_pond_sms(pid)
             if _dual_sms_days is None or _dual_sms_days >= SMS_COOLDOWN_DAYS:
                 # TCPA opt-out: required on 1st text ever, then every 5th send
