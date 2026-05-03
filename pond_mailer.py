@@ -851,46 +851,27 @@ def _get_ylopo_seller_seq_guide(sequence_num):
     return cycle[sequence_num % 3]
 
 
-def _is_seller_lead(tags):
-    """Return True if this lead is a pure seller — no automated SMS.
+def _is_sms_blocked_source(person):
+    """Return True if this lead's source blocks automated SMS.
 
-    Targets the Ylopo Seller Experience population: leads who engaged with the
-    home value / seller report tools. These are homeowners actively thinking about
-    selling their home — automated buyer-focused texts are the wrong channel.
+    The rule is source-based, not tag-based:
 
-    NOT included here (handled separately or not blocked):
+      BLOCKED (seller-specific workflows):
+        • "Ylopo Prospecting" — rAIya homeowner leads; Barry follows up personally
+        • "Ylopo Seller"      — dedicated seller campaign leads
 
-    • SELLER tag — this is applied to sell-to-buy BUYER leads at registration
-      when they answer "do you have a home to sell?" They have IDX activity,
-      they're looking to BUY, they just also have a home. SMS is right for them.
+      ALLOWED (text them):
+        • "Ylopo" / Ylopo buyer, Ylopo PPC+, Ylopo GBP Ads, Qazzoo, anything else
+        • Ylopo buyer leads that ALSO have seller tags (SELLER, Y_SELLER_*,
+          USE_HOME_EQUITY=YES, I_NEED_TO_SELL_BEFORE_I_CAN_BUY) — these are
+          sell-to-buy buyers looking for their next home; SMS is exactly right
 
-    • AI conversation tags (AI_NEEDS_FOLLOW_UP, AI_VOICE_NEEDS_FOLLOW_UP, etc.)
-      — NOT unique to seller leads. Buyer leads also get rAIya texts and can
-      receive these tags. Only safe as a seller signal when combined with
-      source = "Ylopo Prospecting", which is _is_ylopo_prospecting_seller()'s job.
-
-    Caller combines this with _is_ylopo_prospecting_seller() for the full gate:
-        _is_seller = _is_seller_lead(tags) or _is_ylopo_prospecting_seller(person, tags)
-
-    Y_SELLER_REPORT_VIEWED alone is intentionally excluded — viewing the home
-    value estimate is a curiosity action; engagement actions are the threshold.
+    Source list is in config.SMS_BLOCKED_SOURCES so it can be updated without
+    touching this file if FUB source strings ever change.
     """
-    seller_tags = {
-        # Ylopo Seller Experience 2.0 — engagement actions (not just a view)
-        "Y_SELLER_REPORT_ENGAGED",
-        "Y_SELLER_3_VIEW",
-        "Y_SELLER_CASH_OFFER_REQUESTED",
-        "Y_SELLER_LEARN_MORE_EQUITY",
-        "Y_SELLER_TUNE_HOME_VALUE",
-        "Y_SELLER_UNDERSTAND_TREND",
-        "Y_SELLER_NEW_HOME_UPGRADES",
-        "Y_SELLER_EMAIL_AGENT",
-        "Y_SELLER_CALL_AGENT",
-        "SELLER_ALERT",
-        # Definitively a listing / seller context (not a buyer registration tag)
-        "LISTING_LEAD",
-    }
-    return any(t in seller_tags for t in (tags or []))
+    from config import SMS_BLOCKED_SOURCES
+    source = (person.get("source") or "").strip()
+    return source in SMS_BLOCKED_SOURCES
 
 
 def _is_ylopo_prospecting_seller(person, tags):
@@ -3083,21 +3064,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             to_email = emails[0]["value"] if emails else None
 
         # Get phone for SMS channel (parallel to email)
-        # Three gates must all pass before a lead is SMS-eligible:
-        #   1. Shark Tank (pond 4) only — other ponds have different workflows
-        #   2. Buyer leads only — two distinct seller populations are excluded:
-        #        a. Ylopo Seller Experience (Y_SELLER_* engagement, SELLER_ALERT,
-        #           LISTING_LEAD) — homeowners engaging with home value tools
-        #        b. Ylopo Prospecting rAIya sellers — source="Ylopo Prospecting"
-        #           + AI conversation tags (Barry follows up personally)
-        #      Note: SELLER tag alone is NOT blocked — it's applied to sell-to-buy
-        #      BUYER leads who answered "I have a home to sell" at registration.
-        #      These leads have IDX activity and a home address in FUB but are
-        #      primarily buyers looking for their next home. SMS is right for them.
+        # Three gates before a lead is SMS-eligible:
+        #   1. Shark Tank (pond 4) only
+        #   2. Source not in SMS_BLOCKED_SOURCES (config):
+        #        • "Ylopo Prospecting" — rAIya homeowner leads, Barry follows up personally
+        #        • "Ylopo Seller"      — dedicated seller campaign leads
+        #      Everything else is allowed, including Ylopo buyer leads that also
+        #      have seller tags — those are sell-to-buy buyers, SMS is right for them.
         #   3. No suppression tags (opt-outs, wrong number, DO_NOT_CALL, etc.)
-        _in_shark_tank  = person.get("_pond_id") == SHARK_TANK_POND_ID
-        _is_seller      = _is_seller_lead(tags) or _is_ylopo_prospecting_seller(person, tags)
-        to_phone = _tc.get_primary_phone(person) if (_sms_ready and _in_shark_tank and not _is_seller) else None
+        _in_shark_tank    = person.get("_pond_id") == SHARK_TANK_POND_ID
+        _sms_src_blocked  = _is_sms_blocked_source(person)
+        to_phone = _tc.get_primary_phone(person) if (_sms_ready and _in_shark_tank and not _sms_src_blocked) else None
         _sms_blocked = _tc.sms_suppressed_by_tags(tags) if to_phone else []
         _sms_eligible = bool(to_phone and not _sms_blocked)
 
