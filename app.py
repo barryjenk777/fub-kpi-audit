@@ -5891,8 +5891,10 @@ def video_landing(token):
         "</div>"
         "<script>"
         "var v=document.getElementById('v');"
-        "v.play().catch(function(){v.controls=true;});"
+        "if(!('ontouchstart' in window)){"
         "v.addEventListener('click',function(){v.paused?v.play():v.pause();});"
+        "v.play().catch(function(){});"
+        "}"
         "</script>"
         "</body></html>"
     )
