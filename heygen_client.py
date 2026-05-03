@@ -167,19 +167,97 @@ def generate_buyer_background_image(city: str, price_band: str = "",
     return _render_bg(lines, bg_color=(10, 22, 38), width=width, height=height)
 
 
-def get_background_url(bg_type: str, address: str = "", city: str = "",
-                        price_band: str = "") -> str:
-    """
-    Return the URL HeyGen will fetch as the video background.
+# ── Mapbox background configuration ──────────────────────────────────────────
+# Satellite-streets shows aerial imagery + road labels — instantly recognizable
+# as "their neighborhood" to the lead. Pure satellite (satellite-v9) is an
+# alternative if you want no labels.
+MAPBOX_STYLE         = "mapbox/satellite-streets-v12"
+MAPBOX_ZOOM_ADDRESS  = 15   # house-level: individual homes + yards visible
+MAPBOX_ZOOM_STREET   = 14   # street-level: block context visible
+MAPBOX_ZOOM_CITY     = 12   # district-level: search area visible
 
-    Z-buyer + buyer use static pre-rendered JPEGs (faster, always available).
-    Seller uses the dynamic endpoint so the lead's address appears on screen.
-    """
-    from urllib.parse import quote
+# Circle avatar: lower-right placement, compact size
+# HeyGen offset range: -0.5 (far left/top) → 0.5 (far right/bottom), 0 = center
+# HeyGen scale range:  0.3 (tiny) → 2.0 (fill frame), 1.0 = default
+AVATAR_CIRCLE_SCALE    = 0.40   # compact — visible but doesn't dominate the map
+AVATAR_CIRCLE_OFFSET_X = 0.33   # push right of center
+AVATAR_CIRCLE_OFFSET_Y = 0.28   # push toward bottom
 
-    # Circle avatar covers centered text — use solid color backgrounds for now.
-    # TODO: reposition text to top or bottom thirds once circle placement is confirmed.
+
+def _geocode_with_mapbox(query: str, api_key: str):
+    """
+    Geocode an address or place name → (longitude, latitude).
+
+    Returns (lon, lat) float tuple or None on failure.
+    Scoped to US results to avoid false matches.
+    """
+    from urllib.parse import quote as _q
+    url = (
+        f"https://api.mapbox.com/geocoding/v5/mapbox.places/{_q(query)}.json"
+        f"?access_token={api_key}&limit=1&country=us"
+        f"&types=address,place,neighborhood,locality"
+    )
+    try:
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            features = r.json().get("features", [])
+            if features:
+                lon, lat = features[0]["geometry"]["coordinates"]
+                logger.info("Geocoded %r → %.5f, %.5f", query, lon, lat)
+                return lon, lat
+        logger.warning("Mapbox geocoding %d for %r", r.status_code, query)
+    except Exception as e:
+        logger.warning("Mapbox geocoding error for %r: %s", query, e)
     return None
+
+
+def get_background_url(bg_type: str, address: str = "", city: str = "",
+                        price_band: str = "") -> str | None:
+    """
+    Return a Mapbox Static API URL centered on the lead's specific location.
+
+    Sellers / Zbuyers   → centered on their property address (zoom 15)
+    Buyers w/ property  → centered on their most-viewed street (zoom 14)
+    Buyers city-only    → centered on their search city (zoom 12)
+
+    Falls back to None (→ solid color in HeyGen) if MAPBOX_ACCESS_TOKEN is
+    not set or geocoding fails. Graceful degradation — never blocks a send.
+    """
+    api_key = os.environ.get("MAPBOX_ACCESS_TOKEN", "")
+    if not api_key:
+        logger.debug("get_background_url: MAPBOX_ACCESS_TOKEN not set — color fallback")
+        return None
+
+    # Build the best geocoding query we can from available data
+    state = "VA"   # all Legacy Home Team leads are Virginia
+    if address and city:
+        query = f"{address}, {city}, {state}"
+        zoom  = MAPBOX_ZOOM_ADDRESS if bg_type in ("seller", "zbuyer") else MAPBOX_ZOOM_STREET
+    elif address:
+        query = f"{address}, {state}"
+        zoom  = MAPBOX_ZOOM_ADDRESS if bg_type in ("seller", "zbuyer") else MAPBOX_ZOOM_STREET
+    elif city:
+        query = f"{city}, {state}"
+        zoom  = MAPBOX_ZOOM_CITY
+    else:
+        query = "Hampton Roads, Virginia"
+        zoom  = 11
+
+    coords = _geocode_with_mapbox(query, api_key)
+    if not coords:
+        logger.warning("get_background_url: geocoding failed for %r — color fallback", query)
+        return None
+
+    lon, lat = coords
+    # 1280x720 = 16:9 aspect; HeyGen scales to 1920x1080 — imperceptible upscale
+    # attribution=false + logo=false keep the background clean
+    bg_url = (
+        f"https://api.mapbox.com/styles/v1/{MAPBOX_STYLE}/static/"
+        f"{lon:.6f},{lat:.6f},{zoom},0,0/1280x720"
+        f"?access_token={api_key}&attribution=false&logo=false"
+    )
+    logger.info("Mapbox background: %s zoom=%d for [%s] (%r)", bg_type, zoom, query, bg_url[:80])
+    return bg_url
 
 
 # ---------------------------------------------------------------------------
@@ -781,6 +859,8 @@ def generate_zbuyer_background_image(street: str, city: str,
 def submit_video(script: str, background_url: str = None,
                  avatar_id: str = None, voice_id: str = None,
                  avatar_style: str = "circle",
+                 avatar_scale: float = None,
+                 avatar_offset: dict = None,
                  title: str = "Barry Jenkins — Personal Message") -> str | None:
     """
     Submit a video generation job to HeyGen.
@@ -789,11 +869,13 @@ def submit_video(script: str, background_url: str = None,
 
     Args:
         script:         The spoken text for Barry's avatar
-        background_url: URL of a background image (our Railway /api/heygen-bg endpoint).
+        background_url: URL of a background image (Mapbox satellite static map).
                         If None, uses a dark navy color background.
         avatar_id:      Override avatar (defaults to DEFAULT_AVATAR)
         voice_id:       Override voice (defaults to DEFAULT_VOICE)
         avatar_style:   "circle" (Email 1 default) or "normal" (suit follow-up)
+        avatar_scale:   Override circle scale (defaults to AVATAR_CIRCLE_SCALE)
+        avatar_offset:  Override circle offset dict {x, y} (defaults to lower-right position)
         title:          Video title (for HeyGen dashboard)
     """
     _avatar = avatar_id or DEFAULT_AVATAR
@@ -804,13 +886,22 @@ def submit_video(script: str, background_url: str = None,
     else:
         background = {"type": "color", "value": "#0c1228"}
 
+    character = {
+        "type": "avatar",
+        "avatar_id": _avatar,
+        "avatar_style": avatar_style,
+    }
+    # Lower-right positioning for circle style — compact avatar over the map
+    if avatar_style == "circle":
+        character["scale"] = avatar_scale if avatar_scale is not None else AVATAR_CIRCLE_SCALE
+        character["offset"] = avatar_offset if avatar_offset is not None else {
+            "x": AVATAR_CIRCLE_OFFSET_X,
+            "y": AVATAR_CIRCLE_OFFSET_Y,
+        }
+
     payload = {
         "video_inputs": [{
-            "character": {
-                "type": "avatar",
-                "avatar_id": _avatar,
-                "avatar_style": avatar_style,
-            },
+            "character": character,
             "voice": {
                 "type": "text",
                 "voice_id": _voice,
@@ -821,7 +912,7 @@ def submit_video(script: str, background_url: str = None,
         }],
         "dimension": {"width": 1920, "height": 1080},
         "title": title,
-        "quality": "high",
+        "quality": "medium",  # was "high" — medium loads faster without visible quality loss
         # Avatar IV — HeyGen's latest motion engine (2025).
         # Photorealistic micro-expressions, tone/emotion-aware lip sync,
         # natural head tilts + pauses. Drop-in upgrade, same /v2/ endpoint.
@@ -895,6 +986,8 @@ def poll_video(video_id: str, timeout_seconds: int = 360,
 def generate_and_wait(script: str, background_url: str = None,
                       avatar_id: str = None, voice_id: str = None,
                       avatar_style: str = "circle",
+                      avatar_scale: float = None,
+                      avatar_offset: dict = None,
                       timeout_seconds: int = 180) -> dict | None:
     """
     Full pipeline: submit → poll → return result.
@@ -903,26 +996,17 @@ def generate_and_wait(script: str, background_url: str = None,
     This blocks for ~60-90 seconds while HeyGen renders.
     Only call this in a background job, not in a request handler.
     """
-    # Pre-warm the background URL so Railway has it cached before HeyGen fetches it.
-    # Without this, Railway generates the PIL image on HeyGen's first fetch (~400ms),
-    # which may exceed HeyGen's asset download timeout and silently drop the background.
-    if background_url:
-        try:
-            r = requests.get(background_url, timeout=10)
-            if r.status_code == 200:
-                logger.info("Background pre-warmed (%d bytes): %s",
-                            len(r.content), background_url[:60])
-            else:
-                logger.warning("Background pre-warm returned %d — using color fallback",
-                               r.status_code)
-                background_url = None
-        except Exception as e:
-            logger.warning("Background pre-warm failed (%s) — using color fallback", e)
-            background_url = None
+    # Mapbox static URLs are served directly from Mapbox CDN — no pre-warm needed.
+    # Skip the pre-warm fetch; just validate the URL is non-empty.
+    if background_url and not background_url.startswith("http"):
+        logger.warning("generate_and_wait: invalid background_url — color fallback")
+        background_url = None
 
     video_id = submit_video(script, background_url=background_url,
                             avatar_id=avatar_id, voice_id=voice_id,
-                            avatar_style=avatar_style)
+                            avatar_style=avatar_style,
+                            avatar_scale=avatar_scale,
+                            avatar_offset=avatar_offset)
     if not video_id:
         return None
     return poll_video(video_id, timeout_seconds=timeout_seconds)

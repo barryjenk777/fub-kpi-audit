@@ -3630,7 +3630,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         view_count=_view_count,
                         tags=tags,
                     )
-                    bg_url = get_background_url("buyer", city=_city_hg)
+                    bg_url = get_background_url(
+                        "buyer",
+                        address=_mv_street if strategy in ("saved_property", "repeat_view") else "",
+                        city=_city_hg,
+                    )
                     video_result = generate_and_wait(script, background_url=bg_url,
                                                     avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
                                                     timeout_seconds=480)
