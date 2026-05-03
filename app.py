@@ -5701,51 +5701,64 @@ def watch_video():
     return _R(html_out, status=200, mimetype="text/html")
 
 
+# Cache resolved HeyGen CDN URLs keyed by video_id — avoids a HeyGen API
+# call on every iOS range request. TTL=90 min (HeyGen signed URLs expire in ~2h).
+_vp_url_cache: dict = {}   # video_id → (cdn_url, expires_at)
+
+def _get_cdn_url(video_id: str) -> str | None:
+    """Return cached CDN URL for video_id, refreshing if expired."""
+    import time, requests as _req
+    cached = _vp_url_cache.get(video_id)
+    if cached and cached[1] > time.time():
+        return cached[0]
+    try:
+        _hg_key = os.environ.get("HEYGEN_API_KEY", "")
+        r = _req.get(
+            "https://api.heygen.com/v1/video_status.get",
+            headers={"X-Api-Key": _hg_key},
+            params={"video_id": video_id},
+            timeout=8,
+        )
+        _data = r.json().get("data", {})
+        if _data.get("status") != "completed":
+            return None
+        cdn_url = _data.get("video_url", "")
+        if cdn_url:
+            _vp_url_cache[video_id] = (cdn_url, time.time() + 5400)  # 90-min TTL
+        return cdn_url or None
+    except Exception as _e:
+        logger.warning("_get_cdn_url failed for %s: %s", video_id, _e)
+        return None
+
+
 @app.route("/vp/<video_id>")
 def video_proxy(video_id: str):
     """
     iOS-compatible video proxy — streams the HeyGen MP4 through our server
     with proper HTTP Range request support.
 
-    iOS Safari requires a 206 Partial Content response to its initial
-    Range: bytes=0-1 probe before it will play a video inline. HeyGen's
-    CloudFront signed URLs fail that probe (they return 200 with full content
-    instead of 206), so Safari refuses to play. Routing through this proxy
-    lets us respond correctly to all range requests.
+    iOS Safari probes with Range: bytes=0-1 before playing inline. HeyGen's
+    CloudFront URLs return 200 (not 206) for range requests, so Safari stalls.
+    This proxy intercepts range requests and returns proper 206 responses.
 
-    Uses streaming chunked transfer so Railway doesn't need to buffer the
-    full file in memory — chunks flow from HeyGen CDN → Railway → browser.
+    CDN URL is cached per video_id (90-min TTL) so iOS's multiple range
+    requests don't each re-hit the HeyGen API — cuts load time from ~15s → ~2s.
+
+    Timeout: (5s connect, no read timeout) so long videos aren't cut off.
     """
     import re
     import requests as _req
     from flask import request, Response as _R, stream_with_context
 
-    # Only accept 32-char hex video IDs — reject anything else
     if not re.match(r'^[0-9a-f]{32}$', video_id.lower()):
         return "Not found.", 404
 
-    # Fetch fresh signed URL from HeyGen
-    try:
-        _hg_key = os.environ.get("HEYGEN_API_KEY", "")
-        r = _req.get(
-            "https://api.heygen.com/v1/video_status.get",
-            headers={"X-Api-Key": _hg_key},
-            params={"video_id": video_id.lower()},
-            timeout=8,
-        )
-        _data = r.json().get("data", {})
-        if _data.get("status") != "completed":
-            return "Video not ready.", 404
-        cdn_url = _data.get("video_url", "")
-    except Exception as _e:
-        logger.warning("video_proxy HeyGen lookup failed: %s", _e)
-        return "Lookup failed.", 502
-
+    cdn_url = _get_cdn_url(video_id.lower())
     if not cdn_url or not cdn_url.startswith("https://"):
         return "Not found.", 404
 
-    # Forward any Range header from the client (iOS sends Range: bytes=0-1 probe)
-    upstream_headers = {}
+    # Forward Range header — iOS sends bytes=0-1 probe, then real range requests
+    upstream_headers = {"Accept": "*/*"}
     range_hdr = request.headers.get("Range")
     if range_hdr:
         upstream_headers["Range"] = range_hdr
@@ -5755,28 +5768,24 @@ def video_proxy(video_id: str):
             cdn_url,
             headers=upstream_headers,
             stream=True,
-            timeout=15,
+            timeout=(5, None),   # 5s connect; no read timeout (don't cut off video)
         )
     except Exception as _e:
         logger.warning("video_proxy upstream fetch failed: %s", _e)
         return "Upstream error.", 502
 
-    # Build response headers Safari needs
     resp_headers = {
         "Content-Type":  upstream.headers.get("Content-Type", "video/mp4"),
         "Accept-Ranges": "bytes",
-        "Cache-Control": "no-store",
+        "Cache-Control": "public, max-age=3600",
     }
-    if "Content-Length" in upstream.headers:
-        resp_headers["Content-Length"] = upstream.headers["Content-Length"]
-    if "Content-Range" in upstream.headers:
-        resp_headers["Content-Range"] = upstream.headers["Content-Range"]
-
-    status_code = upstream.status_code  # 206 for range responses, 200 otherwise
+    for hdr in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
+        if hdr in upstream.headers:
+            resp_headers[hdr] = upstream.headers[hdr]
 
     return _R(
-        stream_with_context(upstream.iter_content(chunk_size=65536)),
-        status=status_code,
+        stream_with_context(upstream.iter_content(chunk_size=131072)),  # 128KB chunks
+        status=upstream.status_code,
         headers=resp_headers,
     )
 
