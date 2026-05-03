@@ -4012,53 +4012,85 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         if result.get("sg_message_id") and log_id:
             _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
 
-        # ── Dual-channel SMS ─────────────────────────────────────────────────
-        # High-priority leads (AI_NEEDS_FOLLOW_UP, HANDRAISER, etc.) AND all
-        # Zbuyer leads also get a purpose-written SMS the same day — different
-        # angle than the email, hits the phone before they open their inbox.
-        # Zbuyer = urgent distressed sellers requesting cash offers; speed of
-        # contact matters most so dual-channel is always warranted.
-        # Ylopo Prospecting sellers are excluded — Barry follows up personally.
+        # ── Cross-channel iMessage ────────────────────────────────────────────
+        # Every SMS-eligible email lead also gets an iMessage — same HeyGen video
+        # attaches at NO extra credit cost (same video_id, our /vp/ proxy streams it).
+        #
+        # Two copy modes:
+        #   High-intent (Z-buyer, HANDRAISER, AI_NEEDS_FOLLOW_UP, etc.):
+        #     Claude-written urgent angle via generate_sms_body() — hits the phone
+        #     with a different frame before they open their inbox.
+        #   Standard drip (everyone else):
+        #     Short cross-channel nudge — "I sent you an email too with a quick
+        #     video I put together for you." Video plays inline in the thread.
+        #
+        # Ylopo Prospecting sellers are excluded at _sms_eligible (source block).
         # SMS cooldown is checked independently of email cooldown.
-        if _sms_eligible and (is_z or any(t in tags for t in _tc.DUAL_CHANNEL_TAGS)):
+        if _sms_eligible:
             _dual_sms_days = _db.days_since_last_pond_sms(pid)
             if _dual_sms_days is None or _dual_sms_days >= SMS_COOLDOWN_DAYS:
                 # TCPA opt-out: required on 1st text ever, then every 5th send
-                _dual_sms_count  = _db.count_pond_sms_sent(pid)
+                _dual_sms_count    = _db.count_pond_sms_sent(pid)
                 _dual_needs_optout = (_dual_sms_count == 0) or (_dual_sms_count % 5 == 4)
-                try:
-                    _dual_body = generate_sms_body(
-                        person=person, behavior=behavior, strategy=strategy,
-                        leadstream_tier=leadstream_tier, tags=tags,
-                        is_seller=is_ylopo_seller, is_z=is_z,
-                        channel="dual", needs_optout=_dual_needs_optout, dry_run=dry_run,
-                    )
-                except Exception as _dsms_err:
-                    logger.warning("Dual SMS generation failed for %s: %s", name, _dsms_err)
-                    _dual_body = None
+                _is_high_intent    = is_z or any(t in tags for t in _tc.DUAL_CHANNEL_TAGS)
+                _dual_body         = None
+
+                if _is_high_intent:
+                    # Claude-written urgent angle — different voice from email
+                    try:
+                        _dual_body = generate_sms_body(
+                            person=person, behavior=behavior, strategy=strategy,
+                            leadstream_tier=leadstream_tier, tags=tags,
+                            is_seller=is_ylopo_seller, is_z=is_z,
+                            channel="dual", needs_optout=_dual_needs_optout, dry_run=dry_run,
+                        )
+                    except Exception as _dsms_err:
+                        logger.warning("Dual SMS generation failed for %s: %s", name, _dsms_err)
+                else:
+                    # Standard drip: cross-channel nudge — warm, short, personal
+                    # When video is attached it plays inline right below this text —
+                    # no link needed, so we don't mention one.
+                    _has_vid = bool(video_result and video_result.get("video_id"))
+                    if _has_vid:
+                        _dual_body = (
+                            f"Hey {first_name} — I sent you an email too with a quick "
+                            f"video I put together for you. Didn't want it to get buried 👇"
+                        )
+                    else:
+                        _condensed = _tc.email_to_sms(
+                            email_data.get("body_text", ""), first_name=first_name
+                        )
+                        _dual_body = (
+                            f"Hey {first_name} — sent you an email too. {_condensed}"
+                        ).strip()
+                    if _dual_needs_optout:
+                        _dual_body += "\n\nReply STOP to opt out."
 
                 if _dual_body:
-                    # Attach the HeyGen video if one was generated for this email.
-                    # /vp/<video_id> is our iOS-compatible proxy — plays inline in iMessage.
+                    # Attach the HeyGen video — same render as the email, zero extra credits.
+                    # /vp/<video_id> is our iOS-compatible streaming proxy.
+                    # Plays tap-to-play inline in iMessage — no link, no browser.
                     _dual_media_url = None
                     if _sendblue_ready and video_result and video_result.get("video_id"):
                         _base = os.environ.get("BASE_URL",
                                                "https://web-production-3363cc.up.railway.app")
                         _dual_media_url = f"{_base}/vp/{video_result['video_id']}"
 
-                    # Prefer Sendblue (iMessage) over Twilio SMS
+                    # Prefer Sendblue (iMessage blue bubble) over Twilio SMS
                     if _sendblue_ready:
                         _dual_result  = _sb.send_imessage(
                             to_phone, _dual_body,
                             media_url=_dual_media_url,
                             dry_run=dry_run,
                         )
-                        _dual_channel = "sendblue_dual"
+                        _dual_channel = "sendblue_dual" if _is_high_intent else "sendblue_cross"
                         _dual_sid     = _dual_result.get("message_handle")
                     else:
                         _dual_result  = _tc.send_sms(to_phone, _dual_body, dry_run=dry_run)
-                        _dual_channel = "dual"
+                        _dual_channel = "dual" if _is_high_intent else "cross_channel"
                         _dual_sid     = _dual_result.get("twilio_sid")
+
+                    _sms_type_label = "dual SMS" if _is_high_intent else "cross-channel SMS"
 
                     if _dual_result.get("success"):
                         _db.log_pond_sms(pid, name, to_phone, _dual_body,
@@ -4076,24 +4108,29 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                                     person_id=pid,
                                     sms_body=_dual_body,
                                     lead_type=_lt_dual,
-                                    channel="dual",
+                                    channel=_dual_channel,
                                     user_id=BARRY_FUB_USER_ID,
                                 )
                             except Exception as _fub_dual_err:
-                                logger.warning("FUB dual SMS log skipped for %s: %s", name, _fub_dual_err)
+                                logger.warning("FUB %s log skipped for %s: %s",
+                                               _sms_type_label, name, _fub_dual_err)
                         # Tag the lead so Barry can see who's in the SMS drip in FUB
                         if not dry_run:
                             try:
                                 client.add_tag_fast(pid, "Claude_Text_Drip", tags)
                             except Exception as _dtag_err:
-                                logger.warning("Claude_Text_Drip tag (dual) failed for %s: %s", name, _dtag_err)
-                        print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} dual SMS ({len(_dual_body)+52} chars)")
+                                logger.warning("Claude_Text_Drip tag (%s) failed for %s: %s",
+                                               _sms_type_label, name, _dtag_err)
+                        _vid_note = " + video 🎬" if _dual_media_url else ""
+                        print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} {_sms_type_label}{_vid_note} ({len(_dual_body)} chars)")
                         dual_sms_sent += 1
                     elif _dual_result.get("status") == "quiet_hours":
-                        logger.info("Dual SMS quiet_hours block for %s — outside 8am–9pm ET", name)
-                        print(f"    ⏸  Dual SMS held — outside TCPA quiet hours (8am–9pm ET)")
+                        logger.info("%s quiet_hours block for %s — outside 8am–9pm ET",
+                                    _sms_type_label.title(), name)
+                        print(f"    ⏸  {_sms_type_label.title()} held — outside TCPA quiet hours (8am–9pm ET)")
                     else:
-                        logger.warning("Dual SMS failed for %s: %s", name, _dual_result.get("error"))
+                        logger.warning("%s failed for %s: %s",
+                                       _sms_type_label, name, _dual_result.get("error"))
 
         # Log the outbound email to FUB timeline as a structured 📧 note.
         # Agents see email number, type, what it does, and clear next-action.
