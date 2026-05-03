@@ -2889,7 +2889,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
     import db as _db
     from fub_client import FUBClient
-    from config import LEADSTREAM_ALLOWED_POND_IDS, BARRY_FUB_USER_ID
+    from config import LEADSTREAM_ALLOWED_POND_IDS, BARRY_FUB_USER_ID, SHARK_TANK_POND_ID
 
     _db.ensure_pond_email_log_table()
     _db.ensure_pond_sms_log_table()
@@ -2933,6 +2933,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             lid = lead.get("id")
             if lid and lid not in seen_ids:
                 seen_ids.add(lid)
+                # Stamp the pond source — FUB doesn't return assignedPondId on
+                # the person object, so we track it here. Used to gate SMS to
+                # Shark Tank (pond 4) only.
+                lead["_pond_id"] = pond_id
                 all_pond_leads.append(lead)
 
     # Sort by lastActivity descending — mirrors LeadStream score ordering.
@@ -3037,7 +3041,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             to_email = emails[0]["value"] if emails else None
 
         # Get phone for SMS channel (parallel to email)
-        to_phone = _tc.get_primary_phone(person) if _sms_ready else None
+        # SMS is gated to Shark Tank (pond 4) only — other ponds have different
+        # workflows and Barry hasn't opted them in to automated texting.
+        _in_shark_tank = person.get("_pond_id") == SHARK_TANK_POND_ID
+        to_phone = _tc.get_primary_phone(person) if (_sms_ready and _in_shark_tank) else None
         _sms_blocked = _tc.sms_suppressed_by_tags(tags) if to_phone else []
         _sms_eligible = bool(to_phone and not _sms_blocked)
 
