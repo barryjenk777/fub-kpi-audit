@@ -4127,11 +4127,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     # Attach the HeyGen video — same render as the email, zero extra credits.
                     # /vp/<video_id> is our iOS-compatible streaming proxy.
                     # Plays tap-to-play inline in iMessage — no link, no browser.
-                    _dual_media_url = None
-                    if _sendblue_ready and video_result and video_result.get("video_id"):
-                        _base = os.environ.get("BASE_URL",
-                                               "https://web-production-3363cc.up.railway.app")
-                        _dual_media_url = f"{_base}/vp/{video_result['video_id']}"
+                    _dual_media_url = None  # re-enable after confirming AI Agent plan delivers media
+                    # if _sendblue_ready and video_result and video_result.get("video_id"):
+                    #     _base = os.environ.get("BASE_URL",
+                    #                            "https://web-production-3363cc.up.railway.app")
+                    #     _dual_media_url = f"{_base}/vp/{video_result['video_id']}"
 
                     # Prefer Sendblue (iMessage blue bubble) over Twilio SMS
                     if _sendblue_ready:
