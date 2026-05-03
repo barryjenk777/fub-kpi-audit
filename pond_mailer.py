@@ -48,6 +48,10 @@ EMAIL_COOLDOWN_DAYS = 3
 # Alternates: longer content email (4, 6, 8) → listing link email (5, 7, 9)
 # Goal: stay top of mind for leads who weren't ready in the sprint.
 DRIP_COOLDOWN_DAYS = 10   # 5 gaps × 10 days = 50-day drip (emails 4-9)
+
+# SMS channel has its own cooldown, separate from email cadence.
+# 5 days minimum between texts to the same lead (TCPA/carrier best practice).
+from config import SMS_COOLDOWN_DAYS  # noqa: E402
 # Was 15 days — tightened because active searchers go cold waiting that long.
 
 # Minimum IDX events needed to write a meaningful email
@@ -3155,7 +3159,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # pipeline but send a condensed SMS instead of an email.
         if not to_email and _sms_eligible:
             _sms_days = _db.days_since_last_pond_sms(pid)
-            if _sms_days is not None and _sms_days < EMAIL_COOLDOWN_DAYS:
+            if _sms_days is not None and _sms_days < SMS_COOLDOWN_DAYS:
                 logger.debug("Skipping %s (SMS-only) — texted %.1fd ago", name, _sms_days)
                 skipped_cooldown += 1
                 continue
@@ -3229,6 +3233,13 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                         )
                     except Exception as _fub_sms_err:
                         logger.warning("FUB SMS log skipped for %s: %s", name, _fub_sms_err)
+                # Tag the lead in FUB so Barry can filter "leads in SMS drip" via
+                # a FUB smart list with Claude_Text_Drip tag.
+                if not dry_run:
+                    try:
+                        client.add_tag_fast(pid, "Claude_Text_Drip", tags)
+                    except Exception as _tag_err:
+                        logger.warning("Claude_Text_Drip tag failed for %s: %s", name, _tag_err)
                 print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} SMS ({len(_sms_body)+52} chars)")
                 sms_only_sent += 1
                 sent += 1
@@ -3991,7 +4002,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # SMS cooldown is checked independently of email cooldown.
         if _sms_eligible and any(t in tags for t in _tc.DUAL_CHANNEL_TAGS):
             _dual_sms_days = _db.days_since_last_pond_sms(pid)
-            if _dual_sms_days is None or _dual_sms_days >= EMAIL_COOLDOWN_DAYS:
+            if _dual_sms_days is None or _dual_sms_days >= SMS_COOLDOWN_DAYS:
                 # TCPA opt-out: required on 1st text ever, then every 5th send
                 _dual_sms_count  = _db.count_pond_sms_sent(pid)
                 _dual_needs_optout = (_dual_sms_count == 0) or (_dual_sms_count % 5 == 4)
@@ -4029,6 +4040,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                                 )
                             except Exception as _fub_dual_err:
                                 logger.warning("FUB dual SMS log skipped for %s: %s", name, _fub_dual_err)
+                        # Tag the lead so Barry can see who's in the SMS drip in FUB
+                        if not dry_run:
+                            try:
+                                client.add_tag_fast(pid, "Claude_Text_Drip", tags)
+                            except Exception as _dtag_err:
+                                logger.warning("Claude_Text_Drip tag (dual) failed for %s: %s", name, _dtag_err)
                         print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} dual SMS ({len(_dual_body)+52} chars)")
                         dual_sms_sent += 1
                     elif _dual_result.get("status") == "quiet_hours":

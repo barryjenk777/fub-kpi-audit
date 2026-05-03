@@ -6444,6 +6444,83 @@ Rules:
         return False
 
 
+def _schedule_sms_handoff(person_id, to_phone, delay_seconds=270):
+    """
+    Fire a branded handoff SMS to the lead ~4.5 minutes after a positive reply.
+
+    We wait so FUB automation has time to apply the SMS_Conversion tag and
+    assign the lead to an agent via the priority-group rule. Then we fetch the
+    newly assigned agent's name and direct number from FUB and send a personal
+    handoff message.
+
+    Runs in a daemon thread — Flask response returns immediately while we wait.
+    """
+    import threading
+
+    def _send():
+        try:
+            from fub_client import FUBClient
+            from twilio_client import send_sms
+            fub = FUBClient()
+
+            # Fetch updated lead to see who FUB automation assigned
+            person  = fub.get_person(person_id)
+            uid     = (person.get("assignedUserId") or
+                       person.get("ownerId") or
+                       (person.get("assignedTo") or {}).get("id"))
+
+            agent_first = None
+            agent_phone = None
+
+            if uid:
+                agent = fub.get_user_by_id(uid)
+                if agent:
+                    agent_first = (agent.get("firstName") or
+                                   (agent.get("name") or "").split()[0] or None)
+                    agent_phone = (agent.get("mobilePhone") or
+                                   agent.get("phone") or
+                                   agent.get("phoneNumber") or None)
+
+            # Build handoff message — personal, warm, sets clear expectation
+            if agent_first and agent_phone:
+                body = (
+                    f"Passing you to {agent_first} now — they'll reach out from "
+                    f"{agent_phone} with a few follow-up questions. They know your situation."
+                )
+            elif agent_first:
+                body = (
+                    f"Handing you off to {agent_first} on my team — they'll reach out "
+                    f"from their direct line shortly with some follow-up questions."
+                )
+            else:
+                body = (
+                    "One of my agents will reach out from their direct number shortly "
+                    "with some follow-up questions. They'll have your full context."
+                )
+
+            result = send_sms(to_phone, body, dry_run=False)
+            if result.get("success"):
+                logger.info("Handoff SMS sent to %s (person %s, agent: %s)",
+                            to_phone, person_id, agent_first or "unassigned")
+            else:
+                logger.warning("Handoff SMS failed for person %s: %s",
+                               person_id, result.get("error"))
+        except Exception as _e:
+            logger.error("SMS handoff timer failed for person %s: %s",
+                         person_id, _e, exc_info=True)
+
+    t = threading.Timer(delay_seconds, _send)
+    t.daemon = True
+    t.start()
+    logger.info("Handoff SMS scheduled in %ds for person %s → %s", delay_seconds, person_id, to_phone)
+
+
+# CTIA-standard opt-out keywords — Twilio handles these at the carrier level,
+# but we hard-gate on them before running Claude sentiment so a STOP reply
+# always applies SMS_OptOut immediately, even if the Anthropic API is down.
+_SMS_HARD_STOP_WORDS = {"stop", "stopall", "unsubscribe", "cancel", "end", "quit"}
+
+
 @app.route("/webhook/twilio-sms", methods=["POST"])
 def webhook_twilio_sms():
     """
@@ -6452,32 +6529,43 @@ def webhook_twilio_sms():
     Twilio POSTs application/x-www-form-urlencoded to this endpoint when a
     lead replies to one of Barry's outbound AI texts.
 
-    We:
-      1. Validate Twilio signature (guards against spoofed requests)
+    Flow:
+      1. Validate Twilio signature (fail closed — reject if token not configured)
       2. Extract From phone + Body text
-      3. Match phone to lead via pond_sms_log
-      4. Analyze sentiment with Claude Haiku
-      5. Positive  → SMS_Conversion tag + FUB briefing note + notify Barry
-      6. Negative  → SMS_OptOut tag (blocks future texts, leaves email untouched)
-      7. Neutral   → FUB note only (reply visible in CRM timeline)
-      8. Log to pond_sms_reply_log
+      3. Hard-gate STOP keywords before calling Claude (guarantee opt-out)
+         → Return branded TwiML confirmation; log + tag SMS_OptOut; done
+      4. Match phone to lead via pond_sms_log
+      5. Run Claude Haiku sentiment
+      6. Positive  → SMS_Conversion tag + FUB briefing note
+                   → Schedule handoff SMS (4.5 min delay, agent lookup)
+                   → Email Barry with conversion alert
+      7. Negative  → SMS_OptOut tag (blocks future texts, leaves email untouched)
+      8. Neutral   → FUB note only (reply visible in CRM timeline)
+      9. Log to pond_sms_reply_log + notify Barry
 
-    Returns TwiML <Response/> — Twilio retries on non-2xx, so we always
-    return 200 even on unrecoverable errors.
+    Returns TwiML <Response/> — Twilio retries on non-2xx so we always 200.
     """
-    # ── Twilio signature validation ───────────────────────────────────────────
+    from flask import make_response as _mkr
+
+    def _twiml(body_xml="", status=200):
+        r = _mkr(f"<Response>{body_xml}</Response>", status)
+        r.content_type = "text/xml"
+        return r
+
+    # ── Twilio signature validation — fail closed ─────────────────────────────
+    auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    if not auth_token:
+        # No token configured — reject everything rather than accept unauthenticated
+        logger.error("TWILIO_AUTH_TOKEN not set — rejecting all inbound SMS webhooks")
+        return _twiml(status=500)
+
     try:
         from twilio.request_validator import RequestValidator
-        auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "")
-        if auth_token:
-            validator = RequestValidator(auth_token)
-            sig = request.headers.get("X-Twilio-Signature", "")
-            if not validator.validate(request.url, request.form.to_dict(), sig):
-                logger.warning("Twilio signature validation FAILED — rejecting request")
-                from flask import make_response as _mkr
-                resp = _mkr("<Response/>", 403)
-                resp.content_type = "text/xml"
-                return resp
+        validator = RequestValidator(auth_token)
+        sig = request.headers.get("X-Twilio-Signature", "")
+        if not validator.validate(request.url, request.form.to_dict(), sig):
+            logger.warning("Twilio signature validation FAILED — rejecting request")
+            return _twiml(status=403)
     except ImportError:
         logger.warning("twilio package not installed — skipping signature validation")
     except Exception as _ve:
@@ -6492,24 +6580,57 @@ def webhook_twilio_sms():
 
         if not from_phone:
             logger.warning("Twilio SMS webhook: missing From field")
-            from flask import make_response as _mkr2
-            resp = _mkr2("<Response/>", 200)
-            resp.content_type = "text/xml"
-            return resp
+            return _twiml()
+
+        # ── STOP keyword hard-gate (before Claude — no API dependency) ────────
+        # CTIA standard stop words: STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT
+        # Check before any sentiment analysis so a STOP always applies opt-out
+        # even if the Anthropic API is unavailable.
+        body_lower = body_text.strip().lower()
+        is_hard_stop = (
+            body_lower in _SMS_HARD_STOP_WORDS or
+            any(body_lower.startswith(w) for w in _SMS_HARD_STOP_WORDS)
+        )
+
+        if is_hard_stop:
+            logger.info("SMS hard-stop received from %s: %r", from_phone, body_text)
+            person_id_stop, person_name_stop = _db.get_pond_sms_person_by_phone(from_phone)
+            if person_id_stop:
+                try:
+                    from fub_client import FUBClient
+                    fub_stop = FUBClient()
+                    fub_stop.add_tag(person_id_stop, "SMS_OptOut")
+                    logger.info("SMS_OptOut tagged for hard-stop: %s (ID %s)",
+                                person_name_stop, person_id_stop)
+                except Exception as _se:
+                    logger.warning("Could not apply SMS_OptOut for hard-stop %s: %s",
+                                   from_phone, _se)
+                _db.log_pond_sms_reply(
+                    person_id=person_id_stop,
+                    person_name=person_name_stop,
+                    phone_number=from_phone,
+                    reply_text=body_text[:2000],
+                    sentiment="negative",
+                    sentiment_score=1.0,
+                    routed=False,
+                    twilio_message_sid=msg_sid,
+                )
+            # Branded CTIA opt-out confirmation — Twilio sends this to the lead
+            return _twiml(
+                "<Message>You've been removed from Legacy Home Team texts. "
+                "No more messages. Questions? Call (757) 919-8874.</Message>"
+            )
 
         # Match inbound phone to a pond lead via our SMS send log
         person_id, person_name = _db.get_pond_sms_person_by_phone(from_phone)
 
         if not person_id:
             logger.info("Twilio SMS reply: no matching pond lead for %s", from_phone)
-            from flask import make_response as _mkr3
-            resp = _mkr3("<Response/>", 200)
-            resp.content_type = "text/xml"
-            return resp
+            return _twiml()
 
         logger.info("SMS reply matched: %s (ID: %s)", person_name, person_id)
 
-        # Analyze sentiment (reuses email sentiment function — same Claude Haiku prompt)
+        # Analyze sentiment with Claude Haiku (keyword fallback if API unavailable)
         sentiment, sentiment_score, sentiment_reason = _pond_analyze_sentiment(
             body_text, person_name
         )
@@ -6523,12 +6644,18 @@ def webhook_twilio_sms():
             fub = FUBClient()
 
             if sentiment == "positive":
+                # Same protocol as email nurture:
+                #   SMS_Conversion tag → FUB automation assigns lead to priority group
                 fub.add_tag(person_id, "SMS_Conversion")
                 logger.info("SMS_Conversion tag applied to lead %s (%s)", person_id, person_name)
                 routed = True
                 fub_note_ok = _pond_add_sms_reply_fub_note(
                     fub, person_id, person_name, body_text, sentiment_reason
                 )
+                # Schedule handoff text — wait 4.5 min for FUB automation to assign agent,
+                # then send lead a personal message introducing their agent by name + number
+                _schedule_sms_handoff(person_id, from_phone, delay_seconds=270)
+
             elif sentiment == "negative":
                 fub.add_tag(person_id, "SMS_OptOut")
                 logger.info("SMS_OptOut tag applied to lead %s (%s)", person_id, person_name)
@@ -6573,7 +6700,8 @@ def webhook_twilio_sms():
                     "",
                 ]
                 if routed:
-                    _lines.append("✅ SMS_Conversion tag applied — FUB automation will assign")
+                    _lines.append("✅ SMS_Conversion tag applied — FUB automation is assigning now")
+                    _lines.append("✅ Handoff text queued — agent intro sends in ~4.5 min")
                     _lines.append(f"✅ CRM note added: {'yes' if fub_note_ok else 'check logs'}")
                 elif sentiment == "negative":
                     _lines.append("🚫 SMS_OptOut tag applied — lead suppressed from future texts")
@@ -6601,17 +6729,11 @@ def webhook_twilio_sms():
             logger.warning("Could not notify Barry of SMS reply: %s", _ne)
         # ──────────────────────────────────────────────────────────────────────
 
-        from flask import make_response as _mkr4
-        resp = _mkr4("<Response/>", 200)
-        resp.content_type = "text/xml"
-        return resp
+        return _twiml()
 
     except Exception as e:
         logger.error("Twilio SMS webhook unhandled error: %s", e, exc_info=True)
-        from flask import make_response as _mkr5
-        resp = _mkr5("<Response/>", 200)
-        resp.content_type = "text/xml"
-        return resp
+        return _twiml()
 
 
 @app.route("/api/pond-mailer/dashboard")

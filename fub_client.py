@@ -269,6 +269,21 @@ class FUBClient:
                 return user
         return None
 
+    def get_user_by_id(self, user_id):
+        """
+        Get a single FUB user by their numeric user ID.
+        Returns a dict with firstName, lastName, email, mobilePhone, phone, etc.
+        Falls back to scanning all users if the direct endpoint isn't available.
+        """
+        try:
+            return self._request("GET", f"users/{user_id}")
+        except Exception:
+            # FUB may not support GET /users/:id on all plans — scan instead
+            for u in self.get_users():
+                if u.get("id") == user_id:
+                    return u
+            return None
+
     def get_agents_with_email(self, excluded_names=None):
         """
         Return a list of active agent dicts with name, email, and FUB user ID.

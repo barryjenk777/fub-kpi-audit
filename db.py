@@ -3503,6 +3503,21 @@ def get_pond_sms_person_by_phone(phone):
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # Warn if multiple distinct leads share this phone number —
+                # reply will be attributed to most recent send, which may be wrong.
+                cur.execute("""
+                    SELECT COUNT(DISTINCT person_id)
+                    FROM pond_sms_log
+                    WHERE phone_number = %s AND dry_run = FALSE
+                """, (e164,))
+                count_row = cur.fetchone()
+                if count_row and count_row[0] > 1:
+                    logger.warning(
+                        "get_pond_sms_person_by_phone: %s matches %d distinct leads — "
+                        "returning most recent; check FUB for duplicate phone numbers",
+                        e164, count_row[0]
+                    )
+
                 cur.execute("""
                     SELECT person_id, person_name
                     FROM pond_sms_log

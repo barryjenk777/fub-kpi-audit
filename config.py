@@ -381,6 +381,11 @@ SMS_BLOCKED_SOURCES = {
     "Ylopo Prospecting",  # Barry follows up personally — higher TCPA opt-in risk
 }
 
+# Minimum days between automated SMS sends to the same lead.
+# Separate from EMAIL_COOLDOWN_DAYS (3 days) — SMS should be less frequent
+# to avoid TCPA/carrier complaint risk on a 10DLC Low Volume Mixed campaign.
+SMS_COOLDOWN_DAYS = 5
+
 # FUB stages that mean the agent has already resolved/deferred this lead.
 # Leads in these stages score 0 regardless of Ylopo signal tags.
 # This prevents "AI_NEEDS_FOLLOW_UP" from re-surfacing a lead the agent has

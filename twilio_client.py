@@ -33,12 +33,17 @@ import re
 logger = logging.getLogger("twilio_client")
 
 # ── SMS sign-off ─────────────────────────────────────────────────────────────
-# Short enough to fit within 2 SMS segments (320 chars total) alongside body.
-SMS_SIGN_OFF = "— Barry Jenkins, Legacy Home Team · (757) 919-8874"
+# ASCII-only so messages stay in GSM-7 encoding (160 chars/seg, 153 for
+# concatenated). Em dash (—) and middle dot (·) are NOT in GSM-7 — they force
+# Unicode (UCS-2) encoding which drops capacity to 70/67 chars per segment and
+# turns a short 200-char message into 3 segments. Use plain hyphen and pipe.
+SMS_SIGN_OFF = "- Barry Jenkins, Legacy Home Team | (757) 919-8874"
 
-# Body portion max before sign-off + newline (~55 chars for sign-off).
-# 320 total - 55 sign-off - 2 newlines = 263 chars of usable body.
-SMS_MAX_BODY = 260
+# Body portion max before sign-off + newline.
+# GSM-7 2-segment budget: 306 chars total.
+# Sign-off = 50 chars + 1 newline = 51 chars overhead.
+# Usable body = 306 - 51 = 255 chars.
+SMS_MAX_BODY = 255
 
 # ── Tags that block SMS ───────────────────────────────────────────────────────
 # Separate from email suppression: DO_NOT_CALL blocks calls AND texts (belt-and-
@@ -260,16 +265,18 @@ def send_sms(to_number: str, body: str, dry_run: bool = False) -> dict:
                     to_e164, len(full_body), full_body[:100].replace("\n", " "))
         return {"success": True, "twilio_sid": None, "status": "dry_run"}
 
+    # Fast-fail if Twilio env vars aren't configured (check before TCPA so the
+    # error message is "not configured" rather than a misleading "quiet hours").
+    if not is_available():
+        logger.warning("send_sms: Twilio not configured — TWILIO_* env vars missing")
+        return {"success": False, "twilio_sid": None, "status": "failed",
+                "error": "Twilio not configured"}
+
     # TCPA quiet hours: no automated texts before 8am or after 9pm ET
     if not is_within_sms_quiet_hours():
         logger.warning("send_sms: blocked — outside TCPA quiet hours (8am–9pm ET) for %s", to_e164)
         return {"success": False, "twilio_sid": None, "status": "quiet_hours",
                 "error": "Outside TCPA quiet hours (8am–9pm ET)"}
-
-    if not is_available():
-        logger.warning("send_sms: Twilio not configured — TWILIO_* env vars missing")
-        return {"success": False, "twilio_sid": None, "status": "failed",
-                "error": "Twilio not configured"}
 
     try:
         from twilio.rest import Client  # noqa: PLC0415
