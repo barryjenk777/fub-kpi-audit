@@ -5291,17 +5291,19 @@ def api_pond_mailer_run():
     LeadStream-tagged pond leads based on their IDX behavior.
 
     Body (all optional):
-        dry_run    (bool, default true) — preview without sending
-        person     (int)               — single FUB person ID for testing
-        limit      (int)               — max leads to process this run
-        daily_cap  (int)               — daily email ceiling (scheduler passes this)
+        dry_run      (bool, default true) — preview without sending
+        person       (int)               — single FUB person ID for testing
+        limit        (int)               — max leads to process this run
+        daily_cap    (int)               — daily email ceiling (scheduler passes this)
+        to_override  (str)               — redirect all sends to this address (test mode)
     """
     import threading, uuid
-    data      = request.json or {}
-    dry_run   = data.get("dry_run", True)
-    person    = data.get("person")
-    limit     = data.get("limit")
-    daily_cap = data.get("daily_cap")
+    data        = request.json or {}
+    dry_run     = data.get("dry_run", True)
+    person      = data.get("person")
+    limit       = data.get("limit")
+    daily_cap   = data.get("daily_cap")
+    to_override = data.get("to_override")
 
     job_id = str(uuid.uuid4())[:8]
 
@@ -5312,7 +5314,7 @@ def api_pond_mailer_run():
     def _bg():
         try:
             from pond_mailer import run_pond_mailer
-            result = run_pond_mailer(dry_run=dry_run, person_id=person, limit=limit, daily_cap=daily_cap)
+            result = run_pond_mailer(dry_run=dry_run, person_id=person, limit=limit, daily_cap=daily_cap, to_override=to_override)
             _db.finish_pond_mailer_job(job_id, result=result)
         except Exception as e:
             logger.error("Pond mailer error: %s", e)

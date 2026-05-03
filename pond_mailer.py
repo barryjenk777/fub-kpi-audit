@@ -2884,7 +2884,8 @@ def run_new_lead_mailer(dry_run=True):
         )
 
         try:
-            result = send_email(to_email, subject, body_text, body_html, dry_run=dry_run)
+            _send_to = to_override or to_email
+            result = send_email(_send_to, subject, body_text, body_html, dry_run=dry_run)
         except Exception as e:
             logger.error("Send failed for new lead %s: %s", name, e)
             continue
@@ -2930,7 +2931,7 @@ def _parse_iso(ts):
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
+def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to_override=None):
     """
     Main entry point. Processes LeadStream pond leads and sends personalized emails.
 
@@ -3982,8 +3983,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
 
         # ── Send ────────────────────────────────────────────────────────────────
         try:
+            _send_to = to_override or to_email
             result = send_email(
-                to_email=to_email,
+                to_email=_send_to,
                 subject=email_data["subject"],
                 body_text=email_data["body_text"],
                 body_html=email_data["body_html"],
