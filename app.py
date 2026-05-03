@@ -5866,38 +5866,152 @@ def video_landing(token):
     safe_url    = _html.escape(playback_url)
     poster_attr = f"poster=\"{_html.escape(thumbnail_url)}\"" if thumbnail_url else ""
 
-    html_out = (
-        "<!DOCTYPE html>"
-        "<html lang='en'><head>"
-        "<meta charset='UTF-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1.0'>"
-        "<title>Barry Jenkins — Personal Message</title>"
-        "<style>"
-        "*{margin:0;padding:0;box-sizing:border-box}"
-        "body{background:#0c1228;display:flex;flex-direction:column;"
-        "align-items:center;justify-content:center;min-height:100vh;"
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}"
-        ".wrap{width:100%;max-width:900px;padding:16px}"
-        "video{width:100%;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,0.6);cursor:pointer}"
-        ".brand{margin-top:14px;text-align:center;"
-        "color:rgba(255,255,255,0.35);font-size:13px;letter-spacing:0.03em}"
-        "</style></head><body>"
-        "<div class='wrap'>"
-        f"<video id='v' src='{safe_url}' {poster_attr} controls playsinline preload='auto'>"
-        f"<a href='{safe_url}' style='color:#fff'>Download the video</a>"
-        "</video>"
-        "<p class='brand'>Legacy Home Team &nbsp;&middot;&nbsp; Barry Jenkins, Realtor"
-        " &nbsp;&middot;&nbsp; LPT Realty</p>"
-        "</div>"
-        "<script>"
-        "var v=document.getElementById('v');"
-        "if(!('ontouchstart' in window)){"
-        "v.addEventListener('click',function(){v.paused?v.play():v.pause();});"
-        "v.play().catch(function(){});"
-        "}"
-        "</script>"
-        "</body></html>"
-    )
+    # ── Map center from ?c=lat,lon,zoom query param (set by make_video_landing_url) ──
+    from flask import request as _freq
+    _map_c = _freq.args.get("c", "36.8531,-76.2859,11")
+    try:
+        _parts  = _map_c.split(",")
+        map_lat  = float(_parts[0])
+        map_lon  = float(_parts[1])
+        map_zoom = float(_parts[2]) if len(_parts) > 2 else 11.0
+    except Exception:
+        map_lat, map_lon, map_zoom = 36.8531, -76.2859, 11.0
+
+    # Mapbox public access token — safe to embed in HTML (restrict by referrer in dashboard)
+    mapbox_token = os.environ.get("MAPBOX_ACCESS_TOKEN", "")
+
+    # ── Build landing page: fullscreen Mapbox map + video PiP in bottom-right ──
+    # Falls back gracefully: if no Mapbox token, renders the classic dark-background player
+    if mapbox_token:
+        html_out = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<title>Barry Jenkins — Personal Message</title>
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{overflow:hidden;background:#0c1228;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}}
+#map{{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:0}}
+/* Video PiP — bottom-right corner overlay */
+#pip{{
+  position:fixed;bottom:24px;right:24px;
+  width:340px;max-width:calc(100vw - 32px);
+  border-radius:14px;overflow:hidden;
+  box-shadow:0 8px 40px rgba(0,0,0,0.65),0 2px 8px rgba(0,0,0,0.4);
+  z-index:100;background:#000;
+  transition:width 0.25s ease,bottom 0.25s ease,right 0.25s ease;
+}}
+#pip video{{display:block;width:100%;max-height:70vh}}
+/* Expand toggle button */
+#expand-btn{{
+  position:absolute;top:8px;left:8px;
+  background:rgba(0,0,0,0.55);color:#fff;border:none;
+  border-radius:6px;padding:4px 8px;font-size:11px;
+  cursor:pointer;z-index:101;backdrop-filter:blur(4px);
+}}
+/* Brand bar — bottom left, subtle */
+#brand{{
+  position:fixed;bottom:16px;left:16px;
+  color:rgba(255,255,255,0.6);font-size:11px;letter-spacing:0.02em;
+  z-index:50;text-shadow:0 1px 3px rgba(0,0,0,0.8);
+  pointer-events:none;
+}}
+/* Mobile: full-width video at bottom */
+@media(max-width:480px){{
+  #pip{{width:calc(100vw - 24px);right:12px;bottom:12px;border-radius:10px}}
+}}
+/* Expanded state */
+#pip.expanded{{
+  width:min(640px,calc(100vw - 48px));
+  bottom:50%;right:50%;
+  transform:translate(50%,50%);
+  border-radius:16px;
+}}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="pip">
+  <button id="expand-btn" onclick="toggleExpand()">&#x26F6; expand</button>
+  <video id="v" src="{safe_url}" {poster_attr} controls playsinline preload="auto">
+    <a href="{safe_url}" style="color:#fff;padding:16px;display:block">Download video</a>
+  </video>
+</div>
+
+<div id="brand">Legacy Home Team &nbsp;&middot;&nbsp; Barry Jenkins, Realtor &nbsp;&middot;&nbsp; LPT Realty</div>
+
+<script>
+// ── Mapbox map ────────────────────────────────────────────────────────────────
+mapboxgl.accessToken = '{_html.escape(mapbox_token)}';
+var map = new mapboxgl.Map({{
+  container: 'map',
+  style: 'mapbox://styles/mapbox/navigation-day-v1',
+  center: [{map_lon:.6f}, {map_lat:.6f}],
+  zoom: {map_zoom:.1f},
+  interactive: true,
+  attributionControl: false,
+}});
+map.addControl(new mapboxgl.NavigationControl({{showCompass:false}}), 'top-left');
+
+// ── Video autoplay ────────────────────────────────────────────────────────────
+var v = document.getElementById('v');
+if (!('ontouchstart' in window)) {{
+  v.addEventListener('click', function(){{ v.paused ? v.play() : v.pause(); }});
+  v.play().catch(function(){{}});
+}}
+
+// ── Expand / collapse PiP ─────────────────────────────────────────────────────
+var pip = document.getElementById('pip');
+var btn = document.getElementById('expand-btn');
+var expanded = false;
+function toggleExpand() {{
+  expanded = !expanded;
+  pip.classList.toggle('expanded', expanded);
+  btn.innerHTML = expanded ? '&#x2715; collapse' : '&#x26F6; expand';
+}}
+</script>
+</body>
+</html>"""
+    else:
+        # Fallback: classic dark-background player (no Mapbox token)
+        html_out = (
+            "<!DOCTYPE html>"
+            "<html lang='en'><head>"
+            "<meta charset='UTF-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1.0'>"
+            "<title>Barry Jenkins — Personal Message</title>"
+            "<style>"
+            "*{margin:0;padding:0;box-sizing:border-box}"
+            "body{background:#0c1228;display:flex;flex-direction:column;"
+            "align-items:center;justify-content:center;min-height:100vh;"
+            "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}"
+            ".wrap{width:100%;max-width:900px;padding:16px}"
+            "video{width:100%;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,0.6);cursor:pointer}"
+            ".brand{margin-top:14px;text-align:center;"
+            "color:rgba(255,255,255,0.35);font-size:13px;letter-spacing:0.03em}"
+            "</style></head><body>"
+            "<div class='wrap'>"
+            f"<video id='v' src='{safe_url}' {poster_attr} controls playsinline preload='auto'>"
+            f"<a href='{safe_url}' style='color:#fff'>Download the video</a>"
+            "</video>"
+            "<p class='brand'>Legacy Home Team &nbsp;&middot;&nbsp; Barry Jenkins, Realtor"
+            " &nbsp;&middot;&nbsp; LPT Realty</p>"
+            "</div>"
+            "<script>"
+            "var v=document.getElementById('v');"
+            "if(!('ontouchstart' in window)){"
+            "v.addEventListener('click',function(){v.paused?v.play():v.pause();});"
+            "v.play().catch(function(){});"
+            "}"
+            "</script>"
+            "</body></html>"
+        )
+
     from flask import Response as _R
     return _R(html_out, status=200, mimetype="text/html")
 

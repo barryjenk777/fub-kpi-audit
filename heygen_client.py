@@ -1030,7 +1030,7 @@ def _watch_url(video_url: str) -> str:
     return f"{base}/watch?url={_quote(video_url, safe='')}"
 
 
-def make_video_landing_url(video_url: str, video_id: str = "") -> str:
+def make_video_landing_url(video_url: str, video_id: str = "", bg_url: str = "") -> str:
     """
     Build a clean /v/<id> landing URL that hides heygen.com from the email.
 
@@ -1044,16 +1044,31 @@ def make_video_landing_url(video_url: str, video_id: str = "") -> str:
 
     Fallback (no video_id): base64-encodes the raw URL.
         → "https://web-production-3363cc.up.railway.app/v/aHR0cHM6Ly..."  (250+ chars)
+
+    When bg_url (Mapbox static URL) is provided, lat/lon/zoom are extracted and
+    appended as ?c=lat,lon,zoom so the landing page map centers on the lead's area.
     """
     import re
     base = RAILWAY_BASE_URL.rstrip("/")
     # Use video_id if it looks like a HeyGen UUID (32 lowercase hex chars)
     if video_id and re.match(r'^[0-9a-f]{32}$', video_id.lower()):
-        return f"{base}/v/{video_id.lower()}"
-    # Fall back to base64-encoded URL
-    import base64 as _b64
-    token = _b64.urlsafe_b64encode(video_url.encode()).decode().rstrip("=")
-    return f"{base}/v/{token}"
+        url = f"{base}/v/{video_id.lower()}"
+    else:
+        # Fall back to base64-encoded URL
+        import base64 as _b64
+        token = _b64.urlsafe_b64encode(video_url.encode()).decode().rstrip("=")
+        url = f"{base}/v/{token}"
+    # Append map center from Mapbox bg_url → ?c=lat,lon,zoom
+    # Mapbox static format: .../static/{lon},{lat},{zoom},0,0/...
+    if bg_url:
+        try:
+            m = re.search(r'/static/(-?[\d.]+),(-?[\d.]+),([\d.]+),', bg_url)
+            if m:
+                lon, lat, zoom = m.group(1), m.group(2), m.group(3)
+                url += f"?c={lat},{lon},{zoom}"
+        except Exception:
+            pass
+    return url
 
 
 def make_video_plain_text(video_url: str, first_name: str = "", video_id: str = "") -> str:
@@ -1096,7 +1111,8 @@ def make_video_email_html(setup_text: str, video_url: str,
                            first_name: str = "",
                            caption: str = "",
                            duration: float = 0,
-                           video_id: str = "") -> str:
+                           video_id: str = "",
+                           map_url: str = "") -> str:
     """
     Build a cutting-edge video email body — personal feel, engineered to click.
 
@@ -1110,6 +1126,8 @@ def make_video_email_html(setup_text: str, video_url: str,
     - Duration badge on the thumbnail (bottom-right) lowers commitment friction
     - No logo, no newsletter template, no branded footer chrome
     - Unsubscribe injected by send_email() via __UNSUB_URL__ placeholder
+    - When map_url is provided (Mapbox static image), it renders as a hero banner
+      at the top of the email showing the lead's area — strong personalization signal
 
     Args:
         setup_text:   Opening paragraph — already personalized to lead
@@ -1123,10 +1141,13 @@ def make_video_email_html(setup_text: str, video_url: str,
                       e.g. "I looked into 412 Harbour View before I hit record."
         duration:     Video duration in seconds — composited as badge on thumbnail
                       and shown in the caption line for commitment-lowering effect.
+        map_url:      Mapbox static image URL for the map hero banner.
+                      When provided, shown as a full-width map image at the top
+                      of the email (links to the video landing page).
     """
     import html as _h
 
-    landing    = make_video_landing_url(video_url, video_id=video_id)
+    landing    = make_video_landing_url(video_url, video_id=video_id, bg_url=map_url)
     proxy_thumb = make_thumb_proxy_url(thumbnail_url, duration_seconds=duration)
     safe_landing = _h.escape(landing)
     safe_thumb   = _h.escape(proxy_thumb)
@@ -1153,6 +1174,30 @@ def make_video_email_html(setup_text: str, video_url: str,
     if dur_str and dur_str not in safe_caption:
         safe_caption = f"{safe_caption} &nbsp;·&nbsp; {dur_str}"
 
+    # Map hero banner block — shown at top of email when map_url is provided
+    # Table-based so it renders in Outlook; links to video so every click converts
+    map_hero_block = ""
+    if map_url:
+        safe_map_url = _h.escape(map_url)
+        map_hero_block = f"""
+  <!-- Map hero — Mapbox static image, links to video landing page -->
+  <!-- Shows the lead's neighborhood/area — strong personalization signal -->
+  <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 22px">
+    <tr>
+      <td>
+        <a href="{safe_landing}" target="_blank" style="display:block;text-decoration:none;position:relative">
+          <img src="{safe_map_url}"
+               alt="Your area — Hampton Roads"
+               width="560"
+               border="0"
+               style="display:block;width:100%;max-width:560px;border-radius:10px;border:0;
+                      max-height:220px;object-fit:cover">
+        </a>
+      </td>
+    </tr>
+  </table>
+"""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1161,7 +1206,7 @@ def make_video_email_html(setup_text: str, video_url: str,
 </head>
 <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
 <div style="max-width:560px;padding:28px 20px">
-
+{map_hero_block}
   <p style="margin:0 0 20px;font-size:15px;line-height:1.8;color:#222">{safe_setup}</p>
 
   <!-- Video thumbnail — table-based for Outlook compatibility -->

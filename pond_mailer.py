@@ -3512,7 +3512,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             f"{_cta_sent}\n\n"
                             + SIGN_OFF
                         )
-                        # Slim HTML — thumbnail with play button baked in, curiosity-gap caption
+                        # Slim HTML — map hero banner + thumbnail with play button baked in
                         video_body_html = make_video_email_html(
                             setup_text=_setup_sent,
                             video_url=video_result["video_url"],
@@ -3522,6 +3522,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             caption=f"I looked into {_street_display} before I hit record. Here's what stood out.",
                             duration=video_result.get("duration", 0),
                             video_id=video_result.get("video_id", ""),
+                            map_url=bg_url or "",
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3622,6 +3623,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             caption=f"cash offer vs. listing — I ran both numbers for {_street_display}.",
                             duration=video_result.get("duration", 0),
                             video_id=video_result.get("video_id", ""),
+                            map_url=bg_url or "",
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3783,6 +3785,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             caption=_buyer_caption,
                             duration=video_result.get("duration", 0),
                             video_id=video_result.get("video_id", ""),
+                            map_url=bg_url or "",
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3883,6 +3886,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             caption="one more thing I didn't say in my last video.",
                             duration=video_result.get("duration", 0),
                             video_id=video_result.get("video_id", ""),
+                            map_url=bg_url or "",
                         )
                         email_data["body_text"] = video_body_text
                         email_data["body_html"] = video_body_html
@@ -3998,6 +4002,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             caption="had a thought on this I wanted to say out loud.",
                             duration=video_result.get("duration", 0),
                             video_id=video_result.get("video_id", ""),
+                            map_url=bg_url or "",
                         )
                         email_data["body_text"] = video_body_text4
                         email_data["body_html"] = video_body_html4
