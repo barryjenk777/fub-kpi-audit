@@ -6973,17 +6973,18 @@ def api_pond_mailer_reply_stats():
 @app.route("/api/test-mapbox", methods=["GET", "POST"])
 def api_test_mapbox():
     """
-    Quick test: geocode an address → build Mapbox satellite URL → optionally submit
-    a HeyGen test video.  Returns the map URL so Barry can preview it immediately.
+    Quick test: geocode an address → build Mapbox map URL → optionally submit
+    a HeyGen test video (non-blocking — returns video_id immediately).
 
     GET/POST params:
         address  — street address (default: "5308 Summer Crescent")
         city     — city (default: "Virginia Beach")
-        video    — "true" to also submit a HeyGen test video (takes ~2 min to render)
+        video    — "true" to also submit a HeyGen test video
     """
+    import threading
     from flask import request
     try:
-        from heygen_client import get_background_url, generate_and_wait
+        from heygen_client import get_background_url, submit_video
         address = request.values.get("address", "5308 Summer Crescent")
         city    = request.values.get("city", "Virginia Beach")
         do_vid  = request.values.get("video", "false").lower() == "true"
@@ -6995,31 +6996,60 @@ def api_test_mapbox():
         result = {
             "map_url":  bg_url,
             "address":  f"{address}, {city}, VA",
-            "preview":  f"Open this URL to preview the map: {bg_url}",
+            "map_style": "navigation-day-v1 (GPS road-map style)",
+            "preview":  f"Open this URL in your browser to preview the map image: {bg_url}",
         }
 
         if do_vid:
             script = (
                 f"Hi, I'm Barry Jenkins with Legacy Home Team. "
-                f"I wanted to personally reach out about the market in {city}. "
-                f"Values are shifting fast — let me know if you'd like a quick update on your area."
+                f"I wanted to personally reach out about the real estate market near {address} in {city}. "
+                f"The market is moving fast right now — if you'd like a quick update on your area, "
+                f"just reply and I'll get you the numbers."
             )
-            video = generate_and_wait(
+            # Submit async — HeyGen takes 1-3 minutes to render; return ID immediately
+            video_id = submit_video(
                 script=script,
                 background_url=bg_url,
                 avatar_style="circle",
-                timeout_seconds=180,
+                title=f"Map Test — {address}",
             )
-            if video:
-                result["video_id"]     = video.get("video_id")
-                result["video_status"] = video.get("status")
-                result["video_url"]    = video.get("video_url")
+            if video_id:
+                result["video_id"]     = video_id
+                result["video_status"] = "processing"
+                result["check_status"] = f"curl https://web-production-3363cc.up.railway.app/api/test-heygen-status/{video_id}"
             else:
-                result["video_error"] = "HeyGen video generation timed out or failed"
+                result["video_error"] = "HeyGen video submission failed — check HEYGEN_API_KEY"
 
         return jsonify(result)
     except Exception as e:
         logger.exception("api_test_mapbox failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/test-heygen-status/<video_id>")
+def api_test_heygen_status(video_id: str):
+    """Poll HeyGen video status by ID."""
+    try:
+        import requests as _req
+        import os
+        api_key = os.environ.get("HEYGEN_API_KEY", "")
+        r = _req.get(
+            "https://api.heygen.com/v1/video_status.get",
+            params={"video_id": video_id},
+            headers={"X-Api-Key": api_key},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", {})
+        return jsonify({
+            "video_id":  video_id,
+            "status":    data.get("status"),
+            "video_url": data.get("video_url"),
+            "thumbnail": data.get("thumbnail_url"),
+            "error":     data.get("error"),
+        })
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 

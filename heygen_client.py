@@ -168,13 +168,14 @@ def generate_buyer_background_image(city: str, price_band: str = "",
 
 
 # ── Mapbox background configuration ──────────────────────────────────────────
-# Satellite-streets shows aerial imagery + road labels — instantly recognizable
-# as "their neighborhood" to the lead. Pure satellite (satellite-v9) is an
-# alternative if you want no labels.
-MAPBOX_STYLE         = "mapbox/satellite-streets-v12"
-MAPBOX_ZOOM_ADDRESS  = 15   # house-level: individual homes + yards visible
-MAPBOX_ZOOM_STREET   = 14   # street-level: block context visible
-MAPBOX_ZOOM_CITY     = 12   # district-level: search area visible
+# navigation-day-v1: clean road map with blue water — looks exactly like a GPS
+# map, instantly recognizable. streets-v12 is a good alternative.
+# Pure satellite (satellite-v9) and satellite-streets-v12 were tested but
+# Barry preferred an "obvious map" style over aerial imagery.
+MAPBOX_STYLE         = "mapbox/navigation-day-v1"
+MAPBOX_ZOOM_ADDRESS  = 14   # street-level: shows road grid clearly as a map
+MAPBOX_ZOOM_STREET   = 13   # neighborhood: shows surrounding streets
+MAPBOX_ZOOM_CITY     = 11   # district-level: search area visible
 
 # Circle avatar: lower-right placement, compact size
 # HeyGen offset range: -0.5 (far left/top) → 0.5 (far right/bottom), 0 = center
