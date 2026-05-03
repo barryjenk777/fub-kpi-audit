@@ -6444,16 +6444,120 @@ Rules:
         return False
 
 
-def _schedule_sms_handoff(person_id, to_phone, delay_seconds=270):
+def _generate_handoff_sms(lead_first, reply_text, agent_first, agent_phone):
     """
-    Fire a branded handoff SMS to the lead ~4.5 minutes after a positive reply.
+    Use Claude Haiku to write a personalized, warm handoff SMS.
 
-    We wait so FUB automation has time to apply the SMS_Conversion tag and
-    assign the lead to an agent via the priority-group rule. Then we fetch the
-    newly assigned agent's name and direct number from FUB and send a personal
-    handoff message.
+    This is the final impression Barry's AI makes before the human agent takes
+    over — it needs to feel genuine, create confidence, and make the lead
+    genuinely excited to hear from the agent. Not a boilerplate transfer message.
 
-    Runs in a daemon thread — Flask response returns immediately while we wait.
+    Falls back to a strong hand-crafted template if Claude is unavailable.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+    # ── Strong fallback templates (used when Claude unavailable) ────────────
+    # Written so they don't sound like automation. Multiple variants so repeat
+    # leads don't see the same text.
+    import random
+    if agent_first and agent_phone:
+        fallbacks = [
+            (f"{lead_first}, really glad you reached out. I'm handing you to {agent_first} — "
+             f"they're one of the best on our team and already have your full context. "
+             f"Expect a call from {agent_phone} very soon."),
+            (f"{lead_first}, love the response. Connecting you with {agent_first} now — "
+             f"they specialize in exactly this and will reach out from {agent_phone} "
+             f"shortly. You're in good hands."),
+            (f"{lead_first}, this is exactly why I do this. Sending {agent_first} your "
+             f"way — they'll call from {agent_phone} and already know your situation. "
+             f"This conversation is going to be worth it."),
+        ]
+    elif agent_first:
+        fallbacks = [
+            (f"{lead_first}, really glad you replied. Handing you to {agent_first} — "
+             f"they're one of the best we have and already know your situation. "
+             f"Expect their direct call shortly."),
+            (f"{lead_first}, connecting you with {agent_first} now. They have full context "
+             f"on what you're looking for and will reach out from their direct line. "
+             f"This is the conversation worth having."),
+        ]
+    else:
+        fallbacks = [
+            (f"{lead_first}, glad you replied. One of our top agents is being connected "
+             f"to your file right now — they'll reach out from their direct line shortly "
+             f"with full context on your situation."),
+        ]
+
+    if not api_key:
+        return random.choice(fallbacks)
+
+    # ── Claude Haiku — personalized, reads the actual reply ─────────────────
+    phone_line = f"Agent's direct number: {agent_phone}" if agent_phone else "Agent's direct number: not yet assigned"
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic(api_key=api_key)
+
+        prompt = f"""You are Barry Jenkins' AI assistant at Legacy Home Team — Virginia's #1 real estate team (850+ homes/year, Hampton Roads VA).
+
+A lead just replied positively to one of Barry's AI outreach texts. You're sending a final handoff SMS before a human agent takes over the conversation.
+
+CONTEXT:
+Lead's first name: {lead_first}
+What the lead just said: "{reply_text[:300]}"
+Assigned agent's first name: {agent_first or "our agent"}
+{phone_line}
+
+WRITE a 35-45 word handoff SMS that:
+1. Opens with the lead's first name + a single warm sentence that acknowledges their reply authentically (NOT generic — it should feel like you actually read what they said)
+2. Introduces the agent by first name as the specific expert being sent their way — make them sound worth talking to
+3. If you have the agent's phone: mention it naturally as "they'll reach out from [number]"
+4. Closes with one line that creates genuine anticipation — something that makes them want to pick up when the agent calls
+
+RULES:
+— 35-45 words. No more.
+— NO "just", "reaching out", "checking in", "feel free", "happy to help", "don't hesitate"
+— NO corporate-speak. This should read like Barry typed it himself.
+— Start with the lead's first name followed by a comma
+— No sign-off (automatically added). No links.
+— The agent should sound like the best person in the world for their specific situation, not a random handoff
+
+Output ONLY the SMS text. Nothing else."""
+
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=130,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text.strip()
+        # Strip any accidental sign-off
+        for stop in ("Barry Jenkins", "— Barry", "Legacy Home Team"):
+            idx = text.find(stop)
+            if idx > 0:
+                text = text[:idx].strip()
+        if len(text) > 20:
+            return text
+        # Claude returned something too short — use fallback
+        logger.warning("Handoff SMS generation returned suspiciously short text: %r", text)
+        return random.choice(fallbacks)
+
+    except Exception as _ce:
+        logger.warning("Claude handoff SMS generation failed: %s — using fallback", _ce)
+        return random.choice(fallbacks)
+
+
+def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name="",
+                          delay_seconds=270):
+    """
+    Fire a personalized handoff SMS to the lead ~4.5 minutes after a positive reply.
+
+    Waits for FUB automation to apply SMS_Conversion and assign the lead to an
+    agent via the priority-group rule. Then:
+      1. Fetches the assigned agent's name + direct phone from FUB
+      2. Uses Claude Haiku to write a warm, specific handoff message that
+         references what the lead said and positions the agent compellingly
+      3. Sends it via Twilio
+
+    Runs in a daemon thread — Flask response returns immediately.
     """
     import threading
 
@@ -6464,10 +6568,10 @@ def _schedule_sms_handoff(person_id, to_phone, delay_seconds=270):
             fub = FUBClient()
 
             # Fetch updated lead to see who FUB automation assigned
-            person  = fub.get_person(person_id)
-            uid     = (person.get("assignedUserId") or
-                       person.get("ownerId") or
-                       (person.get("assignedTo") or {}).get("id"))
+            person = fub.get_person(person_id)
+            uid    = (person.get("assignedUserId") or
+                      person.get("ownerId") or
+                      (person.get("assignedTo") or {}).get("id"))
 
             agent_first = None
             agent_phone = None
@@ -6481,27 +6585,20 @@ def _schedule_sms_handoff(person_id, to_phone, delay_seconds=270):
                                    agent.get("phone") or
                                    agent.get("phoneNumber") or None)
 
-            # Build handoff message — personal, warm, sets clear expectation
-            if agent_first and agent_phone:
-                body = (
-                    f"Passing you to {agent_first} now — they'll reach out from "
-                    f"{agent_phone} with a few follow-up questions. They know your situation."
-                )
-            elif agent_first:
-                body = (
-                    f"Handing you off to {agent_first} on my team — they'll reach out "
-                    f"from their direct line shortly with some follow-up questions."
-                )
-            else:
-                body = (
-                    "One of my agents will reach out from their direct number shortly "
-                    "with some follow-up questions. They'll have your full context."
-                )
+            lead_first = lead_first_name or "there"
+
+            # Generate the handoff message via Claude (with strong fallback)
+            body = _generate_handoff_sms(
+                lead_first=lead_first,
+                reply_text=reply_text,
+                agent_first=agent_first,
+                agent_phone=agent_phone,
+            )
 
             result = send_sms(to_phone, body, dry_run=False)
             if result.get("success"):
-                logger.info("Handoff SMS sent to %s (person %s, agent: %s)",
-                            to_phone, person_id, agent_first or "unassigned")
+                logger.info("Handoff SMS sent to %s (person %s, agent: %s, %d chars)",
+                            to_phone, person_id, agent_first or "unassigned", len(body))
             else:
                 logger.warning("Handoff SMS failed for person %s: %s",
                                person_id, result.get("error"))
@@ -6512,7 +6609,8 @@ def _schedule_sms_handoff(person_id, to_phone, delay_seconds=270):
     t = threading.Timer(delay_seconds, _send)
     t.daemon = True
     t.start()
-    logger.info("Handoff SMS scheduled in %ds for person %s → %s", delay_seconds, person_id, to_phone)
+    logger.info("Handoff SMS scheduled in %ds for person %s → %s",
+                delay_seconds, person_id, to_phone)
 
 
 # CTIA-standard opt-out keywords — Twilio handles these at the carrier level,
@@ -6645,16 +6743,27 @@ def webhook_twilio_sms():
 
             if sentiment == "positive":
                 # Same protocol as email nurture:
-                #   SMS_Conversion tag → FUB automation assigns lead to priority group
+                #   SMS_Conversion → FUB automation assigns lead to priority group
+                #   Claude_Text_Converted → visible conversion signal in FUB for Barry
                 fub.add_tag(person_id, "SMS_Conversion")
                 logger.info("SMS_Conversion tag applied to lead %s (%s)", person_id, person_name)
+                fub.add_tag(person_id, "Claude_Text_Converted")
+                logger.info("Claude_Text_Converted tag applied to lead %s (%s)", person_id, person_name)
                 routed = True
                 fub_note_ok = _pond_add_sms_reply_fub_note(
                     fub, person_id, person_name, body_text, sentiment_reason
                 )
                 # Schedule handoff text — wait 4.5 min for FUB automation to assign agent,
-                # then send lead a personal message introducing their agent by name + number
-                _schedule_sms_handoff(person_id, from_phone, delay_seconds=270)
+                # then send a Claude-generated message introducing their agent by name + number.
+                # Pass the lead's actual reply so Claude can write something specific to them.
+                _lead_first = (person_name or "").split()[0] if person_name else ""
+                _schedule_sms_handoff(
+                    person_id,
+                    from_phone,
+                    reply_text=body_text,
+                    lead_first_name=_lead_first,
+                    delay_seconds=270,
+                )
 
             elif sentiment == "negative":
                 fub.add_tag(person_id, "SMS_OptOut")
@@ -6701,7 +6810,8 @@ def webhook_twilio_sms():
                 ]
                 if routed:
                     _lines.append("✅ SMS_Conversion tag applied — FUB automation is assigning now")
-                    _lines.append("✅ Handoff text queued — agent intro sends in ~4.5 min")
+                    _lines.append("✅ Claude_Text_Converted tag applied — filter this in FUB")
+                    _lines.append("✅ Handoff text queued — personalized agent intro sends in ~4.5 min")
                     _lines.append(f"✅ CRM note added: {'yes' if fub_note_ok else 'check logs'}")
                 elif sentiment == "negative":
                     _lines.append("🚫 SMS_OptOut tag applied — lead suppressed from future texts")
