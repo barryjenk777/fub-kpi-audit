@@ -364,20 +364,21 @@ YLOPO_PROSPECTING_SOURCES = [
 ]
 
 # Sources that block automated SMS regardless of tags.
-# Rule: text ALL Ylopo leads EXCEPT these two seller-specific sources.
-#   • Ylopo Prospecting — rAIya homeowner leads; Barry follows up personally
-#   • Ylopo Seller      — dedicated seller campaign leads; not buyer-focused
 #
-# Everything else (Ylopo, Ylopo PPC+, Ylopo GBP Ads, Qazzoo, etc.) gets SMS —
-# even if the lead also has seller tags (SELLER, Y_SELLER_*, USE_HOME_EQUITY=YES).
-# Those are sell-to-buy buyers who still need to find their next home.
+# BLOCKED:
+#   • Ylopo Prospecting — rAIya homeowner leads; Barry follows up these personally;
+#                         their opt-in process is less explicit, higher TCPA risk
 #
-# ⚠️  Verify the exact FUB source string for seller leads in your FUB settings
-#     (Admin → Lead Sources). "Ylopo Seller" is the expected value — update here
-#     if your FUB uses a different string (e.g. "YlopoSeller", "Ylopo SE").
+# TEXTED (all other sources, including):
+#   • Ylopo / Ylopo PPC+ / Ylopo GBP Ads — buyer leads (bottom of funnel, live transfers)
+#   • Ylopo Seller      — dedicated Ylopo seller campaign leads; SMS is the right move
+#   • Zbuyer            — urgent sellers asking for a cash offer; often distressed;
+#                         CRITICAL to reach fast — text them
+#   • Qazzoo            — buyer leads
+#   • Any Ylopo buyer with seller tags (SELLER, Y_SELLER_*, USE_HOME_EQUITY=YES) —
+#     these are sell-to-buy buyers who still need to find their next home; SMS right
 SMS_BLOCKED_SOURCES = {
-    "Ylopo Prospecting",
-    "Ylopo Seller",
+    "Ylopo Prospecting",  # Barry follows up personally — higher TCPA opt-in risk
 }
 
 # FUB stages that mean the agent has already resolved/deferred this lead.

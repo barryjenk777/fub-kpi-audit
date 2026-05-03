@@ -3405,6 +3405,29 @@ def has_received_pond_sms(person_id):
         return False
 
 
+def count_pond_sms_sent(person_id):
+    """Return total non-dry-run SMS ever sent to this lead.
+
+    Used to determine opt-out cadence:
+      count == 0  → first text ever (opt-out required on this send)
+      count % 5 == 4 → about to send the 5th, 10th, 15th... text (opt-out required)
+    """
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM pond_sms_log
+                    WHERE person_id = %s AND dry_run = FALSE
+                """, (person_id,))
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+    except Exception as e:
+        logger.warning("count_pond_sms_sent failed for %s: %s", person_id, e)
+        return 0
+
+
 def count_pond_sms_today(tz_name="America/New_York"):
     """Count live (non-dry-run) pond SMS sent today in the given timezone."""
     if not is_available():

@@ -856,15 +856,19 @@ def _is_sms_blocked_source(person):
 
     The rule is source-based, not tag-based:
 
-      BLOCKED (seller-specific workflows):
-        • "Ylopo Prospecting" — rAIya homeowner leads; Barry follows up personally
-        • "Ylopo Seller"      — dedicated seller campaign leads
+      BLOCKED:
+        • "Ylopo Prospecting" — rAIya homeowner leads; Barry follows up personally;
+                                opt-in process is less explicit, higher TCPA risk
 
       ALLOWED (text them):
-        • "Ylopo" / Ylopo buyer, Ylopo PPC+, Ylopo GBP Ads, Qazzoo, anything else
-        • Ylopo buyer leads that ALSO have seller tags (SELLER, Y_SELLER_*,
+        • "Ylopo" / "Ylopo PPC+" / "Ylopo GBP Ads" — buyer leads (bottom of funnel)
+        • "Ylopo Seller"  — dedicated seller campaign leads; SMS is appropriate
+        • "Zbuyer"        — urgent sellers requesting cash offers; often distressed;
+                            fast outreach is critical
+        • "Qazzoo"        — buyer leads
+        • Any Ylopo buyer also tagged as sell-to-buy (SELLER, Y_SELLER_*,
           USE_HOME_EQUITY=YES, I_NEED_TO_SELL_BEFORE_I_CAN_BUY) — these are
-          sell-to-buy buyers looking for their next home; SMS is exactly right
+          buyers who need to find their next home; SMS is exactly right
 
     Source list is in config.SMS_BLOCKED_SOURCES so it can be updated without
     touching this file if FUB source strings ever change.
@@ -1790,7 +1794,7 @@ FINAL QUALITY CHECK — run this before outputting:
 
 def generate_sms_body(person, behavior, strategy, leadstream_tier,
                       tags=None, is_seller=False, is_z=False,
-                      channel="sms_only", dry_run=False):
+                      channel="sms_only", needs_optout=False, dry_run=False):
     """
     Generate a standalone SMS body (25-40 words) via Claude.
 
@@ -1802,13 +1806,17 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
         "sms_only"  — this is the ONLY outreach (lead has no email address)
         "dual"      — SMS alongside an email on the same day (high-priority leads)
         "new_lead"  — immediate text to a brand new lead at peak interest
+
+    needs_optout: True on first SMS ever sent to a lead, and every 5th SMS after
+        that. Claude weaves casual TCPA opt-out language into the message end.
     """
     tags = tags or []
     first_name = person.get("firstName") or "there"
 
     if dry_run:
         tier_label = "Z-buyer" if is_z else ("Seller" if is_seller else "Buyer")
-        return f"[DRY RUN SMS — {tier_label} / {strategy} / {channel}]"
+        optout_tag = " + OPT-OUT" if needs_optout else ""
+        return f"[DRY RUN SMS — {tier_label} / {strategy} / {channel}{optout_tag}]"
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -2004,8 +2012,30 @@ Reference "my assistant" to tie back to the AI conversation they remember."""
             "Portsmouth, Hampton, Newport News."
         )
 
+    # ── TCPA opt-out section (first text ever, or every 5th) ─────────────────
+    word_limit = "25-50" if needs_optout else "25-40"
+    optout_section = ""
+    if needs_optout:
+        optout_section = """
+━━ OPT-OUT LANGUAGE (MANDATORY — TCPA compliance) ━━
+
+This message MUST include a casual opt-out at the END of the text.
+Barry's preferred style — pick one or write your own in the same spirit:
+  "...we can end this anytime, just say the word."
+  "...and you can stop me anytime — just say so."
+  "...or just tell me to stop if you'd rather I didn't reach out."
+  "...we can stop this whenever — just say stop."
+
+Rules for the opt-out:
+• It must be at the END of the message (after your CTA)
+• One short clause — not a new sentence on its own line
+• Keep it human, no-pressure — a genuine offer, not a disclaimer
+• Do NOT write "reply STOP" — too robotic. Barry's voice is casual.
+Word limit for this message: up to 50 words (normal messages max out at 40).
+"""
+
     # ── The prompt ────────────────────────────────────────────────────────────
-    prompt = f"""Write a 25-40 word text message from Barry Jenkins, Hampton Roads realtor.
+    prompt = f"""Write a {word_limit} word text message from Barry Jenkins, Hampton Roads realtor.
 
 WHO THIS PERSON IS:
 {lead_context}
@@ -2075,13 +2105,13 @@ BAD examples (these kill engagement):
 
 ━━ LEAD DATA ━━
 {brief}
-
+{optout_section}
 Output ONLY the raw SMS body text. No explanation. No subject line. No sign-off. Just the text."""
 
     ant_client = _ant.Anthropic(api_key=api_key)
     response = ant_client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=120,
+        max_tokens=160 if needs_optout else 120,  # extra headroom for opt-out clause
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -3147,15 +3177,20 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                 skipped_no_strategy += 1
                 continue
 
+            # TCPA opt-out: required on 1st text ever, then every 5th send
+            _sms_hist_count = _db.count_pond_sms_sent(pid)
+            _needs_optout   = (_sms_hist_count == 0) or (_sms_hist_count % 5 == 4)
+
             print(f"\n  [SMS-ONLY] {name} (ID: {pid}) · {to_phone}")
-            print(f"    Tier: {_tier2} | Strategy: {_strat2}")
+            print(f"    Tier: {_tier2} | Strategy: {_strat2}" +
+                  (" | FIRST TEXT — opt-out required" if _sms_hist_count == 0 else ""))
 
             try:
                 _sms_body = generate_sms_body(
                     person=person, behavior=_beh2, strategy=_strat2,
                     leadstream_tier=_tier2, tags=tags,
-                    is_seller=_is_ylopo_s2, is_z=_is_z2,
-                    channel="sms_only", dry_run=dry_run,
+                    is_seller=False, is_z=_is_z2,   # no sellers reach SMS-only path
+                    channel="sms_only", needs_optout=_needs_optout, dry_run=dry_run,
                 )
             except Exception as _eg:
                 logger.error("SMS-only generation failed for %s: %s", name, _eg)
@@ -3191,6 +3226,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                 print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} SMS ({len(_sms_body)+52} chars)")
                 sms_only_sent += 1
                 sent += 1
+            elif _sms_result.get("status") == "quiet_hours":
+                # TCPA block — outside 8am–9pm ET; not an error, just reschedule
+                logger.info("SMS-only quiet_hours block for %s — will retry next run in window", name)
+                print(f"    ⏸  SMS held — outside TCPA quiet hours (8am–9pm ET)")
             else:
                 logger.error("SMS-only send failed for %s: %s", name, _sms_result.get("error"))
             continue  # Done — don't fall through to email path
@@ -3947,12 +3986,15 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         if _sms_eligible and any(t in tags for t in _tc.DUAL_CHANNEL_TAGS):
             _dual_sms_days = _db.days_since_last_pond_sms(pid)
             if _dual_sms_days is None or _dual_sms_days >= EMAIL_COOLDOWN_DAYS:
+                # TCPA opt-out: required on 1st text ever, then every 5th send
+                _dual_sms_count  = _db.count_pond_sms_sent(pid)
+                _dual_needs_optout = (_dual_sms_count == 0) or (_dual_sms_count % 5 == 4)
                 try:
                     _dual_body = generate_sms_body(
                         person=person, behavior=behavior, strategy=strategy,
                         leadstream_tier=leadstream_tier, tags=tags,
                         is_seller=is_ylopo_seller, is_z=is_z,
-                        channel="dual", dry_run=dry_run,
+                        channel="dual", needs_optout=_dual_needs_optout, dry_run=dry_run,
                     )
                 except Exception as _dsms_err:
                     logger.warning("Dual SMS generation failed for %s: %s", name, _dsms_err)
@@ -3983,6 +4025,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                                 logger.warning("FUB dual SMS log skipped for %s: %s", name, _fub_dual_err)
                         print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} dual SMS ({len(_dual_body)+52} chars)")
                         dual_sms_sent += 1
+                    elif _dual_result.get("status") == "quiet_hours":
+                        logger.info("Dual SMS quiet_hours block for %s — outside 8am–9pm ET", name)
+                        print(f"    ⏸  Dual SMS held — outside TCPA quiet hours (8am–9pm ET)")
                     else:
                         logger.warning("Dual SMS failed for %s: %s", name, _dual_result.get("error"))
 

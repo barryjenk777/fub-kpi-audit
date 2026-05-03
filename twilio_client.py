@@ -200,6 +200,33 @@ def sms_suppressed_by_tags(tags: list) -> list:
     return [t for t in (tags or []) if t in SMS_SUPPRESSION_TAGS]
 
 
+# ── TCPA quiet hours ──────────────────────────────────────────────────────────
+
+def is_within_sms_quiet_hours(tz_name: str = "America/New_York") -> bool:
+    """
+    Return True if it's currently within TCPA-safe hours: 8:00am–9:00pm local.
+
+    TCPA prohibits automated marketing texts before 8am or after 9pm in the
+    recipient's local timezone. Hampton Roads leads are Eastern Time.
+
+    Returns False (blocked) if the timezone cannot be resolved — safe default.
+    """
+    from datetime import datetime
+    try:
+        try:
+            import zoneinfo  # Python 3.9+ stdlib
+            tz = zoneinfo.ZoneInfo(tz_name)
+        except (ImportError, ModuleNotFoundError):
+            import pytz  # fallback for older Python
+            tz = pytz.timezone(tz_name)
+        local_now = datetime.now(tz)
+        # 8:00am (hour=8) through 8:59pm (hour=20) inclusive — 9pm = hour 21 = blocked
+        return 8 <= local_now.hour < 21
+    except Exception as e:
+        logger.warning("is_within_sms_quiet_hours: timezone check failed (%s) — blocking send", e)
+        return False
+
+
 # ── Send ──────────────────────────────────────────────────────────────────────
 
 def send_sms(to_number: str, body: str, dry_run: bool = False) -> dict:
@@ -232,6 +259,12 @@ def send_sms(to_number: str, body: str, dry_run: bool = False) -> dict:
         logger.info("[DRY RUN] SMS to %s (%d chars): %s...",
                     to_e164, len(full_body), full_body[:100].replace("\n", " "))
         return {"success": True, "twilio_sid": None, "status": "dry_run"}
+
+    # TCPA quiet hours: no automated texts before 8am or after 9pm ET
+    if not is_within_sms_quiet_hours():
+        logger.warning("send_sms: blocked — outside TCPA quiet hours (8am–9pm ET) for %s", to_e164)
+        return {"success": False, "twilio_sid": None, "status": "quiet_hours",
+                "error": "Outside TCPA quiet hours (8am–9pm ET)"}
 
     if not is_available():
         logger.warning("send_sms: Twilio not configured — TWILIO_* env vars missing")
