@@ -5701,6 +5701,86 @@ def watch_video():
     return _R(html_out, status=200, mimetype="text/html")
 
 
+@app.route("/vp/<video_id>")
+def video_proxy(video_id: str):
+    """
+    iOS-compatible video proxy — streams the HeyGen MP4 through our server
+    with proper HTTP Range request support.
+
+    iOS Safari requires a 206 Partial Content response to its initial
+    Range: bytes=0-1 probe before it will play a video inline. HeyGen's
+    CloudFront signed URLs fail that probe (they return 200 with full content
+    instead of 206), so Safari refuses to play. Routing through this proxy
+    lets us respond correctly to all range requests.
+
+    Uses streaming chunked transfer so Railway doesn't need to buffer the
+    full file in memory — chunks flow from HeyGen CDN → Railway → browser.
+    """
+    import re
+    import requests as _req
+    from flask import request, Response as _R, stream_with_context
+
+    # Only accept 32-char hex video IDs — reject anything else
+    if not re.match(r'^[0-9a-f]{32}$', video_id.lower()):
+        return "Not found.", 404
+
+    # Fetch fresh signed URL from HeyGen
+    try:
+        _hg_key = os.environ.get("HEYGEN_API_KEY", "")
+        r = _req.get(
+            "https://api.heygen.com/v1/video_status.get",
+            headers={"X-Api-Key": _hg_key},
+            params={"video_id": video_id.lower()},
+            timeout=8,
+        )
+        _data = r.json().get("data", {})
+        if _data.get("status") != "completed":
+            return "Video not ready.", 404
+        cdn_url = _data.get("video_url", "")
+    except Exception as _e:
+        logger.warning("video_proxy HeyGen lookup failed: %s", _e)
+        return "Lookup failed.", 502
+
+    if not cdn_url or not cdn_url.startswith("https://"):
+        return "Not found.", 404
+
+    # Forward any Range header from the client (iOS sends Range: bytes=0-1 probe)
+    upstream_headers = {}
+    range_hdr = request.headers.get("Range")
+    if range_hdr:
+        upstream_headers["Range"] = range_hdr
+
+    try:
+        upstream = _req.get(
+            cdn_url,
+            headers=upstream_headers,
+            stream=True,
+            timeout=15,
+        )
+    except Exception as _e:
+        logger.warning("video_proxy upstream fetch failed: %s", _e)
+        return "Upstream error.", 502
+
+    # Build response headers Safari needs
+    resp_headers = {
+        "Content-Type":  upstream.headers.get("Content-Type", "video/mp4"),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+    }
+    if "Content-Length" in upstream.headers:
+        resp_headers["Content-Length"] = upstream.headers["Content-Length"]
+    if "Content-Range" in upstream.headers:
+        resp_headers["Content-Range"] = upstream.headers["Content-Range"]
+
+    status_code = upstream.status_code  # 206 for range responses, 200 otherwise
+
+    return _R(
+        stream_with_context(upstream.iter_content(chunk_size=65536)),
+        status=status_code,
+        headers=resp_headers,
+    )
+
+
 @app.route("/v/<token>")
 def video_landing(token):
     """
@@ -5709,6 +5789,7 @@ def video_landing(token):
     Two URL formats are supported:
       /v/<video_id>  — preferred: token is a 32-char HeyGen video UUID.
                        Route calls HeyGen API to get a fresh signed URL.
+                       Video is served via /vp/<video_id> proxy for iOS compat.
                        Produced by make_video_landing_url(url, video_id=id).
                        Example URL: /v/726f98a0956d434889663419f22c4060  (79 chars)
 
@@ -5717,15 +5798,15 @@ def video_landing(token):
                        Example URL: /v/aHR0cHM6Ly9maW...  (250+ chars)
 
     Performance notes:
-      - video_id path adds one HeyGen API call (~200ms) but gets a fresh URL
-      - preload='metadata' so the page renders instantly; video buffers only what's needed
+      - video_id path routes video through /vp/ proxy — iOS Safari range-request compat
+      - preload='auto' so iOS buffers aggressively (metadata alone stalls on Safari)
       - poster=thumbnail so the frame shows immediately while video initialises
     """
     import re, base64, html as _html
 
     video_url     = None
     thumbnail_url = None
-    duration      = 0
+    use_proxy     = False   # True when we have a video_id → can use /vp/ proxy
 
     # ── Path 1: HeyGen video_id (32 lowercase hex chars) ──────────────────
     if re.match(r'^[0-9a-f]{32}$', token.lower()):
@@ -5744,7 +5825,7 @@ def video_landing(token):
                     if _data.get("status") == "completed":
                         video_url     = _data.get("video_url", "")
                         thumbnail_url = _data.get("thumbnail_url", "")
-                        duration      = _data.get("duration", 0)
+                        use_proxy     = True   # serve via /vp/ for iOS compat
         except Exception as _e:
             logger.warning("video_landing HeyGen lookup failed: %s", _e)
 
@@ -5760,7 +5841,20 @@ def video_landing(token):
     if not video_url or not video_url.startswith("https://"):
         return "Not found.", 404
 
-    safe_url   = _html.escape(video_url)
+    # Route through proxy for iOS when we have a video_id
+    base_url = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+    if base_url:
+        base_url = f"https://{base_url}"
+    else:
+        from flask import request as _freq
+        base_url = _freq.host_url.rstrip("/")
+
+    if use_proxy:
+        playback_url = f"{base_url}/vp/{token.lower()}"
+    else:
+        playback_url = video_url   # legacy b64 path — no proxy available
+
+    safe_url    = _html.escape(playback_url)
     poster_attr = f"poster=\"{_html.escape(thumbnail_url)}\"" if thumbnail_url else ""
 
     html_out = (
@@ -5780,7 +5874,7 @@ def video_landing(token):
         "color:rgba(255,255,255,0.35);font-size:13px;letter-spacing:0.03em}"
         "</style></head><body>"
         "<div class='wrap'>"
-        f"<video id='v' src='{safe_url}' {poster_attr} controls autoplay playsinline preload='metadata'>"
+        f"<video id='v' src='{safe_url}' {poster_attr} controls playsinline preload='auto'>"
         f"<a href='{safe_url}' style='color:#fff'>Download the video</a>"
         "</video>"
         "<p class='brand'>Legacy Home Team &nbsp;&middot;&nbsp; Barry Jenkins, Realtor"
