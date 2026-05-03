@@ -1808,7 +1808,8 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
         "new_lead"  — immediate text to a brand new lead at peak interest
 
     needs_optout: True on first SMS ever sent to a lead, and every 5th SMS after
-        that. Claude weaves casual TCPA opt-out language into the message end.
+        that. Claude weaves casual TCPA opt-out language into the middle of the
+        message (between the hook and the CTA), not bolted onto the end.
     """
     tags = tags or []
     first_name = person.get("firstName") or "there"
@@ -2019,18 +2020,23 @@ Reference "my assistant" to tie back to the AI conversation they remember."""
         optout_section = """
 ━━ OPT-OUT LANGUAGE (MANDATORY — TCPA compliance) ━━
 
-This message MUST include a casual opt-out at the END of the text.
-Barry's preferred style — pick one or write your own in the same spirit:
-  "...we can end this anytime, just say the word."
-  "...and you can stop me anytime — just say so."
-  "...or just tell me to stop if you'd rather I didn't reach out."
-  "...we can stop this whenever — just say stop."
+This message MUST include a casual opt-out woven into the MIDDLE — between the
+curiosity gap and the CTA. Not bolted onto the end. It reads like a natural
+breath in the sentence before the ask.
 
-Rules for the opt-out:
-• It must be at the END of the message (after your CTA)
-• One short clause — not a new sentence on its own line
-• Keep it human, no-pressure — a genuine offer, not a disclaimer
-• Do NOT write "reply STOP" — too robotic. Barry's voice is casual.
+Barry's preferred style — the opt-out flows INTO the CTA:
+  "Sarah, inventory in your range just shifted — we can stop this convo whenever
+   you want, but is it worth a quick look at what changed?"
+  "Marcus, something on Kempsville worth knowing before you decide — you can tell
+   me to stop reaching out anytime, but want to hear it first?"
+  "Jordan, the numbers on your street moved this month — we can end this anytime,
+   but worth a 5-minute call to see where things landed?"
+
+Rules:
+• Opt-out goes IN THE MIDDLE — after the hook, before the yes/no question
+• One brief clause separated by a comma or dash — not a standalone sentence
+• Keep it human and no-pressure, never robotic
+• Do NOT write "reply STOP" — too corporate. Barry's voice is conversational.
 Word limit for this message: up to 50 words (normal messages max out at 40).
 """
 
