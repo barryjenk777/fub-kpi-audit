@@ -6726,6 +6726,149 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
 _SMS_HARD_STOP_WORDS = {"stop", "stopall", "unsubscribe", "cancel", "end", "quit"}
 
 
+@app.route("/webhook/sendblue", methods=["POST"])
+def webhook_sendblue():
+    """
+    Sendblue inbound iMessage webhook — receives blue-bubble replies from pond leads.
+
+    Sendblue POSTs JSON to this endpoint when a lead replies to an outbound
+    iMessage or when delivery status updates occur.
+
+    Flow mirrors the Twilio SMS webhook:
+      1. Parse JSON body — filter to inbound received messages only
+      2. Hard-gate STOP keywords (opt-out before Claude runs)
+      3. Match phone number to lead via pond_sms_log
+      4. Claude Haiku sentiment analysis
+      5. Positive  → SMS_Conversion + FUB note + handoff SMS (4.5 min)
+      6. Negative  → SMS_OptOut tag
+      7. Neutral   → FUB note only
+      8. Log to pond_sms_reply_log + notify Barry
+
+    Always returns 200 so Sendblue doesn't retry.
+    """
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        data = {}
+
+    # Sendblue sends status callbacks (QUEUED, DELIVERED, etc.) and inbound messages.
+    # We only care about inbound received messages.
+    status = (data.get("status") or "").upper()
+    if status not in ("RECEIVED", ""):
+        return jsonify({"ok": True, "skipped": "status_callback"}), 200
+
+    from_number = data.get("from_number") or data.get("number") or ""
+    body_text   = (data.get("content") or "").strip()
+    media_url   = data.get("media_url") or ""
+
+    if not from_number or not body_text:
+        return jsonify({"ok": True, "skipped": "no_content"}), 200
+
+    logger.info("Sendblue inbound from %s: %r", from_number, body_text[:80])
+
+    # ── Hard-gate STOP keywords ───────────────────────────────────────────────
+    word = body_text.strip().lower().split()[0] if body_text.strip() else ""
+    if word in _SMS_HARD_STOP_WORDS:
+        try:
+            from fub_client import FUBClient
+            from pond_mailer import _db as _pdb
+            fub = FUBClient()
+            pid, pname = _pdb.find_person_by_phone(from_number)
+            if pid:
+                fub.add_tag_fast(pid, "SMS_OptOut", [])
+                _pdb.log_pond_sms_reply(
+                    person_id=pid, person_name=pname or "", phone=from_number,
+                    reply_text=body_text, sentiment="negative",
+                    sentiment_score=1.0, sentiment_reason="STOP keyword",
+                    channel="sendblue",
+                )
+                logger.info("Sendblue STOP from %s (person %s) — SMS_OptOut applied", from_number, pid)
+        except Exception as _e:
+            logger.error("Sendblue STOP handling failed: %s", _e)
+        return jsonify({"ok": True, "opted_out": True}), 200
+
+    # ── Match phone to lead ───────────────────────────────────────────────────
+    try:
+        from pond_mailer import _db as _pdb
+        person_id, person_name = _pdb.find_person_by_phone(from_number)
+    except Exception as _e:
+        logger.error("Sendblue: phone lookup failed for %s: %s", from_number, _e)
+        person_id, person_name = None, None
+
+    if not person_id:
+        logger.warning("Sendblue: no lead matched for phone %s", from_number)
+        return jsonify({"ok": True, "skipped": "no_lead_match"}), 200
+
+    # ── Sentiment analysis ────────────────────────────────────────────────────
+    try:
+        sentiment, sentiment_score, sentiment_reason = _pond_analyze_sentiment(
+            body_text, person_name=person_name or ""
+        )
+    except Exception as _e:
+        logger.error("Sendblue sentiment failed for %s: %s", person_id, _e)
+        sentiment, sentiment_score, sentiment_reason = "neutral", 0.5, "analysis error"
+
+    logger.info("Sendblue sentiment: %s (%.2f) — %s", sentiment, sentiment_score, sentiment_reason)
+
+    # ── Route by sentiment ────────────────────────────────────────────────────
+    try:
+        from fub_client import FUBClient
+        fub = FUBClient()
+
+        if sentiment == "positive":
+            fub.add_tag_fast(person_id, "SMS_Conversion", [])
+            _pond_add_fub_note(fub, person_id, person_name, body_text,
+                               "iMessage Reply", sentiment_reason)
+            _schedule_sms_handoff(
+                person_id=person_id, to_phone=from_number,
+                reply_text=body_text, lead_first_name=(person_name or "").split()[0],
+            )
+
+        elif sentiment == "negative":
+            fub.add_tag_fast(person_id, "SMS_OptOut", [])
+            _pond_add_fub_note(fub, person_id, person_name, body_text,
+                               "iMessage Reply", sentiment_reason)
+
+        else:  # neutral
+            _pond_add_fub_note(fub, person_id, person_name, body_text,
+                               "iMessage Reply", sentiment_reason)
+
+    except Exception as _e:
+        logger.error("Sendblue FUB routing failed for %s: %s", person_id, _e)
+
+    # ── Log reply ─────────────────────────────────────────────────────────────
+    try:
+        from pond_mailer import _db as _pdb
+        _pdb.log_pond_sms_reply(
+            person_id=person_id, person_name=person_name or "",
+            phone=from_number, reply_text=body_text,
+            sentiment=sentiment, sentiment_score=sentiment_score,
+            sentiment_reason=sentiment_reason, channel="sendblue",
+        )
+    except Exception as _e:
+        logger.warning("Sendblue reply log failed: %s", _e)
+
+    # ── Notify Barry ──────────────────────────────────────────────────────────
+    try:
+        _emoji = {"positive": "🔥", "negative": "🚫", "neutral": "💬"}.get(sentiment, "📱")
+        _subj  = f"{_emoji} iMessage reply from {person_name or from_number} — {sentiment.upper()}"
+        _body  = "\n".join([
+            f"Lead: {person_name} ({from_number})",
+            f"Sentiment: {sentiment.upper()} — {sentiment_reason}",
+            f"Message: {body_text}",
+        ])
+        _notify_barry_of_reply(subject=_subj, body=_body, sentiment=sentiment)
+    except Exception as _e:
+        logger.warning("Sendblue Barry notification failed: %s", _e)
+
+    return jsonify({
+        "ok":         True,
+        "person_id":  person_id,
+        "sentiment":  sentiment,
+        "channel":    "sendblue",
+    }), 200
+
+
 @app.route("/webhook/twilio-sms", methods=["POST"])
 def webhook_twilio_sms():
     """

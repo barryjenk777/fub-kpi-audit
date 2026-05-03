@@ -3069,7 +3069,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
     max_to_process = limit or MAX_PER_RUN
 
     import twilio_client as _tc
-    _sms_ready = _tc.is_available()
+    import sendblue_client as _sb
+    _sms_ready      = _tc.is_available() or _sb.is_available()
+    _sendblue_ready = _sb.is_available()
 
     # Hard cap on how many leads we'll check per run — prevents runaway loops
     # on large ponds (each event fetch = 1 API call at 0.35s rate limit).
@@ -3090,6 +3092,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         last  = person.get("lastName") or ""
         name  = f"{first} {last}".strip() or f"ID:{pid}"
         tags  = person.get("tags") or []
+        video_result = None   # populated by HeyGen generation; used for Sendblue media_url
 
         # Score gate: is this lead in the top 50% by LeadStream score?
         _this_ls_score   = _lead_score_map.get(pid, 0)
@@ -3212,14 +3215,23 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 logger.warning("SMS-only body empty for %s — skipping", name)
                 continue
 
-            _sms_result = _tc.send_sms(to_phone, _sms_body, dry_run=dry_run)
+            # Prefer Sendblue (iMessage blue bubble) over Twilio green SMS
+            if _sendblue_ready:
+                _sms_result = _sb.send_imessage(to_phone, _sms_body, dry_run=dry_run)
+                _sms_channel = "sendblue"
+                _sms_sid     = _sms_result.get("message_handle")
+            else:
+                _sms_result  = _tc.send_sms(to_phone, _sms_body, dry_run=dry_run)
+                _sms_channel = "sms_only"
+                _sms_sid     = _sms_result.get("twilio_sid")
+
             if _sms_result.get("success"):
                 _db.log_pond_sms(pid, name, to_phone, _sms_body,
                                  strategy=_strat2, leadstream_tier=_tier2,
                                  dry_run=dry_run,
-                                 twilio_sid=_sms_result.get("twilio_sid"),
+                                 twilio_sid=_sms_sid,
                                  status=_sms_result.get("status", "queued"),
-                                 channel="sms_only")
+                                 channel=_sms_channel)
                 # Log to FUB timeline — 📱 note so agents see what text went out
                 if not dry_run:
                     try:
@@ -4026,14 +4038,35 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     _dual_body = None
 
                 if _dual_body:
-                    _dual_result = _tc.send_sms(to_phone, _dual_body, dry_run=dry_run)
+                    # Attach the HeyGen video if one was generated for this email.
+                    # /vp/<video_id> is our iOS-compatible proxy — plays inline in iMessage.
+                    _dual_media_url = None
+                    if _sendblue_ready and video_result and video_result.get("video_id"):
+                        _base = os.environ.get("BASE_URL",
+                                               "https://web-production-3363cc.up.railway.app")
+                        _dual_media_url = f"{_base}/vp/{video_result['video_id']}"
+
+                    # Prefer Sendblue (iMessage) over Twilio SMS
+                    if _sendblue_ready:
+                        _dual_result  = _sb.send_imessage(
+                            to_phone, _dual_body,
+                            media_url=_dual_media_url,
+                            dry_run=dry_run,
+                        )
+                        _dual_channel = "sendblue_dual"
+                        _dual_sid     = _dual_result.get("message_handle")
+                    else:
+                        _dual_result  = _tc.send_sms(to_phone, _dual_body, dry_run=dry_run)
+                        _dual_channel = "dual"
+                        _dual_sid     = _dual_result.get("twilio_sid")
+
                     if _dual_result.get("success"):
                         _db.log_pond_sms(pid, name, to_phone, _dual_body,
                                          strategy=strategy, leadstream_tier=leadstream_tier,
                                          dry_run=dry_run,
-                                         twilio_sid=_dual_result.get("twilio_sid"),
+                                         twilio_sid=_dual_sid,
                                          status=_dual_result.get("status", "queued"),
-                                         channel="dual")
+                                         channel=_dual_channel)
                         # Log to FUB timeline — 📱 note alongside the email note
                         if not dry_run:
                             try:
