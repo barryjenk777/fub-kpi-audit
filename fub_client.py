@@ -106,6 +106,65 @@ def _build_email_note(subject, sequence_num, lead_type, avatar_used=None,
     return note
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FUB note formatter — structured SMS accountability record for agents
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_sms_note(sms_body, lead_type, channel="sms_only"):
+    """Build a scannable FUB timeline note for an outbound automated SMS.
+
+    Mirrors _build_email_note() format — agents can read it in 10 seconds.
+    Shows the exact text that went out plus a clear agent action.
+    """
+    if lead_type == "zbuyer":
+        ltype_label = "Z-Buyer / Cash Offer"
+    elif lead_type in ("seller", "ylopo_seller", "ylopo_prospecting"):
+        ltype_label = "Seller (Ylopo Prospecting)"
+    else:
+        ltype_label = "Buyer (IDX)"
+
+    channel_label = (
+        "Dual-Channel (email + SMS same send)" if channel == "dual"
+        else "SMS-Only (no email on file)"
+    )
+
+    # Import sign-off lazily to avoid circular dependency
+    try:
+        from twilio_client import SMS_SIGN_OFF as _sign_off
+    except ImportError:
+        _sign_off = "— Barry Jenkins, Legacy Home Team · (757) 919-8874"
+
+    full_text = f"{sms_body}\n{_sign_off}"
+
+    if channel == "dual":
+        agent_action = (
+            "This lead also received an email today — 2× touch surface.\n"
+            "Do NOT reach out manually yet — let the sequence run."
+        )
+    else:
+        agent_action = (
+            "This lead has no email — SMS is the only automated touch.\n"
+            "When they reply, Twilio routes it back as a CRM note.\n"
+            "Do NOT reach out manually yet — let the sequence run."
+        )
+
+    note = (
+        f"📱 AUTOMATED SMS — {channel_label} · {ltype_label}\n"
+        f"{'─' * 52}\n"
+        f"Lead type  : {ltype_label}\n"
+        f"Channel    : {channel_label}\n"
+        f"\n"
+        f"TEXT SENT\n"
+        f"\"{full_text}\"\n"
+        f"\n"
+        f"AGENT ACTION\n"
+        f"{agent_action}\n"
+        f"{'─' * 52}\n"
+        f"Barry Jenkins AI Nurture · Legacy Home Team"
+    )
+    return note
+
+
 class FUBClient:
     BASE_URL = "https://api.followupboss.com/v1"
     RATE_LIMIT_DELAY = 0.35  # ~170 requests/min to stay under 200/min limit
@@ -802,6 +861,60 @@ class FUBClient:
                     return None
         except Exception as e:
             logger.warning("FUB email note log error for person %s: %s", person_id, e)
+            return None
+
+    def log_sms_sent(self, person_id, sms_body, lead_type, channel="sms_only",
+                     user_id=None):
+        """Log an outbound automated SMS to a person's FUB activity timeline.
+
+        Mirrors log_email_sent() — uses /v1/notes so the 📱 record appears in
+        the contact timeline alongside email notes. Agents see exactly what text
+        went out, whether it was SMS-only or dual-channel, and what to do next.
+
+        Non-fatal: logs a warning and returns None on failure.
+        """
+        note_body = _build_sms_note(
+            sms_body=sms_body,
+            lead_type=lead_type,
+            channel=channel,
+        )
+        try:
+            payload = {"personId": int(person_id), "body": note_body}
+            if user_id:
+                payload["userId"] = user_id
+            try:
+                result = self._request("POST", "notes", json_data=payload)
+                logger.info("FUB SMS note posted for person %s (%s)", person_id, channel)
+                print(f"    📱 FUB SMS note posted (person {person_id}, {channel})")
+                return result
+            except Exception as e_with_user:
+                # userId may be rejected if it references a system account.
+                # Retry without it — note will post as the API key owner.
+                if user_id:
+                    logger.warning(
+                        "FUB SMS note with userId=%s failed for person %s: %s "
+                        "— retrying without userId",
+                        user_id, person_id, e_with_user,
+                    )
+                    try:
+                        payload.pop("userId", None)
+                        result = self._request("POST", "notes", json_data=payload)
+                        logger.info("FUB SMS note posted (no userId) for person %s", person_id)
+                        print(f"    📱 FUB SMS note posted without userId (person {person_id})")
+                        return result
+                    except Exception as e_no_user:
+                        logger.warning(
+                            "FUB SMS note failed (both attempts) for person %s: %s",
+                            person_id, e_no_user,
+                        )
+                        print(f"    ⚠️  FUB SMS note FAILED for person {person_id}: {e_no_user}")
+                        return None
+                else:
+                    logger.warning("FUB SMS note failed for person %s: %s", person_id, e_with_user)
+                    print(f"    ⚠️  FUB SMS note FAILED for person {person_id}: {e_with_user}")
+                    return None
+        except Exception as e:
+            logger.warning("FUB SMS note log error for person %s: %s", person_id, e)
             return None
 
     def get_events(self, since=None, event_type=None, limit=100, max_pages=5):

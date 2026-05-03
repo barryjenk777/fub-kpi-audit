@@ -3458,6 +3458,98 @@ def ensure_pond_reply_log_table():
         logger.warning("ensure_pond_reply_log_table failed: %s", e)
 
 
+def get_pond_sms_person_by_phone(phone):
+    """Find the most recently texted pond lead matching this phone number.
+
+    Normalizes the inbound Twilio number to E.164 before matching so any
+    formatting variant resolves to the same row.
+
+    Returns (person_id, person_name) or (None, None).
+    """
+    if not is_available() or not phone:
+        return None, None
+    # Normalize to E.164 (+1XXXXXXXXXX)
+    import re as _re
+    digits = _re.sub(r"\D", "", str(phone))
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    if len(digits) != 10:
+        return None, None
+    e164 = f"+1{digits}"
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, person_name
+                    FROM pond_sms_log
+                    WHERE phone_number = %s
+                      AND dry_run = FALSE
+                    ORDER BY sent_at DESC
+                    LIMIT 1
+                """, (e164,))
+                row = cur.fetchone()
+        if row:
+            return row[0], row[1]
+        return None, None
+    except Exception as e:
+        logger.warning("get_pond_sms_person_by_phone failed: %s", e)
+        return None, None
+
+
+def ensure_pond_sms_reply_log_table():
+    """Create pond_sms_reply_log table if it doesn't exist."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pond_sms_reply_log (
+                        id                  SERIAL PRIMARY KEY,
+                        person_id           INTEGER,
+                        person_name         VARCHAR(255),
+                        phone_number        VARCHAR(20),
+                        reply_text          TEXT,
+                        sentiment           VARCHAR(20),
+                        sentiment_score     FLOAT,
+                        routed              BOOLEAN DEFAULT FALSE,
+                        twilio_message_sid  VARCHAR(64),
+                        received_at         TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_pond_sms_reply_person
+                    ON pond_sms_reply_log(person_id, received_at DESC)
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_pond_sms_reply_phone
+                    ON pond_sms_reply_log(phone_number)
+                """)
+    except Exception as e:
+        logger.warning("ensure_pond_sms_reply_log_table failed: %s", e)
+
+
+def log_pond_sms_reply(person_id, person_name, phone_number, reply_text,
+                       sentiment, sentiment_score, routed=False,
+                       twilio_message_sid=None):
+    """Record an inbound SMS reply from a pond lead."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO pond_sms_reply_log
+                        (person_id, person_name, phone_number, reply_text,
+                         sentiment, sentiment_score, routed, twilio_message_sid)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (person_id, person_name, phone_number, reply_text,
+                      sentiment, sentiment_score, routed, twilio_message_sid))
+    except Exception as e:
+        logger.warning("log_pond_sms_reply failed for person %s: %s", person_id, e)
+
+
 def get_pond_email_person_by_email(email_address):
     """Find the most recently emailed pond lead matching this email address.
     Returns (person_id, person_name, sequence_num) or (None, None, None).

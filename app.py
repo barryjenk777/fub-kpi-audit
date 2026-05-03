@@ -6372,6 +6372,248 @@ Rules:
         return False
 
 
+def _pond_add_sms_reply_fub_note(fub, person_id, person_name, reply_text, sentiment_reason):
+    """
+    Generate a CRM briefing note for an inbound SMS reply and post it to FUB.
+
+    Mirrors _pond_add_fub_note() but scoped to SMS context — tells the agent
+    which channel the reply came from, what the lead said, and the exact move.
+    Falls back to a plain template if Claude is unavailable.
+    Returns True if note was posted successfully, False otherwise.
+    """
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        note_body = None
+
+        if api_key:
+            try:
+                import anthropic
+                client = anthropic.Anthropic(api_key=api_key)
+
+                prompt = f"""Write an internal CRM note for a real estate agent who just got a hot SMS lead hand-off.
+
+Context:
+- Lead name: {person_name or "this lead"}
+- Barry Jenkins (Legacy Home Team, Hampton Roads VA) sent them an automated AI text via his nurture system
+- The lead replied via SMS. AI sentiment: {sentiment_reason}
+- Their reply: {reply_text.strip()[:800]}
+
+Structure the note in three short sections with these exact labels:
+WHAT HAPPENED: (1 sentence — they replied to an AI text, what the AI read from the reply)
+WHAT THEY SAID: (2-3 sentence summary of the lead's actual reply in plain language)
+YOUR MOVE: (One specific, actionable opening line for the agent's call or text back, then one question to advance toward consult, showing, or next step)
+
+Rules:
+- Write as Barry briefing the agent, direct and energetic
+- Under 150 words total
+- No fluff, no greetings, no sign-offs
+- Plain text only, no markdown"""
+
+                response = client.messages.create(
+                    model="claude-3-5-haiku-20241022",
+                    max_tokens=300,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                note_body = response.content[0].text.strip()
+            except Exception as e:
+                logger.warning("Claude SMS note generation failed: %s", e)
+
+        # Fallback if Claude unavailable or fails
+        if not note_body:
+            note_body = (
+                f"🔥 HOT LEAD — {person_name or 'This lead'} replied to Barry's AI text.\n\n"
+                f"WHAT HAPPENED:\n"
+                f"Barry's system sent them an automated SMS.\n"
+                f"The lead replied. AI sentiment: {sentiment_reason}\n\n"
+                f"WHAT THEY SAID:\n{reply_text.strip()[:600]}\n\n"
+                f"YOUR MOVE:\n"
+                f"Text or call them now — they responded to a text, so text first. "
+                f"Open with: \"Hey, I saw you replied to our text — I'm Barry's agent and "
+                f"wanted to reach out personally.\" Then ask what they're looking for and "
+                f"get them booked for a consult or showing."
+            )
+
+        fub._request("POST", "notes", json_data={
+            "personId": int(person_id),
+            "body":     note_body,
+        })
+        logger.info("FUB SMS reply note added for person %s", person_id)
+        return True
+    except Exception as e:
+        logger.warning("Could not add FUB note for SMS reply (person %s): %s", person_id, e)
+        return False
+
+
+@app.route("/webhook/twilio-sms", methods=["POST"])
+def webhook_twilio_sms():
+    """
+    Twilio inbound SMS webhook — receives text replies from pond leads.
+
+    Twilio POSTs application/x-www-form-urlencoded to this endpoint when a
+    lead replies to one of Barry's outbound AI texts.
+
+    We:
+      1. Validate Twilio signature (guards against spoofed requests)
+      2. Extract From phone + Body text
+      3. Match phone to lead via pond_sms_log
+      4. Analyze sentiment with Claude Haiku
+      5. Positive  → SMS_Conversion tag + FUB briefing note + notify Barry
+      6. Negative  → SMS_OptOut tag (blocks future texts, leaves email untouched)
+      7. Neutral   → FUB note only (reply visible in CRM timeline)
+      8. Log to pond_sms_reply_log
+
+    Returns TwiML <Response/> — Twilio retries on non-2xx, so we always
+    return 200 even on unrecoverable errors.
+    """
+    # ── Twilio signature validation ───────────────────────────────────────────
+    try:
+        from twilio.request_validator import RequestValidator
+        auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        if auth_token:
+            validator = RequestValidator(auth_token)
+            sig = request.headers.get("X-Twilio-Signature", "")
+            if not validator.validate(request.url, request.form.to_dict(), sig):
+                logger.warning("Twilio signature validation FAILED — rejecting request")
+                from flask import make_response as _mkr
+                resp = _mkr("<Response/>", 403)
+                resp.content_type = "text/xml"
+                return resp
+    except ImportError:
+        logger.warning("twilio package not installed — skipping signature validation")
+    except Exception as _ve:
+        logger.warning("Twilio signature validation error: %s — proceeding", _ve)
+
+    try:
+        from_phone = request.form.get("From", "").strip()
+        body_text  = request.form.get("Body", "").strip()
+        msg_sid    = request.form.get("MessageSid", "")
+
+        logger.info("Twilio SMS reply: from=%s | body=%s", from_phone, body_text[:80])
+
+        if not from_phone:
+            logger.warning("Twilio SMS webhook: missing From field")
+            from flask import make_response as _mkr2
+            resp = _mkr2("<Response/>", 200)
+            resp.content_type = "text/xml"
+            return resp
+
+        # Match inbound phone to a pond lead via our SMS send log
+        person_id, person_name = _db.get_pond_sms_person_by_phone(from_phone)
+
+        if not person_id:
+            logger.info("Twilio SMS reply: no matching pond lead for %s", from_phone)
+            from flask import make_response as _mkr3
+            resp = _mkr3("<Response/>", 200)
+            resp.content_type = "text/xml"
+            return resp
+
+        logger.info("SMS reply matched: %s (ID: %s)", person_name, person_id)
+
+        # Analyze sentiment (reuses email sentiment function — same Claude Haiku prompt)
+        sentiment, sentiment_score, sentiment_reason = _pond_analyze_sentiment(
+            body_text, person_name
+        )
+        logger.info("SMS sentiment: %s (%.2f) — %s", sentiment, sentiment_score, sentiment_reason)
+
+        routed      = False
+        fub_note_ok = False
+
+        try:
+            from fub_client import FUBClient
+            fub = FUBClient()
+
+            if sentiment == "positive":
+                fub.add_tag(person_id, "SMS_Conversion")
+                logger.info("SMS_Conversion tag applied to lead %s (%s)", person_id, person_name)
+                routed = True
+                fub_note_ok = _pond_add_sms_reply_fub_note(
+                    fub, person_id, person_name, body_text, sentiment_reason
+                )
+            elif sentiment == "negative":
+                fub.add_tag(person_id, "SMS_OptOut")
+                logger.info("SMS_OptOut tag applied to lead %s (%s)", person_id, person_name)
+            else:
+                # Neutral — log note so reply is visible in CRM timeline
+                fub_note_ok = _pond_add_sms_reply_fub_note(
+                    fub, person_id, person_name, body_text, sentiment_reason
+                )
+        except Exception as e:
+            logger.error("FUB SMS reply handling failed for %s (ID %s): %s",
+                         person_name, person_id, e)
+
+        # Log the SMS reply to DB
+        _db.log_pond_sms_reply(
+            person_id=person_id,
+            person_name=person_name,
+            phone_number=from_phone,
+            reply_text=body_text[:2000],
+            sentiment=sentiment,
+            sentiment_score=sentiment_score,
+            routed=routed,
+            twilio_message_sid=msg_sid,
+        )
+
+        # ── Notify Barry ───────────────────────────────────────────────────────
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail as _SGMail
+            sg_key = os.environ.get("SENDGRID_API_KEY")
+            if sg_key:
+                _emoji = {"positive": "🔥", "negative": "🚫", "neutral": "💬"}.get(sentiment, "📬")
+                _subj  = f"{_emoji} SMS Reply from {person_name or from_phone} — {sentiment.upper()}"
+
+                _lines = [
+                    f"{person_name or 'A lead'} ({from_phone}) replied to your AI outreach text.",
+                    "",
+                    f"Sentiment: {sentiment.upper()} — {sentiment_reason}",
+                    "",
+                    "─── Their reply ───────────────────────────────────",
+                    body_text.strip()[:1200],
+                    "────────────────────────────────────────────────────",
+                    "",
+                ]
+                if routed:
+                    _lines.append("✅ SMS_Conversion tag applied — FUB automation will assign")
+                    _lines.append(f"✅ CRM note added: {'yes' if fub_note_ok else 'check logs'}")
+                elif sentiment == "negative":
+                    _lines.append("🚫 SMS_OptOut tag applied — lead suppressed from future texts")
+                else:
+                    _lines.append(f"📝 CRM note added: {'yes' if fub_note_ok else 'check logs'}")
+
+                _lines += ["", "— Legacy Home Team AI Outreach"]
+                _notify_body = "\n".join(_lines)
+                _notify_html = (
+                    "<div style='font-family:-apple-system,sans-serif;font-size:15px;"
+                    "line-height:1.7;color:#222;max-width:560px;margin:24px auto'>"
+                    + _notify_body.replace("\n", "<br>") +
+                    "</div>"
+                )
+                _sg_msg = _SGMail(
+                    from_email=config.EMAIL_FROM,
+                    to_emails=config.EMAIL_FROM,
+                    subject=_subj,
+                    plain_text_content=_notify_body,
+                    html_content=_notify_html,
+                )
+                SendGridAPIClient(sg_key).send(_sg_msg)
+                logger.info("Barry notified of %s SMS reply from %s", sentiment, from_phone)
+        except Exception as _ne:
+            logger.warning("Could not notify Barry of SMS reply: %s", _ne)
+        # ──────────────────────────────────────────────────────────────────────
+
+        from flask import make_response as _mkr4
+        resp = _mkr4("<Response/>", 200)
+        resp.content_type = "text/xml"
+        return resp
+
+    except Exception as e:
+        logger.error("Twilio SMS webhook unhandled error: %s", e, exc_info=True)
+        from flask import make_response as _mkr5
+        resp = _mkr5("<Response/>", 200)
+        resp.content_type = "text/xml"
+        return resp
+
+
 @app.route("/api/pond-mailer/dashboard")
 def api_pond_mailer_dashboard():
     """
@@ -7704,6 +7946,7 @@ else:
     _db.ensure_pond_email_log_table()
     _db.ensure_pond_reply_log_table()
     _db.ensure_pond_sms_log_table()
+    _db.ensure_pond_sms_reply_log_table()
     # Ensure calls cache table exists (incremental FUB sync)
     _db.ensure_calls_cache_table()
     # Ensure pond mailer job tracking table exists at startup (not just on first run)

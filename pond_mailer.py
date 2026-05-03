@@ -3091,28 +3091,31 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
             _is_z2        = _is_z_buyer(tags, person)
             _first2       = first or "there"
 
+            # Ylopo Prospecting seller leads already had an AI conversation
+            # (rAIya text or voice call). Barry follows up personally — no
+            # additional automated SMS. Skip SMS-only path for these leads.
             if _is_ylopo_s2:
-                _beh2 = analyze_behavior([], tags)
-                _strat2 = "ylopo_prospecting"
-                _tier2  = "AI_NEEDS_FOLLOW_UP" if "AI_NEEDS_FOLLOW_UP" in tags else "POND"
-            else:
-                candidates_checked += 1
-                _ev2 = client.get_events_for_person(pid, days=60, limit=100)
-                if len([e for e in _ev2 if e.get("type")]) < MIN_EVENTS_TO_EMAIL:
-                    logger.debug("Skipping %s (SMS-only) — insufficient IDX events", name)
-                    skipped_no_activity += 1
-                    continue
-                _beh2 = analyze_behavior(_ev2, tags)
-                _tier2 = "POND"
-                for _tt in ("AI_NEEDS_FOLLOW_UP", "HANDRAISER", "YPRIORITY", "Y_HOME_3_VIEW"):
-                    if _tt in tags:
-                        _tier2 = _tt
-                        break
-                _strat2, _pri2 = select_strategy(_beh2, _tier2, tags)
-                if _strat2 == "none" or _pri2 < 20:
-                    logger.debug("Skipping %s (SMS-only) — no strategy", name)
-                    skipped_no_strategy += 1
-                    continue
+                logger.debug("Skipping %s (SMS-only) — Ylopo Prospecting seller, no auto-SMS", name)
+                skipped_no_email += 1
+                continue
+
+            candidates_checked += 1
+            _ev2 = client.get_events_for_person(pid, days=60, limit=100)
+            if len([e for e in _ev2 if e.get("type")]) < MIN_EVENTS_TO_EMAIL:
+                logger.debug("Skipping %s (SMS-only) — insufficient IDX events", name)
+                skipped_no_activity += 1
+                continue
+            _beh2 = analyze_behavior(_ev2, tags)
+            _tier2 = "POND"
+            for _tt in ("AI_NEEDS_FOLLOW_UP", "HANDRAISER", "YPRIORITY", "Y_HOME_3_VIEW"):
+                if _tt in tags:
+                    _tier2 = _tt
+                    break
+            _strat2, _pri2 = select_strategy(_beh2, _tier2, tags)
+            if _strat2 == "none" or _pri2 < 20:
+                logger.debug("Skipping %s (SMS-only) — no strategy", name)
+                skipped_no_strategy += 1
+                continue
 
             print(f"\n  [SMS-ONLY] {name} (ID: {pid}) · {to_phone}")
             print(f"    Tier: {_tier2} | Strategy: {_strat2}")
@@ -3141,6 +3144,20 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                                  twilio_sid=_sms_result.get("twilio_sid"),
                                  status=_sms_result.get("status", "queued"),
                                  channel="sms_only")
+                # Log to FUB timeline — 📱 note so agents see what text went out
+                if not dry_run:
+                    try:
+                        from config import BARRY_FUB_USER_ID
+                        _lt2 = "zbuyer" if _is_z2 else "buyer"
+                        client.log_sms_sent(
+                            person_id=pid,
+                            sms_body=_sms_body,
+                            lead_type=_lt2,
+                            channel="sms_only",
+                            user_id=BARRY_FUB_USER_ID,
+                        )
+                    except Exception as _fub_sms_err:
+                        logger.warning("FUB SMS log skipped for %s: %s", name, _fub_sms_err)
                 print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} SMS ({len(_sms_body)+52} chars)")
                 sms_only_sent += 1
                 sent += 1
@@ -3895,8 +3912,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
         # High-priority leads (AI_NEEDS_FOLLOW_UP, HANDRAISER, etc.) also get
         # a purpose-written SMS the same day — different angle than the email,
         # hits the phone BEFORE they open their inbox.
+        # Ylopo Prospecting sellers are excluded — Barry follows up personally.
         # SMS cooldown is checked independently of email cooldown.
-        if _sms_eligible and any(t in tags for t in _tc.DUAL_CHANNEL_TAGS):
+        if _sms_eligible and not is_ylopo_seller and any(t in tags for t in _tc.DUAL_CHANNEL_TAGS):
             _dual_sms_days = _db.days_since_last_pond_sms(pid)
             if _dual_sms_days is None or _dual_sms_days >= EMAIL_COOLDOWN_DAYS:
                 try:
@@ -3919,6 +3937,20 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None):
                                          twilio_sid=_dual_result.get("twilio_sid"),
                                          status=_dual_result.get("status", "queued"),
                                          channel="dual")
+                        # Log to FUB timeline — 📱 note alongside the email note
+                        if not dry_run:
+                            try:
+                                from config import BARRY_FUB_USER_ID
+                                _lt_dual = "zbuyer" if is_z else "buyer"
+                                client.log_sms_sent(
+                                    person_id=pid,
+                                    sms_body=_dual_body,
+                                    lead_type=_lt_dual,
+                                    channel="dual",
+                                    user_id=BARRY_FUB_USER_ID,
+                                )
+                            except Exception as _fub_dual_err:
+                                logger.warning("FUB dual SMS log skipped for %s: %s", name, _fub_dual_err)
                         print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} dual SMS ({len(_dual_body)+52} chars)")
                         dual_sms_sent += 1
                     else:

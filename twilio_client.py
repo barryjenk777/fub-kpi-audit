@@ -52,6 +52,7 @@ SMS_SUPPRESSION_TAGS = {
     "NOT_INTERESTED",       # Declined outreach entirely
     "DO_NOT_CALL",          # Covers texts too — TCPA caution
     "PondMailer_Unsubscribed",  # Unsubscribed from nurture sequence
+    "SMS_OptOut",           # Replied negatively to an AI text (SMS-specific opt-out)
 }
 
 # High-priority tags that trigger dual-channel (email + SMS same send)
