@@ -234,16 +234,21 @@ def is_within_sms_quiet_hours(tz_name: str = "America/New_York") -> bool:
 
 # ── Send ──────────────────────────────────────────────────────────────────────
 
-def send_sms(to_number: str, body: str, dry_run: bool = False) -> dict:
+def send_sms(to_number: str, body: str, media_url: str = None, dry_run: bool = False) -> dict:
     """
-    Send an SMS via the verified 10DLC messaging service.
+    Send an SMS/MMS via the verified 10DLC messaging service.
 
     The SMS_SIGN_OFF is appended to body automatically so callers don't have to
     worry about it. Total length = len(body) + 2 + len(SMS_SIGN_OFF).
 
+    When media_url is provided, Twilio sends as MMS — the video/image attaches
+    inline in the recipient's Messages app. Works on both iPhone and Android.
+    Use our /vp/<video_id> proxy URL (not raw HeyGen URLs, which expire).
+
     Args:
         to_number: Any parseable US phone format — will be normalized to E.164.
         body:      Message text WITHOUT sign-off (use email_to_sms() to build it).
+        media_url: Optional publicly accessible URL to attach as MMS media.
         dry_run:   Log but do not actually send.
 
     Returns dict with keys:
@@ -259,10 +264,11 @@ def send_sms(to_number: str, body: str, dry_run: bool = False) -> dict:
                 "error": f"Invalid phone: {to_number!r}"}
 
     full_body = f"{body}\n{SMS_SIGN_OFF}"
+    media_note = f" + media ({media_url[:60]}...)" if media_url else ""
 
     if dry_run:
-        logger.info("[DRY RUN] SMS to %s (%d chars): %s...",
-                    to_e164, len(full_body), full_body[:100].replace("\n", " "))
+        logger.info("[DRY RUN] SMS to %s (%d chars)%s: %s...",
+                    to_e164, len(full_body), media_note, full_body[:100].replace("\n", " "))
         return {"success": True, "twilio_sid": None, "status": "dry_run"}
 
     # Fast-fail if Twilio env vars aren't configured (check before TCPA so the
@@ -284,13 +290,17 @@ def send_sms(to_number: str, body: str, dry_run: bool = False) -> dict:
             os.environ["TWILIO_ACCOUNT_SID"],
             os.environ["TWILIO_AUTH_TOKEN"],
         )
-        msg = client.messages.create(
-            messaging_service_sid=os.environ["TWILIO_MESSAGING_SERVICE_SID"],
-            to=to_e164,
-            body=full_body,
-        )
-        logger.info("SMS sent to %s | SID: %s | Status: %s | %d chars",
-                    to_e164, msg.sid, msg.status, len(full_body))
+        create_kwargs: dict = {
+            "messaging_service_sid": os.environ["TWILIO_MESSAGING_SERVICE_SID"],
+            "to":   to_e164,
+            "body": full_body,
+        }
+        if media_url:
+            create_kwargs["media_url"] = [media_url]  # Twilio expects a list
+
+        msg = client.messages.create(**create_kwargs)
+        logger.info("SMS%s sent to %s | SID: %s | Status: %s | %d chars",
+                    " (MMS)" if media_url else "", to_e164, msg.sid, msg.status, len(full_body))
         return {"success": True, "twilio_sid": msg.sid, "status": msg.status}
 
     except ImportError:

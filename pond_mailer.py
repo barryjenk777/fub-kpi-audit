@@ -4124,28 +4124,21 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             _dual_body += "\n\nReply STOP to opt out."
 
                 if _dual_body:
-                    # Attach the HeyGen video — same render as the email, zero extra credits.
-                    # /vp/<video_id> is our iOS-compatible streaming proxy.
-                    # Plays tap-to-play inline in iMessage — no link, no browser.
-                    _dual_media_url = None  # re-enable after confirming AI Agent plan delivers media
-                    # if _sendblue_ready and video_result and video_result.get("video_id"):
-                    #     _base = os.environ.get("BASE_URL",
-                    #                            "https://web-production-3363cc.up.railway.app")
-                    #     _dual_media_url = f"{_base}/vp/{video_result['video_id']}"
+                    # Attach the HeyGen video as MMS via Twilio.
+                    # Same render as the email — zero extra HeyGen credits.
+                    # /vp/<video_id> is our streaming proxy (raw HeyGen URLs expire).
+                    _dual_media_url = None
+                    if video_result and video_result.get("video_id"):
+                        _base = os.environ.get("BASE_URL",
+                                               "https://web-production-3363cc.up.railway.app")
+                        _dual_media_url = f"{_base}/vp/{video_result['video_id']}"
 
-                    # Prefer Sendblue (iMessage blue bubble) over Twilio SMS
-                    if _sendblue_ready:
-                        _dual_result  = _sb.send_imessage(
-                            to_phone, _dual_body,
-                            media_url=_dual_media_url,
-                            dry_run=dry_run,
-                        )
-                        _dual_channel = "sendblue_dual" if _is_high_intent else "sendblue_cross"
-                        _dual_sid     = _dual_result.get("message_handle")
-                    else:
-                        _dual_result  = _tc.send_sms(to_phone, _dual_body, dry_run=dry_run)
-                        _dual_channel = "dual" if _is_high_intent else "cross_channel"
-                        _dual_sid     = _dual_result.get("twilio_sid")
+                    # Twilio MMS — works on iPhone and Android
+                    _dual_result  = _tc.send_sms(to_phone, _dual_body,
+                                                  media_url=_dual_media_url,
+                                                  dry_run=dry_run)
+                    _dual_channel = "twilio_mms_dual" if _is_high_intent else "twilio_mms_cross"
+                    _dual_sid     = _dual_result.get("twilio_sid")
 
                     _sms_type_label = "dual SMS" if _is_high_intent else "cross-channel SMS"
 
