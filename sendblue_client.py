@@ -38,6 +38,11 @@ logger = logging.getLogger("sendblue_client")
 
 SENDBLUE_API_BASE = "https://api.sendblue.co"
 
+# Sign-off appended automatically to every outbound iMessage.
+# iMessage supports Unicode so we use the real em dash.
+# Keep it short — blue bubbles read personal, not corporate.
+SENDBLUE_SIGN_OFF = "\n\n- Barry Jenkins w/ Legacy Home Team @LPT"
+
 # Hard stop words — CTIA-standard opt-out keywords
 # Sendblue handles STOP at the carrier level, but we also gate locally so
 # opt-outs are applied immediately even if the Sendblue webhook is delayed.
@@ -154,8 +159,9 @@ def send_imessage(
     media_note = f" + video ({media_url[:60]}...)" if media_url else ""
 
     if dry_run:
+        _dry_full = content + SENDBLUE_SIGN_OFF
         logger.info("[DRY RUN] Sendblue iMessage to %s (%d chars)%s: %s...",
-                    to_e164, len(content), media_note, content[:80].replace("\n", " "))
+                    to_e164, len(_dry_full), media_note, _dry_full[:80].replace("\n", " "))
         return {"success": True, "was_downgraded": False,
                 "message_handle": None, "status": "dry_run"}
 
@@ -172,9 +178,10 @@ def send_imessage(
         import requests as _req
 
         base_url = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app")
+        full_content = content + SENDBLUE_SIGN_OFF
         payload: dict = {
             "number":          to_e164,
-            "content":         content,
+            "content":         full_content,
             "status_callback": f"{base_url}/webhook/sendblue",
         }
         if media_url:
