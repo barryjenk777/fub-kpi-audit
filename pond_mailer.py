@@ -4067,7 +4067,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         # (FUB /v1/emails is blocked for API integrations — notes work fine.)
         if not dry_run:
             try:
-                from config import BARRY_FUB_USER_ID, DRIP_COOLDOWN_DAYS
+                from config import BARRY_FUB_USER_ID
                 _lt = ("zbuyer" if is_z
                        else ("seller" if is_ylopo_seller else "buyer"))
                 client.log_email_sent(
