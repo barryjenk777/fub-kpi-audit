@@ -44,26 +44,28 @@ def _build_email_note(subject, sequence_num, lead_type, avatar_used=None,
         1: ("First Touch" + (" · HeyGen Video 🎥" if is_video else ""),
             "Personalized intro — behavioral observation + local market intel. "
             "Gives them a reason to reply without pressure.",
-            "This is Email 1. No action needed — Barry's system will follow up automatically."),
+            "Call them — a live call right after Email 1 is the strongest move. "
+            f"Next automated email in {cooldown_days or 3} days if no reply."),
         2: ("Listing Drop" if lead_type not in ("zbuyer", "seller", "ylopo_seller", "ylopo_prospecting")
             else "Follow-Up" + (" · HeyGen Video 🎥" if is_video else ""),
             ("Curated IDX listings matching their search. Short, personal, links embedded."
              if lead_type not in ("zbuyer", "seller", "ylopo_seller", "ylopo_prospecting")
              else "Adds one new piece of value the first video didn't cover. "
-                  "Suit avatar — professional follow-through energy."),
-            "If they reply → jump in and introduce yourself. "
-            f"Next automated email in {cooldown_days or 10} days if no reply."),
+                  "Circle avatar on the map background — professional follow-through energy."),
+            "Call them — use the email as your reason: 'I wanted to make sure you saw that.' "
+            f"Next automated email in {cooldown_days or 3} days if no reply."),
         3: ("Breakup",
             "Short, honest question. No pressure. Gives them an easy way to reply "
             "yes or no — or to opt out gracefully.",
-            "If they reply → jump in. This is the last sprint email. "
+            "Call them — this is the last sprint email and the best moment to catch them. "
             "If no reply, drip phase starts automatically."),
         4: ("Drip · Re-engagement" + (" · HeyGen Video 🎥" if is_video else ""),
             "First drip content email after the breakup. "
             "Fresh angle — market insight or updated context. "
-            + ("Suit avatar video re-ignites the relationship." if is_video
+            + ("Video re-ignites the relationship." if is_video
                else "Warm text, no links."),
-            f"If they reply → jump in. Next automated email in {cooldown_days or 10} days if no reply."),
+            f"Call them — drip re-opens the window. "
+            f"Next automated email in {cooldown_days or 10} days if no reply."),
     }
 
     if seq in _seq_descriptions:
@@ -72,20 +74,20 @@ def _build_email_note(subject, sequence_num, lead_type, avatar_used=None,
         # Odd drip emails: listing drops
         type_label   = f"Drip · Listing Drop (Email {seq} of {total_emails})"
         what_it_does = "Curated IDX listings matching their search criteria. Short, personal, links embedded."
-        agent_action = (f"If they reply → jump in. "
+        agent_action = (f"Call them — use the listing as your opener. "
                         f"Next automated email in {cooldown_days or 10} days if no reply.")
     else:
         # Even drip emails: content
         type_label   = f"Drip · Content (Email {seq} of {total_emails})"
         what_it_does = "Longer warm content — market angle, story, or local intel. No links."
-        agent_action = (f"If they reply → jump in. "
+        agent_action = (f"Call them — content emails are great conversation starters. "
                         f"Next automated email in {cooldown_days or 10} days if no reply.")
 
     # Sequence completion (Email 9 or beyond)
     if seq >= total_emails:
         agent_action = (
             "⚠️  SEQUENCE COMPLETE — automated nurture is done for this lead. "
-            "Barry will NOT send more automated emails. This lead needs human follow-up now."
+            "Call them — this lead needs a live conversation now."
         )
 
     note = (
@@ -125,7 +127,7 @@ def _build_sms_note(sms_body, lead_type, channel="sms_only"):
 
     channel_label = (
         "Dual-Channel (email + SMS same send)" if channel == "dual"
-        else "SMS-Only (no email on file)"
+        else "SMS Touch"
     )
 
     # Import sign-off lazily to avoid circular dependency
@@ -139,13 +141,12 @@ def _build_sms_note(sms_body, lead_type, channel="sms_only"):
     if channel == "dual":
         agent_action = (
             "This lead also received an email today — 2× touch surface.\n"
-            "Do NOT reach out manually yet — let the sequence run."
+            "Call them — a warm call right after a personal text lands well."
         )
     else:
         agent_action = (
-            "This lead has no email — SMS is the only automated touch.\n"
-            "When they reply, Twilio routes it back as a CRM note.\n"
-            "Do NOT reach out manually yet — let the sequence run."
+            "Automated text sent. When they reply, Twilio routes it back as a CRM note.\n"
+            "Call them — a live call is always the best next step."
         )
 
     note = (
