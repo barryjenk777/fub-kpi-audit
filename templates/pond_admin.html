@@ -117,6 +117,7 @@
     <button class="btn btn-primary" id="btnRefresh" onclick="loadData()">↺ Refresh</button>
     <button class="btn btn-secondary" id="btnDryRun" onclick="triggerRun(true)">🧪 Dry Run (safe)</button>
     <button class="btn btn-danger"   id="btnLiveRun" onclick="triggerRun(false)">⚡ Live Run NOW</button>
+    <button class="btn btn-secondary" id="btnHeyGen" onclick="testHeyGen()">🎬 Test HeyGen</button>
   </div>
 
   <div id="status-bar">Loading…</div>
@@ -156,6 +157,53 @@
         document.getElementById('main').style.display = 'block';
       } catch(e) {
         document.getElementById('status-bar').textContent = 'Error loading data: ' + e.message;
+      }
+    }
+
+    async function testHeyGen() {
+      const btn = document.getElementById('btnHeyGen');
+      btn.disabled = true;
+      btn.textContent = '⏳ Submitting…';
+      try {
+        const r = await fetch('/api/test-mapbox?video=true');
+        const d = await r.json();
+        if (d.video_id) {
+          btn.textContent = `✓ Submitted! video_id: ${d.video_id.substring(0,8)}…`;
+          // Poll for completion
+          let polls = 0;
+          const poll = setInterval(async () => {
+            polls++;
+            if (polls > 40) { clearInterval(poll); btn.textContent = '🎬 Test HeyGen (timed out)'; btn.disabled = false; return; }
+            try {
+              const sr = await fetch(`/api/test-heygen-status/${d.video_id}`);
+              const sd = await sr.json();
+              if (sd.status === 'completed') {
+                clearInterval(poll);
+                btn.textContent = `✓ HeyGen works! ${sd.duration?.toFixed(0) || '?'}s video`;
+                btn.style.background = '#22c55e';
+                btn.disabled = false;
+              } else if (sd.status === 'failed') {
+                clearInterval(poll);
+                btn.textContent = `✗ HeyGen FAILED: ${sd.error || 'unknown'}`;
+                btn.style.background = '#ef4444';
+                btn.disabled = false;
+              } else {
+                btn.textContent = `⏳ Rendering… (${sd.status || 'processing'})`;
+              }
+            } catch(e) {}
+          }, 8000);
+        } else if (d.video_error) {
+          btn.textContent = `✗ ${d.video_error}`;
+          btn.style.background = '#ef4444';
+          btn.disabled = false;
+        } else if (d.error) {
+          btn.textContent = `✗ Mapbox error: ${d.error}`;
+          btn.style.background = '#ef4444';
+          btn.disabled = false;
+        }
+      } catch(e) {
+        btn.textContent = 'Error: ' + e.message;
+        btn.disabled = false;
       }
     }
 
@@ -270,6 +318,16 @@
             if (totalN === 0) {
               resultHtml += '<div class="skip-bar"><span class="skip-chip nonzero">⚠ ponds empty</span></div>';
             } else {
+              // HeyGen stats
+              const hgSent   = r.heygen_sent ?? null;
+              const hgFailed = r.heygen_failed ?? null;
+              if (hgSent !== null || hgFailed !== null) {
+                const hgColor = hgSent > 0 ? '#22c55e' : (hgFailed > 0 ? '#f5a623' : '#475569');
+                resultHtml += `<div style="font-size:11px;color:${hgColor};margin:3px 0">🎬 HeyGen: ${hgSent ?? 0} videos sent, ${hgFailed ?? 0} failed</div>`;
+                if (r.heygen_last_error) {
+                  resultHtml += `<div style="font-size:10px;color:#ef4444;margin:2px 0">⚠ ${r.heygen_last_error}</div>`;
+                }
+              }
               const chips = [];
               if (r.skipped_cooldown)         chips.push(['cooldown',  r.skipped_cooldown]);
               if (r.skipped_no_activity)      chips.push(['no IDX',    r.skipped_no_activity]);

@@ -3120,6 +3120,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
     sent = 0
     sms_only_sent = 0
     dual_sms_sent = 0
+    heygen_sent = 0           # emails where a HeyGen video was successfully attached
+    heygen_failed = 0         # HeyGen generation attempts that failed or timed out
+    heygen_last_error = None  # most recent HeyGen error message (for diagnostics)
     skipped_cooldown = 0
     skipped_no_email = 0
     skipped_no_activity = 0
@@ -3151,7 +3154,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         last  = person.get("lastName") or ""
         name  = f"{first} {last}".strip() or f"ID:{pid}"
         tags  = person.get("tags") or []
-        video_result = None   # populated by HeyGen generation; used for Sendblue media_url
+        video_result  = None   # populated by HeyGen generation; used for SMS media_url
+        _avatar_used  = None   # set to avatar ID if a HeyGen video was generated
+        bg_url        = None   # Mapbox static map URL for the video background
 
         # Score gate: is this lead in the top 50% by LeadStream score?
         _this_ls_score   = _lead_score_map.get(pid, 0)
@@ -3539,12 +3544,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
 
                         _avatar_used = DEFAULT_AVATAR
                         _hg_slots_left -= 1  # consume one HeyGen slot
+                        heygen_sent += 1
                         logger.info("HeyGen video email built for %s (%.1fs video) — %d slots remain",
                                     name, video_result.get("duration", 0), _hg_slots_left)
                         print(f"    ▶ HeyGen video: {video_result['video_url'][:60]}...")
                     else:
+                        heygen_failed += 1
+                        heygen_last_error = f"seller/{name}: video not ready (timeout or failed on HeyGen side)"
                         logger.warning("HeyGen video not ready for %s — sending text-only", name)
             except Exception as _hg_err:
+                heygen_failed += 1
+                heygen_last_error = f"seller/{name}: {_hg_err}"
                 logger.warning("HeyGen pipeline failed for %s — sending text-only: %s", name, _hg_err)
 
         # ── HeyGen personalized video — Z-buyer Email 1 ─────────────────────────
@@ -3647,17 +3657,19 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
 
                         _avatar_used = DEFAULT_AVATAR
                         _hg_slots_left -= 1  # consume one HeyGen slot
+                        heygen_sent += 1
                         logger.info("HeyGen Z-buyer video email built for %s (%.1fs) — %d slots remain",
                                     name, video_result.get("duration", 0), _hg_slots_left)
                         print(f"    ▶ HeyGen Z-buyer video: {video_result['video_url'][:60]}...")
                     else:
+                        heygen_failed += 1
+                        heygen_last_error = f"zbuyer/{name}: video not ready (timeout or failed on HeyGen side)"
                         logger.warning("HeyGen video not ready for Z-buyer %s — text-only", name)
             except Exception as _hg_err:
+                heygen_failed += 1
+                heygen_last_error = f"zbuyer/{name}: {_hg_err}"
                 logger.warning("HeyGen Z-buyer pipeline failed for %s — text-only: %s",
                                name, _hg_err)
-
-        # ── Track which avatar was used (for A/B analysis) ──────────────────────
-        _avatar_used = None
 
         # ── HeyGen personalized video — Buyer Email 1 ────────────────────────────
         # Buyer leads browsing IDX on legacyhomesearch.com.
@@ -3801,12 +3813,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
 
                         _avatar_used = DEFAULT_AVATAR
                         _hg_slots_left -= 1  # consume one HeyGen slot
+                        heygen_sent += 1
                         logger.info("HeyGen buyer video email built for %s (%.1fs video) — %d slots remain",
                                     name, video_result.get("duration", 0), _hg_slots_left)
                         print(f"    ▶ HeyGen buyer video: {video_result['video_url'][:60]}...")
                     else:
+                        heygen_failed += 1
+                        heygen_last_error = f"buyer/{name}: video not ready (timeout or failed on HeyGen side)"
                         logger.warning("HeyGen video not ready for buyer %s — text-only", name)
             except Exception as _hg_err:
+                heygen_failed += 1
+                heygen_last_error = f"buyer/{name}: {str(_hg_err)[:200]}"
                 logger.warning("HeyGen buyer pipeline failed for %s — text-only: %s",
                                name, _hg_err)
 
@@ -4264,6 +4281,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
     print(f"\n{'='*60}")
     print(f"  Done: {sent} {'would send' if dry_run else 'sent'} "
           f"({'email only' if _sms_total == 0 else f'{sms_only_sent} SMS-only + {dual_sms_sent} dual-channel'})")
+    print(f"  HeyGen: {heygen_sent} videos sent | {heygen_failed} failed")
+    if heygen_last_error:
+        print(f"  Last HeyGen error: {heygen_last_error}")
     print(f"  Leads in ponds: {_total_leads} | Candidates checked: {candidates_checked}")
     print(f"  Cooldown: {skipped_cooldown} | No activity: {skipped_no_activity} | "
           f"No contact: {skipped_no_email} | No strategy: {skipped_no_strategy} | "
@@ -4276,6 +4296,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         "sent":                      sent,
         "sms_only_sent":             sms_only_sent,
         "dual_sms_sent":             dual_sms_sent,
+        "heygen_sent":               heygen_sent,
+        "heygen_failed":             heygen_failed,
+        "heygen_last_error":         heygen_last_error,
         "total_leads_found":         _total_leads,
         "candidates_checked":        candidates_checked,
         "skipped_cooldown":          skipped_cooldown,
