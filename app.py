@@ -5877,42 +5877,76 @@ def short_video_url(code: str):
     /go/<first-8-chars-of-video_id>  →  /v/<full-video_id>?c=lat,lon,zoom
 
     Keeps SMS links short (~50 chars vs 95+ for full URL).
-    The 8-char prefix is unique across all HeyGen video UUIDs in our system.
-    Map center query param (?c=) is preserved if stored alongside the code.
-
-    Storage: in-memory dict _short_url_store  {code: full_path}
-    Set by pond_mailer when generating the landing URL.
+    Stored in SQLite (short_video_urls table) — survives Railway redeploys.
     """
     from flask import redirect as _redirect
-    target = _short_url_store.get(code.lower())
+    import re as _re
+    c = code.lower().strip()
+    if not _re.match(r'^[0-9a-f]{6,32}$', c):
+        return "Not found.", 404
+    target = _db_get_short_url(c)
     if not target:
-        # Fallback: treat code as video_id prefix — reconstruct full /v/ path
-        # by scanning for a matching HeyGen video_id in HeyGen API (best-effort)
-        import re as _re
-        if _re.match(r'^[0-9a-f]{8,32}$', code.lower()):
-            return _redirect(f"/v/{code.lower()}", code=302)
+        # Fallback: if code is a full 32-char video_id, go directly
+        if len(c) == 32:
+            return _redirect(f"/v/{c}", code=302)
         return "Not found.", 404
     return _redirect(target, code=302)
 
 
-# In-memory short URL store: {8-char-code: "/v/<id>?c=lat,lon,zoom"}
-# Populated by make_short_video_url() called from pond_mailer
-_short_url_store: dict = {}
+def _ensure_short_url_table():
+    """Create short_video_urls SQLite table if it doesn't exist."""
+    try:
+        conn = _db._get_conn()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS short_video_urls (
+                code       TEXT PRIMARY KEY,
+                target     TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.commit()
+    except Exception as _e:
+        logger.warning("_ensure_short_url_table: %s", _e)
+
+
+def _db_get_short_url(code: str) -> str | None:
+    try:
+        conn = _db._get_conn()
+        row = conn.execute(
+            "SELECT target FROM short_video_urls WHERE code = ?", (code,)
+        ).fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _db_set_short_url(code: str, target: str):
+    try:
+        _ensure_short_url_table()
+        conn = _db._get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO short_video_urls (code, target) VALUES (?, ?)",
+            (code, target),
+        )
+        conn.commit()
+    except Exception as _e:
+        logger.warning("_db_set_short_url failed: %s", _e)
 
 
 def make_short_video_url(video_id: str, map_center: str = "") -> str:
     """
-    Register a short URL and return the full /go/<code> path.
+    Register a short URL in SQLite and return the full /go/<code> URL.
 
-    code = first 8 chars of video_id (always unique within one Railway instance).
-    map_center = "lat,lon,zoom" query string for the landing page map.
+    code = first 8 chars of video_id — unique enough for our send volume.
+    map_center = "lat,lon,zoom" appended as ?c= param on the landing page.
+    Persists across Railway redeploys via SQLite.
     """
     base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
-    code = video_id.lower()[:8]
+    code   = video_id.lower()[:8]
     target = f"/v/{video_id.lower()}"
     if map_center:
         target += f"?c={map_center}"
-    _short_url_store[code] = target
+    _db_set_short_url(code, target)
     return f"{base}/go/{code}"
 
 
