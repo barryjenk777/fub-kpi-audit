@@ -7541,15 +7541,28 @@ def api_test_sms():
         "to":                  "+1...",
         "body":                "...",
         "media_url":           "https://..." (optional),
+        "video_id":            "32-char HeyGen ID" (optional — auto-builds mthumb + short link),
         "bypass_quiet_hours":  true           (optional — for after-hours testing to Barry's number)
     }
+    When video_id is provided: attaches /mthumb/<id> as MMS image and appends
+    the /go/<code> short URL to the body automatically — no manual URL needed.
     """
     from twilio_client import send_sms as _send_sms, format_e164, is_available, SMS_SIGN_OFF
     data               = request.json or {}
     to                 = data.get("to", "+17578164037")
     body               = data.get("body", "Test from Legacy Home Team system.")
     media_url          = data.get("media_url")
+    video_id           = (data.get("video_id") or "").strip().lower()
     bypass_quiet_hours = bool(data.get("bypass_quiet_hours", False))
+
+    # If video_id provided, auto-build mthumb URL + register short link + append to body
+    if video_id:
+        _base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+        if not media_url:
+            media_url = f"{_base}/mthumb/{video_id}"
+        short_link = make_short_video_url(video_id)
+        if short_link not in body:
+            body = f"{body}\n\n{short_link}"
 
     # Standard path — respects TCPA quiet hours
     if not bypass_quiet_hours:
