@@ -523,8 +523,10 @@ def run_morning_nudges(dry_run: bool = False):
                 rank, team_size, name, selected_arc, tone,
             )
 
+        pb   = _db.get_prospecting_block(name)
         html = _build_morning_html(body_text, leads, ctx.get("dashboard_url", ""),
-                                   isa_transfers=isa_transfers)
+                                   isa_transfers=isa_transfers, goal_ctx=goal_ctx,
+                                   prospecting_block=pb, agent_name=name)
 
         try:
             if not dry_run:
@@ -605,7 +607,9 @@ def run_closing_milestones(dry_run=False):
                 goal_ctx=goal_ctx,
             )
 
-            html = _build_morning_html(body_text, [], ctx.get("dashboard_url", ""))
+            pb   = _db.get_prospecting_block(name)
+            html = _build_morning_html(body_text, [], ctx.get("dashboard_url", ""),
+                                       goal_ctx=goal_ctx, prospecting_block=pb, agent_name=name)
             log_content = "milestone_deal:" + deal_marker + "|" + subject
 
             try:
@@ -675,21 +679,28 @@ def _build_goal_ctx(agent_name, all_goals, ytd_cache, calls_yesterday):
         }
         pace = _db.compute_pace(goal, targets, actuals)
 
-        daily_target = max(1, round(targets.get("calls_per_week", 100) / 5))
+        # daily_target = DIALS to make per day (phone call attempts)
+        # daily_convos = live conversations needed per day (dials × contact_rate)
+        # These are DIFFERENT — the email historically confused them. Fix here.
+        daily_target = max(1, round(targets.get("dials_per_week", targets.get("calls_per_week", 100)) / 5))
+        daily_convos = max(1, round(targets.get("convos_per_week", targets.get("calls_per_week", 20) * 0.15) / 5))
         calls_pct    = pace.get("calls", {}).get("pct", 0)
         calls_ytd    = actuals["calls_ytd"]
         calls_target_ytd = round(pace.get("calls", {}).get("target_ytd", 0))
         gap          = calls_yesterday - daily_target   # positive = beat target, negative = fell short
 
         return {
-            "gci_goal":         float(goal.get("gci_goal", 0)),
-            "gci_fmt":          _fmt_gci(float(goal.get("gci_goal", 0))),
-            "daily_target":     daily_target,
-            "calls_ytd":        calls_ytd,
-            "calls_target_ytd": calls_target_ytd,
-            "calls_pace_pct":   calls_pct,
-            "pace_status":      pace.get("calls", {}).get("status", "red"),
-            "gap_yesterday":    gap,   # calls above/below daily target yesterday
+            "gci_goal":          float(goal.get("gci_goal", 0)),
+            "gci_fmt":           _fmt_gci(float(goal.get("gci_goal", 0))),
+            "daily_target":      daily_target,      # DIALS per day (call attempts)
+            "daily_convos":      daily_convos,      # Conversations per day (live contacts)
+            "weekly_dials":      daily_target * 5,  # weekly dials target
+            "weekly_convos":     daily_convos * 5,  # weekly conversations target
+            "calls_ytd":         calls_ytd,
+            "calls_target_ytd":  calls_target_ytd,
+            "calls_pace_pct":    calls_pct,
+            "pace_status":       pace.get("calls", {}).get("status", "red"),
+            "gap_yesterday":     gap,               # dials above/below daily target yesterday
         }
     except Exception as e:
         logger.warning("_build_goal_ctx failed for %s: %s", agent_name, e)
@@ -725,8 +736,8 @@ def _weekend_warrior_copy(ctx, calls, appts, texts, day_name, goal_ctx, team_siz
             ])
         else:
             goal_section = random.choice([
-                f"Your {gci_goal_fmt} goal needs {daily_target} conversations a day. On a {day_name} you logged {calls} — {gap_desc}. YTD pace: {calls_pace_pct}%. Every day like this compounds.",
-                f"To reach {gci_goal_fmt} this year, the daily target is {daily_target} calls. You hit {calls} on a {day_name}. That's the kind of consistency that makes the year-end number real.",
+                f"Your {gci_goal_fmt} goal needs {daily_target} dials a day. On a {day_name} you logged {calls} — {gap_desc}. YTD pace: {calls_pace_pct}%. Every day like this compounds.",
+                f"To reach {gci_goal_fmt} this year, the daily target is {daily_target} dials. You hit {calls} on a {day_name}. That's the kind of consistency that makes the year-end number real.",
             ])
 
     goal_prefix = f"{goal_section}\n\n" if has_goals else ""
@@ -748,8 +759,8 @@ def _weekend_warrior_copy(ctx, calls, appts, texts, day_name, goal_ctx, team_siz
             f"{calls} calls on a {day_name}. The team will hear about this. 😤",
         ])
         body = random.choice([
-            f"{goal_prefix}{calls} conversation{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''} on a {day_name}. Most of your competition didn't even open their laptop. You were out there doing the thing.\n\nThis is the gap. Not talent. Not luck. Just showing up when nobody else does.\n\nNow go enjoy the rest of your weekend. You've earned it. 🏆",
-            f"{goal_prefix}FUB is showing {calls} calls on a {day_name}. I double-checked. It's real.\n\nOut of {team_size} agents on this team, you are clearly not built the same. James Clear would say you just cast the most important vote of the week — the one nobody asked you to cast.\n\nSavage. Now go relax.",
+            f"{goal_prefix}{calls} dial{'s' if calls != 1 else ''}{(' and ' + str(appts) + ' appointment' + ('s' if appts != 1 else '')) if appts > 0 else ''} on a {day_name}. Most of your competition didn't even open their laptop. You were out there doing the thing.\n\nThis is the gap. Not talent. Not luck. Just showing up when nobody else does.\n\nNow go enjoy the rest of your weekend. You've earned it. 🏆",
+            f"{goal_prefix}FUB is showing {calls} outbound dials on a {day_name}. I double-checked. It's real.\n\nOut of {team_size} agents on this team, you are clearly not built the same. James Clear would say you just cast the most important vote of the week — the one nobody asked you to cast.\n\nSavage. Now go relax.",
         ])
     else:
         subject = random.choice([
@@ -758,8 +769,8 @@ def _weekend_warrior_copy(ctx, calls, appts, texts, day_name, goal_ctx, team_siz
             f"The agents who hit big years work when others don't. That's you, {first}.",
         ])
         body = random.choice([
-            f"{goal_prefix}{why_open}{calls} conversation{'s' if calls != 1 else ''} on a {day_name}. That's not hustle culture — that's a decision about what kind of year you want to have.\n\nThe compounding effect is invisible until suddenly it isn't. You're building something real, {first}. Enjoy the rest of the weekend.",
-            f"{goal_prefix}{why_open}Most of the real estate industry took {day_name} off. You didn't.\n\n{calls} calls. {appts} appointments. That's {identity} in action — not because someone told you to, but because you decided to.\n\nGo enjoy the day. You've earned it.",
+            f"{goal_prefix}{why_open}{calls} dial{'s' if calls != 1 else ''} on a {day_name}. That's not hustle culture — that's a decision about what kind of year you want to have.\n\nThe compounding effect is invisible until suddenly it isn't. You're building something real, {first}. Enjoy the rest of the weekend.",
+            f"{goal_prefix}{why_open}Most of the real estate industry took {day_name} off. You didn't.\n\n{calls} dials. {appts} appointment{'s' if appts != 1 else ''}. That's {identity} in action — not because someone told you to, but because you decided to.\n\nGo enjoy the day. You've earned it.",
         ])
 
     return subject, body
@@ -837,24 +848,26 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
         return subject, body
     # ─────────────────────────────────────────────────────────────────────────
 
-    # Goal section (weekly version) — conversations are the primary metric
+    # Goal section (weekly version)
+    # Use weekly_convos target (conversations) when comparing vs w_convos (actual convos).
+    # Use weekly_dials target (dials) when referencing the call volume number.
     goal_section = ""
     if has_goals:
-        calls_pace_pct = goal_ctx["calls_pace_pct"]
-        gci_goal_fmt   = goal_ctx["gci_fmt"]
-        daily_target   = goal_ctx["daily_target"]
-        week_target    = daily_target * 5   # weekly conversation target
+        calls_pace_pct  = goal_ctx["calls_pace_pct"]
+        gci_goal_fmt    = goal_ctx["gci_fmt"]
+        weekly_dials    = goal_ctx.get("weekly_dials", goal_ctx["daily_target"] * 5)
+        weekly_convos_t = goal_ctx.get("weekly_convos", max(1, round(weekly_dials * 0.15)))
         on_track_w  = "Still in the green. Don't coast." if calls_pace_pct >= 85 else "Next week is where you close that gap."
         on_track_w2 = "You're doing it." if calls_pace_pct >= 85 else "You know what fixes this? Monday morning. That's literally it."
         if tone == "funny":
             goal_section = random.choice([
-                f"The {gci_goal_fmt} scoreboard: you needed ~{week_target} real conversations this week, you had {w_convos}{calls_note}. YTD pace: {calls_pace_pct}%. {on_track_w}",
-                f"Quick {gci_goal_fmt} math: ~{week_target} conversations needed this week, {w_convos} logged{calls_note}. Pace: {calls_pace_pct}%. {on_track_w2}",
+                f"The {gci_goal_fmt} scoreboard: you needed ~{weekly_convos_t} real conversations this week, you had {w_convos}{calls_note}. YTD pace: {calls_pace_pct}%. {on_track_w}",
+                f"Quick {gci_goal_fmt} math: ~{weekly_dials} dials needed this week, {w_convos} conversations logged{calls_note}. Pace: {calls_pace_pct}%. {on_track_w2}",
             ])
         else:
             goal_section = random.choice([
-                f"Your {gci_goal_fmt} goal needs roughly {week_target} real conversations a week. This week you had {w_convos}{calls_note}. YTD pace sits at {calls_pace_pct}% — {'on track' if calls_pace_pct >= 85 else 'behind where it needs to be'}. Next week is the correction.",
-                f"To hit {gci_goal_fmt} this year, the weekly conversation target is around {week_target}. You had {w_convos} this week{calls_note}, putting YTD pace at {calls_pace_pct}%. {'The foundation is solid.' if calls_pace_pct >= 85 else 'Each week is a chance to tighten the gap.'}",
+                f"Your {gci_goal_fmt} goal needs roughly {weekly_convos_t} real conversations a week. This week you had {w_convos}{calls_note}. YTD pace sits at {calls_pace_pct}% — {'on track' if calls_pace_pct >= 85 else 'behind where it needs to be'}. Next week is the correction.",
+                f"To hit {gci_goal_fmt} this year, the weekly target is around {weekly_dials} dials / {weekly_convos_t} conversations. You had {w_convos} this week{calls_note}, putting YTD pace at {calls_pace_pct}%. {'The foundation is solid.' if calls_pace_pct >= 85 else 'Each week is a chance to tighten the gap.'}",
             ])
 
     goal_prefix    = f"{goal_section}\n\n" if has_goals else ""
@@ -1235,100 +1248,369 @@ def _sassy_morning_copy(ctx, rank, team_size, calls, appts, texts,
     return subject, body
 
 
+def _pb_fmt_time(t: str) -> str:
+    """Format 'HH:MM' → '9:00 AM'"""
+    try:
+        h, m = int(t[:2]), int(t[3:5])
+        period = "AM" if h < 12 else "PM"
+        h12 = h % 12 or 12
+        return f"{h12}:{m:02d} {period}"
+    except Exception:
+        return t
+
+
+def _pb_fmt_dur(minutes: int) -> str:
+    if minutes < 60:
+        return f"{minutes} min"
+    h = minutes // 60
+    rem = minutes % 60
+    return f"{h}h" if rem == 0 else f"{h}h {rem}m"
+
+
+def _pb_today_info(prospecting_block) -> dict:
+    """
+    Given a prospecting block dict (or None), return info about today vs the block.
+    Returns: {is_today, is_set, label, next_label, start_fmt, end_fmt, days_fmt, update_url}
+    """
+    if not prospecting_block:
+        return {"is_set": False}
+
+    days_raw     = prospecting_block.get("prospecting_days") or []
+    start_time   = prospecting_block.get("start_time", "09:00")
+    duration_min = int(prospecting_block.get("duration_minutes", 60))
+    token        = prospecting_block.get("token", "")
+
+    today_name = date.today().strftime("%A").lower()
+    day_map = {"monday": "Mon", "tuesday": "Tue", "wednesday": "Wed",
+               "thursday": "Thu", "friday": "Fri", "saturday": "Sat", "sunday": "Sun"}
+    day_order = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+    days_fmt = " · ".join(day_map.get(d, d.capitalize()) for d in days_raw if d in day_map)
+    start_fmt = _pb_fmt_time(start_time)
+    # Compute end time
+    try:
+        h, m = int(start_time[:2]), int(start_time[3:5])
+        total_m = h * 60 + m + duration_min
+        end_h, end_m = divmod(total_m, 60)
+        end_h = end_h % 24
+        end_fmt = _pb_fmt_time(f"{end_h:02d}:{end_m:02d}")
+    except Exception:
+        end_fmt = ""
+
+    is_today = today_name in [d.lower() for d in days_raw]
+    update_url = f"{BASE_URL}/my-block/{token}" if token else dashboard_url
+
+    if is_today:
+        label = f"TODAY — {start_fmt} to {end_fmt}"
+    else:
+        # Find next block day from today
+        today_idx = day_order.index(today_name) if today_name in day_order else 0
+        next_day = None
+        for i in range(1, 8):
+            candidate = day_order[(today_idx + i) % 7]
+            if candidate in [d.lower() for d in days_raw]:
+                next_day = candidate
+                break
+        if next_day:
+            label = f"Next: {day_map.get(next_day, next_day.capitalize())} at {start_fmt}"
+        else:
+            label = f"Next block: {start_fmt}"
+
+    return {
+        "is_set": True,
+        "is_today": is_today,
+        "label": label,
+        "days_fmt": days_fmt,
+        "start_fmt": start_fmt,
+        "end_fmt": end_fmt,
+        "dur_fmt": _pb_fmt_dur(duration_min),
+        "update_url": update_url,
+    }
+
+
 def _build_morning_html(body_text: str, leads: list, dashboard_url: str,
-                        isa_transfers: list = None) -> str:
-    """Build the full branded HTML email for the morning nudge."""
+                        isa_transfers: list = None,
+                        goal_ctx: dict = None,
+                        prospecting_block: dict = None,
+                        agent_name: str = "") -> str:
+    """
+    Build the full branded HTML email for the morning nudge.
+    Redesigned: first-name opener, call block card, dials pace bar, lead cards.
+    """
     FUB_PERSON_URL = "https://yourfriendlyagent.followupboss.com/2/people/view/{person_id}"
     FUB_LIST_URL   = "https://yourfriendlyagent.followupboss.com/2/people?smart-list=leadstream"
 
-    html_body = "<p>" + body_text.replace("\n\n", "</p><p>").replace("\n", "<br>") + "</p>"
+    first = (agent_name.split()[0] if agent_name else "").strip()
 
-    # LeadStream leads section
-    # ISA transfer block — shown above LeadStream leads if any active transfers exist
+    # ── First-name opener (Barry-text-message style) ────────────────────────
+    opener_html = ""
+    if first:
+        opener_html = f"""
+  <p style="font-size:28px;font-weight:900;color:#f5a623;margin:0 0 20px;
+             letter-spacing:-0.5px;line-height:1">{first},</p>"""
+
+    # ── Arc body text ────────────────────────────────────────────────────────
+    html_body = "<p style='margin:0 0 14px'>" + body_text.replace("\n\n", "</p><p style='margin:0 0 14px'>").replace("\n", "<br>") + "</p>"
+
+    # ── Prospecting call block card ──────────────────────────────────────────
+    pb_info = _pb_today_info(prospecting_block)
+    if pb_info.get("is_set"):
+        if pb_info["is_today"]:
+            # Gold/amber — it's GO time
+            pb_bg      = "linear-gradient(135deg,#7c4a00 0%,#92540a 100%)"
+            pb_border  = "#f5a623"
+            pb_icon    = "🔒"
+            pb_title   = "YOUR BLOCK IS NOW"
+            pb_label   = pb_info["label"]
+            pb_sub     = f"{pb_info['days_fmt']} &nbsp;·&nbsp; {pb_info['dur_fmt']} session"
+            pb_pill_bg = "#f5a623"
+            pb_pill_tx = "#0d1117"
+            pb_pill    = "PROSPECT NOW"
+        else:
+            # Grey — block is coming
+            pb_bg      = "linear-gradient(135deg,#1e293b 0%,#0f172a 100%)"
+            pb_border  = "#334155"
+            pb_icon    = "📅"
+            pb_title   = "CALL BLOCK"
+            pb_label   = pb_info["label"]
+            pb_sub     = f"{pb_info['days_fmt']} &nbsp;·&nbsp; {pb_info['dur_fmt']} session"
+            pb_pill_bg = "#334155"
+            pb_pill_tx = "#94a3b8"
+            pb_pill    = "UPDATE SCHEDULE"
+
+        pb_html = f"""
+  <div style="background:{pb_bg};border:2px solid {pb_border};border-radius:12px;
+              padding:20px 24px;margin:24px 0">
+    <p style="margin:0 0 4px;font-size:10px;font-weight:800;color:{pb_border};
+              letter-spacing:1.5px;text-transform:uppercase">{pb_icon} {pb_title}</p>
+    <p style="margin:0 0 4px;font-size:22px;font-weight:900;color:#ffffff;line-height:1.2">{pb_label}</p>
+    <p style="margin:0 0 14px;font-size:12px;color:#94a3b8">{pb_sub}</p>
+    <a href="{pb_info['update_url']}"
+       style="display:inline-block;background:{pb_pill_bg};color:{pb_pill_tx};
+              font-size:11px;font-weight:800;padding:6px 14px;border-radius:6px;
+              text-decoration:none;letter-spacing:0.5px">{pb_pill} →</a>
+  </div>"""
+    else:
+        # No block set — bright CTA
+        setup_url = dashboard_url or BASE_URL
+        pb_html = f"""
+  <div style="background:linear-gradient(135deg,#7c4a00 0%,#92540a 100%);
+              border:2px dashed #f5a623;border-radius:12px;padding:20px 24px;margin:24px 0">
+    <p style="margin:0 0 4px;font-size:10px;font-weight:800;color:#f5a623;
+              letter-spacing:1.5px;text-transform:uppercase">⏰ NO BLOCK SET YET</p>
+    <p style="margin:0 0 10px;font-size:17px;font-weight:700;color:#ffffff;line-height:1.3">
+      Lock in your prospecting time block.</p>
+    <p style="margin:0 0 14px;font-size:13px;color:#cbd5e1;line-height:1.5">
+      Top producers don't find time to prospect — they protect it. Takes 60 seconds.</p>
+    <a href="{setup_url}"
+       style="display:inline-block;background:#f5a623;color:#0d1117;
+              font-size:11px;font-weight:800;padding:6px 14px;border-radius:6px;
+              text-decoration:none;letter-spacing:0.5px">SET MY BLOCK →</a>
+  </div>"""
+
+    # ── Dials target card ────────────────────────────────────────────────────
+    dials_html = ""
+    if goal_ctx:
+        daily_dials  = goal_ctx.get("daily_target", 0)
+        daily_convos = goal_ctx.get("daily_convos", 0)
+        pace_pct     = min(100, max(0, int(goal_ctx.get("calls_pace_pct", 0))))
+        pace_status  = goal_ctx.get("pace_status", "red")
+        gci_fmt_     = goal_ctx.get("gci_fmt", "your goal")
+        calls_ytd    = goal_ctx.get("calls_ytd", 0)
+        calls_tgt    = goal_ctx.get("calls_target_ytd", 0)
+        gap          = goal_ctx.get("gap_yesterday", 0)
+
+        bar_color = {"green": "#22c55e", "yellow": "#eab308", "red": "#ef4444"}.get(pace_status, "#ef4444")
+        bar_label = {"green": "On Pace ✓", "yellow": "Slightly Behind", "red": "Behind Pace"}.get(pace_status, "Behind")
+
+        gap_txt = (f"+{gap} above target" if gap > 0 else
+                   ("on target" if gap == 0 else f"{abs(gap)} short of target"))
+
+        dials_html = f"""
+  <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;
+              padding:20px 24px;margin:0 0 24px">
+    <p style="margin:0 0 12px;font-size:10px;font-weight:800;color:#64748b;
+              letter-spacing:1.5px;text-transform:uppercase">📞 TODAY'S DIAL TARGET &nbsp;·&nbsp; {gci_fmt_}</p>
+    <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:0 0 4px">
+      <span style="font-size:48px;font-weight:900;color:#ffffff;line-height:1">{daily_dials}</span>
+      <span style="font-size:14px;color:#94a3b8;font-weight:600">dials needed today</span>
+    </div>
+    <p style="margin:0 0 12px;font-size:12px;color:#64748b">
+      ~{daily_convos} live conversation{'s' if daily_convos != 1 else ''} expected &nbsp;·&nbsp; Yesterday: {gap_txt}
+    </p>
+    <div style="background:#1e293b;border-radius:6px;height:10px;margin:0 0 6px;overflow:hidden">
+      <div style="background:{bar_color};height:10px;width:{pace_pct}%;
+                  border-radius:6px;transition:width 0.3s"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:#64748b">
+      <span style="color:{bar_color};font-weight:700">{bar_label} — {pace_pct}% YTD</span>
+      <span>{calls_ytd:,} of {calls_tgt:,} dials</span>
+    </div>
+  </div>"""
+
+    # ── ISA transfer block ───────────────────────────────────────────────────
     isa_html = ""
     if isa_transfers:
-        FUB_PERSON_URL = "https://yourfriendlyagent.followupboss.com/2/people/view/{person_id}"
         isa_rows = ""
         for t in isa_transfers:
             pid   = t.get("person_id", "")
             lname = t.get("lead_name", "Unknown")
             days  = t.get("days_since", 0)
-            age   = f"Day {int(days) + 1}" if days < 1 else f"Day {int(days) + 1}"
+            age   = f"Day {int(days) + 1}"
             url   = FUB_PERSON_URL.format(person_id=pid) if pid else "#"
             isa_rows += f"""
             <tr>
               <td style="padding:10px 0;border-bottom:1px solid #fed7d7">
-                <a href="{url}" style="font-size:15px;font-weight:700;color:#1a1a2e;text-decoration:none">{lname}</a>
-                <span style="margin-left:8px;font-size:11px;font-weight:700;color:#e53e3e;background:#fff5f5;padding:2px 8px;border-radius:10px">{age}</span>
+                <a href="{url}" style="font-size:15px;font-weight:700;color:#1a1a2e;
+                          text-decoration:none">{lname}</a>
+                <span style="margin-left:8px;font-size:11px;font-weight:700;color:#e53e3e;
+                             background:#fff5f5;padding:2px 8px;border-radius:10px">{age}</span>
               </td>
-              <td style="padding:10px 0;border-bottom:1px solid #fed7d7;text-align:right;vertical-align:middle">
-                <a href="{url}" style="font-size:12px;font-weight:700;color:#e53e3e;text-decoration:none">Call Now →</a>
+              <td style="padding:10px 0;border-bottom:1px solid #fed7d7;text-align:right;
+                         vertical-align:middle">
+                <a href="{url}" style="font-size:12px;font-weight:700;color:#e53e3e;
+                          text-decoration:none">Call Now →</a>
               </td>
             </tr>"""
         isa_html = f"""
-  <div style="background:#fff5f5;border:2px solid #fed7d7;border-radius:10px;padding:20px 24px;margin:24px 0">
-    <p style="margin:0 0 6px;font-size:12px;font-weight:800;color:#e53e3e;letter-spacing:1px;text-transform:uppercase">🔴 ISA Transfers — Call These First</p>
-    <p style="margin:0 0 14px;font-size:13px;color:#718096;line-height:1.5">These leads already talked to Ylopo's AI. ISA confirmed they're ready for a human. Hit them before anything else today.</p>
-    <table width="100%" cellpadding="0" cellspacing="0">{isa_rows}
-    </table>
+  <div style="background:#fff5f5;border:2px solid #fed7d7;border-radius:12px;
+              padding:20px 24px;margin:0 0 24px">
+    <p style="margin:0 0 4px;font-size:10px;font-weight:800;color:#e53e3e;
+              letter-spacing:1.5px;text-transform:uppercase">🔴 ISA TRANSFERS — CALL THESE FIRST</p>
+    <p style="margin:0 0 14px;font-size:13px;color:#718096;line-height:1.5">
+      These leads already talked to Ylopo's AI. ISA confirmed they're ready.
+      Hit them before anything else today.</p>
+    <table width="100%" cellpadding="0" cellspacing="0">{isa_rows}</table>
   </div>"""
 
+    # ── LeadStream lead cards ────────────────────────────────────────────────
     leads_html = ""
     if leads:
-        lead_rows = ""
+        tier_cfg = {
+            "hot":    {"bg": "#fff1f2", "border": "#fecdd3", "badge_bg": "#ef4444",
+                       "badge_tx": "#ffffff", "icon": "🔥"},
+            "warm":   {"bg": "#fff7ed", "border": "#fed7aa", "badge_bg": "#f97316",
+                       "badge_tx": "#ffffff", "icon": "🌡️"},
+            "active": {"bg": "#eff6ff", "border": "#bfdbfe", "badge_bg": "#3b82f6",
+                       "badge_tx": "#ffffff", "icon": "⚡"},
+        }
+        lead_cards = ""
         for lead in leads:
-            pid   = lead.get("id")
-            lname = lead.get("name", "Unknown")
-            score = lead.get("score", 0)
-            tier  = (lead.get("tier") or "").lower()
-            stage = lead.get("stage", "")
-            url   = FUB_PERSON_URL.format(person_id=pid) if pid else "#"
-            tier_color = {"hot": "#ef4444", "warm": "#f97316", "active": "#3b82f6"}.get(tier, "#6b7280")
-            lead_rows += f"""
-            <tr>
-              <td style="padding:10px 0;border-bottom:1px solid #f1f5f9">
-                <a href="{url}" style="font-size:15px;font-weight:600;color:#1a1a2e;text-decoration:none">{lname}</a>
-                <span style="margin-left:8px;font-size:11px;font-weight:700;color:{tier_color};text-transform:uppercase;background:rgba(0,0,0,0.05);padding:2px 7px;border-radius:10px">{tier}</span><br>
-                <span style="font-size:12px;color:#94a3b8">{stage} &nbsp;·&nbsp; Score: {score}</span>
-              </td>
-              <td style="padding:10px 0;border-bottom:1px solid #f1f5f9;text-align:right;vertical-align:middle">
-                <a href="{url}" style="font-size:12px;font-weight:700;color:#667eea;text-decoration:none">Open in FUB →</a>
-              </td>
-            </tr>"""
+            pid    = lead.get("id")
+            lname  = lead.get("name", "Unknown")
+            score  = lead.get("score", 0)
+            tier   = (lead.get("tier") or "").lower()
+            stage  = lead.get("stage", "") or "—"
+            url    = FUB_PERSON_URL.format(person_id=pid) if pid else "#"
+            cfg    = tier_cfg.get(tier, {"bg": "#f8fafc", "border": "#e2e8f0",
+                                         "badge_bg": "#6b7280", "badge_tx": "#ffffff",
+                                         "icon": "👤"})
+            # Signal strength bar (score 0–100)
+            signal_pct = min(100, max(0, int(score)))
+            sig_color  = cfg["badge_bg"]
+            lead_cards += f"""
+  <div style="background:{cfg['bg']};border:1.5px solid {cfg['border']};
+              border-radius:10px;padding:14px 18px;margin:0 0 10px;
+              display:block">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        <a href="{url}" style="font-size:15px;font-weight:700;color:#0f172a;
+                  text-decoration:none;display:block;margin:0 0 3px">{cfg['icon']} {lname}</a>
+        <span style="font-size:12px;color:#64748b">{stage}</span>
+      </div>
+      <div style="text-align:right;flex-shrink:0;margin-left:12px">
+        <span style="display:inline-block;background:{cfg['badge_bg']};color:{cfg['badge_tx']};
+                     font-size:10px;font-weight:800;padding:2px 8px;border-radius:6px;
+                     text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">{tier or 'lead'}</span><br>
+        <a href="{url}" style="font-size:12px;font-weight:700;color:{cfg['badge_bg']};
+                  text-decoration:none">Open FUB →</a>
+      </div>
+    </div>
+    <div style="margin:10px 0 2px">
+      <div style="background:rgba(0,0,0,0.08);border-radius:4px;height:4px;overflow:hidden">
+        <div style="background:{sig_color};height:4px;width:{signal_pct}%;border-radius:4px"></div>
+      </div>
+      <p style="margin:3px 0 0;font-size:10px;color:#94a3b8">Signal score: {score}</p>
+    </div>
+  </div>"""
 
         leads_html = f"""
-  <div style="background:#f8fafc;border-radius:10px;padding:20px 24px;margin:24px 0">
-    <p style="margin:0 0 14px;font-size:12px;font-weight:700;color:#94a3b8;letter-spacing:1px;text-transform:uppercase">🔥 Your Top LeadStream Leads</p>
-    <table width="100%" cellpadding="0" cellspacing="0">{lead_rows}
-    </table>
-    <p style="margin:16px 0 0;text-align:center">
-      <a href="{FUB_LIST_URL}" style="font-size:13px;font-weight:700;color:#667eea;text-decoration:none">See all your LeadStream leads →</a>
+  <div style="margin:0 0 24px">
+    <p style="margin:0 0 12px;font-size:10px;font-weight:800;color:#64748b;
+              letter-spacing:1.5px;text-transform:uppercase">🔥 YOUR TOP LEADSTREAM LEADS</p>
+    {lead_cards}
+    <p style="margin:8px 0 0;text-align:center">
+      <a href="{FUB_LIST_URL}"
+         style="font-size:13px;font-weight:700;color:#667eea;text-decoration:none">
+        See all your LeadStream leads →</a>
     </p>
   </div>"""
 
+    # ── Dashboard button ─────────────────────────────────────────────────────
     dash_btn = f"""
   <div style="text-align:center;margin:20px 0 8px">
-    <a href="{dashboard_url}" style="display:inline-block;background:#f5a623;color:#0d1117;padding:13px 32px;border-radius:8px;text-decoration:none;font-weight:800;font-size:14px">View My Dashboard →</a>
+    <a href="{dashboard_url}"
+       style="display:inline-block;background:#f5a623;color:#0d1117;padding:13px 32px;
+              border-radius:8px;text-decoration:none;font-weight:800;font-size:14px">
+      View My Dashboard →</a>
   </div>""" if dashboard_url else ""
 
     return f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
-<div style="max-width:560px;margin:24px auto;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08)">
-  <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:22px 32px;text-align:center">
-    <img src="{LOGO_URL}" alt="Legacy Home Team" width="120" style="display:block;margin:0 auto;height:auto">
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <!--[if mso]><noscript><xml><o:OfficeDocumentSettings>
+    <o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings>
+  </xml></noscript><![endif]-->
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;
+             font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<div style="max-width:580px;margin:24px auto;background:#ffffff;
+            border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.10)">
+
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);
+              padding:24px 32px;text-align:center">
+    <img src="{LOGO_URL}" alt="Legacy Home Team" width="130"
+         style="display:block;margin:0 auto;height:auto">
   </div>
-  <div style="padding:28px 32px 12px">
-    <div style="font-size:16px;line-height:1.75;color:#2d3748">{html_body}</div>
+
+  <!-- Body -->
+  <div style="padding:28px 32px 8px">
+
+    {opener_html}
+
+    <!-- Arc email body -->
+    <div style="font-size:16px;line-height:1.8;color:#1e293b;margin:0 0 24px">
+      {html_body}
+    </div>
+
+    {pb_html}
+
+    {dials_html}
+
     {isa_html}
+
     {leads_html}
+
     {dash_btn}
+
   </div>
-  <div style="background:#f7fafc;padding:14px 32px;text-align:center;border-top:1px solid #e2e8f0">
-    <p style="margin:0;font-size:12px;color:#a0aec0">Legacy Home Team &middot; Daily accountability &middot; <a href="{dashboard_url}" style="color:#a0aec0">My Dashboard</a></p>
+
+  <!-- Footer -->
+  <div style="background:#f8fafc;padding:16px 32px;text-align:center;
+              border-top:1px solid #e2e8f0">
+    <p style="margin:0;font-size:12px;color:#94a3b8">
+      Legacy Home Team &nbsp;·&nbsp; Daily accountability
+      &nbsp;·&nbsp;
+      <a href="{dashboard_url or BASE_URL}" style="color:#94a3b8">My Dashboard</a>
+    </p>
   </div>
+
 </div>
-</body></html>"""
+</body>
+</html>"""
 
 
 def run_afternoon_push(dry_run: bool = False):
@@ -1381,6 +1663,7 @@ def run_streak_break_check(dry_run: bool = False):
 def run_weekly_summary(dry_run: bool = False):
     """
     Called Sunday 6pm ET. Send each agent their week-in-numbers summary.
+    Includes a prospecting time-block CTA for agents who haven't set one yet.
     """
     profiles = _db.get_agent_profiles(active_only=True)
     sent = 0
@@ -1414,7 +1697,56 @@ def run_weekly_summary(dry_run: bool = False):
             else:
                 one_liner = f"Next week: get back to your why."
 
-        extra = {"calls": calls, "appts": appts, "pace_word": pace_word, "one_liner": one_liner}
+        # ── Prospecting block section ──────────────────────────────────
+        first = name.split()[0]
+        pb    = _db.get_prospecting_block(name)
+        token = _db.get_goal_token(name) or ""
+        pb_cta = ""
+
+        if pb and pb.get("prospecting_days"):
+            # They have a block — remind + offer to update for next week
+            days_raw  = pb.get("prospecting_days") or []
+            start_raw = pb.get("start_time", "09:00")
+            dur_min   = int(pb.get("duration_minutes", 60))
+            day_abbr  = {"monday":"Mon","tuesday":"Tue","wednesday":"Wed",
+                         "thursday":"Thu","friday":"Fri","saturday":"Sat"}
+            day_order = ["monday","tuesday","wednesday","thursday","friday","saturday"]
+            days_str  = " · ".join(day_abbr.get(d, d.capitalize())
+                                   for d in day_order if d in [x.lower() for x in days_raw])
+            h, m   = int(start_raw[:2]), int(start_raw[3:5])
+            ampm   = "AM" if h < 12 else "PM"
+            h12    = h % 12 or 12
+            time_str  = f"{h12}:{m:02d} {ampm}"
+            dur_str   = f"{dur_min} min" if dur_min < 60 else (
+                        f"{dur_min//60}h" if dur_min % 60 == 0 else f"{dur_min//60}h {dur_min%60}m")
+            block_str = f"{days_str} at {time_str} ({dur_str})"
+            update_url = f"{BASE_URL}/my-block/{token}" if token else ""
+            pb_cta = (
+                f"\n\n📅 Your call block this week: {block_str}.\n"
+                f"Need to adjust it for next week? "
+            )
+            if update_url:
+                pb_cta += f"Update it here (takes 10 seconds) → {update_url}"
+            else:
+                pb_cta += "Log in to your dashboard to update."
+        else:
+            # No block set yet — push them to set it
+            setup_url = f"{BASE_URL}/goals/setup/{token}#step7" if token else ""
+            pb_cta = (
+                f"\n\nOne more thing, {first}: the agents who hit their goals this year "
+                f"aren't just working harder — they're protecting their time. "
+                f"If you haven't set your prospecting time block yet, your goal dashboard "
+                f"has a quick setup. Pick your days, pick a time, and we'll "
+                f"lock it into your calendar automatically."
+            )
+            if setup_url:
+                pb_cta += f"\n\nSet it up (30 seconds) → {setup_url}"
+        # ─────────────────────────────────────────────────────────────
+
+        extra = {
+            "calls": calls, "appts": appts,
+            "pace_word": pace_word, "one_liner": one_liner + pb_cta,
+        }
         if nudge_agent(name, "weekly_summary", email, extra=extra, dry_run=dry_run):
             sent += 1
     logger.info("run_weekly_summary: sent %d nudge emails", sent)

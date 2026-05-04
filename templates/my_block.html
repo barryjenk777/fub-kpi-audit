@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+  <title>Update Your Call Block</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 24px 16px 48px;
+    }
+
+    .logo {
+      width: 110px;
+      margin: 0 auto 28px;
+      display: block;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 420px;
+      background: #1e293b;
+      border-radius: 16px;
+      padding: 28px 24px 32px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 900;
+      color: #f5a623;
+      margin: 0 0 6px;
+      letter-spacing: -0.3px;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: #64748b;
+      margin: 0 0 28px;
+      line-height: 1.5;
+    }
+
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      color: #64748b;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin: 0 0 8px;
+    }
+
+    /* ── Day picker ── */
+    .day-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 6px;
+      margin: 0 0 24px;
+    }
+    .day-pill {
+      background: #0f172a;
+      border: 1.5px solid #334155;
+      border-radius: 8px;
+      padding: 8px 2px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: #64748b;
+      cursor: pointer;
+      transition: all 0.15s;
+      user-select: none;
+    }
+    .day-pill:active { transform: scale(0.95); }
+    .day-pill.selected {
+      background: #f5a623;
+      border-color: #f5a623;
+      color: #0d1117;
+    }
+
+    /* ── Time + duration ── */
+    .row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 0 0 24px;
+    }
+    .field-group { display: flex; flex-direction: column; gap: 8px; }
+
+    select, input[type="time"] {
+      width: 100%;
+      background: #0f172a;
+      border: 1.5px solid #334155;
+      border-radius: 8px;
+      color: #f1f5f9;
+      font-size: 16px;
+      font-weight: 700;
+      padding: 12px 14px;
+      appearance: none;
+      -webkit-appearance: none;
+      outline: none;
+    }
+    select:focus, input[type="time"]:focus {
+      border-color: #f5a623;
+    }
+    select option { background: #1e293b; }
+
+    /* ── Preview ── */
+    .preview {
+      background: #0f172a;
+      border: 1.5px solid #f5a623;
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin: 0 0 24px;
+      min-height: 52px;
+    }
+    .preview-label {
+      font-size: 10px;
+      font-weight: 800;
+      color: #f5a623;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin: 0 0 4px;
+    }
+    .preview-text {
+      font-size: 14px;
+      font-weight: 700;
+      color: #f1f5f9;
+      line-height: 1.4;
+    }
+
+    /* ── Recurring vs one-week toggle ── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 28px;
+    }
+    /* Custom toggle switch */
+    .switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0;
+      background: #334155;
+      border-radius: 24px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .slider::before {
+      content: '';
+      position: absolute;
+      left: 3px; top: 3px;
+      width: 18px; height: 18px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+    .switch input:checked + .slider { background: #f5a623; }
+    .switch input:checked + .slider::before { transform: translateX(20px); }
+    .toggle-label { font-size: 13px; color: #94a3b8; line-height: 1.3; }
+    .toggle-label strong { color: #f1f5f9; font-weight: 700; }
+
+    /* ── Submit button ── */
+    .btn-submit {
+      width: 100%;
+      background: #f5a623;
+      color: #0d1117;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 900;
+      padding: 16px;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      letter-spacing: 0.3px;
+    }
+    .btn-submit:active { opacity: 0.85; transform: scale(0.99); }
+    .btn-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── States ── */
+    .state-loading, .state-success, .state-error { display: none; }
+    .state-loading { text-align: center; padding: 24px; }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 3px solid #334155;
+      border-top-color: #f5a623;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .state-success {
+      text-align: center;
+      padding: 24px;
+    }
+    .success-icon {
+      font-size: 52px;
+      margin: 0 0 16px;
+    }
+    .state-success h2 { color: #22c55e; font-size: 20px; margin: 0 0 8px; }
+    .state-success p  { color: #94a3b8; font-size: 14px; line-height: 1.5; }
+
+    .state-error {
+      background: #450a0a;
+      border: 1.5px solid #ef4444;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 0 0 16px;
+      font-size: 13px;
+      color: #fca5a5;
+    }
+
+    .current-block {
+      background: #172033;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin: 0 0 24px;
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+    .current-block strong { color: #cbd5e1; }
+  </style>
+</head>
+<body>
+
+  <img src="/static/logo-white.png" alt="Legacy Home Team" class="logo">
+
+  <div class="card">
+
+    <!-- Loading state -->
+    <div class="state-loading" id="stateLoading">
+      <div class="spinner"></div>
+      <p style="color:#64748b;font-size:14px">Loading your block…</p>
+    </div>
+
+    <!-- Success state -->
+    <div class="state-success" id="stateSuccess">
+      <div class="success-icon">📅</div>
+      <h2>Block updated!</h2>
+      <p id="successMsg">Your calendar invite is on its way. Check your email in a moment.</p>
+    </div>
+
+    <!-- Form state -->
+    <div id="stateForm">
+      <h1>Update Your Call Block</h1>
+      <p class="subtitle">Pick your days and time for this week's prospecting block. Takes 10 seconds.</p>
+
+      <!-- Current block reminder -->
+      <div class="current-block" id="currentBlock" style="display:none">
+        <strong>Current block:</strong> <span id="currentBlockText"></span>
+      </div>
+
+      <!-- Error banner -->
+      <div class="state-error" id="stateError"></div>
+
+      <!-- Day picker -->
+      <label>Which days?</label>
+      <div class="day-grid">
+        <div class="day-pill" data-day="monday"   onclick="toggleDay(this)">Mon</div>
+        <div class="day-pill" data-day="tuesday"  onclick="toggleDay(this)">Tue</div>
+        <div class="day-pill" data-day="wednesday"onclick="toggleDay(this)">Wed</div>
+        <div class="day-pill" data-day="thursday" onclick="toggleDay(this)">Thu</div>
+        <div class="day-pill" data-day="friday"   onclick="toggleDay(this)">Fri</div>
+        <div class="day-pill" data-day="saturday" onclick="toggleDay(this)">Sat</div>
+      </div>
+
+      <!-- Time + Duration -->
+      <div class="row-2">
+        <div class="field-group">
+          <label>Start time</label>
+          <input type="time" id="startTime" value="09:00" onchange="updatePreview()">
+        </div>
+        <div class="field-group">
+          <label>Duration</label>
+          <select id="duration" onchange="updatePreview()">
+            <option value="30">30 min</option>
+            <option value="60" selected>1 hour</option>
+            <option value="90">1.5 hours</option>
+            <option value="120">2 hours</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Preview -->
+      <div class="preview">
+        <div class="preview-label">Your block</div>
+        <div class="preview-text" id="blockPreview">Select days to preview</div>
+      </div>
+
+      <!-- Recurring toggle -->
+      <div class="toggle-row">
+        <label class="switch">
+          <input type="checkbox" id="recurringToggle" checked onchange="updatePreview()">
+          <span class="slider"></span>
+        </label>
+        <span class="toggle-label">
+          <strong>Recurring</strong> — update my weekly template<br>
+          <span id="toggleHint">Uncheck to change this week only</span>
+        </span>
+      </div>
+
+      <button class="btn-submit" id="btnSave" onclick="saveBlock()" disabled>
+        Lock In My Block →
+      </button>
+    </div>
+
+  </div>
+
+  <script>
+    const TOKEN = '{{ token }}';
+    const selectedDays = new Set();
+
+    // ── Boot: load existing block ──────────────────────────────────────────
+    async function loadBlock() {
+      try {
+        const r = await fetch(`/api/goals/prospecting-block/${TOKEN}`);
+        if (!r.ok) return;
+        const resp = await r.json();
+        const data = resp.block || resp;  // handle {block: {...}} or flat
+        if (data && data.prospecting_days && data.prospecting_days.length) {
+          // Pre-select days
+          data.prospecting_days.forEach(d => {
+            const pill = document.querySelector(`[data-day="${d}"]`);
+            if (pill) { pill.classList.add('selected'); selectedDays.add(d); }
+          });
+          // Pre-fill start time
+          if (data.start_time) {
+            document.getElementById('startTime').value = data.start_time.slice(0, 5);
+          }
+          // Pre-fill duration
+          if (data.duration_minutes) {
+            document.getElementById('duration').value = String(data.duration_minutes);
+          }
+          // Show current block summary
+          const cb = document.getElementById('currentBlock');
+          const cbText = document.getElementById('currentBlockText');
+          cbText.textContent = fmtBlockSummary(
+            data.prospecting_days, data.start_time, data.duration_minutes
+          );
+          cb.style.display = 'block';
+          updatePreview();
+        }
+      } catch(e) { /* silent — fresh start */ }
+    }
+
+    function fmtBlockSummary(days, startTime, durationMin) {
+      const dayAbbr = {monday:'Mon',tuesday:'Tue',wednesday:'Wed',
+                       thursday:'Thu',friday:'Fri',saturday:'Sat'};
+      const daysStr = (days || []).map(d => dayAbbr[d] || d).join(', ');
+      const startFmt = fmtTime(startTime);
+      const durFmt = durationMin < 60
+        ? `${durationMin}m`
+        : (durationMin % 60 === 0
+            ? `${durationMin/60}h`
+            : `${Math.floor(durationMin/60)}h ${durationMin%60}m`);
+      return `${daysStr} · ${startFmt} · ${durFmt}`;
+    }
+
+    // ── Day toggle ─────────────────────────────────────────────────────────
+    function toggleDay(el) {
+      const d = el.dataset.day;
+      if (selectedDays.has(d)) { selectedDays.delete(d); el.classList.remove('selected'); }
+      else                      { selectedDays.add(d);    el.classList.add('selected'); }
+      updatePreview();
+      document.getElementById('btnSave').disabled = selectedDays.size === 0;
+    }
+
+    // ── Preview ────────────────────────────────────────────────────────────
+    function updatePreview() {
+      const recurring = document.getElementById('recurringToggle').checked;
+      document.getElementById('toggleHint').textContent = recurring
+        ? 'Uncheck to change this week only'
+        : 'This change applies to THIS WEEK only';
+
+      const preview = document.getElementById('blockPreview');
+      if (selectedDays.size === 0) { preview.textContent = 'Select days to preview'; return; }
+
+      const order = ['monday','tuesday','wednesday','thursday','friday','saturday'];
+      const abbr  = {monday:'Mon',tuesday:'Tue',wednesday:'Wed',
+                     thursday:'Thu',friday:'Fri',saturday:'Sat'};
+      const sorted = order.filter(d => selectedDays.has(d)).map(d => abbr[d]);
+
+      const start  = document.getElementById('startTime').value;
+      const dur    = parseInt(document.getElementById('duration').value);
+      const startF = fmtTime(start);
+
+      // Compute end time
+      const [h, m] = start.split(':').map(Number);
+      const endTotal = h * 60 + m + dur;
+      const endH = Math.floor(endTotal / 60) % 24;
+      const endM = endTotal % 60;
+      const endF = fmtTime(`${String(endH).padStart(2,'0')}:${String(endM).padStart(2,'0')}`);
+
+      const durLabel = dur < 60 ? `${dur} min` : (dur % 60 === 0 ? `${dur/60}h` : `${Math.floor(dur/60)}h ${dur%60}m`);
+
+      preview.textContent = `${sorted.join(' · ')} · ${startF}–${endF} (${durLabel})`;
+    }
+
+    function fmtTime(t) {
+      if (!t) return '';
+      const [h, m] = t.split(':').map(Number);
+      const period = h < 12 ? 'AM' : 'PM';
+      const h12 = h % 12 || 12;
+      return `${h12}:${String(m).padStart(2,'0')} ${period}`;
+    }
+
+    // ── Save ───────────────────────────────────────────────────────────────
+    async function saveBlock() {
+      const btn = document.getElementById('btnSave');
+      const errEl = document.getElementById('stateError');
+
+      if (selectedDays.size === 0) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      errEl.style.display = 'none';
+
+      const recurring = document.getElementById('recurringToggle').checked;
+      const payload = {
+        days: Array.from(selectedDays),
+        start_time: document.getElementById('startTime').value,
+        duration_minutes: parseInt(document.getElementById('duration').value),
+        recurring: recurring,
+      };
+
+      try {
+        const r = await fetch(`/api/goals/prospecting-block/${TOKEN}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Save failed');
+
+        // Show success
+        document.getElementById('stateForm').style.display = 'none';
+        const successEl = document.getElementById('stateSuccess');
+        const msgEl = document.getElementById('successMsg');
+        if (recurring) {
+          msgEl.textContent = 'Your recurring block is saved and a calendar invite is on its way!';
+        } else {
+          msgEl.textContent = 'This week\'s block is updated. A one-time calendar invite is headed to your email.';
+        }
+        successEl.style.display = 'block';
+      } catch(e) {
+        errEl.textContent = e.message || 'Something went wrong. Try again.';
+        errEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Lock In My Block →';
+      }
+    }
+
+    // Boot
+    loadBlock();
+    document.getElementById('btnSave').disabled = true;
+  </script>
+
+</body>
+</html>

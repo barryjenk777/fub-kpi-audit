@@ -3012,6 +3012,357 @@ def api_debug_storage():
 # GOALS  — agent setup, manager scorecard, FUB deal sync
 # ============================================================
 
+# ──────────────────────────────────────────────────────────────────────────────
+# ICS calendar invite helper for prospecting blocks
+# ──────────────────────────────────────────────────────────────────────────────
+
+_ICAL_DAY_MAP = {
+    "monday": "MO", "tuesday": "TU", "wednesday": "WE",
+    "thursday": "TH", "friday": "FR", "saturday": "SA", "sunday": "SU",
+}
+_ICAL_WEEKDAY_NUM = {
+    "monday": 0, "tuesday": 1, "wednesday": 2,
+    "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6,
+}
+
+
+def _next_occurrence(day_name: str) -> "date":
+    """Return the next calendar date that falls on day_name (today inclusive)."""
+    from datetime import date, timedelta
+    today = date.today()
+    target_wd = _ICAL_WEEKDAY_NUM.get(day_name.lower(), 0)
+    days_ahead = (target_wd - today.weekday()) % 7
+    return today + timedelta(days=days_ahead)
+
+
+def _duration_to_iso(minutes: int) -> str:
+    h, m = divmod(minutes, 60)
+    parts = "PT"
+    if h: parts += f"{h}H"
+    if m: parts += f"{m}M"
+    return parts
+
+
+def _build_ics(agent_name: str, agent_email: str,
+               days: list, start_time: str, duration_minutes: int,
+               recurring: bool = True) -> str:
+    """
+    Build an ICS file (iCalendar).
+
+    recurring=True  → RRULE weekly, deterministic UID (updates existing invite)
+    recurring=False → One VEVENT per day this week, dated UIDs (single-week override)
+    """
+    import re as _re
+    from datetime import date
+
+    if not days:
+        raise ValueError("No days specified for prospecting block ICS")
+
+    days_sorted = sorted(days, key=lambda d: _ICAL_WEEKDAY_NUM.get(d.lower(), 0))
+    next_dates   = {d: _next_occurrence(d) for d in days_sorted}
+
+    hh, mm       = start_time.split(":")[:2]
+    duration_iso = _duration_to_iso(duration_minutes)
+    slug         = _re.sub(r"[^a-z0-9]", "-", agent_name.lower())
+
+    day_labels   = {"monday":"Mon","tuesday":"Tue","wednesday":"Wed",
+                    "thursday":"Thu","friday":"Fri","saturday":"Sat","sunday":"Sun"}
+    days_readable = ", ".join(day_labels.get(d.lower(), d) for d in days_sorted)
+    dur_label = _duration_to_iso(duration_minutes).replace("PT","").replace("H"," hr ").replace("M"," min").strip()
+    desc  = (f"Prospecting Hour - your weekly commitment to building the business "
+             f"that funds your goals. Block: {days_readable} at {start_time} ET "
+             f"for {dur_label}. You chose this. Now protect it.")
+
+    alarm = (
+        "BEGIN:VALARM\r\n"
+        "TRIGGER:-PT10M\r\n"
+        "ACTION:DISPLAY\r\n"
+        "DESCRIPTION:Time to prospect — your future self is counting on you.\r\n"
+        "END:VALARM\r\n"
+    )
+
+    cal_header = (
+        "BEGIN:VCALENDAR\r\n"
+        "VERSION:2.0\r\n"
+        "PRODID:-//Legacy Home Team//Goal System//EN\r\n"
+        "CALSCALE:GREGORIAN\r\n"
+        "METHOD:REQUEST\r\n"
+    )
+
+    if recurring:
+        # Single VEVENT with RRULE — deterministic UID replaces existing invite
+        first_day    = min(days_sorted, key=lambda d: next_dates[d])
+        dtstart_date = next_dates[first_day]
+        dtstart      = f"{dtstart_date.strftime('%Y%m%d')}T{hh}{mm}00"
+        byday        = ",".join(_ICAL_DAY_MAP.get(d.lower(), "MO") for d in days_sorted)
+        uid          = f"prospecting-block-{slug}@legacyhometeam.com"
+
+        ics = (
+            cal_header
+            + "BEGIN:VEVENT\r\n"
+            + f"UID:{uid}\r\n"
+            + f"DTSTART;TZID=America/New_York:{dtstart}\r\n"
+            + f"DURATION:{duration_iso}\r\n"
+            + f"RRULE:FREQ=WEEKLY;BYDAY={byday}\r\n"
+            + f"SUMMARY:Prospecting Hour - to accomplish my goals\r\n"
+            + f"DESCRIPTION:{desc}\r\n"
+            + f"ORGANIZER;CN=Barry Jenkins - Legacy Home Team:mailto:{config.EMAIL_FROM}\r\n"
+            + f"ATTENDEE;RSVP=TRUE;CN={agent_name}:mailto:{agent_email}\r\n"
+            + "STATUS:CONFIRMED\r\n"
+            + "TRANSP:OPAQUE\r\n"
+            + alarm
+            + "END:VEVENT\r\n"
+            + "END:VCALENDAR\r\n"
+        )
+    else:
+        # One VEVENT per day — dated UIDs, no RRULE — single-week override
+        vevents = ""
+        for d in days_sorted:
+            dt_date = next_dates[d]
+            dtstart = f"{dt_date.strftime('%Y%m%d')}T{hh}{mm}00"
+            uid     = f"prospecting-override-{slug}-{dt_date.strftime('%Y%m%d')}@legacyhometeam.com"
+            vevents += (
+                "BEGIN:VEVENT\r\n"
+                + f"UID:{uid}\r\n"
+                + f"DTSTART;TZID=America/New_York:{dtstart}\r\n"
+                + f"DURATION:{duration_iso}\r\n"
+                + f"SUMMARY:Prospecting Hour (this week) - to accomplish my goals\r\n"
+                + f"DESCRIPTION:{desc}\r\n"
+                + f"ORGANIZER;CN=Barry Jenkins - Legacy Home Team:mailto:{config.EMAIL_FROM}\r\n"
+                + f"ATTENDEE;RSVP=TRUE;CN={agent_name}:mailto:{agent_email}\r\n"
+                + "STATUS:CONFIRMED\r\n"
+                + "TRANSP:OPAQUE\r\n"
+                + alarm
+                + "END:VEVENT\r\n"
+            )
+        ics = cal_header + vevents + "END:VCALENDAR\r\n"
+
+    return ics
+
+
+def _send_prospecting_ics(agent_name: str, agent_email: str,
+                           days: list, start_time: str,
+                           duration_minutes: int = 60,
+                           recurring: bool = True) -> bool:
+    """
+    Generate an ICS calendar invite and email it to the agent via SendGrid.
+    recurring=True  → weekly repeating template (sent from goal wizard)
+    recurring=False → single-week override events (sent from /my-block page)
+    Returns True on success.
+    """
+    import base64
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import (Mail, Attachment, FileContent,
+                                       FileName, FileType, Disposition)
+
+    sg_key = os.environ.get("SENDGRID_API_KEY")
+    if not sg_key:
+        print("[PROSPECTING ICS] No SENDGRID_API_KEY — skipping ICS send")
+        return False
+
+    ics_content = _build_ics(agent_name, agent_email, days, start_time,
+                             duration_minutes, recurring=recurring)
+    encoded     = base64.b64encode(ics_content.encode()).decode()
+
+    first = agent_name.split()[0]
+    day_labels = {"monday":"Mon","tuesday":"Tue","wednesday":"Wed",
+                  "thursday":"Thu","friday":"Fri","saturday":"Sat"}
+    days_readable = ", ".join(day_labels.get(d, d) for d in sorted(
+        days, key=lambda d: _ICAL_WEEKDAY_NUM.get(d.lower(), 0)))
+
+    hh, mm = start_time.split(":")[:2]
+    h_int = int(hh)
+    ampm  = "AM" if h_int < 12 else "PM"
+    h12   = h_int % 12 or 12
+    time_readable = f"{h12}:{mm} {ampm}"
+
+    dur_map = {30:"30 minutes", 60:"1 hour", 90:"1 hour 30 minutes", 120:"2 hours"}
+    dur_label = dur_map.get(duration_minutes, f"{duration_minutes} minutes")
+
+    subject = (f"📆 Your Prospecting Time Block is locked in, {first}!"
+               if recurring else
+               f"📅 Updated block for this week, {first} — calendar invite inside")
+    html_body = f"""
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+            max-width:560px;margin:0 auto;background:#080c14;color:#e8edf8;
+            border-radius:10px;overflow:hidden">
+  <div style="background:linear-gradient(135deg,#0f1520,#131d30);
+              padding:32px 28px;border-bottom:1px solid #243050">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.12em;
+                text-transform:uppercase;color:#f5a623;margin-bottom:6px">
+      Legacy Home Team — Goal System
+    </div>
+    <div style="font-size:24px;font-weight:800;line-height:1.25;margin-bottom:8px">
+      Your prospecting block is official, {first}. 🎯
+    </div>
+    <div style="font-size:15px;color:#94a3b8;line-height:1.6">
+      You committed to showing up. Here's your calendar invite — accept it and
+      protect that time like it's a listing appointment.
+    </div>
+  </div>
+
+  <div style="padding:24px 28px">
+    <div style="background:#0f1520;border:1px solid #243050;border-radius:10px;
+                padding:20px;margin-bottom:20px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.1em;
+                  text-transform:uppercase;color:#68789a;margin-bottom:12px">
+        Your Schedule
+      </div>
+      <div style="font-size:18px;font-weight:700;color:#f5a623;margin-bottom:4px">
+        Prospecting Hour — to accomplish my goals
+      </div>
+      <div style="font-size:14px;color:#e8edf8;margin-bottom:2px">
+        📅 Every week: <strong>{days_readable}</strong>
+      </div>
+      <div style="font-size:14px;color:#e8edf8;margin-bottom:2px">
+        🕗 Starting at: <strong>{time_readable} ET</strong>
+      </div>
+      <div style="font-size:14px;color:#e8edf8">
+        ⏱ Duration: <strong>{dur_label}</strong>
+      </div>
+    </div>
+
+    <div style="background:rgba(245,166,35,.08);border:1px solid rgba(245,166,35,.2);
+                border-radius:8px;padding:16px;margin-bottom:20px;font-size:14px;
+                color:#e8edf8;line-height:1.6">
+      <strong style="color:#f5a623">Why this matters:</strong> The calendar invite
+      is attached below. Accept it and your phone will remind you 10 minutes before
+      every session. The agents who hit their goals aren't smarter — they're just
+      harder to move off their schedule.
+    </div>
+
+    <div style="font-size:13px;color:#68789a;line-height:1.6">
+      This is a recurring invite. It will show up every week until you remove it.
+      If your schedule changes, just text Barry and we'll update it.
+    </div>
+  </div>
+
+  <div style="padding:16px 28px 24px;border-top:1px solid #243050;font-size:12px;
+              color:#3d506e;text-align:center">
+    Barry Jenkins · Legacy Home Team · LPT Realty<br>
+    (757) 919-8874 · legacyhomesearch.com
+  </div>
+</div>
+"""
+    text_body = (
+        f"Your prospecting block is locked in, {first}!\n\n"
+        f"Schedule: {days_readable} at {time_readable} ET, {dur_label}\n\n"
+        f"The calendar invite is attached. Accept it so your phone reminds you "
+        f"10 minutes before every session.\n\n"
+        f"— Barry Jenkins, Legacy Home Team"
+    )
+
+    msg = Mail(
+        from_email=config.EMAIL_FROM,
+        to_emails=agent_email,
+        subject=subject,
+        plain_text_content=text_body,
+        html_content=html_body,
+    )
+    att = Attachment(
+        FileContent(encoded),
+        FileName("prospecting-block.ics"),
+        FileType("text/calendar"),
+        Disposition("attachment"),
+    )
+    msg.attachment = att
+
+    try:
+        SendGridAPIClient(sg_key).send(msg)
+        return True
+    except Exception as e:
+        print(f"[PROSPECTING ICS] SendGrid error: {e}")
+        raise
+
+
+# ── Re-send prospecting block invite from dashboard ───────────────────────────
+
+@app.route("/api/goals/prospecting-block/<token>", methods=["POST"])
+def api_save_prospecting_block(token):
+    """
+    Save or update an agent's prospecting block from their dashboard.
+    Accepts: {days, start_time, duration_minutes, send_invite: bool}
+    Also used for re-sending calendar invites.
+    """
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return jsonify({"error": "Invalid or expired link"}), 403
+
+    body        = request.json or {}
+    resend_only = body.get("resend_only", False)
+    # recurring=True  → update the weekly template (default for wizard + dashboard)
+    # recurring=False → override just this coming week (from /my-block page)
+    recurring   = bool(body.get("recurring", True))
+
+    if resend_only:
+        # Re-send invite using existing block from DB
+        existing_block = _db.get_prospecting_block(agent_name)
+        if not existing_block or not existing_block.get("prospecting_days"):
+            return jsonify({"error": "No prospecting block on file to re-send"}), 400
+        days     = existing_block["prospecting_days"]
+        start    = existing_block["start_time"]
+        duration = existing_block["duration_minutes"]
+        record   = existing_block
+    else:
+        days     = body.get("days") or []
+        start    = body.get("start_time", "09:00")
+        duration = int(body.get("duration_minutes", 60))
+        if not days:
+            return jsonify({"error": "Please choose at least one day"}), 400
+        # Only update the DB template when it's a recurring change
+        if recurring:
+            record = _db.upsert_prospecting_block(
+                agent_name=agent_name,
+                prospecting_days=days,
+                start_time=start,
+                duration_minutes=duration,
+            )
+        else:
+            # Single-week override — don't overwrite the recurring template
+            record = _db.get_prospecting_block(agent_name) or {}
+
+    invite_sent = False
+    if body.get("send_invite", True):
+        _all_profiles = {p["agent_name"]: p for p in (_db.get_agent_profiles(active_only=False) or [])}
+        ap    = _all_profiles.get(agent_name, {})
+        email = ap.get("email", "")
+        if email:
+            try:
+                _send_prospecting_ics(agent_name, email, days, start, duration,
+                                      recurring=recurring)
+                if recurring:
+                    _db.mark_prospecting_invite_sent(agent_name)
+                invite_sent = True
+            except Exception as e:
+                print(f"[PROSPECTING ICS] Send failed for {agent_name}: {e}")
+        else:
+            print(f"[PROSPECTING ICS] No email on file for {agent_name}")
+
+    return jsonify({"success": True, "record": record, "invite_sent": invite_sent})
+
+
+@app.route("/api/goals/prospecting-block/<token>", methods=["GET"])
+def api_get_prospecting_block(token):
+    """Return the agent's current prospecting block schedule."""
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return jsonify({"error": "Invalid or expired link"}), 403
+    block = _db.get_prospecting_block(agent_name)
+    return jsonify({"success": True, "block": block})
+
+
+# ---- Option B: Update prospecting block for the week ──────────────────────
+
+@app.route("/my-block/<token>")
+def my_block_page(token):
+    """Mobile-optimized page for agents to update their weekly call block."""
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return ("<h2 style='font-family:sans-serif;padding:2rem;color:#fff;background:#0f172a;min-height:100vh'>"
+                "This link has expired or is invalid. Ask Barry for a new one.</h2>"), 404
+    return render_template("my_block.html", token=token, agent_name=agent_name)
+
+
 # ---- Agent self-service setup page (token link) ----
 
 @app.route("/goals/setup/<token>")
@@ -3109,6 +3460,38 @@ def api_goals_setup_save(token):
                 phone=phone or None,
                 email=email or None,
             )
+        # ── Save prospecting block + send calendar invites ─────────────
+        pb = body.get("prospecting_block") or {}
+        pb_days     = pb.get("days") or []
+        pb_start    = pb.get("start_time", "09:00")
+        pb_duration = int(pb.get("duration_minutes", 60))
+        pb_record   = None
+        if pb_days:
+            pb_record = _db.upsert_prospecting_block(
+                agent_name=agent_name,
+                prospecting_days=pb_days,
+                start_time=pb_start,
+                duration_minutes=pb_duration,
+            )
+            # Get agent email to send ICS
+            _all_p_dict  = {p["agent_name"]: p for p in (_db.get_agent_profiles(active_only=False) or [])}
+            _ap          = _all_p_dict.get(agent_name, {})
+            _agent_email = (contact.get("email") or "").strip() or _ap.get("email", "")
+            if _agent_email and pb_record:
+                try:
+                    _send_prospecting_ics(
+                        agent_name=agent_name,
+                        agent_email=_agent_email,
+                        days=pb_days,
+                        start_time=pb_start,
+                        duration_minutes=pb_duration,
+                    )
+                    _db.mark_prospecting_invite_sent(agent_name)
+                    print(f"[PROSPECTING ICS] Sent calendar invites to {_agent_email} for {agent_name}")
+                except Exception as _ics_err:
+                    print(f"[PROSPECTING ICS] Failed to send ICS to {_agent_email}: {_ics_err}")
+        # ─────────────────────────────────────────────────────────────────
+
         # ── Notify Barry ───────────────────────────────────────────────
         try:
             is_first = not (existing and float(existing.get("gci_goal", 0)) > 0)
@@ -3122,6 +3505,11 @@ def api_goals_setup_save(token):
                 lines.append(f"Why: {why_stmt}")
             if who_ben:
                 lines.append(f"Who they're doing it for: {who_ben}")
+            if pb_days:
+                day_labels = {"monday":"Mon","tuesday":"Tue","wednesday":"Wed",
+                              "thursday":"Thu","friday":"Fri","saturday":"Sat"}
+                days_str = ", ".join(day_labels.get(d, d) for d in pb_days)
+                lines.append(f"Prospecting Block: {days_str} at {pb_start} ({pb_duration} min)")
             if quality_flags:
                 lines.append(f"")
                 lines.append(f"⚠️ Flags: {'; '.join(quality_flags)}")
@@ -3147,7 +3535,8 @@ def api_goals_setup_save(token):
             print(f"[GOAL NOTIFY] Failed to notify Barry: {_ne}")
         # ───────────────────────────────────────────────────────────────
 
-        return jsonify({"success": True, "goal": goal})
+        return jsonify({"success": True, "goal": goal,
+                        "prospecting_block": pb_record})
     except (KeyError, ValueError) as e:
         return jsonify({"error": f"Bad input: {e}"}), 400
 
@@ -3638,6 +4027,196 @@ This link is personal to you — please don't share it.
 
     return jsonify({"success": True, "sent": sent, "failed": failed,
                     "test_mode": test_mode})
+
+
+@app.route("/api/goals/announce-time-block", methods=["POST"])
+def api_goals_announce_time_block():
+    """
+    Send the prospecting time-block feature rollout announcement to all active
+    agents who have a goal on file. One-time blast — Barry triggers manually.
+
+    Body: { test_mode: false }  — set test_mode:true to preview without sending.
+    """
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+
+    body      = request.json or {}
+    test_mode = body.get("test_mode", False)
+
+    sg_key = os.environ.get("SENDGRID_API_KEY")
+    if not sg_key and not test_mode:
+        return jsonify({"error": "SENDGRID_API_KEY not set"}), 503
+
+    base_url  = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+    profiles  = _db.get_agent_profiles(active_only=True)
+    year      = datetime.now().year
+    sent      = []
+    failed    = []
+
+    for p in profiles:
+        name      = p.get("agent_name", "")
+        email     = p.get("email", "")
+        token     = _db.get_goal_token(name) or ""
+        if not email or not token:
+            continue
+
+        first       = name.split()[0]
+        setup_url   = f"{base_url}/goals/setup/{token}"
+        dash_url    = f"{base_url}/my-goals/{token}"
+        # Check if they've already set their block
+        pb          = _db.get_prospecting_block(name)
+        has_block   = bool(pb and pb.get("prospecting_days"))
+
+        cta_line = (
+            "✅ You've already set your prospecting block — nice work. "
+            "Head to your dashboard to see your schedule or update it any time."
+            if has_block else
+            "👉 Open your goal dashboard now to set your prospecting block — it takes 30 seconds."
+        )
+        cta_url   = dash_url if has_block else setup_url
+        cta_label = "View My Dashboard →" if has_block else "Set My Time Block →"
+
+        html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#080c14;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<div style="max-width:560px;margin:0 auto">
+
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#0d1117,#131d30);padding:28px 32px;
+              text-align:center;border-radius:12px 12px 0 0">
+    <img src="https://web-production-3363cc.up.railway.app/static/logo-white.png"
+         alt="Legacy Home Team" width="150" style="display:block;margin:0 auto 10px;height:auto">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;
+                color:#f5a623;margin-bottom:6px">New Feature Drop</div>
+    <div style="font-size:22px;font-weight:800;color:#ffffff;line-height:1.3">
+      📆 Prospecting Time Block is here, {first}
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div style="background:#0f1520;padding:32px;border-left:1px solid #243050;border-right:1px solid #243050">
+
+    <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#e8edf8">
+      Hey {first} — quick one.
+    </p>
+
+    <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#e8edf8">
+      I've been watching the data all year, and the single biggest difference between agents
+      who hit their goals and agents who don't isn't skill, market, or even leads.
+      <strong style="color:#f5a623">It's scheduled prospecting time.</strong>
+    </p>
+
+    <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#e8edf8">
+      The agents who block their calendar and protect it — even just 1 hour a day —
+      compound that into deals. The ones who "do it when they can" run out of year.
+    </p>
+
+    <!-- Feature box -->
+    <div style="background:linear-gradient(135deg,rgba(245,166,35,.1),rgba(245,166,35,.03));
+                border:1px solid rgba(245,166,35,.3);border-radius:10px;padding:20px;margin:0 0 22px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+                  color:#f5a623;margin-bottom:8px">What's new in your dashboard</div>
+      <div style="color:#e8edf8;font-size:14px;line-height:1.8">
+        ✅ Pick the days you'll prospect (Mon–Sat)<br>
+        ✅ Set your start time<br>
+        ✅ Choose your block length (30 min to 2 hours)<br>
+        ✅ Get a <strong>recurring calendar invite</strong> sent right to your email<br>
+        ✅ Block shows on your dashboard — visible to both you and me
+      </div>
+    </div>
+
+    <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#e8edf8">
+      {cta_line}
+    </p>
+
+    <!-- CTA button -->
+    <div style="text-align:center;margin:0 0 22px">
+      <a href="{cta_url}"
+         style="display:inline-block;background:#f5a623;color:#080c14;font-weight:800;
+                font-size:15px;padding:16px 36px;border-radius:8px;text-decoration:none;
+                letter-spacing:0.3px">
+        {cta_label}
+      </a>
+    </div>
+
+    <p style="margin:0;font-size:15px;line-height:1.7;color:#e8edf8">
+      This is one of the highest-leverage moves you can make right now.
+      Takes 30 seconds. Pays off every week.<br><br>
+      Let's go,<br>
+      <strong style="color:#f5a623">Barry Jenkins</strong><br>
+      <span style="font-size:13px;color:#68789a">Legacy Home Team</span>
+    </p>
+  </div>
+
+  <!-- Footer -->
+  <div style="background:#080c14;border:1px solid #243050;border-top:none;
+              border-radius:0 0 12px 12px;padding:14px 32px;text-align:center">
+    <p style="margin:0;font-size:11px;color:#3d506e;line-height:1.5">
+      Legacy Home Team &middot; LPT Realty &middot; (757) 919-8874<br>
+      <a href="{dash_url}" style="color:#3d506e">View Dashboard</a>
+    </p>
+  </div>
+
+</div>
+</body>
+</html>"""
+
+        plain_body = f"""Hey {first},
+
+Quick one.
+
+The single biggest difference between agents who hit their goals and those who don't isn't skill, market, or leads. It's scheduled prospecting time.
+
+I just added a new feature to your goal dashboard: Prospecting Time Block.
+
+Here's how it works:
+• Pick the days you'll prospect (Mon-Sat)
+• Set your start time
+• Choose your block length (30 min to 2 hours)
+• Get a recurring calendar invite sent to your email
+• Block shows on your dashboard
+
+{cta_line}
+
+Link: {cta_url}
+
+This takes 30 seconds and pays off every week.
+
+Let's go,
+Barry Jenkins
+Legacy Home Team
+"""
+
+        subject = f"📆 New: Lock your prospecting time into your calendar, {first}"
+
+        if test_mode:
+            sent.append({"agent_name": name, "email": email, "status": "preview",
+                         "has_block": has_block, "html_preview": html_body[:200]})
+            continue
+
+        try:
+            import sendgrid as _sg
+            from sendgrid.helpers.mail import Mail as _Mail, Email as _Email
+            sg  = _sg.SendGridAPIClient(sg_key)
+            msg = _Mail(
+                from_email=config.EMAIL_FROM,
+                to_emails=email,
+                subject=subject,
+                html_content=html_body,
+                plain_text_content=plain_body,
+            )
+            resp = sg.send(msg)
+            sent.append({"agent_name": name, "email": email,
+                         "status": "sent", "code": resp.status_code, "has_block": has_block})
+            print(f"[TIME BLOCK ANNOUNCE] Sent to {name} <{email}> — HTTP {resp.status_code}")
+        except Exception as e:
+            failed.append({"agent_name": name, "email": email, "error": str(e)})
+            print(f"[TIME BLOCK ANNOUNCE] FAILED for {name} <{email}>: {e}")
+
+    return jsonify({"success": True, "sent": sent, "failed": failed,
+                    "test_mode": test_mode,
+                    "total_agents": len(profiles)})
 
 
 # ---- FUB Deal sync ----

@@ -191,6 +191,62 @@ button{cursor:pointer;border:none;font-family:inherit}
   </div>
 </div>
 
+<!-- ── PROSPECTING CALL BLOCK — persistent, visible on ALL tabs ── -->
+<div id="prospect-block-card" style="max-width:540px;margin:0 auto;padding:.6rem 1rem 0">
+  <!-- STATE: not set yet — shown by default, hidden if block is confirmed -->
+  <div id="pb-not-set" style="display:block">
+    <div style="background:linear-gradient(135deg,rgba(245,166,35,.12),rgba(245,166,35,.04));
+                border:1.5px dashed rgba(245,166,35,.5);border-radius:12px;
+                padding:1rem 1.2rem;margin-bottom:.6rem">
+      <div style="font-size:.6rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+                  color:#f5a623;margin-bottom:.3rem">⏰ Missing: Your Call Block</div>
+      <div style="font-size:.95rem;font-weight:700;color:#e8edf8;margin-bottom:.3rem">
+        Protect your prospecting time
+      </div>
+      <div style="font-size:.8rem;color:#94a3b8;line-height:1.5;margin-bottom:.75rem">
+        Top producers don't find time to prospect — they protect it.
+        Pick your days and time and we'll lock it into your calendar automatically.
+      </div>
+      <a href="/goals/setup/{{ token }}"
+         style="display:inline-block;background:#f5a623;color:#080c14;font-weight:700;
+                font-size:.82rem;padding:.55rem 1.2rem;border-radius:8px;text-decoration:none">
+        Set My Call Block →
+      </a>
+    </div>
+  </div>
+  <!-- STATE: already set -->
+  <div id="pb-is-set" style="display:none">
+    <div style="background:linear-gradient(135deg,rgba(245,166,35,.08),rgba(245,166,35,.02));
+                border:1.5px solid rgba(245,166,35,.35);border-radius:12px;
+                padding:.9rem 1.2rem;margin-bottom:.6rem">
+      <div id="pb-today-banner" style="display:none;background:#f5a623;color:#0d1117;
+                font-size:.65rem;font-weight:800;letter-spacing:.1em;
+                text-transform:uppercase;padding:.25rem .6rem;border-radius:4px;
+                margin-bottom:.4rem">🔒 YOUR BLOCK IS NOW</div>
+      <div id="pb-eyebrow" style="font-size:.6rem;font-weight:700;letter-spacing:.12em;
+                text-transform:uppercase;color:#f5a623;margin-bottom:.25rem">📅 CALL BLOCK</div>
+      <div id="pb-schedule-text" style="font-size:.92rem;font-weight:700;color:#e8edf8;
+                                         line-height:1.5;margin-bottom:.6rem"></div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button onclick="resendPbInvite()"
+                style="background:transparent;border:1px solid rgba(245,166,35,.4);color:#f5a623;
+                       font-size:.75rem;font-weight:600;padding:.4rem .85rem;border-radius:6px;
+                       cursor:pointer;font-family:inherit">
+          📆 Re-send Invite
+        </button>
+        <a href="/my-block/{{ token }}"
+           style="display:inline-block;background:rgba(245,166,35,.12);
+                  border:1px solid rgba(245,166,35,.3);color:#f5a623;
+                  font-size:.75rem;font-weight:600;padding:.4rem .85rem;
+                  border-radius:6px;text-decoration:none">
+          ✏️ Update This Week
+        </a>
+      </div>
+      <div id="pb-invite-status" style="font-size:.7rem;color:#f5a623;margin-top:.4rem;display:none"></div>
+    </div>
+  </div>
+</div>
+
 <div class="container">
 
   <!-- ── DAILY VIEW ── -->
@@ -209,7 +265,7 @@ button{cursor:pointer;border:none;font-family:inherit}
       <div id="dn-main">
         <div class="dn-number-wrap">
           <div class="dn-big" id="dn-big">—</div>
-          <div class="dn-unit">conversations</div>
+          <div class="dn-unit">dials</div>
         </div>
         <div class="dn-context" id="dn-context"></div>
         <div class="dn-progress-wrap" id="dn-progress-wrap"></div>
@@ -774,8 +830,113 @@ function showToast(msg, isError=false) {
   setTimeout(() => t.classList.remove('show'), 4000);
 }
 
+// ── Prospecting Block CTA ─────────────────────────────────────────
+
+const DAY_LABELS_PB = {monday:'Mon',tuesday:'Tue',wednesday:'Wed',
+                       thursday:'Thu',friday:'Fri',saturday:'Sat'};
+const DAY_ORDER_PB  = ['monday','tuesday','wednesday','thursday','friday','saturday'];
+
+function fmtTimePB(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = hhmm.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12  = h % 12 || 12;
+  return `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
+}
+
+function fmtDurPB(mins) {
+  if (mins <= 30) return '30 min';
+  if (mins <= 60) return '1 hour';
+  if (mins <= 90) return '1½ hours';
+  return `${mins/60} hours`;
+}
+
+async function loadProspectingBlock() {
+  // Card is already visible (pb-not-set shown by default).
+  // This function upgrades it to pb-is-set if the agent has a block on file.
+  try {
+    const res = await fetch(`/api/goals/prospecting-block/${TOKEN}`);
+    if (!res.ok) {
+      console.warn('[block] API returned', res.status, '— showing set-block CTA');
+      return;
+    }
+    const d = await res.json();
+
+    if (d.block && d.block.prospecting_days && d.block.prospecting_days.length > 0) {
+      const b = d.block;
+      const daysSorted = DAY_ORDER_PB.filter(day => (b.prospecting_days||[]).includes(day));
+      const daysStr = daysSorted.map(day => DAY_LABELS_PB[day] || day).join(' · ');
+      const timeStr = fmtTimePB(b.start_time);
+      const durStr  = fmtDurPB(b.duration_minutes);
+
+      // Compute end time
+      const [hRaw, mRaw] = (b.start_time || '09:00').split(':').map(Number);
+      const endTotal = hRaw * 60 + mRaw + (b.duration_minutes || 60);
+      const endH = Math.floor(endTotal / 60) % 24;
+      const endM = endTotal % 60;
+      const endStr = fmtTimePB(`${String(endH).padStart(2,'0')}:${String(endM).padStart(2,'0')}`);
+
+      // Is today a block day?
+      const todayDayName = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][new Date().getDay()];
+      const isToday = (b.prospecting_days || []).includes(todayDayName);
+
+      if (isToday) {
+        document.getElementById('pb-eyebrow').style.display = 'none';
+        const banner = document.getElementById('pb-today-banner');
+        banner.style.display = 'block';
+        document.getElementById('pb-schedule-text').innerHTML =
+          `<strong>${timeStr} – ${endStr}</strong> &nbsp;·&nbsp; ${daysStr} &nbsp;·&nbsp; ${durStr}`;
+      } else {
+        const dayOrder = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+        const todayIdx = dayOrder.indexOf(todayDayName);
+        let nextDay = null;
+        for (let i = 1; i <= 7; i++) {
+          const candidate = dayOrder[(todayIdx + i) % 7];
+          if ((b.prospecting_days || []).includes(candidate)) { nextDay = candidate; break; }
+        }
+        const nextLabel = nextDay
+          ? `Next: ${DAY_LABELS_PB[nextDay] || nextDay} at ${timeStr}`
+          : `Next block: ${timeStr}`;
+        document.getElementById('pb-eyebrow').textContent = '📅 CALL BLOCK';
+        document.getElementById('pb-schedule-text').innerHTML =
+          `<strong>${nextLabel}</strong> &nbsp;·&nbsp; ${daysStr} &nbsp;·&nbsp; ${durStr}`;
+      }
+
+      document.getElementById('pb-is-set').style.display = 'block';
+      document.getElementById('pb-not-set').style.display = 'none';
+    }
+    // else: leave pb-not-set visible (already the default)
+  } catch(e) {
+    console.warn('[block] loadProspectingBlock error:', e);
+    // Leave pb-not-set visible — better than nothing
+  }
+}
+
+async function resendPbInvite() {
+  const statusEl = document.getElementById('pb-invite-status');
+  statusEl.style.display = 'block';
+  statusEl.textContent   = '⏳ Sending…';
+  try {
+    const res = await fetch(`/api/goals/prospecting-block/${TOKEN}`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      // POST with no days = re-send existing block (server reads from DB)
+      body: JSON.stringify({days: [], resend_only: true}),
+    });
+    const d = await res.json();
+    if (d.invite_sent) {
+      statusEl.textContent = '✅ Calendar invite sent — check your email!';
+    } else {
+      statusEl.textContent = d.error || '⚠️ Could not send — check your email is on file.';
+    }
+  } catch(e) {
+    statusEl.textContent = '❌ Error — try again in a moment.';
+  }
+}
+
 // ── Boot ──────────────────────────────────────────────────────────
 loadDashboard();
+loadProspectingBlock();
 </script>
 </body>
 </html>

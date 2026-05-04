@@ -359,6 +359,19 @@ CREATE TABLE IF NOT EXISTS isa_transfers (
 -- Migration: add columns to existing deployments
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS lead_name  TEXT;
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS agent_name TEXT;
+
+-- Prospecting time block schedule (set during goal wizard step 7)
+-- Stores which days/time the agent has committed to prospect each week.
+-- Drives recurring calendar invite generation via SendGrid.
+CREATE TABLE IF NOT EXISTS prospecting_blocks (
+    agent_name       TEXT PRIMARY KEY REFERENCES agent_profiles(agent_name) ON DELETE CASCADE,
+    prospecting_days TEXT[]      NOT NULL DEFAULT '{}',   -- e.g. ARRAY['monday','tuesday','thursday']
+    start_time       TIME        NOT NULL DEFAULT '09:00',
+    duration_minutes INTEGER     NOT NULL DEFAULT 60,     -- 30, 60, 90, 120
+    invite_sent_at   TIMESTAMPTZ,                         -- NULL = ICS not yet sent
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """
 
 
@@ -4598,3 +4611,134 @@ def db_cache_get(cache_key: str, max_age_hours: int = 24):
     except Exception as e:
         logger.warning("db_cache_get(%s) failed: %s", cache_key, e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Prospecting Block  (agent's weekly time-block commitment — Step 7 wizard)
+# ---------------------------------------------------------------------------
+
+def upsert_prospecting_block(agent_name: str, prospecting_days: list,
+                              start_time: str, duration_minutes: int = 60) -> dict | None:
+    """
+    Save or update an agent's prospecting block schedule.
+
+    Args:
+        agent_name:        e.g. "Sarah Johnson"
+        prospecting_days:  list of lowercase day names, e.g. ['monday','tuesday','friday']
+        start_time:        HH:MM string, e.g. '09:00'
+        duration_minutes:  30, 60, 90, or 120
+
+    Returns the saved row as a dict, or None on failure.
+    """
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO prospecting_blocks
+                        (agent_name, prospecting_days, start_time, duration_minutes, updated_at)
+                    VALUES (%s, %s::text[], %s::time, %s, NOW())
+                    ON CONFLICT (agent_name) DO UPDATE SET
+                        prospecting_days = EXCLUDED.prospecting_days,
+                        start_time       = EXCLUDED.start_time,
+                        duration_minutes = EXCLUDED.duration_minutes,
+                        updated_at       = NOW()
+                    RETURNING agent_name, prospecting_days, start_time::text, duration_minutes,
+                              invite_sent_at, created_at, updated_at
+                """, (agent_name, prospecting_days, start_time, duration_minutes))
+                row = cur.fetchone()
+                if row:
+                    return {
+                        "agent_name":       row[0],
+                        "prospecting_days": list(row[1]) if row[1] else [],
+                        "start_time":       str(row[2]),
+                        "duration_minutes": row[3],
+                        "invite_sent_at":   row[4].isoformat() if row[4] else None,
+                        "created_at":       row[5].isoformat() if row[5] else None,
+                        "updated_at":       row[6].isoformat() if row[6] else None,
+                    }
+        return None
+    except Exception as e:
+        logger.warning("upsert_prospecting_block failed for %s: %s", agent_name, e)
+        return None
+
+
+def get_prospecting_block(agent_name: str) -> dict | None:
+    """
+    Return the agent's prospecting block schedule, or None if not set.
+    """
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, prospecting_days, start_time::text, duration_minutes,
+                           invite_sent_at, created_at, updated_at
+                    FROM   prospecting_blocks
+                    WHERE  agent_name = %s
+                """, (agent_name,))
+                row = cur.fetchone()
+        if row:
+            return {
+                "agent_name":       row[0],
+                "prospecting_days": list(row[1]) if row[1] else [],
+                "start_time":       str(row[2]),
+                "duration_minutes": row[3],
+                "invite_sent_at":   row[4].isoformat() if row[4] else None,
+                "created_at":       row[5].isoformat() if row[5] else None,
+                "updated_at":       row[6].isoformat() if row[6] else None,
+            }
+        return None
+    except Exception as e:
+        logger.warning("get_prospecting_block failed for %s: %s", agent_name, e)
+        return None
+
+
+def get_all_prospecting_blocks() -> list:
+    """Return all prospecting blocks (used by nudge_engine to check completeness)."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, prospecting_days, start_time::text, duration_minutes,
+                           invite_sent_at, updated_at
+                    FROM   prospecting_blocks
+                    ORDER  BY agent_name
+                """)
+                rows = cur.fetchall()
+        return [
+            {
+                "agent_name":       r[0],
+                "prospecting_days": list(r[1]) if r[1] else [],
+                "start_time":       str(r[2]),
+                "duration_minutes": r[3],
+                "invite_sent_at":   r[4].isoformat() if r[4] else None,
+                "updated_at":       r[5].isoformat() if r[5] else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("get_all_prospecting_blocks failed: %s", e)
+        return []
+
+
+def mark_prospecting_invite_sent(agent_name: str) -> bool:
+    """Record that calendar invites were sent for this agent's prospecting block."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE prospecting_blocks
+                    SET    invite_sent_at = NOW(), updated_at = NOW()
+                    WHERE  agent_name = %s
+                """, (agent_name,))
+        return True
+    except Exception as e:
+        logger.warning("mark_prospecting_invite_sent failed for %s: %s", agent_name, e)
+        return False

@@ -312,13 +312,13 @@ def _goal_section(ctx, goal_ctx, tone):
 
     if tone == "funny":
         opts = [
-            f"Quick scoreboard on {gci_goal_fmt}: need {daily_target} calls/day, you had {calls_ytd} YTD vs. a target of {calls_target_ytd}. Pace: {calls_pace_pct}% ({pace_label}). {'The math is mathing.' if calls_pace_pct >= 85 else 'The math needs help. Today is your audition.'}",
-            f"Your {gci_goal_fmt} doesn't care about your feelings. It needs {daily_target} calls a day. YTD pace: {calls_pace_pct}% ({pace_label}). {'Green light, keep going.' if calls_pace_pct >= 85 else 'Yellow flag. Today is your pit stop.'}",
+            f"Quick scoreboard on {gci_goal_fmt}: need {daily_target} dials/day, you had {calls_ytd} YTD vs. a target of {calls_target_ytd}. Pace: {calls_pace_pct}% ({pace_label}). {'The math is mathing.' if calls_pace_pct >= 85 else 'The math needs help. Today is your audition.'}",
+            f"Your {gci_goal_fmt} doesn't care about your feelings. It needs {daily_target} dials a day. YTD pace: {calls_pace_pct}% ({pace_label}). {'Green light, keep going.' if calls_pace_pct >= 85 else 'Yellow flag. Today is your pit stop.'}",
         ]
     else:
         opts = [
-            f"Your {gci_goal_fmt} goal needs {daily_target} calls a day. YTD pace: {calls_pace_pct}% — {pace_label} ({calls_ytd} calls vs. a target of {calls_target_ytd} at this point in the year).",
-            f"To reach {gci_goal_fmt} this year, the daily target is {daily_target} calls. You're sitting at {calls_pace_pct}% of pace YTD — {pace_label}. The gap closes one day at a time.",
+            f"Your {gci_goal_fmt} goal needs {daily_target} dials a day. YTD pace: {calls_pace_pct}% — {pace_label} ({calls_ytd} dials vs. a target of {calls_target_ytd} at this point in the year).",
+            f"To reach {gci_goal_fmt} this year, the daily dial target is {daily_target}. You're sitting at {calls_pace_pct}% of pace YTD — {pace_label}. The gap closes one day at a time.",
         ]
     return random.choice(opts)
 
@@ -593,7 +593,7 @@ def _arc_scoreboard(ctx, situation, goal_ctx, deal_summary, tone, top_agent, tea
             bodies = [
                 (
                     f"No pep talk today. Just the numbers.\n\n"
-                    f"Goal: {gci_goal_fmt}. Daily target: {daily_target} calls. Yesterday: {gap + daily_target} "
+                    f"Goal: {gci_goal_fmt}. Daily dial target: {daily_target}. Yesterday: {gap + daily_target} "
                     f"({'above' if gap >= 0 else 'below'} target). {pace_line}\n\n"
                     f"The math is simple. The doing is not. But you already know the math — "
                     f"so the only variable left is whether you pick up the phone today.\n\n"
@@ -602,10 +602,10 @@ def _arc_scoreboard(ctx, situation, goal_ctx, deal_summary, tone, top_agent, tea
                 (
                     f"I looked at your numbers. Then I looked again. Here's what's real:\n\n"
                     f"{pace_line}\n\n"
-                    f"Daily target to hit {gci_goal_fmt}: {daily_target} calls. "
+                    f"Daily dial target to hit {gci_goal_fmt}: {daily_target}. "
                     f"The gap between where you are and where you need to be is just reps. "
                     f"No mystery. No magic. Just reps.\n\n"
-                    f"Make {daily_target} calls today. Log them. Repeat. That's the entire plan.\n\n"
+                    f"Make {daily_target} dials today. Log them. Repeat. That's the entire plan.\n\n"
                     f"(Told you. No fluff.)"
                 ),
                 (
@@ -613,9 +613,9 @@ def _arc_scoreboard(ctx, situation, goal_ctx, deal_summary, tone, top_agent, tea
                     f"{gci_goal_fmt} goal ÷ your avg commission = closings needed.\n"
                     f"Closings ÷ your conversion rate = appointments needed.\n"
                     f"Appointments ÷ your show rate = calls needed.\n"
-                    f"Calls needed ÷ working days = {daily_target}/day.\n\n"
+                    f"Calls needed ÷ working days = {daily_target} dials/day.\n\n"
                     f"{pace_line}\n\n"
-                    f"See? Simple. The doing is your job. {daily_target} calls. Go."
+                    f"See? Simple. The doing is your job. {daily_target} dials. Go."
                 ),
             ]
         else:
@@ -642,10 +642,10 @@ def _arc_scoreboard(ctx, situation, goal_ctx, deal_summary, tone, top_agent, tea
             bodies = [
                 (
                     f"Here's where you are right now on {gci_goal_fmt}:\n\n"
-                    f"Daily target: {daily_target} calls. {pace_line}\n\n"
+                    f"Daily dial target: {daily_target}. {pace_line}\n\n"
                     f"The gap is real. I'm not going to pretend it isn't. But a gap is just a math problem — "
                     f"and math problems have solutions.\n\n"
-                    f"Today's solution: {daily_target} calls. Logged. That's one day's brick laid.\n\n"
+                    f"Today's solution: {daily_target} dials. Logged. That's one day's brick laid.\n\n"
                     f"The agents who hit their goals don't close the gap all at once. "
                     f"They close it one morning at a time. This is one of those mornings."
                 ),
@@ -654,12 +654,12 @@ def _arc_scoreboard(ctx, situation, goal_ctx, deal_summary, tone, top_agent, tea
                     f"{pace_line}\n\n"
                     f"If nothing changes, the year ends differently than you planned. "
                     f"But this is the exact moment where things can change — not at year-end, not next month. Right now.\n\n"
-                    f"The daily target to hit {gci_goal_fmt} is {daily_target} calls. "
-                    f"Make {daily_target} calls today. Then again tomorrow. "
+                    f"The daily dial target to hit {gci_goal_fmt} is {daily_target}. "
+                    f"Make {daily_target} dials today. Then again tomorrow. "
                     f"The math takes care of itself when you take care of the reps."
                 ),
                 (
-                    f"Your {gci_goal_fmt} goal needs {daily_target} calls a day. {pace_line}\n\n"
+                    f"Your {gci_goal_fmt} goal needs {daily_target} dials a day. {pace_line}\n\n"
                     f"Every great agent I've watched build a big year had one thing in common — "
                     f"when they saw a gap, they didn't look away. They looked straight at it and then went to work.\n\n"
                     f"Look straight at it today, {first}. Then pick up the phone."
@@ -950,10 +950,10 @@ def _arc_elite(ctx, situation, goal_ctx, deal_summary, tone, top_agent, team_avg
                 f"Let me tell you what the top agent on this team actually does.\n\n"
                 f"{top_first} made {top_calls} calls {day_name}. "
                 f"The gap between last place and first place on this team right now? It's not talent. It's not zip code. "
-                f"It's not magic.\n\nIt's {gap_calls} conversations.\n\n"
+                f"It's not magic.\n\nIt's {gap_calls} more dials a day.\n\n"
                 f"You can close that gap in {days_to_close} days. Not by being brilliant — by being consistent. "
                 f"The agents who are being too nice to their call list lose this competition every time.\n\n"
-                f"Don't be too nice to your call list today, {first}. Make your calls."
+                f"Don't be too nice to your call list today, {first}. Make your dials."
             ),
             (
                 f"{goal_block}"
@@ -969,7 +969,7 @@ def _arc_elite(ctx, situation, goal_ctx, deal_summary, tone, top_agent, team_avg
                 f"{goal_block}"
                 f"Here's the competitive math nobody talks about:\n\n"
                 f"Team average yesterday: {team_avg} calls. Top performer: {top_calls}. "
-                f"The difference between {top_first} and average isn't hustle — it's {top_calls - team_avg} extra conversations.\n\n"
+                f"The difference between {top_first} and average isn't hustle — it's {top_calls - team_avg} extra dials a day.\n\n"
                 f"Three days of matching {top_first}'s number and you're a different agent on the leaderboard.\n\n"
                 f"What does #{rank} of {team_size} feel like? What would #1 feel like?\n\n"
                 f"Today, you get to choose. {calls_t} calls, minimum. Let's see it."
@@ -991,7 +991,7 @@ def _arc_elite(ctx, situation, goal_ctx, deal_summary, tone, top_agent, team_avg
                 f"The top agent on this team made {top_calls} calls {day_name}.\n\n"
                 f"You're currently at #{rank} of {team_size}. The gap between last and first isn't talent. "
                 f"It isn't market knowledge. It isn't luck.\n\n"
-                f"It's {gap_calls} conversations. You can make that up in {days_to_close} days. "
+                f"It's {gap_calls} more dials per day. You can close that in {days_to_close} days. "
                 f"Not by being brilliant — just by being consistent in a way most agents on this team aren't willing to be.\n\n"
                 f"Are you going to be too nice to your discomfort today, {first}? "
                 f"Or are you going to make {calls_t} calls and start closing the gap?"

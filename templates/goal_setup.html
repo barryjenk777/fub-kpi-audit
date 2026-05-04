@@ -157,6 +157,27 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
 .save-status.err{color:var(--red)}
 
 @media(max-width:400px){.archetypes{grid-template-columns:1fr}}
+
+/* ── Prospecting Block (step 7) ────────────────────────── */
+.day-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.45rem;margin-bottom:.9rem}
+.day-pill{background:var(--surface2);border:2px solid var(--border);border-radius:var(--r-sm);padding:.6rem .4rem;cursor:pointer;transition:all .2s;text-align:center;user-select:none}
+.day-pill:hover{border-color:var(--subtle)}
+.day-pill.selected{border-color:var(--gold);background:var(--gold-bg);color:var(--gold);font-weight:700}
+.day-pill-label{font-size:.82rem;font-weight:600}
+.day-pill-abbr{font-size:.65rem;color:var(--muted);margin-top:.1rem}
+.day-pill.selected .day-pill-abbr{color:var(--gold);opacity:.7}
+.dur-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.45rem;margin-bottom:.9rem}
+.dur-pill{background:var(--surface2);border:2px solid var(--border);border-radius:var(--r-sm);padding:.65rem .3rem;cursor:pointer;transition:all .2s;text-align:center;user-select:none}
+.dur-pill:hover{border-color:var(--subtle)}
+.dur-pill.selected{border-color:var(--gold);background:var(--gold-bg);color:var(--gold);font-weight:700}
+.dur-pill-val{font-size:.95rem;font-weight:700}
+.dur-pill-unit{font-size:.6rem;color:var(--muted);margin-top:.1rem}
+.dur-pill.selected .dur-pill-unit{color:var(--gold);opacity:.7}
+.invite-cta{background:linear-gradient(135deg,rgba(245,166,35,.08),rgba(245,166,35,.03));border:1px solid rgba(245,166,35,.25);border-radius:var(--r);padding:1rem 1.1rem;margin-top:.3rem;margin-bottom:.9rem;text-align:center}
+.invite-cta-title{font-size:.85rem;font-weight:700;color:var(--gold);margin-bottom:.3rem}
+.invite-cta-sub{font-size:.75rem;color:var(--muted);line-height:1.5;margin-bottom:.7rem}
+.block-preview{background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:.65rem .9rem;font-size:.82rem;color:var(--muted);line-height:1.6;margin-bottom:.5rem;min-height:1.8rem;transition:all .3s}
+.block-preview strong{color:var(--text)}
 </style>
 </head>
 <body>
@@ -171,10 +192,10 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
 
 <div class="progress-wrap">
   <div class="progress-label">
-    <span id="step-label">Step 1 of 6</span>
+    <span id="step-label">Step 1 of 7</span>
     <span id="step-name">Your Why</span>
   </div>
-  <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:16.6%"></div></div>
+  <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:14.3%"></div></div>
   <div class="step-dots">
     <div class="step-dot active" id="dot-1"></div>
     <div class="step-dot" id="dot-2"></div>
@@ -182,6 +203,7 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
     <div class="step-dot" id="dot-4"></div>
     <div class="step-dot" id="dot-5"></div>
     <div class="step-dot" id="dot-6"></div>
+    <div class="step-dot" id="dot-7"></div>
   </div>
 </div>
 
@@ -575,13 +597,100 @@ input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none}
 
     <div class="step-err" id="err-step6">Please enter your cell phone number so we can send your morning nudge.</div>
 
-    <button class="btn btn-gold" id="btn-save" onclick="saveAll()" disabled>
-      🔒 Lock In My {{ year }} System
+    <div class="nav-wrap">
+      <button class="btn btn-ghost" onclick="goTo(5)">← Back</button>
+      <button class="btn btn-gold" onclick="goTo(7)" style="flex:1">
+        Next: Schedule Prospecting →
+      </button>
+    </div>
+  </div>
+
+  <!-- ── SECTION 7: PROSPECTING BLOCK ── -->
+  <div class="section" id="section-7">
+    <div class="sec-eyebrow">Section 7 — Your Time Block</div>
+    <div class="sec-headline">Protect your prospecting time.</div>
+    <div class="sec-sub">The agents who win aren't better at sales — they're better at showing up consistently. Pick your days and time, and we'll lock it into your calendar so nothing can steal it.</div>
+
+    <div class="card">
+      <div class="card-title">📅 Which days will you prospect?</div>
+      <div class="day-grid">
+        <div class="day-pill" id="day-monday"    onclick="toggleDay('monday')">
+          <div class="day-pill-label">Monday</div>
+          <div class="day-pill-abbr">Mon</div>
+        </div>
+        <div class="day-pill" id="day-tuesday"   onclick="toggleDay('tuesday')">
+          <div class="day-pill-label">Tuesday</div>
+          <div class="day-pill-abbr">Tue</div>
+        </div>
+        <div class="day-pill" id="day-wednesday" onclick="toggleDay('wednesday')">
+          <div class="day-pill-label">Wednesday</div>
+          <div class="day-pill-abbr">Wed</div>
+        </div>
+        <div class="day-pill" id="day-thursday"  onclick="toggleDay('thursday')">
+          <div class="day-pill-label">Thursday</div>
+          <div class="day-pill-abbr">Thu</div>
+        </div>
+        <div class="day-pill" id="day-friday"    onclick="toggleDay('friday')">
+          <div class="day-pill-label">Friday</div>
+          <div class="day-pill-abbr">Fri</div>
+        </div>
+        <div class="day-pill" id="day-saturday"  onclick="toggleDay('saturday')">
+          <div class="day-pill-label">Saturday</div>
+          <div class="day-pill-abbr">Sat</div>
+        </div>
+      </div>
+      <div class="step-err" id="err-step7-days">Please choose at least one day to prospect.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🕗 What time does your block start?</div>
+      <div class="field">
+        <label>Start time</label>
+        <input type="time" id="prospect_start_time" value="09:00" oninput="updateBlockPreview()">
+        <div class="helper">Pick a time you can protect every week — before the market opens is gold.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">⏱ How long is your block?</div>
+      <div class="dur-grid">
+        <div class="dur-pill" id="dur-30"  onclick="selectDuration(30)">
+          <div class="dur-pill-val">30</div>
+          <div class="dur-pill-unit">min</div>
+        </div>
+        <div class="dur-pill selected" id="dur-60"  onclick="selectDuration(60)">
+          <div class="dur-pill-val">1</div>
+          <div class="dur-pill-unit">hour</div>
+        </div>
+        <div class="dur-pill" id="dur-90"  onclick="selectDuration(90)">
+          <div class="dur-pill-val">90</div>
+          <div class="dur-pill-unit">min</div>
+        </div>
+        <div class="dur-pill" id="dur-120" onclick="selectDuration(120)">
+          <div class="dur-pill-val">2</div>
+          <div class="dur-pill-unit">hours</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📬 Your commitment</div>
+      <div class="block-preview" id="block-preview">
+        Pick your days and time above to see your schedule.
+      </div>
+      <div class="invite-cta">
+        <div class="invite-cta-title">📆 Lock it in your calendar</div>
+        <div class="invite-cta-sub">After you save, we'll email you calendar invites for every prospecting block — accept them and your week is already protected. It's not just a goal anymore. It's an appointment with your future.</div>
+      </div>
+    </div>
+
+    <button class="btn btn-gold" id="btn-save" onclick="saveAll()" style="font-size:.95rem">
+      🔒 Lock In My {{ year }} System + Send Calendar Invites
     </button>
     <div class="save-status" id="save-status"></div>
 
     <div style="margin-top:1rem" class="nav-wrap">
-      <button class="btn btn-ghost" onclick="goTo(5)">← Back</button>
+      <button class="btn btn-ghost" onclick="goTo(6)">← Back</button>
     </div>
   </div>
 
@@ -593,7 +702,7 @@ const YEAR  = {{ year }};
 const AGENT = "{{ agent_name }}";
 const FIRST = AGENT.split(' ')[0];
 
-const STEP_NAMES = ['Your Why','Your Identity','Income Goal','Your Market','Sphere','Daily System'];
+const STEP_NAMES = ['Your Why','Your Identity','Income Goal','Your Market','Sphere','Daily System','Time Block'];
 
 const ARCHETYPE_DEFAULTS = {
   consistent:           {calls:20, texts:5,  appts:1},
@@ -660,6 +769,13 @@ function validate(step) {
     if (banner) banner.classList.toggle('show', !ok);
   }
 
+  if (step === 7) {
+    const daysOk = selectedDays.size > 0;
+    const banner = document.getElementById('err-step7-days');
+    if (banner) banner.classList.toggle('show', !daysOk);
+    ok = daysOk;
+  }
+
   return ok;
 }
 
@@ -680,17 +796,18 @@ function goTo(step) {
   currentStep = step;
   updateProgress();
   if (step === 6) prepSection6();
+  if (step === 7) prepSection7();
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
 function updateProgress() {
-  const pct = (currentStep / 6) * 100;
+  const pct = (currentStep / 7) * 100;
   document.getElementById('progress-fill').style.width = pct + '%';
-  document.getElementById('step-label').textContent = `Step ${currentStep} of 6`;
+  document.getElementById('step-label').textContent = `Step ${currentStep} of 7`;
   document.getElementById('step-name').textContent = STEP_NAMES[currentStep - 1];
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= 7; i++) {
     const dot = document.getElementById(`dot-${i}`);
-    dot.className = 'step-dot' + (i < currentStep ? ' done' : i === currentStep ? ' active' : '');
+    if (dot) dot.className = 'step-dot' + (i < currentStep ? ' done' : i === currentStep ? ' active' : '');
   }
 }
 
@@ -849,16 +966,93 @@ function toggleAdv() {
   a.classList.toggle('open');
 }
 
+// ── Prospecting Block (step 7) ────────────────────────────────────
+
+let selectedDays = new Set();
+let selectedDuration = 60; // default 1 hour
+
+const DAY_ORDER = ['monday','tuesday','wednesday','thursday','friday','saturday'];
+const DAY_LABELS = {monday:'Monday',tuesday:'Tuesday',wednesday:'Wednesday',
+                    thursday:'Thursday',friday:'Friday',saturday:'Saturday'};
+
+function toggleDay(day) {
+  if (selectedDays.has(day)) {
+    selectedDays.delete(day);
+    document.getElementById(`day-${day}`).classList.remove('selected');
+  } else {
+    selectedDays.add(day);
+    document.getElementById(`day-${day}`).classList.add('selected');
+  }
+  // Hide days error if they now have at least one
+  if (selectedDays.size > 0) {
+    const b = document.getElementById('err-step7-days');
+    if (b) b.classList.remove('show');
+  }
+  updateBlockPreview();
+}
+
+function selectDuration(mins) {
+  selectedDuration = mins;
+  [30,60,90,120].forEach(m => {
+    document.getElementById(`dur-${m}`)?.classList.toggle('selected', m === mins);
+  });
+  updateBlockPreview();
+}
+
+function fmtTime(hhmm) {
+  if (!hhmm) return '';
+  const [h, m] = hhmm.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12  = h % 12 || 12;
+  return `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
+}
+
+function fmtDur(mins) {
+  if (mins < 60) return `${mins} min`;
+  if (mins === 60) return '1 hour';
+  if (mins === 90) return '1½ hours';
+  return `${mins/60} hours`;
+}
+
+function updateBlockPreview() {
+  const preview = document.getElementById('block-preview');
+  if (!preview) return;
+  const startTime = document.getElementById('prospect_start_time')?.value || '09:00';
+
+  if (selectedDays.size === 0) {
+    preview.innerHTML = 'Pick your days and time above to see your schedule.';
+    return;
+  }
+
+  // Sort days in week order
+  const daysSorted = DAY_ORDER.filter(d => selectedDays.has(d)).map(d => DAY_LABELS[d]);
+  const daysStr = daysSorted.join(', ');
+  const timeStr = fmtTime(startTime);
+  const durStr  = fmtDur(selectedDuration);
+
+  preview.innerHTML = `<strong>Prospecting Hour</strong> — ${daysStr}<br>
+    Every week at <strong>${timeStr}</strong> for <strong>${durStr}</strong><br>
+    <span style="font-size:.72rem;opacity:.75;margin-top:.2rem;display:block">
+      "This isn't just a goal anymore — it's an appointment with your future."
+    </span>`;
+}
+
+function prepSection7() {
+  // Pre-select days if returning to this step
+  updateBlockPreview();
+}
+
 // ── Save everything ───────────────────────────────────────────────
 
 async function saveAll() {
-  // Validate phone before saving
-  if (!validate(6)) return;
+  // Validate step 6 (phone) and step 7 (prospecting days)
+  if (!validate(6)) { goTo(6); return; }
+  if (!validate(7)) return;
 
   const btn    = document.getElementById('btn-save');
   const status = document.getElementById('save-status');
   btn.disabled = true;
-  btn.textContent = '⏳ Saving…';
+  btn.textContent = '⏳ Locking in your system…';
   status.textContent = '';
 
   const whyPayload = {
@@ -895,6 +1089,11 @@ async function saveAll() {
       phone: document.getElementById('contact_phone')?.value.trim() || '',
       email: document.getElementById('contact_email')?.value.trim() || '',
     },
+    prospecting_block: {
+      days:             Array.from(selectedDays),
+      start_time:       document.getElementById('prospect_start_time')?.value || '09:00',
+      duration_minutes: selectedDuration,
+    },
   };
 
   try {
@@ -907,16 +1106,16 @@ async function saveAll() {
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
     status.className   = 'save-status ok';
-    status.textContent = '✅ System locked in — taking you to your dashboard…';
+    status.textContent = '✅ System locked in! Calendar invites on their way — taking you to your dashboard…';
     btn.textContent    = '✅ Done!';
     btn.disabled       = true;
     setTimeout(() => {
       window.location.href = `/my-goals/${TOKEN}`;
-    }, 1200);
+    }, 1800);
   } catch(e) {
     status.className   = 'save-status err';
     status.textContent = '❌ ' + e.message;
-    btn.textContent    = `🔒 Lock In My ${YEAR} System`;
+    btn.textContent    = `🔒 Lock In My ${YEAR} System + Send Calendar Invites`;
     btn.disabled       = false;
   }
 }
