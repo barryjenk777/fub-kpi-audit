@@ -210,8 +210,17 @@
       try {
         const r = await fetch('/api/pond-mailer/test-heygen-email');
         const d = await r.json();
-        msg.textContent = d.message || (d.ok ? 'Queued! Check your inbox.' : 'Something went wrong.');
+        if (d.ok) {
+          msg.style.color = '#4ade80';
+          msg.textContent = d.message;
+        } else {
+          msg.style.color = '#f87171';
+          msg.textContent = `❌ ${d.error}` + (d.body ? `\n\nHeyGen said: ${JSON.stringify(d.body, null, 2)}` : '');
+          msg.style.whiteSpace = 'pre-wrap';
+          msg.style.fontFamily = 'monospace';
+        }
       } catch(e) {
+        msg.style.color = '#f87171';
         msg.textContent = `Error: ${e.message}`;
       }
       btn.textContent = '📧 Email Me a Test Video';
