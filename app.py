@@ -5731,6 +5731,85 @@ def _get_cdn_url(video_id: str) -> str | None:
         return None
 
 
+@app.route("/mthumb/<video_id>")
+def mms_thumb(video_id: str):
+    """
+    MMS-optimised thumbnail for Twilio MMS delivery.
+
+    HeyGen thumbnails are 1920×1080 JPEG at ~900KB — too large for carrier
+    MMS limits (~600KB). This endpoint fetches the thumbnail via HeyGen API,
+    resizes to 640×360, and re-compresses to quality 55 (~120–180KB).
+
+    Cached in memory for 2 hours (same session as /vp/ CDN cache).
+    Used as media_url in pond_mailer MMS sends instead of the raw video.
+    """
+    import io, re as _re
+    from flask import Response as _R, abort as _abort
+    import requests as _req
+
+    # Normalise video_id
+    vid = video_id.lower().strip()
+    if not _re.match(r'^[0-9a-f]{32}$', vid):
+        _abort(400)
+
+    cache_key = f"mthumb:{vid}"
+    cached = _thumb_cache.get(cache_key)
+    if cached:
+        return _R(cached, mimetype="image/jpeg",
+                  headers={"Cache-Control": "public, max-age=7200"})
+
+    # Fetch HeyGen thumbnail URL
+    hg_key = os.environ.get("HEYGEN_API_KEY", "")
+    if not hg_key:
+        _abort(503)
+
+    try:
+        r = _req.get(
+            "https://api.heygen.com/v1/video_status.get",
+            headers={"X-Api-Key": hg_key, "Content-Type": "application/json"},
+            params={"video_id": vid},
+            timeout=8,
+        )
+        r.raise_for_status()
+        data = r.json().get("data", {})
+        if data.get("status") != "completed":
+            _abort(404)
+        thumb_url = data.get("thumbnail_url", "")
+        if not thumb_url:
+            _abort(404)
+    except Exception as _e:
+        logger.warning("mms_thumb HeyGen lookup failed for %s: %s", vid, _e)
+        _abort(502)
+
+    # Fetch original thumbnail
+    try:
+        resp = _req.get(thumb_url, timeout=10)
+        resp.raise_for_status()
+        raw_bytes = resp.content
+    except Exception as _e:
+        logger.warning("mms_thumb fetch failed for %s: %s", vid, _e)
+        _abort(502)
+
+    # Resize + compress with PIL → target ≤ 400 KB for carrier MMS delivery
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        # Resize to 640×360 (16:9, standard MMS resolution)
+        img = img.resize((640, 360), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=55, optimize=True)
+        jpeg_bytes = buf.getvalue()
+        logger.info("mms_thumb %s: %d KB (compressed from %d KB)",
+                    vid, len(jpeg_bytes) // 1024, len(raw_bytes) // 1024)
+    except Exception as _e:
+        logger.warning("mms_thumb PIL failed for %s: %s — serving raw", vid, _e)
+        jpeg_bytes = raw_bytes  # serve original if PIL fails
+
+    _thumb_cache[cache_key] = jpeg_bytes
+    return _R(jpeg_bytes, mimetype="image/jpeg",
+              headers={"Cache-Control": "public, max-age=7200"})
+
+
 @app.route("/vp/<video_id>")
 def video_proxy(video_id: str):
     """

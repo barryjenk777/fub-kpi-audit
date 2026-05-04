@@ -4129,16 +4129,23 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             _dual_body += "\n\nReply STOP to opt out."
 
                 if _dual_body:
-                    # Attach the HeyGen video as MMS via Twilio.
-                    # Same render as the email — zero extra HeyGen credits.
-                    # /vp/<video_id> is our streaming proxy (raw HeyGen URLs expire).
+                    # MMS via Twilio — attach /mthumb/<id> (640×360 JPEG, ~150KB).
+                    # Raw HeyGen thumbnails (900KB) and videos (2+ MB) both exceed
+                    # carrier MMS size limits (~600KB). /mthumb compresses on-the-fly.
+                    # The video landing page link is appended to the body so the lead
+                    # can tap to watch the full video on the Mapbox landing page.
                     _dual_media_url = None
                     if video_result and video_result.get("video_id"):
                         _base = os.environ.get("BASE_URL",
                                                "https://web-production-3363cc.up.railway.app")
-                        _dual_media_url = f"{_base}/vp/{video_result['video_id']}"
+                        _vid_id = video_result["video_id"]
+                        _dual_media_url = f"{_base}/mthumb/{_vid_id}"
+                        # Append video link to body — leads tap to see map + full video
+                        _video_link = f"{_base}/v/{_vid_id}"
+                        if _video_link not in _dual_body:
+                            _dual_body = f"{_dual_body}\n\n{_video_link}"
 
-                    # Twilio MMS — works on iPhone and Android
+                    # Twilio MMS — thumbnail image inline, video link in body
                     _dual_result  = _tc.send_sms(to_phone, _dual_body,
                                                   media_url=_dual_media_url,
                                                   dry_run=dry_run)
