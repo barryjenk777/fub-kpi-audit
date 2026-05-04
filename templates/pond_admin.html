@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pond Mailer Admin · Legacy Home Team</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      min-height: 100vh;
+      padding: 24px 16px 48px;
+    }
+    h1 { font-size: 24px; font-weight: 900; color: #f5a623; margin: 0 0 4px; }
+    .subtitle { font-size: 13px; color: #64748b; margin: 0 0 28px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 0 0 24px; }
+    .card {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 18px 20px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    }
+    .card h2 { font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #64748b; margin: 0 0 12px; }
+    .stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 0; border-bottom: 1px solid #1e293b; }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-label { font-size: 13px; color: #94a3b8; }
+    .stat-value { font-size: 18px; font-weight: 900; color: #f1f5f9; }
+    .stat-value.green { color: #22c55e; }
+    .stat-value.amber { color: #f5a623; }
+    .stat-value.red   { color: #ef4444; }
+    .stat-value.dim   { color: #475569; font-size: 14px; font-weight: 600; }
+
+    /* env check */
+    .env-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; color: #94a3b8; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot.ok  { background: #22c55e; }
+    .dot.bad { background: #ef4444; }
+
+    /* jobs table */
+    .full-card { background: #1e293b; border-radius: 12px; padding: 18px 20px; margin: 0 0 20px; }
+    .full-card h2 { font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: #64748b; margin: 0 0 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: #475569; padding: 0 12px 8px 0; }
+    td { padding: 8px 12px 8px 0; border-top: 1px solid #334155; color: #cbd5e1; vertical-align: top; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+    }
+    .badge-ok       { background: #14532d; color: #4ade80; }
+    .badge-error    { background: #450a0a; color: #f87171; }
+    .badge-running  { background: #1e3a5f; color: #60a5fa; }
+    .badge-dry      { background: #2d1b69; color: #a78bfa; }
+    .skip-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+    .skip-chip {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 10px;
+      color: #64748b;
+    }
+    .skip-chip.nonzero { color: #f5a623; border-color: #f5a623; }
+
+    /* buttons */
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 24px; }
+    .btn {
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-primary   { background: #f5a623; color: #0d1117; }
+    .btn-secondary { background: #1e293b; color: #f1f5f9; border: 1.5px solid #334155; }
+    .btn-danger    { background: #450a0a; color: #f87171; border: 1.5px solid #ef4444; }
+    .btn:disabled  { opacity: 0.4; cursor: not-allowed; }
+
+    /* scheduler */
+    .sched-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #334155; font-size: 12px; }
+    .sched-row:last-child { border-bottom: none; }
+    .sched-name { color: #94a3b8; }
+    .sched-next { color: #f5a623; font-weight: 700; }
+
+    /* recent sends */
+    .send-row { padding: 10px 0; border-bottom: 1px solid #334155; }
+    .send-row:last-child { border-bottom: none; }
+    .send-name { font-size: 14px; font-weight: 700; color: #f1f5f9; }
+    .send-meta { font-size: 12px; color: #64748b; margin-top: 2px; }
+    .send-subj { font-size: 12px; color: #94a3b8; margin-top: 2px; font-style: italic; }
+
+    .spinner { width:24px; height:24px; border:2px solid #334155; border-top-color:#f5a623; border-radius:50%; animation:spin .7s linear infinite; margin:auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #status-bar { font-size: 12px; color: #64748b; text-align: center; padding: 8px 0 0; }
+
+    .error-box { background:#450a0a; border:1px solid #ef4444; border-radius:8px; padding:10px 14px; font-size:12px; color:#fca5a5; margin:8px 0; }
+    .as-of { font-size: 11px; color: #475569; margin: 0 0 20px; }
+
+    /* result diff */
+    .result-detail { font-size: 11px; color: #64748b; margin-top: 4px; }
+  </style>
+</head>
+<body>
+
+  <h1>Pond Mailer Admin</h1>
+  <p class="subtitle">Live status · Legacy Home Team</p>
+
+  <div class="actions">
+    <button class="btn btn-primary" id="btnRefresh" onclick="loadData()">↺ Refresh</button>
+    <button class="btn btn-secondary" id="btnDryRun" onclick="triggerRun(true)">🧪 Dry Run (safe)</button>
+    <button class="btn btn-danger"   id="btnLiveRun" onclick="triggerRun(false)">⚡ Live Run NOW</button>
+  </div>
+
+  <div id="status-bar">Loading…</div>
+
+  <div id="main" style="display:none">
+    <p class="as-of" id="asOf"></p>
+
+    <!-- Env vars -->
+    <div class="full-card" id="envCard"></div>
+
+    <!-- Today / 7d stats -->
+    <div class="grid" id="statsGrid"></div>
+
+    <!-- Scheduler -->
+    <div class="full-card" id="schedCard"></div>
+
+    <!-- Recent jobs -->
+    <div class="full-card" id="jobsCard"></div>
+
+    <!-- Recent sends -->
+    <div class="full-card" id="sendsCard"></div>
+  </div>
+
+  <script>
+    let _lastRefresh = null;
+
+    async function loadData() {
+      document.getElementById('status-bar').innerHTML = '<div class="spinner"></div>';
+      try {
+        const [recent, health] = await Promise.all([
+          fetch('/api/pond-mailer/recent').then(r => r.json()),
+          fetch('/api/health').then(r => r.json()),
+        ]);
+        renderAll(recent, health);
+        _lastRefresh = new Date();
+        document.getElementById('status-bar').textContent = 'Last refreshed: ' + _lastRefresh.toLocaleTimeString();
+        document.getElementById('main').style.display = 'block';
+      } catch(e) {
+        document.getElementById('status-bar').textContent = 'Error loading data: ' + e.message;
+      }
+    }
+
+    async function triggerRun(dryRun) {
+      const label = dryRun ? 'Dry run' : 'LIVE run';
+      if (!dryRun && !confirm('Send real emails to real leads right now?')) return;
+
+      const btn = dryRun ? document.getElementById('btnDryRun') : document.getElementById('btnLiveRun');
+      btn.disabled = true;
+      btn.textContent = '⏳ Starting…';
+
+      try {
+        const resp = await fetch('/api/pond-mailer/run', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ dry_run: dryRun, daily_cap: dryRun ? 999 : 45 }),
+        });
+        const data = await resp.json();
+        btn.textContent = `✓ ${label} started (job: ${data.job_id})`;
+        setTimeout(() => { btn.textContent = dryRun ? '🧪 Dry Run (safe)' : '⚡ Live Run NOW'; btn.disabled = false; }, 5000);
+        setTimeout(loadData, 3000);
+      } catch(e) {
+        btn.textContent = 'Error: ' + e.message;
+        btn.disabled = false;
+      }
+    }
+
+    function renderAll(recent, health) {
+      document.getElementById('asOf').textContent = 'As of ' + (recent.as_of || '—');
+
+      // ── Env vars ─────────────────────────────────────────────────────────
+      const envKeys = health.env_checks || {};
+      let envHtml = '<h2>Environment Variables</h2>';
+      const envList = [
+        ['ANTHROPIC_API_KEY',  envKeys.anthropic_api_key,  'Claude email generation'],
+        ['SENDGRID_API_KEY',   envKeys.sendgrid_api_key,   'Email delivery'],
+        ['HEYGEN_API_KEY',     envKeys.heygen_api_key,     'HeyGen video (optional)'],
+        ['FUB_API_KEY',        envKeys.fub_api_key,        'FUB lead data'],
+        ['DATABASE_URL',       recent.db_available,        'Job log + cooldown tracking'],
+        ['TWILIO_ACCOUNT_SID', envKeys.twilio_sid,         'SMS (optional)'],
+      ];
+      for (const [key, ok, label] of envList) {
+        const cls = (ok === false || ok === null || ok === undefined) ? 'bad' : 'ok';
+        envHtml += `<div class="env-row">
+          <span class="dot ${cls}"></span>
+          <span style="font-weight:700;color:#f1f5f9;flex:0 0 200px">${key}</span>
+          <span>${ok ? '✓ Set' : '✗ MISSING'} &mdash; ${label}</span>
+        </div>`;
+      }
+      document.getElementById('envCard').innerHTML = envHtml;
+
+      // ── Stats ─────────────────────────────────────────────────────────────
+      const td = recent.today || {};
+      const w7 = recent.last_7_days || {};
+      let statsHtml = `
+        <div class="card">
+          <h2>Today</h2>
+          <div class="stat-row"><span class="stat-label">Sequence emails sent</span><span class="stat-value ${td.sequence_emails > 0 ? 'green' : 'dim'}">${td.sequence_emails ?? '—'}</span></div>
+          <div class="stat-row"><span class="stat-label">Immediate (new lead)</span><span class="stat-value">${td.immediate_texts ?? '—'}</span></div>
+          <div class="stat-row"><span class="stat-label">Dry runs</span><span class="stat-value dim">${td.dry_runs ?? '—'}</span></div>
+        </div>
+        <div class="card">
+          <h2>Last 7 Days</h2>
+          <div class="stat-row"><span class="stat-label">Sequence emails</span><span class="stat-value ${w7.sequence_emails > 0 ? 'green' : 'amber'}">${w7.sequence_emails ?? '—'}</span></div>
+          <div class="stat-row"><span class="stat-label">Immediate emails</span><span class="stat-value">${w7.immediate_texts ?? '—'}</span></div>
+          <div class="stat-row"><span class="stat-label">Unique leads</span><span class="stat-value">${w7.unique_leads ?? '—'}</span></div>
+        </div>`;
+      document.getElementById('statsGrid').innerHTML = statsHtml;
+
+      // ── Scheduler ────────────────────────────────────────────────────────
+      const jobs = (health.scheduler?.jobs || []).filter(j => j.id.startsWith('pond_mailer'));
+      let schedHtml = '<h2>Scheduler — Pond Mailer Slots</h2>';
+      if (!health.scheduler?.running) {
+        schedHtml += '<div class="error-box">⚠ Scheduler not running — APScheduler may not have started.</div>';
+      } else if (jobs.length === 0) {
+        schedHtml += '<div class="error-box">No pond mailer jobs found in scheduler.</div>';
+      } else {
+        for (const j of jobs) {
+          const fired = j.last_fired && j.last_fired !== 'never'
+            ? new Date(j.last_fired).toLocaleString()
+            : '—';
+          const next = j.next_run ? new Date(j.next_run).toLocaleString() : '—';
+          schedHtml += `<div class="sched-row">
+            <span class="sched-name">${j.name}</span>
+            <span style="font-size:11px;color:#475569;margin:0 12px">Last: ${fired}</span>
+            <span class="sched-next">Next: ${next}</span>
+          </div>`;
+        }
+      }
+      document.getElementById('schedCard').innerHTML = schedHtml;
+
+      // ── Recent jobs ──────────────────────────────────────────────────────
+      const rj = recent.recent_jobs || [];
+      let jobsHtml = '<h2>Recent Runs</h2>';
+      if (rj.length === 0) {
+        jobsHtml += '<p style="color:#475569;font-size:13px">No job history yet. Trigger a run to start.</p>';
+      } else {
+        jobsHtml += '<table><thead><tr><th>Started</th><th>Status</th><th>Result</th><th>Error</th></tr></thead><tbody>';
+        for (const j of rj) {
+          const statusCls = j.status === 'complete' ? 'badge-ok'
+            : j.status === 'error' ? 'badge-error' : 'badge-running';
+          const dryCls = j.dry_run ? 'badge-dry' : '';
+
+          // Result breakdown
+          let resultHtml = '—';
+          if (j.result) {
+            const r = j.result;
+            const sentN = r.sent ?? 0;
+            const totalN = r.total_leads_found ?? null;
+            const totalLabel = totalN !== null ? ` of ${totalN} leads` : '';
+            resultHtml = `<span style="font-weight:700;color:${sentN > 0 ? '#22c55e' : (totalN === 0 ? '#ef4444' : '#f5a623')}">${sentN} sent${totalLabel}</span>`;
+            if (totalN === 0) {
+              resultHtml += '<div class="skip-bar"><span class="skip-chip nonzero">⚠ ponds empty</span></div>';
+            } else {
+              const chips = [];
+              if (r.skipped_cooldown)         chips.push(['cooldown',  r.skipped_cooldown]);
+              if (r.skipped_no_activity)      chips.push(['no IDX',    r.skipped_no_activity]);
+              if (r.skipped_no_email)         chips.push(['no email',  r.skipped_no_email]);
+              if (r.skipped_no_strategy)      chips.push(['no strategy', r.skipped_no_strategy]);
+              if (r.skipped_generation_error) chips.push(['gen error', r.skipped_generation_error]);
+              if (chips.length) {
+                resultHtml += '<div class="skip-bar">' +
+                  chips.map(([lbl, n]) => `<span class="skip-chip ${n > 0 ? 'nonzero' : ''}">${lbl}: ${n}</span>`).join('') +
+                  '</div>';
+              }
+            }
+          }
+
+          jobsHtml += `<tr>
+            <td>${j.started_et || '—'}${j.finished_et ? `<br><span style="color:#475569">${j.finished_et}</span>` : ''}</td>
+            <td>
+              <span class="badge ${statusCls}">${j.status}</span>
+              ${j.dry_run ? ' <span class="badge badge-dry">DRY</span>' : ''}
+            </td>
+            <td>${resultHtml}</td>
+            <td style="color:#f87171;font-size:11px">${j.error || ''}</td>
+          </tr>`;
+        }
+        jobsHtml += '</tbody></table>';
+      }
+      document.getElementById('jobsCard').innerHTML = jobsHtml;
+
+      // ── Recent sends ─────────────────────────────────────────────────────
+      const rs = recent.recent_sends || [];
+      let sendsHtml = '<h2>Recent Emails Sent</h2>';
+      if (rs.length === 0) {
+        sendsHtml += '<p style="color:#475569;font-size:13px">No emails logged yet.</p>';
+      } else {
+        for (const s of rs) {
+          const dryLabel = s.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
+          sendsHtml += `<div class="send-row">
+            <div class="send-name">${s.name || 'Unknown'}${dryLabel}</div>
+            <div class="send-meta">${s.sent_et || ''} · seq #${s.sequence_num ?? '?'} · ${s.strategy || '?'}</div>
+            <div class="send-subj">${s.subject || ''}</div>
+          </div>`;
+        }
+      }
+      document.getElementById('sendsCard').innerHTML = sendsHtml;
+    }
+
+    // Auto-refresh every 30s
+    loadData();
+    setInterval(loadData, 30000);
+  </script>
+
+</body>
+</html>

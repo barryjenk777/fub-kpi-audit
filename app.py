@@ -5813,6 +5813,16 @@ def api_health():
         else:
             cache_status[endpoint] = {"cached": False}
 
+    # Env var checks — boolean only, never expose values
+    env_checks = {
+        "anthropic_api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "sendgrid_api_key":  bool(os.environ.get("SENDGRID_API_KEY")),
+        "heygen_api_key":    bool(os.environ.get("HEYGEN_API_KEY")),
+        "fub_api_key":       bool(os.environ.get("FUB_API_KEY")),
+        "database_url":      bool(os.environ.get("DATABASE_URL")),
+        "twilio_sid":        bool(os.environ.get("TWILIO_ACCOUNT_SID")),
+    }
+
     return jsonify({
         "status": status,
         "last_leadstream_run": last_run_str,
@@ -5824,6 +5834,7 @@ def api_health():
         "pond_leads_tagged": len(manifest.get("pond", [])) if last_run else 0,
         "scheduler": scheduler_info,
         "dashboard_cache": cache_status,
+        "env_checks": env_checks,
     })
 
 
@@ -5903,6 +5914,12 @@ def api_pond_mailer_run():
     threading.Thread(target=_bg, daemon=True).start()
 
     return jsonify({"job_id": job_id, "status": "running", "dry_run": dry_run})
+
+
+@app.route("/pond-admin")
+def pond_admin_page():
+    """Pond mailer admin dashboard — shows status, recent jobs, env checks, scheduler."""
+    return render_template("pond_admin.html")
 
 
 @app.route("/api/pond-mailer/status/<job_id>")

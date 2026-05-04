@@ -4260,18 +4260,24 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         import time as _t; _t.sleep(1.5)
 
     _sms_total = sms_only_sent + dual_sms_sent
+    _total_leads = len(all_pond_leads)
     print(f"\n{'='*60}")
     print(f"  Done: {sent} {'would send' if dry_run else 'sent'} "
           f"({'email only' if _sms_total == 0 else f'{sms_only_sent} SMS-only + {dual_sms_sent} dual-channel'})")
+    print(f"  Leads in ponds: {_total_leads} | Candidates checked: {candidates_checked}")
     print(f"  Cooldown: {skipped_cooldown} | No activity: {skipped_no_activity} | "
           f"No contact: {skipped_no_email} | No strategy: {skipped_no_strategy} | "
           f"Generation error: {skipped_generation_error}")
+    if _total_leads == 0:
+        print(f"  ⚠ WARNING: Ponds {sorted(LEADSTREAM_ALLOWED_POND_IDS)} returned 0 leads — check FUB pond assignments.")
     print(f"{'='*60}\n")
 
     return {
         "sent":                      sent,
         "sms_only_sent":             sms_only_sent,
         "dual_sms_sent":             dual_sms_sent,
+        "total_leads_found":         _total_leads,
+        "candidates_checked":        candidates_checked,
         "skipped_cooldown":          skipped_cooldown,
         "skipped_no_email":          skipped_no_email,
         "skipped_no_activity":       skipped_no_activity,

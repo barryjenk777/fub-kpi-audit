@@ -4206,7 +4206,7 @@ def get_pond_recent_activity():
                 # Recent jobs from pond_mailer_jobs (may not exist yet)
                 try:
                     cur.execute("""
-                        SELECT job_id, status, dry_run, error,
+                        SELECT job_id, status, dry_run, error, result,
                                started_at AT TIME ZONE 'America/New_York',
                                finished_at AT TIME ZONE 'America/New_York'
                         FROM pond_mailer_jobs
@@ -4219,9 +4219,10 @@ def get_pond_recent_activity():
                             "job_id":      r[0],
                             "status":      r[1],
                             "dry_run":     r[2],
-                            "error":       (r[3] or "")[:200] if r[3] else None,
-                            "started_et":  r[4].strftime("%m/%d %I:%M %p") if r[4] else None,
-                            "finished_et": r[5].strftime("%m/%d %I:%M %p") if r[5] else None,
+                            "error":       (r[3] or "")[:400] if r[3] else None,
+                            "result":      r[4] if r[4] else None,
+                            "started_et":  r[5].strftime("%m/%d %I:%M %p") if r[5] else None,
+                            "finished_et": r[6].strftime("%m/%d %I:%M %p") if r[6] else None,
                         }
                         for r in job_rows
                     ]
