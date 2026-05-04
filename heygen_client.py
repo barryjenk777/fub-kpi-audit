@@ -40,14 +40,11 @@ _API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 _BASE = "https://api.heygen.com"
 
 # Barry's avatar + voice IDs — confirmed working via API test
-DEFAULT_AVATAR      = "11d44d579fd64b69910264b6b20975a8"  # Barry Jenkins — Talking Photo (face cutout, no circle)
-DEFAULT_AVATAR_TYPE = "talking_photo"                      # HeyGen character type for DEFAULT_AVATAR
+DEFAULT_AVATAR      = "4b314392e9b6441d97abaf6d83808de5"  # Barry Jenkins — Avatar 2, circle style (Email 1)
+DEFAULT_AVATAR_TYPE = "avatar"                             # HeyGen character type for DEFAULT_AVATAR
 AVATAR_SUIT         = "dc3bfe40aeaf4590b76ee12824d019dd"  # Barry Jenkins — Suit avatar (Email 2 follow-up)
 AVATAR_SUIT_TYPE    = "avatar"                             # HeyGen character type for AVATAR_SUIT
 DEFAULT_VOICE       = "b37262521af24a0e9245308e4045ac3f"  # Barry Jenkins — HeyGen native voice clone
-
-# Old circle avatar kept for reference — do not use (has blue circle frame baked in)
-# _LEGACY_CIRCLE_AVATAR = "4b314392e9b6441d97abaf6d83808de5"
 
 # Background endpoint hosted on Railway — generates branded background on-demand
 # HeyGen fetches this URL during rendering. No external storage needed.
@@ -878,7 +875,7 @@ def generate_zbuyer_background_image(street: str, city: str,
 
 def submit_video(script: str, background_url: str = None,
                  avatar_id: str = None, voice_id: str = None,
-                 avatar_style: str = "normal",
+                 avatar_style: str = "circle",
                  avatar_scale: float = None,
                  avatar_offset: dict = None,
                  character_type: str = None,
@@ -1022,7 +1019,7 @@ def poll_video(video_id: str, timeout_seconds: int = 360,
 
 def generate_and_wait(script: str, background_url: str = None,
                       avatar_id: str = None, voice_id: str = None,
-                      avatar_style: str = "normal",
+                      avatar_style: str = "circle",
                       avatar_scale: float = None,
                       avatar_offset: dict = None,
                       character_type: str = None,
