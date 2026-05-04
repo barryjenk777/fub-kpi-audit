@@ -1123,6 +1123,18 @@ async function saveAll() {
 // Init
 toggleBenefitsCustom();
 recalc();
+
+// If URL has #step7 (dashboard CTA for agents who've already set goals),
+// jump straight to the call block step without requiring previous steps.
+if (window.location.hash === '#step7') {
+  // Deactivate step 1, force-activate step 7
+  document.getElementById(`section-1`).classList.remove('active');
+  document.getElementById(`section-7`).classList.add('active');
+  currentStep = 7;
+  updateProgress();
+  prepSection7();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 </script>
 </body>
 </html>
