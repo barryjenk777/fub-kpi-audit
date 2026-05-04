@@ -7419,15 +7419,44 @@ def api_test_heygen_status(video_id: str):
 def api_test_sms():
     """
     Send a test SMS or MMS via Twilio. Admin/dev use only.
-    Body: { "to": "+1...", "body": "...", "media_url": "https://..." (optional) }
+    Body: {
+        "to":                  "+1...",
+        "body":                "...",
+        "media_url":           "https://..." (optional),
+        "bypass_quiet_hours":  true           (optional — for after-hours testing to Barry's number)
+    }
     """
-    from twilio_client import send_sms as _send_sms, is_within_sms_quiet_hours
-    data      = request.json or {}
-    to        = data.get("to", "+17578164037")
-    body      = data.get("body", "Test from Legacy Home Team system.")
-    media_url = data.get("media_url")
-    result    = _send_sms(to, body, media_url=media_url, dry_run=False)
-    return jsonify(result)
+    from twilio_client import send_sms as _send_sms, format_e164, is_available, SMS_SIGN_OFF
+    data               = request.json or {}
+    to                 = data.get("to", "+17578164037")
+    body               = data.get("body", "Test from Legacy Home Team system.")
+    media_url          = data.get("media_url")
+    bypass_quiet_hours = bool(data.get("bypass_quiet_hours", False))
+
+    # Standard path — respects TCPA quiet hours
+    if not bypass_quiet_hours:
+        result = _send_sms(to, body, media_url=media_url, dry_run=False)
+        return jsonify(result)
+
+    # Bypass path — direct Twilio call, skips quiet-hours gate.
+    # Only safe for internal test numbers (Barry's own phone).
+    if not is_available():
+        return jsonify({"success": False, "status": "failed", "error": "Twilio not configured"})
+    try:
+        from twilio.rest import Client as _TwilioClient
+        _client = _TwilioClient(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
+        _full_body  = f"{body}\n{SMS_SIGN_OFF}"
+        _kwargs     = {
+            "messaging_service_sid": os.environ["TWILIO_MESSAGING_SERVICE_SID"],
+            "to":   format_e164(to),
+            "body": _full_body,
+        }
+        if media_url:
+            _kwargs["media_url"] = [media_url]
+        _msg = _client.messages.create(**_kwargs)
+        return jsonify({"success": True, "twilio_sid": _msg.sid, "status": _msg.status})
+    except Exception as _e:
+        return jsonify({"success": False, "status": "failed", "error": str(_e)})
 
 
 # ---- Scheduler: cache warming + email delivery ----
