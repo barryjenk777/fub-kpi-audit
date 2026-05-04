@@ -7459,6 +7459,30 @@ def api_test_sms():
         return jsonify({"success": False, "status": "failed", "error": str(_e)})
 
 
+@app.route("/api/twilio-status/<sid>", methods=["GET"])
+def api_twilio_status(sid):
+    """Look up a Twilio message SID and return its current delivery status."""
+    from twilio_client import is_available
+    if not is_available():
+        return jsonify({"error": "Twilio not configured"}), 400
+    try:
+        from twilio.rest import Client as _TC
+        _client = _TC(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
+        msg = _client.messages(sid).fetch()
+        return jsonify({
+            "sid":          msg.sid,
+            "status":       msg.status,
+            "error_code":   msg.error_code,
+            "error_message": msg.error_message,
+            "to":           msg.to,
+            "num_media":    msg.num_media,
+            "direction":    msg.direction,
+            "date_sent":    str(msg.date_sent),
+        })
+    except Exception as _e:
+        return jsonify({"error": str(_e)}), 500
+
+
 # ---- Scheduler: cache warming + email delivery ----
 _scheduler_started = False
 _scheduler = None          # global ref so health endpoint can inspect jobs
