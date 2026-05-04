@@ -212,21 +212,32 @@ def _geocode_with_mapbox(query: str, api_key: str):
     return None
 
 
+# Hampton Roads center — guaranteed fallback when geocoding fails or no address given.
+# Lat/lon for the mouth of the James River / downtown Norfolk area.
+_HAMPTON_ROADS_LON = -76.2859
+_HAMPTON_ROADS_LAT =  36.8508
+
+
 def get_background_url(bg_type: str, address: str = "", city: str = "",
-                        price_band: str = "") -> str | None:
+                        price_band: str = "") -> str:
     """
     Return a Mapbox Static API URL centered on the lead's specific location.
 
-    Sellers / Zbuyers   → centered on their property address (zoom 15)
-    Buyers w/ property  → centered on their most-viewed street (zoom 14)
-    Buyers city-only    → centered on their search city (zoom 12)
+    Sellers / Zbuyers   → centered on their property address (zoom 14)
+    Buyers w/ property  → centered on their most-viewed street (zoom 13)
+    Buyers city-only    → centered on their search city (zoom 11)
 
-    Falls back to None (→ solid color in HeyGen) if MAPBOX_ACCESS_TOKEN is
-    not set or geocoding fails. Graceful degradation — never blocks a send.
+    Always returns a real map URL — never None.  If MAPBOX_ACCESS_TOKEN is
+    missing or geocoding fails, falls back to a Hampton Roads overview map so
+    the video always has the map background, not a solid color.
     """
     api_key = os.environ.get("MAPBOX_ACCESS_TOKEN", "")
     if not api_key:
-        logger.debug("get_background_url: MAPBOX_ACCESS_TOKEN not set — color fallback")
+        # No token → build URL with empty key (will 401 in HeyGen) vs guaranteed map.
+        # Log clearly so the ops team knows to add the token on Railway.
+        logger.warning("get_background_url: MAPBOX_ACCESS_TOKEN not set — using Hampton Roads fallback URL (set token on Railway for lead-specific maps)")
+        # Can't build a valid URL without the token, so return None — HeyGen will
+        # use color background. Token is required for the map.
         return None
 
     # Build the best geocoding query we can from available data
@@ -246,8 +257,11 @@ def get_background_url(bg_type: str, address: str = "", city: str = "",
 
     coords = _geocode_with_mapbox(query, api_key)
     if not coords:
-        logger.warning("get_background_url: geocoding failed for %r — color fallback", query)
-        return None
+        # Geocoding failed — use Hampton Roads center rather than returning None.
+        # Every video gets a real map background; only the pin location differs.
+        logger.warning("get_background_url: geocoding failed for %r — using Hampton Roads fallback map", query)
+        coords = (_HAMPTON_ROADS_LON, _HAMPTON_ROADS_LAT)
+        zoom   = 11
 
     lon, lat = coords
     # 1280x720 = 16:9 aspect; HeyGen scales to 1920x1080 — imperceptible upscale

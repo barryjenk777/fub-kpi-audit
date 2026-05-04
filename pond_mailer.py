@@ -3880,7 +3880,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     video_result = generate_and_wait(
                         script, background_url=bg_url,
                         avatar_id=AVATAR_SUIT, voice_id=DEFAULT_VOICE,
-                        avatar_style="normal",   # show the suit, not a circle crop
+                        avatar_style="circle",   # circle crop — map stays the dominant visual
                         timeout_seconds=480,
                     )
 
@@ -3996,7 +3996,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     video_result = generate_and_wait(
                         script, background_url=bg_url,
                         avatar_id=AVATAR_SUIT, voice_id=DEFAULT_VOICE,
-                        avatar_style="normal",   # show the suit, not a circle crop
+                        avatar_style="circle",   # circle crop — map stays the dominant visual
                         timeout_seconds=480,
                     )
 
