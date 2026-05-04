@@ -4129,21 +4129,31 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             _dual_body += "\n\nReply STOP to opt out."
 
                 if _dual_body:
-                    # MMS via Twilio — attach /mthumb/<id> (640×360 JPEG, ~150KB).
-                    # Raw HeyGen thumbnails (900KB) and videos (2+ MB) both exceed
+                    # MMS via Twilio — attach /mthumb/<id> (640×360 JPEG, ~35KB).
+                    # Raw HeyGen thumbnails (~900KB) and videos (2+ MB) both fail
                     # carrier MMS size limits (~600KB). /mthumb compresses on-the-fly.
-                    # The video landing page link is appended to the body so the lead
-                    # can tap to watch the full video on the Mapbox landing page.
+                    # Short URL (/go/<8-char>) keeps the link compact in the SMS body.
                     _dual_media_url = None
                     if video_result and video_result.get("video_id"):
                         _base = os.environ.get("BASE_URL",
                                                "https://web-production-3363cc.up.railway.app")
                         _vid_id = video_result["video_id"]
                         _dual_media_url = f"{_base}/mthumb/{_vid_id}"
-                        # Append video link to body — leads tap to see map + full video
-                        _video_link = f"{_base}/v/{_vid_id}"
-                        if _video_link not in _dual_body:
-                            _dual_body = f"{_dual_body}\n\n{_video_link}"
+                        # Register short URL and append to SMS body
+                        try:
+                            from app import make_short_video_url as _mk_short
+                            # Parse map center from bg_url if available
+                            _map_center = ""
+                            if bg_url:
+                                import re as _re
+                                _mc = _re.search(r'/static/(-?[\d.]+),(-?[\d.]+),([\d.]+),', bg_url)
+                                if _mc:
+                                    _map_center = f"{_mc.group(2)},{_mc.group(1)},{_mc.group(3)}"
+                            _short_link = _mk_short(_vid_id, map_center=_map_center)
+                        except Exception:
+                            _short_link = f"{_base}/v/{_vid_id}"
+                        if _short_link not in _dual_body:
+                            _dual_body = f"{_dual_body}\n\n{_short_link}"
 
                     # Twilio MMS — thumbnail image inline, video link in body
                     _dual_result  = _tc.send_sms(to_phone, _dual_body,

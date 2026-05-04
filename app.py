@@ -5869,6 +5869,53 @@ def video_proxy(video_id: str):
     )
 
 
+@app.route("/go/<code>")
+def short_video_url(code: str):
+    """
+    Short URL redirect for SMS video links.
+
+    /go/<first-8-chars-of-video_id>  →  /v/<full-video_id>?c=lat,lon,zoom
+
+    Keeps SMS links short (~50 chars vs 95+ for full URL).
+    The 8-char prefix is unique across all HeyGen video UUIDs in our system.
+    Map center query param (?c=) is preserved if stored alongside the code.
+
+    Storage: in-memory dict _short_url_store  {code: full_path}
+    Set by pond_mailer when generating the landing URL.
+    """
+    from flask import redirect as _redirect
+    target = _short_url_store.get(code.lower())
+    if not target:
+        # Fallback: treat code as video_id prefix — reconstruct full /v/ path
+        # by scanning for a matching HeyGen video_id in HeyGen API (best-effort)
+        import re as _re
+        if _re.match(r'^[0-9a-f]{8,32}$', code.lower()):
+            return _redirect(f"/v/{code.lower()}", code=302)
+        return "Not found.", 404
+    return _redirect(target, code=302)
+
+
+# In-memory short URL store: {8-char-code: "/v/<id>?c=lat,lon,zoom"}
+# Populated by make_short_video_url() called from pond_mailer
+_short_url_store: dict = {}
+
+
+def make_short_video_url(video_id: str, map_center: str = "") -> str:
+    """
+    Register a short URL and return the full /go/<code> path.
+
+    code = first 8 chars of video_id (always unique within one Railway instance).
+    map_center = "lat,lon,zoom" query string for the landing page map.
+    """
+    base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+    code = video_id.lower()[:8]
+    target = f"/v/{video_id.lower()}"
+    if map_center:
+        target += f"?c={map_center}"
+    _short_url_store[code] = target
+    return f"{base}/go/{code}"
+
+
 @app.route("/v/<token>")
 def video_landing(token):
     """
@@ -5959,8 +6006,9 @@ def video_landing(token):
     # Mapbox public access token — safe to embed in HTML (restrict by referrer in dashboard)
     mapbox_token = os.environ.get("MAPBOX_ACCESS_TOKEN", "")
 
-    # ── Build landing page: fullscreen Mapbox map + video PiP in bottom-right ──
-    # Falls back gracefully: if no Mapbox token, renders the classic dark-background player
+    # ── Build landing page: map fades behind dark overlay, video is the centered hero ──
+    # Map provides locality context; dark overlay stops it competing with the video.
+    # Falls back gracefully: if no Mapbox token, renders the classic dark-background player.
     if mapbox_token:
         html_out = f"""<!DOCTYPE html>
 <html lang="en">
@@ -5973,85 +6021,76 @@ def video_landing(token):
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{overflow:hidden;background:#0c1228;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}}
-#map{{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:0}}
-/* Video PiP — bottom-right corner overlay */
-#pip{{
-  position:fixed;bottom:24px;right:24px;
-  width:340px;max-width:calc(100vw - 32px);
+
+/* Map — full screen background, non-interactive so video gets all taps */
+#map{{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:0;pointer-events:none}}
+
+/* Dark overlay — fades the map so the video is the clear focal point */
+#overlay{{
+  position:fixed;top:0;left:0;width:100vw;height:100vh;
+  background:rgba(10,16,36,0.72);
+  z-index:1;pointer-events:none;
+}}
+
+/* Video — centered hero, large */
+#stage{{
+  position:fixed;top:0;left:0;width:100vw;height:100vh;
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  z-index:10;padding:16px;
+}}
+#vid-wrap{{
+  width:100%;max-width:560px;
   border-radius:14px;overflow:hidden;
-  box-shadow:0 8px 40px rgba(0,0,0,0.65),0 2px 8px rgba(0,0,0,0.4);
-  z-index:100;background:#000;
-  transition:width 0.25s ease,bottom 0.25s ease,right 0.25s ease;
+  box-shadow:0 12px 48px rgba(0,0,0,0.7);
+  background:#000;
 }}
-#pip video{{display:block;width:100%;max-height:70vh}}
-/* Expand toggle button */
-#expand-btn{{
-  position:absolute;top:8px;left:8px;
-  background:rgba(0,0,0,0.55);color:#fff;border:none;
-  border-radius:6px;padding:4px 8px;font-size:11px;
-  cursor:pointer;z-index:101;backdrop-filter:blur(4px);
-}}
-/* Brand bar — bottom left, subtle */
+#vid-wrap video{{display:block;width:100%;max-height:80vh;}}
+
+/* Brand — below video */
 #brand{{
-  position:fixed;bottom:16px;left:16px;
-  color:rgba(255,255,255,0.6);font-size:11px;letter-spacing:0.02em;
-  z-index:50;text-shadow:0 1px 3px rgba(0,0,0,0.8);
-  pointer-events:none;
+  margin-top:12px;
+  color:rgba(255,255,255,0.45);font-size:12px;letter-spacing:0.03em;
+  text-align:center;text-shadow:0 1px 4px rgba(0,0,0,0.8);
 }}
-/* Mobile: full-width video at bottom */
+
+/* Mobile: full-width */
 @media(max-width:480px){{
-  #pip{{width:calc(100vw - 24px);right:12px;bottom:12px;border-radius:10px}}
-}}
-/* Expanded state */
-#pip.expanded{{
-  width:min(640px,calc(100vw - 48px));
-  bottom:50%;right:50%;
-  transform:translate(50%,50%);
-  border-radius:16px;
+  #vid-wrap{{border-radius:10px}}
+  #brand{{font-size:11px}}
 }}
 </style>
 </head>
 <body>
 
 <div id="map"></div>
+<div id="overlay"></div>
 
-<div id="pip">
-  <button id="expand-btn" onclick="toggleExpand()">&#x26F6; expand</button>
-  <video id="v" src="{safe_url}" {poster_attr} controls playsinline preload="auto">
-    <a href="{safe_url}" style="color:#fff;padding:16px;display:block">Download video</a>
-  </video>
+<div id="stage">
+  <div id="vid-wrap">
+    <video id="v" src="{safe_url}" {poster_attr} controls playsinline preload="auto">
+      <a href="{safe_url}" style="color:#fff;padding:16px;display:block">Watch video</a>
+    </video>
+  </div>
+  <div id="brand">Legacy Home Team &nbsp;&middot;&nbsp; Barry Jenkins, Realtor &nbsp;&middot;&nbsp; LPT Realty</div>
 </div>
 
-<div id="brand">Legacy Home Team &nbsp;&middot;&nbsp; Barry Jenkins, Realtor &nbsp;&middot;&nbsp; LPT Realty</div>
-
 <script>
-// ── Mapbox map ────────────────────────────────────────────────────────────────
+// Map loads in background — non-interactive, purely atmospheric
 mapboxgl.accessToken = '{_html.escape(mapbox_token)}';
-var map = new mapboxgl.Map({{
+new mapboxgl.Map({{
   container: 'map',
   style: 'mapbox://styles/mapbox/navigation-day-v1',
   center: [{map_lon:.6f}, {map_lat:.6f}],
   zoom: {map_zoom:.1f},
-  interactive: true,
+  interactive: false,
   attributionControl: false,
 }});
-map.addControl(new mapboxgl.NavigationControl({{showCompass:false}}), 'top-left');
 
-// ── Video autoplay ────────────────────────────────────────────────────────────
+// Video autoplay on desktop; iOS requires user tap
 var v = document.getElementById('v');
 if (!('ontouchstart' in window)) {{
-  v.addEventListener('click', function(){{ v.paused ? v.play() : v.pause(); }});
   v.play().catch(function(){{}});
-}}
-
-// ── Expand / collapse PiP ─────────────────────────────────────────────────────
-var pip = document.getElementById('pip');
-var btn = document.getElementById('expand-btn');
-var expanded = false;
-function toggleExpand() {{
-  expanded = !expanded;
-  pip.classList.toggle('expanded', expanded);
-  btn.innerHTML = expanded ? '&#x2715; collapse' : '&#x26F6; expand';
 }}
 </script>
 </body>
