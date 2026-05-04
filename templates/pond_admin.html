@@ -117,8 +117,9 @@
     <button class="btn btn-primary" id="btnRefresh" onclick="loadData()">↺ Refresh</button>
     <button class="btn btn-secondary" id="btnDryRun" onclick="triggerRun(true)">🧪 Dry Run (safe)</button>
     <button class="btn btn-danger"   id="btnLiveRun" onclick="triggerRun(false)">⚡ Live Run NOW</button>
-    <button class="btn btn-secondary" id="btnHeyGen" onclick="testHeyGen()">🎬 Test HeyGen</button>
+    <button class="btn btn-secondary" id="btnHeyGen" onclick="runHeyGenDiagnose()">🎬 Diagnose HeyGen</button>
   </div>
+  <div id="heygenDiag" style="display:none;background:#1e293b;border-radius:12px;padding:18px 20px;margin:0 0 20px"></div>
 
   <div id="status-bar">Loading…</div>
 
@@ -160,49 +161,39 @@
       }
     }
 
-    async function testHeyGen() {
+    async function runHeyGenDiagnose() {
       const btn = document.getElementById('btnHeyGen');
+      const diagDiv = document.getElementById('heygenDiag');
       btn.disabled = true;
-      btn.textContent = '⏳ Submitting…';
+      btn.textContent = '⏳ Running full diagnostic (30-60s)…';
+      diagDiv.style.display = 'block';
+      diagDiv.innerHTML = '<h2 style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#64748b;margin:0 0 12px">HeyGen Diagnostic</h2><p style="color:#64748b;font-size:13px">Running step-by-step check…</p>';
       try {
-        const r = await fetch('/api/test-mapbox?video=true');
+        const r = await fetch('/api/pond-mailer/diagnose-heygen');
         const d = await r.json();
-        if (d.video_id) {
-          btn.textContent = `✓ Submitted! video_id: ${d.video_id.substring(0,8)}…`;
-          // Poll for completion
-          let polls = 0;
-          const poll = setInterval(async () => {
-            polls++;
-            if (polls > 40) { clearInterval(poll); btn.textContent = '🎬 Test HeyGen (timed out)'; btn.disabled = false; return; }
-            try {
-              const sr = await fetch(`/api/test-heygen-status/${d.video_id}`);
-              const sd = await sr.json();
-              if (sd.status === 'completed') {
-                clearInterval(poll);
-                btn.textContent = `✓ HeyGen works! ${sd.duration?.toFixed(0) || '?'}s video`;
-                btn.style.background = '#22c55e';
-                btn.disabled = false;
-              } else if (sd.status === 'failed') {
-                clearInterval(poll);
-                btn.textContent = `✗ HeyGen FAILED: ${sd.error || 'unknown'}`;
-                btn.style.background = '#ef4444';
-                btn.disabled = false;
-              } else {
-                btn.textContent = `⏳ Rendering… (${sd.status || 'processing'})`;
-              }
-            } catch(e) {}
-          }, 8000);
-        } else if (d.video_error) {
-          btn.textContent = `✗ ${d.video_error}`;
-          btn.style.background = '#ef4444';
-          btn.disabled = false;
-        } else if (d.error) {
-          btn.textContent = `✗ Mapbox error: ${d.error}`;
-          btn.style.background = '#ef4444';
-          btn.disabled = false;
+        let html = '<h2 style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#64748b;margin:0 0 12px">HeyGen Diagnostic</h2>';
+        // Steps
+        for (const s of (d.steps || [])) {
+          const color = s.ok ? '#22c55e' : '#ef4444';
+          const icon  = s.ok ? '✓' : '✗';
+          html += `<div style="padding:6px 0;border-bottom:1px solid #334155">
+            <span style="font-weight:700;color:${color};margin-right:8px">${icon}</span>
+            <span style="color:#f1f5f9;font-size:13px">${s.step}</span>
+            ${s.detail ? `<div style="font-size:11px;color:#64748b;margin-left:20px;margin-top:2px">${s.detail}</div>` : ''}
+          </div>`;
         }
+        // Verdict
+        const verdictColor = (d.verdict || '').startsWith('✓') ? '#22c55e' : '#f5a623';
+        html += `<div style="margin-top:14px;padding:12px 14px;background:#0f172a;border-radius:8px;font-size:13px;font-weight:700;color:${verdictColor}">${d.verdict || ''}</div>`;
+        if (d.fix) {
+          html += `<div style="margin-top:8px;padding:10px 14px;background:#450a0a;border-radius:8px;font-size:12px;color:#fca5a5">${d.fix}</div>`;
+        }
+        diagDiv.innerHTML = html;
+        btn.textContent = '🎬 Diagnose HeyGen';
+        btn.disabled = false;
       } catch(e) {
-        btn.textContent = 'Error: ' + e.message;
+        diagDiv.innerHTML = `<p style="color:#ef4444">Error: ${e.message}</p>`;
+        btn.textContent = '🎬 Diagnose HeyGen';
         btn.disabled = false;
       }
     }

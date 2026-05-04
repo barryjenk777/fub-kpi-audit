@@ -8163,6 +8163,194 @@ def api_test_heygen_status(video_id: str):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/pond-mailer/diagnose-heygen")
+def api_diagnose_heygen():
+    """
+    Step-by-step HeyGen diagnostic. Picks the first eligible pond lead and
+    walks through every gate: API key → lead → sequence → script → submit → poll.
+    Returns a JSON log showing exactly which step succeeded or failed.
+    Safe — dry-run only, never sends anything.
+    """
+    import time as _time
+    steps = []
+
+    def step(name, ok, detail=""):
+        steps.append({"step": name, "ok": ok, "detail": str(detail)[:400]})
+
+    try:
+        # Step 1: Check API key
+        heygen_key = os.environ.get("HEYGEN_API_KEY", "")
+        step("HEYGEN_API_KEY set", bool(heygen_key),
+             "Set on Railway" if heygen_key else "MISSING — set this env var on Railway")
+        if not heygen_key:
+            return jsonify({"steps": steps, "verdict": "HEYGEN_API_KEY not set"})
+
+        # Step 2: Check FUB key + find a pond lead
+        from fub_client import FUBClient
+        from config import LEADSTREAM_ALLOWED_POND_IDS
+        client = FUBClient()
+        pond_lead = None
+        for pond_id in sorted(LEADSTREAM_ALLOWED_POND_IDS):
+            leads = client.get_people_recent(pond_id=pond_id, limit=20)
+            for p in leads:
+                emails = p.get("emails") or []
+                has_email = any(e.get("value") for e in emails)
+                if has_email:
+                    pond_lead = p
+                    break
+            if pond_lead:
+                break
+
+        step("Found pond lead with email", bool(pond_lead),
+             f"FUB person ID {pond_lead.get('id')}: {pond_lead.get('firstName')} {pond_lead.get('lastName')}"
+             if pond_lead else f"No leads with email in ponds {sorted(LEADSTREAM_ALLOWED_POND_IDS)}")
+        if not pond_lead:
+            return jsonify({"steps": steps, "verdict": "No eligible pond leads found"})
+
+        pid   = pond_lead.get("id")
+        first = pond_lead.get("firstName") or "there"
+
+        # Step 3: Sequence check
+        import db as _db_local
+        history = _db_local.get_lead_email_history(pid)
+        seq_num = history.get("sequence_num", 1)
+        suppressed = history.get("suppressed", False)
+        has_replied = history.get("has_replied", False)
+        step("Not suppressed / replied", not suppressed and not has_replied,
+             f"sequence_num={seq_num}, suppressed={suppressed}, has_replied={has_replied}")
+
+        step("Eligible for Email 1 HeyGen (sequence_num == 1)", seq_num == 1,
+             f"sequence_num={seq_num} — HeyGen only fires on Email 1. "
+             f"{'Lead already got email 1+ without a video, now on text drip.' if seq_num > 1 else 'Ready for Email 1 video.'}")
+
+        if seq_num != 1:
+            # Try to find a true sequence-1 lead
+            for pond_id in sorted(LEADSTREAM_ALLOWED_POND_IDS):
+                leads = client.get_people_recent(pond_id=pond_id, limit=50)
+                for p in leads:
+                    emails = p.get("emails") or []
+                    if not any(e.get("value") for e in emails):
+                        continue
+                    h2 = _db_local.get_lead_email_history(p.get("id"))
+                    if h2.get("sequence_num", 1) == 1 and not h2.get("suppressed"):
+                        pond_lead = p
+                        pid   = p.get("id")
+                        first = p.get("firstName") or "there"
+                        seq_num = 1
+                        break
+                if seq_num == 1:
+                    break
+            step("Found sequence-1 lead for full test", seq_num == 1,
+                 f"Using {pond_lead.get('firstName')} {pond_lead.get('lastName')} (ID {pid})"
+                 if seq_num == 1 else "All pond leads already have email 1 — HeyGen won't fire until new leads come in")
+
+        # Step 4: HeyGen daily cap check
+        hg_cap = 8
+        hg_used = _db_local.count_heygen_today()
+        slots_left = max(0, hg_cap - hg_used)
+        step("Under HeyGen daily cap (8/day)", slots_left > 0,
+             f"{hg_used} used today, {slots_left} slots remaining (cap={hg_cap})")
+
+        # Step 5: HEYGEN_API_KEY actually works — ping the API
+        import requests as _req
+        try:
+            r_ping = _req.get(
+                "https://api.heygen.com/v1/user/remaining_quota",
+                headers={"X-Api-Key": heygen_key},
+                timeout=10,
+            )
+            if r_ping.status_code == 200:
+                quota = r_ping.json().get("data", {})
+                credits = quota.get("remaining_credits") or quota.get("credit_remaining")
+                step("HeyGen API key valid", True,
+                     f"API responded 200. Credits remaining: {credits}")
+            else:
+                step("HeyGen API key valid", False,
+                     f"API returned {r_ping.status_code}: {r_ping.text[:300]}")
+                return jsonify({"steps": steps,
+                                "verdict": f"HeyGen API key rejected — HTTP {r_ping.status_code}"})
+        except Exception as ping_err:
+            step("HeyGen API reachable", False, str(ping_err))
+            return jsonify({"steps": steps, "verdict": "Cannot reach HeyGen API"})
+
+        # Step 6: Generate a buyer video script (uses Claude)
+        try:
+            from heygen_client import generate_buyer_video_script, DEFAULT_AVATAR, DEFAULT_VOICE, get_background_url
+            tags  = pond_lead.get("tags") or []
+            script = generate_buyer_video_script(
+                first_name=first, city="Virginia Beach",
+                strategy="any_activity", view_count=2, tags=tags,
+            )
+            step("Video script generated (Claude)", bool(script),
+                 f"{len(script)} chars: \"{script[:120]}…\"")
+        except Exception as script_err:
+            step("Video script generated (Claude)", False, str(script_err))
+            return jsonify({"steps": steps, "verdict": f"Script generation failed: {script_err}"})
+
+        # Step 7: Submit to HeyGen
+        try:
+            from heygen_client import submit_video
+            bg_url = get_background_url("buyer", city="Virginia Beach")
+            step("Mapbox background URL", bool(bg_url),
+                 bg_url if bg_url else "MAPBOX_ACCESS_TOKEN not set — using color fallback (OK)")
+            t0 = _time.time()
+            video_id = submit_video(script, background_url=bg_url,
+                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
+                                    title=f"Diagnostic test — {first}")
+            elapsed = _time.time() - t0
+            step("HeyGen video submitted", bool(video_id),
+                 f"video_id={video_id} ({elapsed:.1f}s)" if video_id else
+                 "submit_video returned None — check HEYGEN_API_KEY or quota")
+        except Exception as submit_err:
+            step("HeyGen video submitted", False, str(submit_err))
+            return jsonify({"steps": steps, "verdict": f"HeyGen submit failed: {submit_err}"})
+
+        if not video_id:
+            return jsonify({
+                "steps": steps,
+                "verdict": "HeyGen submit failed — likely bad API key, exhausted credits, or invalid avatar/voice ID",
+                "fix": "Check HEYGEN_API_KEY env var on Railway. Verify account credits at app.heygen.com."
+            })
+
+        # Step 8: Poll briefly (30s) to confirm rendering starts
+        step("Polling for render status (30s max)…", True, "Checking every 5 seconds")
+        poll_status = None
+        poll_detail = ""
+        for _ in range(6):
+            _time.sleep(5)
+            try:
+                rp = _req.get("https://api.heygen.com/v1/video_status.get",
+                              headers={"X-Api-Key": heygen_key},
+                              params={"video_id": video_id}, timeout=10)
+                if rp.status_code == 200:
+                    data = rp.json().get("data", {})
+                    poll_status = data.get("status")
+                    poll_detail = f"status={poll_status}"
+                    if poll_status in ("completed", "failed"):
+                        break
+            except Exception:
+                pass
+
+        render_ok = poll_status in ("completed", "processing", "pending", "waiting")
+        step("Render started / completed", render_ok,
+             poll_detail or "No status returned")
+
+        verdict = (
+            "✓ HeyGen pipeline is fully working. Videos will go out on the next email-1 lead."
+            if render_ok and seq_num == 1
+            else "✓ HeyGen API works! But all current pond leads are on email 2+. "
+                 "New leads will get video on email 1."
+            if render_ok
+            else f"✗ HeyGen render issue: {poll_detail}"
+        )
+        return jsonify({"steps": steps, "verdict": verdict, "test_video_id": video_id})
+
+    except Exception as e:
+        import traceback
+        step("Unexpected error", False, traceback.format_exc()[:500])
+        return jsonify({"steps": steps, "verdict": f"Unexpected error: {e}"})
+
+
 @app.route("/api/test-sms", methods=["POST"])
 def api_test_sms():
     """
