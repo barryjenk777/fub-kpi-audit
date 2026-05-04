@@ -8352,6 +8352,111 @@ def api_diagnose_heygen():
         return jsonify({"steps": steps, "verdict": f"Unexpected error: {e}"})
 
 
+@app.route("/api/pond-mailer/test-heygen-email")
+def api_test_heygen_email():
+    """
+    Generate a talking-photo test video and email it to Barry.
+
+    Runs the full pipeline (HeyGen render → SendGrid) in a background thread
+    so the HTTP response returns immediately. Check your inbox in ~3-5 minutes.
+    """
+    import threading, time as _time, logging as _logging
+    _log = _logging.getLogger(__name__)
+
+    def _run():
+        try:
+            from heygen_client import (
+                submit_video, poll_video, get_background_url,
+                make_video_email_html, make_video_plain_text,
+                DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
+            )
+            import config
+
+            test_script = (
+                "Hey Barry — this is a quick test of the new talking photo avatar. "
+                "I'm floating right on top of the Hampton Roads map. "
+                "No blue circle, just my face. "
+                "Let me know if this looks right and we're good to go."
+            )
+
+            bg_url = get_background_url("buyer", city="Virginia Beach")
+            _log.info("Test email: bg_url=%s", bg_url)
+
+            video_id = submit_video(
+                test_script,
+                background_url=bg_url,
+                avatar_id=DEFAULT_AVATAR,
+                voice_id=DEFAULT_VOICE,
+                character_type=DEFAULT_AVATAR_TYPE,
+                title="Barry — talking photo test",
+            )
+            if not video_id:
+                _log.error("Test email: HeyGen submit returned None — check API key / credits")
+                return
+
+            _log.info("Test email: video submitted %s — polling…", video_id)
+            result = poll_video(video_id, timeout_seconds=480, poll_interval=8)
+            if not result or not result.get("video_url"):
+                _log.error("Test email: video did not complete — %s", result)
+                return
+
+            video_url     = result["video_url"]
+            thumbnail_url = result.get("thumbnail_url", "")
+            duration      = result.get("duration", 0)
+            _log.info("Test email: video ready %s (%.1fs)", video_url, duration)
+
+            body_html = make_video_email_html(
+                setup_text="Barry — here's the talking photo test on the Hampton Roads map.",
+                video_url=video_url,
+                thumbnail_url=thumbnail_url,
+                cta_text="Reply if the face cutout looks right and we're ready to ship.",
+                first_name="Barry",
+                caption="talking photo test · no blue circle",
+                duration=duration,
+                video_id=video_id,
+                map_url=bg_url or "",
+            )
+            body_text = (
+                "Barry — talking photo test on the Hampton Roads map.\n\n"
+                + make_video_plain_text(video_url, first_name="Barry", video_id=video_id)
+                + "\nReply if the face cutout looks right and we're ready to ship.\n\n"
+                "— Barry Jenkins AI Nurture · Legacy Home Team"
+            )
+
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail, Email, To, Content
+            import os as _os
+
+            sg_key = _os.environ.get("SENDGRID_API_KEY", "")
+            if not sg_key:
+                _log.error("Test email: SENDGRID_API_KEY not set")
+                return
+
+            msg = Mail(
+                from_email=Email(config.EMAIL_FROM, "Barry Jenkins"),
+                to_emails=To(config.EMAIL_FROM),
+                subject="[Test] Talking photo on map — does this look right?",
+            )
+            msg.add_content(Content("text/plain", body_text))
+            msg.add_content(Content("text/html",  body_html))
+
+            sg = SendGridAPIClient(sg_key)
+            resp = sg.client.mail.send.post(request_body=msg.get())
+            _log.info("Test email sent → %d", resp.status_code)
+
+        except Exception as _err:
+            import traceback as _tb
+            _log.error("Test email pipeline failed: %s\n%s", _err, _tb.format_exc())
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jsonify({
+        "ok": True,
+        "message": "Test video queued — check barry@yourfriendlyagent.net in 3-5 minutes. "
+                   "The email will have the subject: [Test] Talking photo on map — does this look right?"
+    })
+
+
 @app.route("/api/test-sms", methods=["POST"])
 def api_test_sms():
     """

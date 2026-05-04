@@ -118,8 +118,10 @@
     <button class="btn btn-secondary" id="btnDryRun" onclick="triggerRun(true)">🧪 Dry Run (safe)</button>
     <button class="btn btn-danger"   id="btnLiveRun" onclick="triggerRun(false)">⚡ Live Run NOW</button>
     <button class="btn btn-secondary" id="btnHeyGen" onclick="runHeyGenDiagnose()">🎬 Diagnose HeyGen</button>
+    <button class="btn btn-secondary" id="btnTestEmail" onclick="sendTestEmail()">📧 Email Me a Test Video</button>
   </div>
   <div id="heygenDiag" style="display:none;background:#1e293b;border-radius:12px;padding:18px 20px;margin:0 0 20px"></div>
+  <div id="testEmailMsg" style="display:none;background:#1e293b;border-radius:12px;padding:14px 20px;margin:0 0 20px;color:#94a3b8;font-size:14px"></div>
 
   <div id="status-bar">Loading…</div>
 
@@ -196,6 +198,24 @@
         btn.textContent = '🎬 Diagnose HeyGen';
         btn.disabled = false;
       }
+    }
+
+    async function sendTestEmail() {
+      const btn = document.getElementById('btnTestEmail');
+      const msg = document.getElementById('testEmailMsg');
+      btn.disabled = true;
+      btn.textContent = '⏳ Queuing…';
+      msg.style.display = 'block';
+      msg.textContent = 'Generating video — check barry@yourfriendlyagent.net in 3-5 minutes…';
+      try {
+        const r = await fetch('/api/pond-mailer/test-heygen-email');
+        const d = await r.json();
+        msg.textContent = d.message || (d.ok ? 'Queued! Check your inbox.' : 'Something went wrong.');
+      } catch(e) {
+        msg.textContent = `Error: ${e.message}`;
+      }
+      btn.textContent = '📧 Email Me a Test Video';
+      btn.disabled = false;
     }
 
     async function triggerRun(dryRun) {
