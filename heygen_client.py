@@ -1209,29 +1209,9 @@ def make_video_email_html(setup_text: str, video_url: str,
     if dur_str and dur_str not in safe_caption:
         safe_caption = f"{safe_caption} &nbsp;·&nbsp; {dur_str}"
 
-    # Map hero banner block — shown at top of email when map_url is provided
-    # Table-based so it renders in Outlook; links to video so every click converts
-    map_hero_block = ""
-    if map_url:
-        safe_map_url = _h.escape(map_url)
-        map_hero_block = f"""
-  <!-- Map hero — Mapbox static image, links to video landing page -->
-  <!-- Shows the lead's neighborhood/area — strong personalization signal -->
-  <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 22px">
-    <tr>
-      <td>
-        <a href="{safe_landing}" target="_blank" style="display:block;text-decoration:none;position:relative">
-          <img src="{safe_map_url}"
-               alt="Your area — Hampton Roads"
-               width="560"
-               border="0"
-               style="display:block;width:100%;max-width:560px;border-radius:10px;border:0;
-                      max-height:220px;object-fit:cover">
-        </a>
-      </td>
-    </tr>
-  </table>
-"""
+    # map_url is passed through to make_video_landing_url for map centering
+    # but is NOT rendered as a separate image in the email — the video thumbnail
+    # already shows the map background, so a second map image above it is redundant.
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1241,7 +1221,6 @@ def make_video_email_html(setup_text: str, video_url: str,
 </head>
 <body style="margin:0;padding:0;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
 <div style="max-width:560px;padding:28px 20px">
-{map_hero_block}
   <p style="margin:0 0 20px;font-size:15px;line-height:1.8;color:#222">{safe_setup}</p>
 
   <!-- Video thumbnail — table-based for Outlook compatibility -->
