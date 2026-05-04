@@ -433,9 +433,10 @@ NEW_LEAD_DAILY_CAP = 15
 # HeyGen video emails are exempt from the main pond mailer daily cap.
 # They get their own ceiling so the most valuable touchpoint (personalized
 # video at first contact) is never rationed against generic drip sends.
-# Each video takes up to 8 min to render — realistically 5-6 per day max
-# before Railway job timeouts; 8 gives comfortable headroom to tune up later.
-HEYGEN_DAILY_CAP = 8
+# Each video takes ~4-8 min to render. With 80 pond leads across 3 daily runs,
+# 25 gives full coverage so every eligible lead can receive a video email
+# without waiting days for their turn in the queue.
+HEYGEN_DAILY_CAP = 25
 
 # Stale hot threshold: days since last agent contact to qualify
 LEADSTREAM_STALE_DAYS = 3

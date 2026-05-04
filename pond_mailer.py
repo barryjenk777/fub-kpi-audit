@@ -3445,13 +3445,18 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         if _hg_slots_left == 0:
             logger.info("HeyGen daily cap of %d reached (%d used) — video skipped for %s",
                         _HG_CAP, _hg_used_today, name)
+        # Score gate applies to Email 2+ only; Email 1 always gets a video (every new
+        # lead deserves a personalized opener — the score gate is for conserving credits
+        # on follow-up emails, not first contact).
         if not _video_eligible:
-            logger.info("HeyGen score gate: %s score=%d < threshold=%d — text-only email",
-                        name, _this_ls_score, _hg_video_threshold)
+            logger.debug("HeyGen score gate (Email 2+): %s score=%d < threshold=%d",
+                         name, _this_ls_score, _hg_video_threshold)
 
-        # ── HeyGen personalized video — seller Email 1 only ─────────────────────
+        # ── HeyGen personalized video — seller Email 1 ──────────────────────────
         # When video succeeds the ENTIRE email body is replaced with a short wrapper.
         # Falls back gracefully to the Claude-written text email if HeyGen fails.
+        # Score gate is NOT applied here — every seller lead deserves a personalized
+        # video on first contact regardless of LeadStream score.
         if is_ylopo_seller and sequence_num == 1 and not dry_run:
             try:
                 from heygen_client import (
@@ -3463,7 +3468,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
+                if heygen_available() and _hg_slots_left > 0:
                     # FUB addresses array is usually empty for Ylopo leads.
                     # Try standard address fields, then fall back to tag-derived city.
                     _addrs   = person.get("addresses") or []
@@ -3573,7 +3578,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
+                if heygen_available() and _hg_slots_left > 0:
+                    # Score gate NOT applied on Email 1 — every Z-buyer deserves a
+                    # personalized video on first contact regardless of LeadStream score.
                     # FUB addresses array is usually empty for Ylopo leads.
                     # Try addresses array, then fall back to tag-derived city.
                     _addrs   = person.get("addresses") or []
@@ -3690,7 +3697,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
+                if heygen_available() and _hg_slots_left > 0:
+                    # Score gate NOT applied on Email 1 — every buyer deserves a
+                    # personalized video on first contact regardless of LeadStream score.
                     _beh_city      = (behavior.get("cities") or [])
                     _city_hg       = _beh_city[0] if _beh_city else (
                         _city_from_tags(tags) or "Hampton Roads"
@@ -3827,12 +3836,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 logger.warning("HeyGen buyer pipeline failed for %s — text-only: %s",
                                name, _hg_err)
 
-        # ── HeyGen suit follow-up video — Email 2 (seller + Z-buyer only) ────────
-        # Buyer Email 2 stays as the listing drop — too valuable to replace.
+        # ── HeyGen suit follow-up video — Email 2 (all lead types) ─────────────
         # Suit avatar reads as "I take this seriously" — different energy from
         # the casual circle opener. Frame: "Not sure if you caught my last video,
         # but I wanted to add one more thing..." New piece of value, not a repeat.
-        if sequence_num == 2 and (is_ylopo_seller or is_z) and not dry_run:
+        # Buyers now get Email 2 video too — the suit follow-up replaces the
+        # plain-text listing drop with a personal "here's what I'm watching for you"
+        # video that's far more memorable. Score gate still applies here (Email 2+).
+        if sequence_num == 2 and not dry_run:
             try:
                 from heygen_client import (
                     is_available as heygen_available,
@@ -3849,8 +3860,13 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     _street_fu  = (_addr0_fu.get("street") or "").strip()
                     _city_fu    = (_addr0_fu.get("city") or "").strip()
                     if not _city_fu:
-                        _city_fu = _city_from_tags(tags) or "Hampton Roads"
-                    _lead_type  = "zbuyer" if is_z else "seller"
+                        # Buyers: prefer IDX behavior city; sellers: tag-derived
+                        _beh_cities_fu = behavior.get("cities") or []
+                        _city_fu = (
+                            _beh_cities_fu[0] if (not is_ylopo_seller and not is_z and _beh_cities_fu)
+                            else _city_from_tags(tags) or "Hampton Roads"
+                        )
+                    _lead_type  = "zbuyer" if is_z else ("seller" if is_ylopo_seller else "buyer")
 
                     logger.info("Generating HeyGen Email 2 follow-up for %s (%s)", name, _lead_type)
                     script = generate_followup_video_script(
@@ -3869,7 +3885,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     )
 
                     if video_result and video_result.get("video_url"):
-                        # Wrapper: name + address → get out of the way → one CTA line.
+                        # Wrapper: name + reference → get out of the way → one CTA line.
                         # "Not sure if you caught my last video" is the hook — use it.
                         _p = 'margin:0 0 16px;font-size:15px;line-height:1.8;color:#222'
                         if is_z:
@@ -3880,7 +3896,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             )
                             cta_line = f"10 minutes on the phone and I'll walk you through both. Just reply here."
                             _fu_subj   = f"{first_name} — one more thing on {_street_fu}"
-                        else:
+                        elif is_ylopo_seller:
                             _fu_caption = f"&#9654; Barry's follow-up for {first_name} — {_street_fu}"
                             setup_line = (
                                 f"{first_name} — not sure if you caught my last video, "
@@ -3888,6 +3904,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             )
                             cta_line = f"Reply here and we'll find 10 minutes to walk through it."
                             _fu_subj   = f"{first_name} — one more thing about {_street_fu}"
+                        else:  # buyer
+                            _fu_caption = f"&#9654; Barry's follow-up for {first_name} — {_city_fu} search"
+                            setup_line = (
+                                f"{first_name} — not sure if you caught my last video, "
+                                f"but I had one more thing I wanted to pass along about the {_city_fu} market."
+                            )
+                            cta_line = f"Just reply here — happy to walk you through what I'm seeing."
+                            _fu_subj   = f"{first_name} — one more thing on {_city_fu}"
 
                         video_body_text = (
                             f"{setup_line}\n\n"
@@ -3919,12 +3943,16 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
 
                         _avatar_used = AVATAR_SUIT
                         _hg_slots_left -= 1  # consume one HeyGen slot
-                        logger.info("HeyGen Email 2 suit video built for %s (%.1fs) — %d slots remain",
-                                    name, video_result.get("duration", 0), _hg_slots_left)
-                        print(f"    ▶ HeyGen Email 2 suit: {video_result['video_url'][:60]}...")
+                        heygen_sent += 1
+                        logger.info("HeyGen Email 2 suit video built for %s (%s, %.1fs) — %d slots remain",
+                                    name, _lead_type, video_result.get("duration", 0), _hg_slots_left)
+                        print(f"    ▶ HeyGen Email 2 suit ({_lead_type}): {video_result['video_url'][:60]}...")
                     else:
-                        logger.warning("HeyGen Email 2 video not ready for %s — text-only", name)
+                        heygen_failed += 1
+                        logger.warning("HeyGen Email 2 video not ready for %s (%s) — text-only",
+                                       name, _lead_type)
             except Exception as _hg_err:
+                heygen_failed += 1
                 logger.warning("HeyGen Email 2 pipeline failed for %s — text-only: %s", name, _hg_err)
 
         # ── HeyGen suit re-engagement video — Email 4 (all lead types) ───────────
