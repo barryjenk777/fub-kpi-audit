@@ -40,9 +40,14 @@ _API_KEY = os.environ.get("HEYGEN_API_KEY", "")
 _BASE = "https://api.heygen.com"
 
 # Barry's avatar + voice IDs — confirmed working via API test
-DEFAULT_AVATAR = "4b314392e9b6441d97abaf6d83808de5"   # Barry Jenkins — Avatar 2, circle style (Email 1)
-AVATAR_SUIT    = "dc3bfe40aeaf4590b76ee12824d019dd"   # Barry Jenkins — Suit avatar (Email 2 follow-up)
-DEFAULT_VOICE  = "b37262521af24a0e9245308e4045ac3f"   # Barry Jenkins — HeyGen native voice clone
+DEFAULT_AVATAR      = "11d44d579fd64b69910264b6b20975a8"  # Barry Jenkins — Talking Photo (face cutout, no circle)
+DEFAULT_AVATAR_TYPE = "talking_photo"                      # HeyGen character type for DEFAULT_AVATAR
+AVATAR_SUIT         = "dc3bfe40aeaf4590b76ee12824d019dd"  # Barry Jenkins — Suit avatar (Email 2 follow-up)
+AVATAR_SUIT_TYPE    = "avatar"                             # HeyGen character type for AVATAR_SUIT
+DEFAULT_VOICE       = "b37262521af24a0e9245308e4045ac3f"  # Barry Jenkins — HeyGen native voice clone
+
+# Old circle avatar kept for reference — do not use (has blue circle frame baked in)
+# _LEGACY_CIRCLE_AVATAR = "4b314392e9b6441d97abaf6d83808de5"
 
 # Background endpoint hosted on Railway — generates branded background on-demand
 # HeyGen fetches this URL during rendering. No external storage needed.
@@ -873,9 +878,10 @@ def generate_zbuyer_background_image(street: str, city: str,
 
 def submit_video(script: str, background_url: str = None,
                  avatar_id: str = None, voice_id: str = None,
-                 avatar_style: str = "circle",
+                 avatar_style: str = "normal",
                  avatar_scale: float = None,
                  avatar_offset: dict = None,
+                 character_type: str = None,
                  title: str = "Barry Jenkins — Personal Message") -> str | None:
     """
     Submit a video generation job to HeyGen.
@@ -888,31 +894,48 @@ def submit_video(script: str, background_url: str = None,
                         If None, uses a dark navy color background.
         avatar_id:      Override avatar (defaults to DEFAULT_AVATAR)
         voice_id:       Override voice (defaults to DEFAULT_VOICE)
-        avatar_style:   "circle" (Email 1 default) or "normal" (suit follow-up)
-        avatar_scale:   Override circle scale (defaults to AVATAR_CIRCLE_SCALE)
-        avatar_offset:  Override circle offset dict {x, y} (defaults to lower-right position)
+        avatar_style:   "normal" (default) or "circle" — only applies to avatar type, not talking_photo
+        avatar_scale:   Override scale (0.3 = small corner, 1.0 = full frame)
+        avatar_offset:  Override offset dict {x, y} (-0.5 far left/top → 0.5 far right/bottom)
+        character_type: "talking_photo" or "avatar". Defaults to DEFAULT_AVATAR_TYPE.
         title:          Video title (for HeyGen dashboard)
     """
     _avatar = avatar_id or DEFAULT_AVATAR
     _voice  = voice_id  or DEFAULT_VOICE
+    _char_type = character_type or DEFAULT_AVATAR_TYPE
 
     if background_url:
         background = {"type": "image", "url": background_url}
     else:
         background = {"type": "color", "value": "#0c1228"}
 
-    character = {
-        "type": "avatar",
-        "avatar_id": _avatar,
-        "avatar_style": avatar_style,
-    }
-    # Lower-right positioning for circle style — compact avatar over the map
-    if avatar_style == "circle":
-        character["scale"] = avatar_scale if avatar_scale is not None else AVATAR_CIRCLE_SCALE
-        character["offset"] = avatar_offset if avatar_offset is not None else {
-            "x": AVATAR_CIRCLE_OFFSET_X,
-            "y": AVATAR_CIRCLE_OFFSET_Y,
+    # ── Build character block ─────────────────────────────────────────────────
+    if _char_type == "talking_photo":
+        # Talking photo: face/shoulders cutout, no circle frame.
+        # Scale + offset work the same as avatar type.
+        character = {
+            "type":              "talking_photo",
+            "talking_photo_id":  _avatar,
+            "scale":  avatar_scale if avatar_scale is not None else AVATAR_CIRCLE_SCALE,
+            "offset": avatar_offset if avatar_offset is not None else {
+                "x": AVATAR_CIRCLE_OFFSET_X,
+                "y": AVATAR_CIRCLE_OFFSET_Y,
+            },
         }
+    else:
+        # Standard avatar (full body or circle crop)
+        character = {
+            "type":         "avatar",
+            "avatar_id":    _avatar,
+            "avatar_style": avatar_style,
+        }
+        # Positioning only needed when using circle crop
+        if avatar_style == "circle":
+            character["scale"] = avatar_scale if avatar_scale is not None else AVATAR_CIRCLE_SCALE
+            character["offset"] = avatar_offset if avatar_offset is not None else {
+                "x": AVATAR_CIRCLE_OFFSET_X,
+                "y": AVATAR_CIRCLE_OFFSET_Y,
+            }
 
     payload = {
         "video_inputs": [{
@@ -999,9 +1022,10 @@ def poll_video(video_id: str, timeout_seconds: int = 360,
 
 def generate_and_wait(script: str, background_url: str = None,
                       avatar_id: str = None, voice_id: str = None,
-                      avatar_style: str = "circle",
+                      avatar_style: str = "normal",
                       avatar_scale: float = None,
                       avatar_offset: dict = None,
+                      character_type: str = None,
                       timeout_seconds: int = 180) -> dict | None:
     """
     Full pipeline: submit → poll → return result.
@@ -1020,7 +1044,8 @@ def generate_and_wait(script: str, background_url: str = None,
                             avatar_id=avatar_id, voice_id=voice_id,
                             avatar_style=avatar_style,
                             avatar_scale=avatar_scale,
-                            avatar_offset=avatar_offset)
+                            avatar_offset=avatar_offset,
+                            character_type=character_type)
     if not video_id:
         return None
     return poll_video(video_id, timeout_seconds=timeout_seconds)

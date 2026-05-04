@@ -3466,7 +3466,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     get_background_url,
                     make_video_plain_text,
                     make_video_email_html,
-                    DEFAULT_AVATAR, DEFAULT_VOICE,
+                    DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
                     # FUB addresses array is usually empty for Ylopo leads.
@@ -3487,7 +3487,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     )
                     bg_url = get_background_url("seller", address=_street, city=_city_hg)
                     video_result = generate_and_wait(script, background_url=bg_url,
-                                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE, timeout_seconds=480)
+                                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
+                                                    character_type=DEFAULT_AVATAR_TYPE, timeout_seconds=480)
 
                     if video_result and video_result.get("video_url"):
                         _city_display   = _city_hg or "Hampton Roads"
@@ -3576,7 +3577,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     get_background_url,
                     make_video_plain_text,
                     make_video_email_html,
-                    DEFAULT_AVATAR, DEFAULT_VOICE,
+                    DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
                     # Score gate NOT applied on Email 1 — every Z-buyer deserves a
@@ -3600,7 +3601,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     )
                     bg_url = get_background_url("zbuyer", address=_street, city=_city_hg)
                     video_result = generate_and_wait(script, background_url=bg_url,
-                                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE, timeout_seconds=480)
+                                                    avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
+                                                    character_type=DEFAULT_AVATAR_TYPE, timeout_seconds=480)
 
                     if video_result and video_result.get("video_url"):
                         _city_display   = _city_hg or "Hampton Roads"
@@ -3695,7 +3697,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     get_background_url,
                     make_video_plain_text,
                     make_video_email_html,
-                    DEFAULT_AVATAR, DEFAULT_VOICE,
+                    DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0:
                     # Score gate NOT applied on Email 1 — every buyer deserves a
@@ -3732,7 +3734,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     )
                     video_result = generate_and_wait(script, background_url=bg_url,
                                                     avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
-                                                    timeout_seconds=480)
+                                                    character_type=DEFAULT_AVATAR_TYPE, timeout_seconds=480)
 
                     if video_result and video_result.get("video_url"):
                         _city_display = _city_hg or "Hampton Roads"
@@ -3852,7 +3854,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     get_background_url,
                     make_video_plain_text,
                     make_video_email_html,
-                    AVATAR_SUIT, DEFAULT_VOICE,
+                    AVATAR_SUIT, AVATAR_SUIT_TYPE, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     _addrs_fu   = person.get("addresses") or []
@@ -3880,7 +3882,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     video_result = generate_and_wait(
                         script, background_url=bg_url,
                         avatar_id=AVATAR_SUIT, voice_id=DEFAULT_VOICE,
-                        avatar_style="circle",   # circle crop — map stays the dominant visual
+                        avatar_style="normal", character_type=AVATAR_SUIT_TYPE,
                         timeout_seconds=480,
                     )
 
@@ -3971,7 +3973,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     get_background_url,
                     make_video_plain_text,
                     make_video_email_html,
-                    AVATAR_SUIT, DEFAULT_VOICE,
+                    AVATAR_SUIT, AVATAR_SUIT_TYPE, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     _addrs_e4   = person.get("addresses") or []
@@ -3996,7 +3998,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     video_result = generate_and_wait(
                         script, background_url=bg_url,
                         avatar_id=AVATAR_SUIT, voice_id=DEFAULT_VOICE,
-                        avatar_style="circle",   # circle crop — map stays the dominant visual
+                        avatar_style="normal", character_type=AVATAR_SUIT_TYPE,
                         timeout_seconds=480,
                     )
 

@@ -8275,7 +8275,7 @@ def api_diagnose_heygen():
 
         # Step 6: Generate a buyer video script (uses Claude)
         try:
-            from heygen_client import generate_buyer_video_script, DEFAULT_AVATAR, DEFAULT_VOICE, get_background_url
+            from heygen_client import generate_buyer_video_script, DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE, get_background_url
             tags  = pond_lead.get("tags") or []
             script = generate_buyer_video_script(
                 first_name=first, city="Virginia Beach",
@@ -8296,6 +8296,7 @@ def api_diagnose_heygen():
             t0 = _time.time()
             video_id = submit_video(script, background_url=bg_url,
                                     avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
+                                    character_type=DEFAULT_AVATAR_TYPE,
                                     title=f"Diagnostic test — {first}")
             elapsed = _time.time() - t0
             step("HeyGen video submitted", bool(video_id),
