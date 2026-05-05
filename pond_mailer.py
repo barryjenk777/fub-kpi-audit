@@ -1832,7 +1832,8 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
     except ImportError:
         raise RuntimeError("anthropic package not installed")
 
-    # ── Build a tight, SMS-relevant brief ────────────────────────────────────
+    # ── Build a rich behavioral brief using ALL available signals ─────────────
+    b = behavior or {}
     brief_lines = [f"LEAD: {first_name}"]
 
     if is_z:
@@ -1843,7 +1844,7 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
         elif street:
             brief_lines.append(f"PROPERTY: {street}")
         brief_lines.append("ACTION: Submitted a cash offer request on this property.")
-        brief_lines.append("NOTE: They want to know what their home is worth in cash vs. listing.")
+        brief_lines.append("NOTE: Wants to know cash offer vs. listing value. Barry shows both numbers -- most cash buyers only show one.")
 
     elif is_seller:
         street = person.get("streetAddress") or person.get("street") or ""
@@ -1853,9 +1854,8 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
         elif city:
             brief_lines.append(f"AREA: {city}")
         brief_lines.append("LEAD TYPE: Homeowner who engaged with Barry's AI assistant about home value. NOT a buyer.")
-        # Surface the most specific engagement signal — this drives the text angle
         if "ISA_TRANSFER_UNSUCCESSFUL" in tags or "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE" in tags or "DECLINED_BY_REALTOR" in tags:
-            brief_lines.append("CONVERSATION STATE: Was ready for live transfer to Barry — call dropped on our end. Missed connection. Text acknowledges this and offers easy retry.")
+            brief_lines.append("CONVERSATION STATE: Was ready for live transfer to Barry -- call dropped on our end. Missed connection. Text acknowledges this and offers easy retry.")
         elif "CALLBACK_SCHEDULED" in tags:
             brief_lines.append("CONVERSATION STATE: Explicitly scheduled a callback. Text is a light confirmation, not a new pitch.")
         elif "AI_VOICE_NEEDS_FOLLOW_UP" in tags:
@@ -1863,86 +1863,170 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
         elif "AI_NEEDS_FOLLOW_UP" in tags or "AI_RESPONDED" in tags or "AI_ENGAGED" in tags:
             brief_lines.append("CONVERSATION STATE: Had a TEXT CONVERSATION with AI assistant about home value. Warm lead. Barry is the human following up on that text exchange.")
         elif "NURTURE" in tags:
-            brief_lines.append("CONVERSATION STATE: Interested in selling but not ready yet. Nurture mode — useful market update, not a listing pitch.")
+            brief_lines.append("CONVERSATION STATE: Interested in selling but not ready yet. Nurture mode -- useful market update, not a listing pitch.")
         elif "VOICEMAIL" in tags:
             brief_lines.append("CONVERSATION STATE: Previous call went to voicemail. Low-pressure re-open. Easier to text than play phone tag.")
         else:
             brief_lines.append("CONVERSATION STATE: Engaged with Barry's platform about home value. Warm, not cold.")
 
     else:
-        # Buyer — lead with the most specific data point available
-        b = behavior
+        # ── BUYER -- surface every available signal as usable ammunition ─────
+
+        # Primary hook: highest-intent signal first
         if b.get("most_viewed") and b.get("most_viewed_ct", 0) >= 2:
             p = b["most_viewed"]
             addr = f"{p.get('street')}, {p.get('city')}" if p.get("city") else p.get("street", "")
-            brief_lines.append(f"REPEAT VIEWER: {addr} — viewed {b['most_viewed_ct']} times. High attachment.")
+            price_str = f" (${_safe_int(p.get('price')):,})" if p.get("price") else ""
+            brief_lines.append(
+                f"REPEAT VIEWER: {addr}{price_str} -- viewed {b['most_viewed_ct']}x. "
+                "They keep coming back to this one. High attachment. Use the view count as your hook."
+            )
         elif b.get("saves"):
             p = b["saves"][0]
             addr = f"{p.get('street')}, {p.get('city')}" if p.get("city") else p.get("street", "")
             price_str = f" (${_safe_int(p.get('price')):,})" if p.get("price") else ""
-            brief_lines.append(f"SAVED: {addr}{price_str} — highest intent signal.")
+            brief_lines.append(
+                f"SAVED (HIGHEST INTENT): {addr}{price_str} -- "
+                "they hit the heart button. Saves are the strongest buying signal in IDX."
+            )
+        elif b.get("registration_prop"):
+            rp = b["registration_prop"]
+            raddr = f"{rp.get('street')}, {rp.get('city')}" if rp.get("city") else rp.get("street", "")
+            rprice = f" (${_safe_int(rp.get('price')):,})" if rp.get("price") else ""
+            brief_lines.append(
+                f"REGISTERED ON: {raddr}{rprice} -- this specific property made them give us their contact info. "
+                "That address is your opener."
+            )
         elif b.get("views"):
             p = b["views"][0]
             addr = f"{p.get('street')}, {p.get('city')}" if p.get("city") else p.get("street", "")
-            brief_lines.append(f"REGISTERED ON / FIRST VIEWED: {addr}")
+            brief_lines.append(f"FIRST VIEWED: {addr}")
 
-        cities = list(b.get("cities") or [])
-        if cities:
-            brief_lines.append(f"SEARCHING IN: {', '.join(cities[:3])}")
+        # Additional saves beyond the first
+        if b.get("saves") and len(b["saves"]) > 1:
+            more_saves = []
+            for sp in b["saves"][1:3]:
+                sa = f"{sp.get('street')}, {sp.get('city')}" if sp.get("city") else sp.get("street", "")
+                sprice = f" (${_safe_int(sp.get('price')):,})" if sp.get("price") else ""
+                more_saves.append(f"{sa}{sprice}")
+            brief_lines.append(f"ALSO SAVED: {' | '.join(more_saves)}")
 
+        # Geography -- single city vs. spread tells you how decisive they are
+        cities_list = sorted(b.get("cities") or [])
+        if len(cities_list) > 2:
+            brief_lines.append(
+                f"SEARCH SPREAD: across {len(cities_list)} cities ({', '.join(cities_list[:3])}) -- "
+                "still deciding on location. A good angle: help them narrow it down."
+            )
+        elif len(cities_list) == 1:
+            brief_lines.append(
+                f"CITY: locked into {cities_list[0]} only -- decisive, just needs the right house in the right price."
+            )
+        elif cities_list:
+            brief_lines.append(f"CITIES: {', '.join(cities_list)}")
+
+        # Price range
         if b.get("price_min") and b.get("price_max"):
-            brief_lines.append(f"PRICE RANGE: ${b['price_min']:,}–${b['price_max']:,}")
+            brief_lines.append(f"PRICE RANGE: ${b['price_min']:,} to ${b['price_max']:,}")
+        elif b.get("price_max"):
+            brief_lines.append(f"PRICE CAP: ${b['price_max']:,}")
 
-        beds = b.get("beds_seen")
-        if beds:
-            brief_lines.append(f"BEDS: {min(beds)}-{max(beds)}br range" if len(beds) > 1 else f"BEDS: {list(beds)[0]}br")
+        # Price drift -- powerful signal, use it as copy ammunition
+        if b.get("price_drift") and abs(b["price_drift"]) > 15000:
+            if b["price_drift"] > 0:
+                brief_lines.append(
+                    f"PRICE DRIFT UP: search has moved up ${b['price_drift']:,} from where they started -- "
+                    "stretching budget or getting more serious. Acknowledge the shift."
+                )
+            else:
+                brief_lines.append(
+                    f"PRICE DRIFT DOWN: search moved down ${abs(b['price_drift']):,} -- "
+                    "getting realistic on budget. Meet them where they are, don't ignore it."
+                )
 
+        # Beds
+        beds = sorted(b.get("beds_seen") or [])
+        if len(beds) > 1:
+            brief_lines.append(f"BEDS: viewing {min(beds)}-{max(beds)}br range")
+        elif beds:
+            brief_lines.append(f"BEDS: {beds[0]}br focused")
+
+        # Property type dominance
+        if b.get("property_type"):
+            brief_lines.append(f"PROPERTY TYPE: primarily viewing {b['property_type']}s")
+
+        # Engagement depth -- this shapes the angle
+        vc = b.get("view_count", 0)
+        sc_count = b.get("session_count", 0)
+        save_c = b.get("save_count", 0)
+        if vc >= 40:
+            brief_lines.append(
+                f"BUYER DEPTH: {vc} total views, {sc_count} separate sessions, {save_c} saves -- "
+                "deep, committed searcher. Possibly frustrated. Lead with new intel they haven't seen yet. "
+                "Don't tell them what the market is like -- they already know."
+            )
+        elif vc >= 20:
+            brief_lines.append(
+                f"ACTIVE SEARCHER: {vc} views across {sc_count} sessions, {save_c} saves -- "
+                "knows the market well. Treat them like a peer who deserves real data, not a sales pitch."
+            )
+        elif vc >= 8:
+            brief_lines.append(
+                f"ENGAGED: {vc} views across {sc_count} sessions, {save_c} saves -- actively looking"
+            )
+        else:
+            brief_lines.append(
+                f"EARLY STAGE: {vc} views, {sc_count} sessions -- just forming their market picture. "
+                "Something specific about what they've seen so far is your best angle."
+            )
+
+        # Recency -- urgency calibration
         if b.get("hours_since_last") is not None:
             hrs = b["hours_since_last"]
             if hrs < 2:
-                brief_lines.append("RECENCY: active RIGHT NOW (within 2 hours)")
+                brief_lines.append("RECENCY: active RIGHT NOW (within 2 hours) -- hottest possible window, match their energy")
             elif hrs < 24:
-                brief_lines.append(f"RECENCY: active {int(hrs)}h ago — hot window")
+                brief_lines.append(f"RECENCY: active {int(hrs)}h ago -- hot window, they're in the mindset")
             elif hrs < 48:
-                brief_lines.append("RECENCY: active yesterday")
+                brief_lines.append("RECENCY: active yesterday -- still warm")
+            elif hrs < 96:
+                brief_lines.append(f"RECENCY: went quiet {int(hrs/24)} days ago -- re-engage with something new")
             else:
-                brief_lines.append(f"RECENCY: last active {int(hrs/24)} days ago")
+                brief_lines.append(f"RECENCY: last seen {int(hrs/24)} days ago -- re-engagement needed, lead with market change")
 
+        # Sell-before-buy -- two-sided opportunity
         if b.get("sell_before_buy"):
-            brief_lines.append("NOTE: Needs to sell current home first. Don't ignore this — it's actually workable.")
+            brief_lines.append(
+                "SELL-BEFORE-BUY: needs to sell their home first -- this is actually a two-sided opportunity. "
+                "Barry can help on both sides. Don't treat this as a complication."
+            )
 
     brief = "\n".join(brief_lines)
 
     # ── Channel context ───────────────────────────────────────────────────────
     channel_notes = {
         "sms_only": (
-            "SMS-ONLY: No email is going out. This text IS the outreach. Make it count.\n"
-            "They haven't heard from Barry yet — this is first contact via phone."
+            "SMS-ONLY: No email is going out today. This text IS the outreach. "
+            "They haven't heard from Barry yet -- this is first contact via phone. Make it count."
         ),
         "dual": (
-            "DUAL-CHANNEL: They're also receiving a longer email today. The SMS hits their phone "
-            "BEFORE they see the email. Take a DIFFERENT angle — don't summarize the email. "
+            "DUAL-CHANNEL: An email is also going out today. The SMS hits their phone BEFORE they open the email. "
+            "Take a DIFFERENT angle -- do not summarize the email. "
             "The SMS is the tap on the shoulder. The email is the follow-through."
         ),
         "new_lead": (
-            "NEW LEAD: Just registered. This is FIRST CONTACT at peak interest — they're looking "
-            "at homes right now. Fast, warm, specific. Match their energy."
+            "NEW LEAD: Just registered on the website. First contact at peak interest -- they're looking right now. "
+            "Fast, warm, and tied to the exact property or search that brought them in."
         ),
         "cross": (
-            "CROSS-CHANNEL NUDGE: Barry just sent this person an email with a video. "
-            "This iMessage arrives alongside it — a short, personal note that gives them ONE "
-            "specific, useful data point tied to their actual search, then naturally bridges "
-            "to the email. The goal: make them want to open the email AND the video.\n\n"
+            "CROSS-CHANNEL NUDGE: Barry just sent this person an email with a personalized video. "
+            "This text arrives alongside it -- a short, personal note with ONE specific data point "
+            "tied to their actual search, then a natural bridge to the email.\n\n"
             "Structure (3 short sentences):\n"
-            "  1. Lead with something specific to their search — address they viewed, city + "
-            "price range, what's moved in their market. Prove you looked them up. "
-            "One concrete fact or observation.\n"
-            "  2. Drop one market insight that actually matters to them right now — inventory "
-            "reality, price shift, competition level, what buyers/sellers in their range are "
-            "experiencing. Useful, not generic.\n"
-            "  3. Bridge to the email naturally. 'Sent you more on this in the email' or "
-            "'put the full picture in the email I just sent' — easy, not salesy. "
-            "The video plays inline directly below — do NOT mention a video, link, or attachment."
+            "  1. Their specific data -- address viewed, city + price range, market signal. Concrete. Personal.\n"
+            "  2. One market insight that matters to them right now -- inventory shift, price movement, competition. Real, not generic.\n"
+            "  3. Bridge to the email. 'Sent you more on this in the email' or 'put the full picture in the email I just sent.' "
+            "Easy, not salesy. Do NOT mention a video, link, or attachment."
         ),
     }
     channel_note = channel_notes.get(channel, channel_notes["sms_only"])
@@ -1950,92 +2034,77 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
     # ── Lead type context ─────────────────────────────────────────────────────
     if is_z:
         lead_context = (
-            "Z-BUYER SELLER: Owns the property listed above. Requested a cash offer. "
-            "NOT a buyer. Barry's edge: he can show them the cash offer AND the listing option. "
-            "Most cash buyers can only show one number. Barry can show the full picture."
+            "Z-BUYER SELLER: Owns the property listed in the brief. Requested a cash offer. NOT a buyer. "
+            "Barry's competitive edge: he can show the cash number AND the listing option side by side. "
+            "Most cash buyer companies only show one number. Barry shows both and lets the seller decide."
         )
     elif is_seller:
-        # Determine the specific conversation state so Claude writes the right angle
-        _had_text_convo   = "AI_NEEDS_FOLLOW_UP" in tags or "AI_RESPONDED" in tags or "AI_ENGAGED" in tags
-        _had_voice_convo  = "AI_VOICE_NEEDS_FOLLOW_UP" in tags
-        _missed_transfer  = "ISA_TRANSFER_UNSUCCESSFUL" in tags or "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE" in tags or "DECLINED_BY_REALTOR" in tags
-        _callback_sched   = "CALLBACK_SCHEDULED" in tags
-        _future_seller    = "NURTURE" in tags
-        _voicemail        = "VOICEMAIL" in tags
+        _had_text_convo  = "AI_NEEDS_FOLLOW_UP" in tags or "AI_RESPONDED" in tags or "AI_ENGAGED" in tags
+        _had_voice_convo = "AI_VOICE_NEEDS_FOLLOW_UP" in tags
+        _missed_transfer = "ISA_TRANSFER_UNSUCCESSFUL" in tags or "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE" in tags or "DECLINED_BY_REALTOR" in tags
+        _callback_sched  = "CALLBACK_SCHEDULED" in tags
+        _future_seller   = "NURTURE" in tags
+        _voicemail       = "VOICEMAIL" in tags
 
         if _missed_transfer:
             _convo_note = (
-                "CRITICAL: This person was actively connected or nearly connected to Barry on a live call — "
-                "it dropped or didn't go through on our end. That is a MISS on Barry's side, not theirs. "
-                "The text must acknowledge it directly and offer a simple path to try again. "
-                "Tone: apologetic but not groveling. 'We missed each other' energy, not 'sorry to bother you' energy."
+                "CRITICAL: This person was actively on a live call being connected to Barry -- it dropped on our end. "
+                "That is Barry's miss, not theirs. The text must acknowledge it directly and offer a simple path to retry. "
+                "Tone: 'We missed each other' -- apologetic without being groveling."
             )
         elif _callback_sched:
             _convo_note = (
-                "This person explicitly scheduled a callback. "
-                "The text should feel like a light confirmation — 'just making sure we're still on.' "
+                "This person explicitly scheduled a callback. The text is a light confirmation -- 'just making sure we're still on.' "
                 "Not a new pitch. The conversation is already in motion."
             )
         elif _had_voice_convo:
             _convo_note = (
-                "This person had a VOICE CALL with Barry's AI assistant about their home value. "
-                "They SPOKE with the AI — this is a very warm lead. "
-                "Barry is the human following up on that voice conversation. "
-                "The text should feel like a natural handoff: 'I heard you spoke with my assistant — I'm the person behind it.'"
+                "This person had a VOICE CALL with Barry's AI assistant about their home value. Very warm lead. "
+                "Barry is the human following up. Text should feel like: 'I heard you spoke with my assistant -- I'm the person behind it, and I pulled the real numbers.'"
             )
         elif _had_text_convo:
             _convo_note = (
-                "This person had a TEXT CONVERSATION with Barry's AI assistant about their home value. "
-                "They are WARM — they engaged. They know they're talking to a real estate agent's AI. "
-                "Barry is the human following up on that conversation. "
-                "The text should feel like: 'I'm the person behind that conversation — I pulled the real numbers.'"
+                "This person had a TEXT CONVERSATION with Barry's AI assistant about their home value. They engaged -- they are warm. "
+                "Barry is the human following up. Text should feel like: 'I'm the person behind that conversation -- I pulled the actual data.'"
             )
         elif _future_seller:
             _convo_note = (
-                "This person said they're interested in selling but NOT ready yet. "
-                "Long-game nurture. No urgency, no hard pitch. "
-                "The text is a useful market update, not a 'ready to list?' ask. "
+                "This person said they're interested in selling but not ready yet. Long-game nurture. "
+                "Text is a useful market update, not a 'ready to list?' ask. "
                 "Tone: friend who keeps an eye on things. 'Thought you'd want to know.'"
             )
         elif _voicemail:
             _convo_note = (
-                "A previous call attempt went to voicemail. "
-                "The text should be casual and low-pressure — not 'I've been trying to reach you' desperation. "
-                "Just a light re-open: 'easier to text than play phone tag.'"
+                "A call attempt went to voicemail. Casual and low-pressure re-open. "
+                "Not 'I've been trying to reach you' -- just a light re-open, easier to text than play phone tag."
             )
         else:
             _convo_note = (
-                "This homeowner engaged with Barry's platform about their home value. "
-                "They're warm — not a cold prospect. Barry is following up as the human agent. "
-                "The text should feel like: 'I saw your home came up and wanted to reach out personally.'"
+                "This homeowner engaged with Barry's platform about their home value. Warm, not cold. "
+                "Text should feel like: 'I saw your home came up and wanted to reach out personally.'"
             )
 
-        lead_context = f"""YLOPO PROSPECTING SELLER — HOMEOWNER (not a buyer):
-This person OWNS the home at the address in the brief. They are NOT browsing for homes to buy.
-Do NOT reference IDX, home searches, listings for sale, or buying homes. Ever.
+        lead_context = f"""YLOPO PROSPECTING SELLER -- HOMEOWNER (not a buyer):
+This person OWNS the home at the address in the brief. They are NOT browsing homes to buy.
+Do NOT reference IDX, home searches, listings for sale, or buying. Ever.
 
-THIS IS A WARM LEAD — NOT COLD OUTREACH:
+THIS IS A WARM LEAD:
 {_convo_note}
 
-Barry's role: he is the real human agent behind the AI assistant. The AI started the conversation.
-Barry closes the loop with real, specific market data the AI couldn't provide.
+Barry's role: he is the real human agent behind the AI assistant. The AI opened the door. Barry brings the real data.
+His value: he knows their specific street, what homes like theirs are actually selling for right now, and he can give a real number -- no pressure, no commitment.
 
-His value to this homeowner: he knows their specific street, he knows what homes like theirs
-are actually selling for right now, and he can give them a real number — no pressure, no commitment.
-
-TONE: Warm, competent, personal. Like the friend who happens to be Hampton Roads' top agent.
-Teaching voice. Market intel as a gift. Never pushy. Never "WE BUY HOUSES" energy.
-Reference "my assistant" to tie back to the AI conversation they remember."""
+TONE: Warm, competent, personal. The friend who happens to be Hampton Roads' #1 agent.
+Market intel as a gift. Never pushy. Never "WE BUY HOUSES" energy.
+Reference "my assistant" to tie back to the conversation they already had."""
     else:
         lead_context = (
-            "BUYER: Browsing homes on legacyhomesearch.com in Hampton Roads. "
-            "Looking to purchase — cities like Virginia Beach, Chesapeake, Norfolk, Suffolk, "
-            "Portsmouth, Hampton, Newport News."
+            "BUYER: Actively browsing homes on legacyhomesearch.com in Hampton Roads, Virginia. "
+            "Cities include Virginia Beach, Chesapeake, Norfolk, Suffolk, Portsmouth, Hampton, Newport News. "
+            "Use every specific data point in the brief -- it's what separates a personal text from a blast."
         )
 
-    # ── TCPA opt-out section (first text ever, or every 5th) ─────────────────
-    # Cross-channel nudges run slightly longer — they're packing real data context
-    # plus the email bridge, so 40-65 words instead of the 25-40 SMS-only cap.
+    # ── TCPA opt-out section ──────────────────────────────────────────────────
     if channel == "cross":
         word_limit = "50-70" if needs_optout else "40-65"
     else:
@@ -2043,137 +2112,121 @@ Reference "my assistant" to tie back to the AI conversation they remember."""
     optout_section = ""
     if needs_optout:
         optout_section = """
-━━ OPT-OUT LANGUAGE (MANDATORY — TCPA compliance) ━━
+OPT-OUT (MANDATORY -- TCPA compliance):
+Weave a casual opt-out into the MIDDLE of the message -- between the hook and the CTA.
+Not bolted onto the end. It reads like a natural breath in the conversation.
 
-This message MUST include a casual opt-out woven into the MIDDLE — between the
-curiosity gap and the CTA. Not bolted onto the end. It reads like a natural
-breath in the sentence before the ask.
-
-Barry's preferred style — the opt-out flows INTO the CTA:
-  "Sarah, inventory in your range just shifted — we can stop this convo whenever
-   you want, but is it worth a quick look at what changed?"
-  "Marcus, something on Kempsville worth knowing before you decide — you can tell
-   me to stop reaching out anytime, but want to hear it first?"
-  "Jordan, the numbers on your street moved this month — we can end this anytime,
+Barry's style -- opt-out flows INTO the CTA, never stands alone:
+  "Sarah, inventory in your range just shifted -- you can tell me to stop reaching out anytime,
+   but is it worth a quick look at what changed?"
+  "Marcus, something on Kempsville worth knowing -- stop me whenever you want,
+   but want to hear it first?"
+  "Jordan, the numbers on your street moved -- we can end this anytime,
    but worth a 5-minute call to see where things landed?"
 
 Rules:
-• Opt-out goes IN THE MIDDLE — after the hook, before the yes/no question
-• One brief clause separated by a comma or dash — not a standalone sentence
-• Keep it human and no-pressure, never robotic
-• Do NOT write "reply STOP" — too corporate. Barry's voice is conversational.
-Word limit for this message: up to 50 words (normal messages max out at 40).
+  - Opt-out in the MIDDLE, after hook, before yes/no question
+  - One brief clause with a comma -- never a separate sentence
+  - Human and conversational. Never "reply STOP" -- too corporate.
+  - Word count bumped to 50 words for this message.
 """
 
-    # ── The prompt ────────────────────────────────────────────────────────────
-    # Cross-channel gets a different sentence structure — data + market insight + email bridge
+    # ── Sentence structure rules by channel ───────────────────────────────────
     if channel == "cross":
-        sentence_rules = f"""━━ MESSAGE RULES ({word_limit} words) ━━
+        sentence_rules = f"""MESSAGE RULES ({word_limit} words, 3 sentences):
 
-LENGTH: {word_limit} words. Three short sentences. No more.
+S1 -- SPECIFIC DATA HOOK: Lead with something from their actual search. Address they viewed repeatedly,
+city + price range, or a market signal in their area. One concrete, specific fact. Proves you looked
+them up personally, not a blast.
 
-SENTENCE 1 — Specific data hook:
-Lead with something from their actual search. Property address they viewed repeatedly,
-their city + price range combo, or a specific market signal in their area.
-One concrete fact. Proves you looked this person up, not a blast.
+S2 -- MARKET INSIGHT: One genuinely useful piece of context tied to their search. Inventory shift,
+price movement in their range, what's selling vs. sitting, competition level. Real and specific.
+Not "it's a great time to buy."
 
-SENTENCE 2 — Market insight that matters:
-One genuinely useful piece of context tied to their search — inventory reality,
-price movement in their range, what's selling vs. sitting, competition level.
-Real and specific. Not "it's a great time to buy/sell."
+S3 -- EMAIL BRIDGE: Natural, low-key. "Sent you more in the email" or "put the full breakdown in the
+email I just sent." Easy. Not salesy. Do NOT mention a video, link, or attachment.
 
-SENTENCE 3 — Bridge to the email:
-Natural, low-key. "Sent you more on this in the email" or "put the full breakdown
-in the email I just sent" or "dropped the details in an email too." Easy, not salesy.
-Do NOT mention a video, link, or attachment — the video plays inline below this text.
-
-OPENING: Start with their first name followed by a comma. Example: "Jordan," or "Sarah,"
-No em dashes. No "Hey" or "Hi". Just the name then a comma.
-
-NO LINKS. NO sign-off (added automatically). NO credentials."""
+OPENING: First name + comma. "Jordan," or "Sarah," -- no Hey, no Hi, just the name.
+NO em dashes. NO en dashes. Comma or period only. NO links. NO sign-off."""
     else:
-        sentence_rules = f"""━━ SMS RULES (these are absolute) ━━
+        sentence_rules = f"""SMS RULES ({word_limit} words, 2 sentences max):
 
-LENGTH: {word_limit} words. Never more. Two sentences MAX.
+S1 -- THE OPEN LOOP (this is everything): Reference something SPECIFIC from their behavior --
+exact address, their view count on that property, their exact price range, their city.
+Then imply you have something they need to know WITHOUT giving it away.
+The specific detail proves you're not a bot. The withholding forces the reply.
 
-SENTENCE 1 — The curiosity gap:
-This is EVERYTHING. Create tension between what you know and what they don't yet.
-Mention something SPECIFIC — property address, their exact price range + city, their
-neighborhood. Then imply you have something they need to know without giving it away.
-The specific detail proves you're not a bot. The withholding makes them reply.
+S2 -- ONE YES/NO CTA: One question. Answerable in a single word. "Worth a call?" "Still looking?"
+"Want to see?" Make replying feel easier than ignoring.
 
-SENTENCE 2 — One CTA:
-One yes/no question only. Answerable in a single word.
-Make replying feel easier than ignoring.
+OPENING: First name + comma. "Jordan," or "Sarah," -- no Hey, no Hi, just the name.
+NO em dashes. NO en dashes. Comma or period only. NO links. NO sign-off."""
 
-OPENING: Start with their first name followed by a comma. Example: "Jordan," or "Sarah,"
-No em dashes. No "Hey" or "Hi". Just the name then a comma.
-
-NO LINKS. NO sign-off (added automatically). NO credentials."""
-
-    prompt = f"""Write a {word_limit} word text message from Barry Jenkins, Hampton Roads realtor.
+    # ── The prompt ────────────────────────────────────────────────────────────
+    prompt = f"""You are writing a text message for Barry Jenkins -- Hampton Roads' #1 real estate agent
+(850+ homes per year, Virginia's top team). Barry texts like a brilliant friend who happens to know
+the market cold, not like a salesperson. Every text is written for one specific person based on their
+actual behavior on his website.
 
 WHO THIS PERSON IS:
 {lead_context}
 
-CHANNEL:
+CHANNEL CONTEXT:
 {channel_note}
 
 {sentence_rules}
 
-NEVER USE:
-- "just checking in" / "reaching out" / "following up" / "circling back"
-- "I noticed" — lead with the observation, not yourself
-- "I'd love to" / "happy to help" / "feel free to"
-- "dream home" / "perfect fit" / "hot market"
-- Anything that could apply to a different person
-
-━━ WHAT MAKES A GREAT REAL ESTATE TEXT ━━
-
-The CURIOSITY GAP is the whole game. You hint at something specific to their situation
-but don't give it away. They reply to get the answer. That's the conversion.
-
-GREAT examples by lead type (personalize to actual data — do not copy verbatim):
-
-BUYER (IDX browser):
-  "Jordan, went back to 812 Copperfield three times and I think I know what's holding you up. Worth a call?"
-  "Brittany, inventory under $450k in Virginia Beach just shifted. What you were seeing two weeks ago is different now. Still looking?"
-  "Marcus, the homes you saved in Chesapeake are moving faster than the calendar shows. Worth a quick conversation?"
-
-SELLER — YLOPO PROSPECTING (warm handoff from AI — THESE LEADS ALREADY TALKED TO THE AI):
-  The text CONTINUES the AI conversation. Barry is the human following up.
-  NEVER write cold market intel as if they've never heard from us.
-  "Sarah, my assistant mentioned your place on Harbour View. I pulled the actual numbers on your street. Worth a quick call to go through them?"
-  "Sarah, picking up where my assistant left off on your home value question. The numbers on Harbour View are more interesting than I expected. Have a few minutes?"
-  "David, my assistant flagged your place on Wythe Creek. I looked into it — something in that area is worth knowing about. Want me to share?"
-
-SELLER — MISSED TRANSFER (they were ready, call dropped on our end):
-  "David, we tried to connect you with Barry after your home value conversation and the call dropped on our end. Sorry about that. Want to try again?"
-
-SELLER — FUTURE SELLER (not ready yet, nurture):
-  "Sarah, keeping an eye on the Harbour View market like I mentioned. Something shifted this month I thought you'd want to know about."
-
-Z-BUYER (cash offer request):
-  "Marcus, got your request on Kempsville. Before I give you that number there's something you should hear first. Got 5 minutes?"
-  "Lisa, ran your place on Shore Drive. The gap between cash and listed is smaller than most sellers expect right now. Want to see both numbers?"
-
-CROSS-CHANNEL (sent alongside email + video — 3 sentences, data hook + market insight + email bridge):
-  "Jordan, you've been back to 812 Copperfield four times — inventory under $425k in Virginia Beach just tightened, and that one's priced below what's moving right now. Put the full breakdown in the email I just sent."
-  "Sarah, the Chesapeake search you've been running — homes in the $350-$400k range are getting multiple offers again after a slow February. Sent you more on what that means for your timeline in the email."
-  "Marcus, your price range in Norfolk is sitting at about 3 weeks on market right now, which is tighter than it looks on Zillow. Dropped the specifics in the email I just sent over."
-
-BAD examples (these kill engagement):
-  "Hi Jordan, I saw you were looking at homes in Chesapeake. I'd love to help you find your dream home! Let me know if you'd like to chat."
-  "Sarah, just checking in on your home value question. I'm a top Hampton Roads agent and would love to help. Feel free to reach out!"
-  "Marcus, I noticed you submitted a cash offer request. I can help you with that process. Just reach out when you're ready."
-
-━━ LEAD DATA ━━
+THE BEHAVIORAL INTEL (your ammunition -- use the most specific details you have):
 {brief}
+
 {optout_section}
-Output ONLY the raw SMS body text. No explanation. No subject line. No sign-off. Just the text."""
+
+THE CRAFT OF HIGH-CONVERTING REAL ESTATE SMS:
+
+The open loop IS the strategy. You know something specific about what this person has been doing.
+Reference it precisely enough that they know you looked them up. Then withhold the useful information
+until they reply. The gap between "he knows something about my situation" and "I need to know what it is"
+generates the reply. That is the entire conversion mechanism.
+
+WHAT SEPARATES GREAT FROM GENERIC:
+
+GREAT -- uses their specific data as the hook:
+  "Marcus, you've been back to that Harbour View condo 6 times. I pulled the seller history on that
+   building and there's something there worth knowing before you decide. Worth a call?"
+
+  "Brittany, the two homes you saved in Chesapeake -- both are still available but inventory under
+   $380k in that area just dropped 22%. The math on waiting just changed. Still actively looking?"
+
+  "Jordan, you started your search around $340k and now you're looking at $430k homes. I have a
+   theory on why, and a property that might reset that ceiling for you. Got 5 minutes?"
+
+  "Lisa, that Shore Drive place you signed up for has been sitting 61 days, which is unusual for
+   that street. Something there creates real leverage for you as a buyer. Want to hear why?"
+
+  "David, you've been looking across 4 cities for a while now. I think I know which one actually
+   fits what you're after. Worth a quick conversation to narrow it down?"
+
+  "Sarah, those 3-bedroom condos in Virginia Beach you've been watching -- that whole segment just
+   tightened. Two in your range went pending this week. Still in the market?"
+
+GENERIC (kills engagement -- never do this):
+  "Hi Jordan! I saw you've been looking at homes. I'd love to help you find your dream home!"
+  "Sarah, just reaching out to see if you have any questions about your home search."
+  "Marcus, hot market right now -- great time to buy! Let me know if you want to chat."
+
+ABSOLUTE RULES:
+  - ZERO em dashes (--), ZERO en dashes, ZERO curly quotes. Plain ASCII only. GSM-7 safe.
+    Replace any dash thought with a comma or period. "Jordan, something came up" not "Jordan -- something came up."
+  - No "just", "reaching out", "following up", "checking in", "circling back"
+  - No "I noticed" -- lead with the observation, not yourself
+  - No "dream home", "perfect fit", "exciting opportunity", "hot market"
+  - The MOST specific data point goes first. Generic language anywhere = wasted text.
+  - One yes/no question to close. That's it.
+  - No links, no sign-off, no credentials
+
+Output ONLY the raw SMS body. No explanation. No label. No sign-off. Just the text."""
 
     ant_client = _ant.Anthropic(api_key=api_key)
-    # Cross-channel needs more tokens — 3 sentences with data context + email bridge
     if channel == "cross":
         _max_tok = 220 if needs_optout else 180
     else:
@@ -2186,8 +2239,18 @@ Output ONLY the raw SMS body text. No explanation. No subject line. No sign-off.
 
     sms_text = response.content[0].text.strip()
 
+    # Hard post-processing: strip any em/en dashes that slipped through
+    import re as _re_sms
+    # Unicode em dash (U+2014), en dash (U+2013), horizontal bar (U+2015),
+    # minus-sign (U+2212), figure dash (U+2012), and HTML entities
+    sms_text = _re_sms.sub(r'[‒–—―−]', ',', sms_text)
+    sms_text = sms_text.replace('&mdash;', ',').replace('&ndash;', ',')
+    # Collapse any double commas or comma-space-comma artifacts
+    sms_text = _re_sms.sub(r',\s*,', ',', sms_text)
+    sms_text = _re_sms.sub(r',\s*\.', '.', sms_text)
+
     # Strip any accidental sign-off Claude might add
-    for stop_phrase in ("Barry Jenkins", "Barry\nLegacy", "— Barry", "Legacy Home Team"):
+    for stop_phrase in ("Barry Jenkins", "Barry\nLegacy", "- Barry", "Legacy Home Team"):
         idx = sms_text.find(stop_phrase)
         if idx > 0:
             sms_text = sms_text[:idx].strip()
