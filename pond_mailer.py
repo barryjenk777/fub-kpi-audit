@@ -3132,8 +3132,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
 
     import twilio_client as _tc
     import sendblue_client as _sb
-    _sms_ready      = _tc.is_available() or _sb.is_available()
-    _sendblue_ready = _sb.is_available()
+    # Sendblue disabled — outbound not configured. Twilio only.
+    _sms_ready      = _tc.is_available()
+    _sendblue_ready = False
 
     # Hard cap on how many leads we'll check per run — prevents runaway loops
     # on large ponds (each event fetch = 1 API call at 0.35s rate limit).
