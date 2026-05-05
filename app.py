@@ -7722,93 +7722,116 @@ def _pond_add_sms_reply_fub_note(fub, person_id, person_name, reply_text, sentim
         except Exception as _be:
             logger.warning("Behavior re-fetch for FUB note failed (non-fatal): %s", _be)
 
-        # ── 3. Build the specific opener via Claude Haiku ─────────────────────
-        opener_text = None
+        # ── 3. Build the agent delivery guide via Claude Haiku ───────────────
+        # This is the core: decode what the AI text promised, then give the agent
+        # the ACTUAL substance to deliver on it using only what we genuinely know.
+        delivery_guide = None
         try:
             api_key = os.environ.get("ANTHROPIC_API_KEY")
             if api_key:
                 import anthropic as _ant2
                 _ant_cl = _ant2.Anthropic(api_key=api_key)
 
-                # Give Claude Haiku just enough context to write one sharp opener
-                _beh_summary = "\n".join(behavior_lines[:6]) if behavior_lines else "No behavioral data available."
-                _orig_hook   = f'Our AI text: "{original_sms}"' if original_sms else "AI text not available."
-                _opener_prompt = f"""Write ONE specific opening line for a real estate agent calling/texting this lead back, then ONE follow-up question to advance toward a showing or consult.
+                _beh_summary = "\n".join(behavior_lines) if behavior_lines else "No behavioral data available."
+                _orig_hook   = f'"{original_sms}"' if original_sms else "not available"
 
-Lead: {person_name or "this lead"}
-{_orig_hook}
+                _delivery_prompt = f"""You are briefing a real estate agent who just got a reply to an AI nurture text.
+The agent needs to know: (1) exactly what the AI text implied, (2) what they can ACTUALLY say to
+deliver on that implication using ONLY the real behavioral data we have, and (3) a specific opener.
+
+IMPORTANT: We only have behavioral data from the lead's activity on our IDX website (view counts,
+saves, price range, search patterns). We do NOT have MLS data, seller history, or property records.
+The agent must deliver on the promise using behavioral insights only -- which are genuine and powerful.
+
+Lead name: {person_name or "this lead"}
+Our AI text: {_orig_hook}
 Lead replied: "{reply_text.strip()[:400]}"
-AI read it as: {sentiment_reason}
+What our AI detected: {sentiment_reason}
 
-Their search data:
+Their actual behavioral data (this is all we know -- use it):
 {_beh_summary}
 
-Format:
-OPENER: [One sentence that references something specific from their search -- not generic]
-QUESTION: [One yes/no or either/or question that moves toward booking]
+Write three sections:
 
-Under 60 words total. No fluff. Barry's voice -- direct, warm, knowledgeable."""
+WHAT OUR TEXT IMPLIED:
+One sentence: what expectation did our text create? What did the lead think we know?
 
-                _opener_resp = _ant_cl.messages.create(
+WHAT YOU ACTUALLY KNOW (say this when they ask "what did you find?"):
+2-3 specific things the agent can say, built ONLY from the behavioral data above.
+These must be true, specific, and interesting. Frame behavioral patterns as insights.
+Example frames that work:
+  - "When someone views the same house X times, it usually means [specific interpretation]"
+  - "Your search moved up $X from where you started -- that tells me [specific thing]"
+  - "You saved [address] but kept looking -- usually means [specific interpretation]"
+
+YOUR MOVE:
+OPENER: One sentence for the agent to open with -- references something specific, not generic.
+QUESTION: One question that moves toward a consult, showing, or commitment.
+
+Under 200 words total. Direct and useful. No fluff."""
+
+                _delivery_resp = _ant_cl.messages.create(
                     model="claude-3-5-haiku-20241022",
-                    max_tokens=120,
-                    messages=[{"role": "user", "content": _opener_prompt}],
+                    max_tokens=350,
+                    messages=[{"role": "user", "content": _delivery_prompt}],
                 )
-                opener_text = _opener_resp.content[0].text.strip()
+                delivery_guide = _delivery_resp.content[0].text.strip()
         except Exception as _oe:
-            logger.warning("Claude opener generation failed (non-fatal): %s", _oe)
+            logger.warning("Claude delivery guide generation failed (non-fatal): %s", _oe)
 
         # ── 4. Assemble the full note ─────────────────────────────────────────
         note_parts = [
             f"REPLY TO AI TEXT -- {sentiment_reason.upper()}",
             "",
-            f"WHAT THEY SAID:",
+            "WHAT THEY SAID:",
             f'"{reply_text.strip()[:600]}"',
             "",
         ]
 
         if original_sms:
             note_parts += [
-                "WHAT OUR AI TEXT SAID (the hook we used):",
+                "HOOK WE USED:",
                 f'"{original_sms[:400]}"',
                 "",
             ]
 
         if behavior_lines:
             note_parts += [
-                "WHAT WE KNOW (use this on your call):",
+                "THEIR BEHAVIORAL DATA (everything we actually know):",
             ] + behavior_lines + [
                 "",
-                "HOW TO SEE THEIR FULL HISTORY IN FUB:",
-                "  Open their profile > Activity tab > filter IDX Activity.",
-                "  Every property they viewed, saved, and searched is there.",
+                "TO SEE THEIR FULL HISTORY: Open their FUB profile > Activity tab > IDX Activity.",
+                "Every property they viewed, saved, and searched is there.",
                 "",
             ]
 
-        if opener_text:
+        if delivery_guide:
             note_parts += [
-                "YOUR MOVE:",
-                opener_text,
+                "---",
+                delivery_guide,
             ]
         else:
-            # Fallback opener if Claude is down
+            # Fallback when Claude is unavailable
+            _first = (person_name or "there").split()[0]
             _addr_hint = ""
-            if behavior_lines:
-                # grab the first address mention from behavior lines
-                for bl in behavior_lines[:2]:
-                    if "VIEWED" in bl or "SAVED" in bl or "REGISTERED" in bl:
-                        _addr_hint = bl.split(":", 1)[-1].strip().split("--")[0].strip()
-                        break
-            _open_line = (
-                f"'Hey {(person_name or 'there').split()[0]}, it's [your name] from Barry's team at Legacy Home Team. "
-                + (f"I saw you replied to our message about {_addr_hint}." if _addr_hint
-                   else "I saw you replied to Barry's text and wanted to reach out personally.")
-                + "'"
-            )
+            for bl in behavior_lines[:3]:
+                if any(x in bl for x in ("VIEWED", "SAVED", "REGISTERED")):
+                    _addr_hint = bl.split(":", 1)[-1].strip().split("--")[0].strip()
+                    break
             note_parts += [
+                "---",
+                "WHAT YOU ACTUALLY KNOW (say this when they ask 'what did you find?'):",
+                "  The behavioral data above is your substance. Frame it as insight:",
+                "  'When someone keeps going back to the same house that many times, it usually",
+                "   means there's one specific thing they can't answer from the photos. What is it?'",
+                "  'Your search has moved up in price from where you started -- that tells me",
+                "   something about what you've been finding vs. what you actually want.'",
+                "",
                 "YOUR MOVE:",
-                f"OPENER: {_open_line}",
-                "QUESTION: When are you free for a quick call to go over what you're seeing in the market?",
+                f"OPENER: 'Hey {_first}, it's [your name] from Barry's team."
+                + (f" I saw you replied about {_addr_hint}." if _addr_hint
+                   else " I saw you replied to our text and wanted to reach out directly.'"),
+                "QUESTION: What's the one thing about this search that hasn't clicked yet?",
             ]
 
         note_body = "\n".join(note_parts)

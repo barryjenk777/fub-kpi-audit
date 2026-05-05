@@ -2183,44 +2183,70 @@ THE BEHAVIORAL INTEL (your ammunition -- use the most specific details you have)
 
 THE CRAFT OF HIGH-CONVERTING REAL ESTATE SMS:
 
-The open loop IS the strategy. You know something specific about what this person has been doing.
-Reference it precisely enough that they know you looked them up. Then withhold the useful information
-until they reply. The gap between "he knows something about my situation" and "I need to know what it is"
-generates the reply. That is the entire conversion mechanism.
+The open loop IS the strategy. You know something specific about what this person has been doing
+on legacyhomesearch.com. Reference it precisely enough that they know you looked them up personally.
+Then withhold the interpretation until they reply. The gap between "he sees exactly what I'm doing"
+and "I need to know what he thinks" generates the reply.
 
-WHAT SEPARATES GREAT FROM GENERIC:
+HONESTY RULE -- THIS IS NON-NEGOTIABLE:
+You only know what is in the behavioral brief above. Do NOT imply you pulled seller history,
+MLS records, building history, permit history, or any external property data. You have not.
+The behavioral data -- view counts, saves, price drift, search patterns -- IS your real intel.
+It is MORE surprising to a lead than fake property research, because they don't expect you to
+know they've been back to that house 6 times. Lead with what is true. It's enough.
 
-GREAT -- uses their specific data as the hook:
-  "Marcus, you've been back to that Harbour View condo 6 times. I pulled the seller history on that
-   building and there's something there worth knowing before you decide. Worth a call?"
+WHAT THE OPEN LOOP LOOKS LIKE WHEN BUILT ON REAL DATA:
 
-  "Brittany, the two homes you saved in Chesapeake -- both are still available but inventory under
-   $380k in that area just dropped 22%. The math on waiting just changed. Still actively looking?"
+REPEAT VIEWER (most powerful):
+  "Marcus, you've been back to that Harbour View condo 6 times. When someone does that,
+   it usually means one specific thing. Worth a quick call to figure out what's holding you?"
 
-  "Jordan, you started your search around $340k and now you're looking at $430k homes. I have a
-   theory on why, and a property that might reset that ceiling for you. Got 5 minutes?"
+  "Brittany, you've gone back to that house on Copperfield 4 times across two different sessions.
+   I have a theory on what that means. Want to hear it?"
 
-  "Lisa, that Shore Drive place you signed up for has been sitting 61 days, which is unusual for
-   that street. Something there creates real leverage for you as a buyer. Want to hear why?"
+PRICE DRIFT (they don't know you can see this):
+  "Jordan, you started your search around $320k and now you're looking at $430k homes. I see
+   that shift a lot and I know exactly what's usually behind it. Got 5 minutes?"
 
-  "David, you've been looking across 4 cities for a while now. I think I know which one actually
-   fits what you're after. Worth a quick conversation to narrow it down?"
+  "David, your search has moved up $60k from where you started. That usually tells me something
+   specific about what you haven't found yet. Want to talk through it?"
 
-  "Sarah, those 3-bedroom condos in Virginia Beach you've been watching -- that whole segment just
-   tightened. Two in your range went pending this week. Still in the market?"
+SAVES PATTERN:
+  "Sarah, you've saved 3 homes in the past two weeks and all three are still available.
+   That pattern usually means one thing. Still actively looking?"
 
-GENERIC (kills engagement -- never do this):
+  "Lisa, you signed up to see that place on Shore Drive and then kept searching. Usually means
+   something about it didn't close the deal for you. What was it?"
+
+SEARCH SPREAD (multiple cities = undecided):
+  "David, you've been looking across Chesapeake, Virginia Beach, and Norfolk for a while.
+   I can usually tell from someone's saves which one they actually want. Want to compare notes?"
+
+DEEP SEARCH (many views, long time):
+  "Marcus, you've looked at a lot of homes over the past couple months. That many views usually
+   points to one thing you haven't found yet. Want me to guess what it is, or tell me?"
+
+SELLER (AI handoff -- always honest since it's a real conversation):
+  "Sarah, my assistant mentioned your place on Harbour View. I looked at what's happening on
+   that street right now. Worth a quick call to go through the real numbers?"
+
+CROSS-CHANNEL (alongside email + video):
+  "Jordan, you've been back to that Chesapeake search 4 times this month and the inventory
+   in your range just shifted. Sent you more on this in the email I just sent."
+
+GENERIC (kills engagement -- never write this):
   "Hi Jordan! I saw you've been looking at homes. I'd love to help you find your dream home!"
   "Sarah, just reaching out to see if you have any questions about your home search."
   "Marcus, hot market right now -- great time to buy! Let me know if you want to chat."
 
 ABSOLUTE RULES:
-  - ZERO em dashes (--), ZERO en dashes, ZERO curly quotes. Plain ASCII only. GSM-7 safe.
-    Replace any dash thought with a comma or period. "Jordan, something came up" not "Jordan -- something came up."
+  - ZERO em dashes, ZERO en dashes, ZERO curly quotes. Plain ASCII only. GSM-7 safe.
+    Use a comma or period where you want a dash. "Jordan, something came up" not "Jordan -- something came up."
   - No "just", "reaching out", "following up", "checking in", "circling back"
   - No "I noticed" -- lead with the observation, not yourself
   - No "dream home", "perfect fit", "exciting opportunity", "hot market"
-  - The MOST specific data point goes first. Generic language anywhere = wasted text.
+  - NEVER imply you pulled seller history, MLS data, or external property records. You haven't.
+  - The cliffhanger must be something you can ACTUALLY deliver on from the behavioral data.
   - One yes/no question to close. That's it.
   - No links, no sign-off, no credentials
 
