@@ -712,6 +712,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
         <div class="sec-actions">
           <span style="font-size:.68rem;color:var(--muted)">Last synced: <span id="g-updated">checking…</span></span>
           <button class="btn btn-ghost btn-sm" id="btn-force" onclick="forceRefreshGoals()">🔄 Force Refresh</button>
+          <button class="btn btn-ghost btn-sm" id="btn-sync-roster" onclick="syncAgentRoster()">👥 Sync Roster</button>
           <button class="btn btn-ghost btn-sm" onclick="openLogClosing()">+ Log Closing</button>
           <button class="btn btn-ghost btn-sm" onclick="toggleEmailPanel()">📧 Setup Emails</button>
         </div>
@@ -1313,6 +1314,21 @@ async function forceRefreshGoals(){
     showToast('✅ Scorecard refreshed with live FUB data','ok');
   }catch(e){showToast('Refresh failed: '+e.message,'err');document.getElementById('g-updated').textContent='error — try again';}
   finally{btn.disabled=false;btn.textContent='🔄 Force Refresh';}
+}
+
+async function syncAgentRoster(){
+  const btn=document.getElementById('btn-sync-roster');
+  btn.disabled=true;btn.textContent='⏳ Syncing…';
+  showToast('👥 Pulling agent roster from FUB…','ok');
+  try{
+    const r=await fetch('/api/goals/scan-agents',{method:'POST'});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    showToast(`✅ Roster synced — ${d.count} agents found. Reloading scorecard…`,'ok');
+    // Reload scorecard so newly added agents appear
+    await loadGoals();
+  }catch(e){showToast('Roster sync failed: '+e.message,'err');}
+  finally{btn.disabled=false;btn.textContent='👥 Sync Roster';}
 }
 
 function toggleEmailPanel(){

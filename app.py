@@ -9299,6 +9299,24 @@ def scheduled_sync_goals_data():
     print(f"[GOALS SYNC] Starting goals data sync for {year}…")
 
     try:
+        # ── 0. Sync FUB agent roster → agent_profiles ──────────────────────
+        # Runs first so new agents added since last sync appear on the scorecard
+        # before we try to pull their deals / call counts.
+        try:
+            _rc = FUBClient()
+            _excluded = list(config.EXCLUDED_USERS)
+            _roster = _rc.get_agents_with_email(excluded_names=_excluded)
+            for _a in _roster:
+                _db.upsert_agent_profile(
+                    _a["name"],
+                    fub_user_id=_a["fub_user_id"],
+                    email=_a["email"],
+                    is_active=True,
+                )
+            print(f"[GOALS SYNC] Roster sync: {len(_roster)} agents upserted")
+        except Exception as _re:
+            print(f"[GOALS SYNC] Roster sync failed (non-fatal): {_re}")
+
         # ── 1. Sync FUB Deals ──────────────────────────────────────────────
         try:
             client = FUBClient()
