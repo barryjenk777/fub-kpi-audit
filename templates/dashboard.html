@@ -1660,6 +1660,59 @@ function buildManager(d){
   h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px"><div><span style="font-size:11px;color:var(--muted)">REPORTING PERIOD</span><br><span style="font-size:15px;font-weight:700">${tw[0]?.label||''}</span></div><div style="display:flex;gap:16px;background:var(--surface2);padding:10px 18px;border-radius:var(--r-sm);border:1px solid var(--border)"><div style="text-align:center"><span style="font-size:10px;color:var(--muted)">MIN CALLS</span><br><span style="font-weight:800;color:var(--blue)">${kpi.min_calls}</span></div><div style="text-align:center"><span style="font-size:10px;color:var(--muted)">MIN CONVOS</span><br><span style="font-weight:800;color:var(--blue)">${kpi.min_convos}</span></div><div style="text-align:center"><span style="font-size:10px;color:var(--muted)">MAX OOC</span><br><span style="font-weight:800;color:var(--blue)">${kpi.max_ooc}</span></div></div></div>`;
   function pulse(icon,label,curr,prev,extra){const pct=prev>0?Math.round((curr-prev)/prev*100):(curr>0?100:0);const dir=pct>10?'up':pct<-10?'down':'flat';return`<div class="stat-card"><div class="stat-label">${icon} ${label}</div><div class="stat-value c-blue">${curr}</div><div class="stat-trend">${trendArrow(dir,pct)}</div>${extra?'<div class="stat-sub">'+extra+'</div>':''}</div>`}
   h+='<div class="stat-row">';h+=pulse('📞','Team Calls',currT.calls||0,prevT.calls||0,'');h+=pulse('💬','Conversations',currT.convos||0,prevT.convos||0,`${cs.team_call_to_convo}% connect rate`);h+=pulse('📱','Texts Sent',currT.texts||0,0,'This week');h+=pulse('📅','Appts Set',currT.appts_set||0,(tw[1]?.totals||{}).appts_set||0,'');const talkM=Math.round((currT.talk_secs||0)/60);h+=pulse('⏱️','Talk Time',talkM>60?Math.round(talkM/60)+'h '+talkM%60+'m':talkM+'m',0,'Total');h+='</div>';
+  // ── Time Blocking Status (prominent, top of manager view) ────────────────
+  {
+    const _TB_DAYS=[['monday','M'],['tuesday','T'],['wednesday','W'],['thursday','Th'],['friday','F'],['saturday','Sa']];
+    const _tbAll=at.map(ag=>{
+      const bl=ag.time_block||null;
+      const days=bl&&bl.prospecting_days?bl.prospecting_days.length:0;
+      const dur=bl?bl.duration_minutes||0:0;
+      return{name:ag.name,block:bl,days,dur};
+    });
+    const _locked=_tbAll.filter(a=>a.days>0).sort((a,b)=>b.days-a.days);
+    const _notSet=_tbAll.filter(a=>a.days===0);
+    const _allLocked=_notSet.length===0&&_locked.length>0;
+    const _scoreColor=_locked.length===_tbAll.length&&_tbAll.length>0?'#16a34a':_locked.length>0?'#d97706':'#dc2626';
+
+    h+=`<div style="margin-bottom:1.3rem;border:2px solid ${_allLocked?'rgba(34,197,94,.4)':'rgba(59,130,246,.2)'};border-radius:var(--r);overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:${_allLocked?'rgba(34,197,94,.08)':'var(--surface2)'};border-bottom:1px solid rgba(255,255,255,.05)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:.95rem;font-weight:800;color:var(--text)">⏰ Time Blocking</span>
+          <span style="font-size:.72rem;font-weight:700;background:${_scoreColor};color:#fff;padding:3px 10px;border-radius:20px">${_locked.length} of ${_tbAll.length} locked in</span>
+          ${_allLocked?'<span style="font-size:.72rem;color:#22c55e;font-weight:600">— full team committed 🔥</span>':''}
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;min-height:${_tbAll.length>0?'1px':'60px'}">
+        <div style="padding:14px 16px;border-right:1px solid var(--border)">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#22c55e;margin-bottom:10px">✅ Locked In (${_locked.length})</div>
+          ${_locked.length>0?_locked.map(ag=>{
+            const _blk=new Set(ag.block.prospecting_days||[]);
+            const _dots=_TB_DAYS.map(([k,l])=>{const on=_blk.has(k);return`<span style="display:inline-flex;flex-direction:column;align-items:center;gap:1px;font-size:.52rem;line-height:1;color:${on?'#22c55e':'var(--muted)'};opacity:${on?1:.25}"><span style="width:9px;height:9px;border-radius:50%;background:${on?'#22c55e':'var(--surface3)'};display:inline-block"></span>${l}</span>`;}).join('');
+            const _dur=ag.dur>=60?`${Math.floor(ag.dur/60)}h${ag.dur%60>0?ag.dur%60+'m':''}`:`${ag.dur}m`;
+            const _tm=ag.block.start_time?ag.block.start_time.slice(0,5):'';
+            const _hInt=parseInt(_tm.split(':')[0]||0);
+            const _ampm=_hInt<12?'AM':'PM';
+            const _h12=_hInt%12||12;
+            const _mStr=_tm.split(':')[1]||'00';
+            const _timeStr=_tm?`${_h12}:${_mStr} ${_ampm} ET`:'';
+            return`<div style="display:flex;flex-direction:column;gap:4px;padding:8px 0;border-bottom:1px solid rgba(34,197,94,.1)">
+              <div style="font-size:.88rem;font-weight:700;color:var(--text)">${ag.name}</div>
+              <div style="display:flex;gap:5px;align-items:center">${_dots}</div>
+              <div style="font-size:.67rem;color:var(--muted)">${_dur}/session${_timeStr?' · '+_timeStr:''}</div>
+            </div>`;
+          }).join(''):`<p style="font-size:.78rem;color:var(--muted);margin:0;padding:4px 0">No one has set a block yet.</p>`}
+        </div>
+        <div style="padding:14px 16px">
+          <div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:${_notSet.length>0?'var(--red)':'#22c55e'};margin-bottom:10px">${_notSet.length>0?`⚠️ Needs to Set (${_notSet.length})`:'✅ All agents blocked in'}</div>
+          ${_notSet.length>0?_notSet.map(ag=>`<div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid rgba(239,68,68,.1)">
+            <span style="width:8px;height:8px;border-radius:50%;background:#ef4444;display:inline-block;flex-shrink:0"></span>
+            <span style="font-size:.88rem;font-weight:700;color:var(--text)">${ag.name}</span>
+          </div>`).join(''):`<p style="font-size:.78rem;color:#22c55e;margin:0;padding:4px 0">Everyone is locked in. 🎯</p>`}
+        </div>
+      </div>
+    </div>`;
+  }
+
   h+=`<div class="sec-hdr"><div class="sec-title">🎯 Your Focus This Week <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:.72rem;margin-left:.4rem">${cs.meeting_kpi}/${cs.total_agents} meeting KPIs (${cs.pct_meeting}%)</span></div><div class="sec-actions"><button class="btn btn-ghost btn-sm" id="btnManagerEmail" onclick="sendManagerEmail()">📧 Email Joe's Game Plan</button></div></div>`;
   if(cs.need_accountability.length>0){h+=`<div class="action-box red"><div class="title">🚨 Accountability Check-Ins Needed</div><p style="font-size:13px;margin-bottom:8px">1-on-1 this week. Focus on call blocking and daily schedule.</p><ul>`;at.filter(a=>a.coaching_type==='accountability').forEach(a=>{h+=`<li style="margin-bottom:6px"><strong>${a.name}</strong> <span class="tag tag-fail" style="margin-left:6px">Grade ${a.grade}</span> — ${a.insights[0]||''}</li>`;});h+='</ul></div>';}
   if(cs.need_skill.length>0){h+=`<div class="action-box amber"><div class="title">📋 Skill Coaching Opportunities</div><p style="font-size:13px;margin-bottom:8px">Putting in effort but not converting. Role-play and script work.</p><ul>`;at.filter(a=>a.coaching_type==='skill').forEach(a=>{h+=`<li style="margin-bottom:6px"><strong>${a.name}</strong> <span class="tag tag-warn" style="margin-left:6px">Grade ${a.grade}</span> — ${a.insights[0]||''}</li>`;});h+='</ul></div>';}
@@ -1677,8 +1730,8 @@ function buildManager(d){
   h+=`<div class="sec-hdr"><div class="sec-title">💡 Effort vs Results Matrix</div></div>`;
   h+=`<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:1.2rem"><div style="background:var(--green-bg);border:1px solid var(--green);padding:12px;border-radius:var(--r)"><strong style="color:var(--green)">⭐ Stars</strong> — High calls + High convos<br><div style="margin-top:6px">${stars.length?stars.map(a=>`<span class="badge badge-green" style="margin:2px">${a.name}</span>`).join(''):'<span class="c-muted" style="font-size:12px">None this week</span>'}</div></div><div style="background:var(--yellow-bg);border:1px solid var(--yellow);padding:12px;border-radius:var(--r)"><strong style="color:var(--yellow)">💪 Grinders</strong> — High calls, few convos<br><div style="margin-top:6px">${grinders.length?grinders.map(a=>`<span class="badge badge-yellow" style="margin:2px">${a.name}</span>`).join(''):'<span class="c-muted" style="font-size:12px">None</span>'}</div></div><div style="background:var(--blue-bg);border:1px solid var(--blue);padding:12px;border-radius:var(--r)"><strong style="color:var(--blue)">🎯 Efficient</strong> — Low calls but converting<br><div style="margin-top:6px">${efficient.length?efficient.map(a=>`<span class="badge badge-blue" style="margin:2px">${a.name}</span>`).join(''):'<span class="c-muted" style="font-size:12px">None</span>'}</div></div><div style="background:var(--red-bg);border:1px solid var(--red);padding:12px;border-radius:var(--r)"><strong style="color:var(--red)">🚨 Disengaged</strong> — Low calls + Low convos<br><div style="margin-top:6px">${disengaged.length?disengaged.map(a=>`<span class="badge badge-red" style="margin:2px">${a.name}</span>`).join(''):'<span class="c-muted" style="font-size:12px">None</span>'}</div></div></div>`;
 
-  // ── Time Blocking Commitment Board ──────────────────────────────────────
-  {
+  // ── (Time Blocking moved to top of manager view — see stat-row section) ──
+  if(false){
     const _TB_DAYS=[['monday','M'],['tuesday','T'],['wednesday','W'],['thursday','Th'],['friday','F'],['saturday','Sa']];
     const _tbAgents=at.map(ag=>{
       const bl=ag.time_block||null;
