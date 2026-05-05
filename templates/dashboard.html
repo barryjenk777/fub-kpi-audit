@@ -713,6 +713,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
           <span style="font-size:.68rem;color:var(--muted)">Last synced: <span id="g-updated">checking…</span></span>
           <button class="btn btn-ghost btn-sm" id="btn-force" onclick="forceRefreshGoals()">🔄 Force Refresh</button>
           <button class="btn btn-ghost btn-sm" id="btn-sync-roster" onclick="syncAgentRoster()">👥 Sync Roster</button>
+          <button class="btn btn-ghost btn-sm" id="btn-tb-nudge" onclick="sendTimeBlockNudge()">⏰ Nudge: Set Time Block</button>
           <button class="btn btn-ghost btn-sm" onclick="openLogClosing()">+ Log Closing</button>
           <button class="btn btn-ghost btn-sm" onclick="toggleEmailPanel()">📧 Setup Emails</button>
         </div>
@@ -1325,10 +1326,33 @@ async function syncAgentRoster(){
     const d=await r.json();
     if(d.error)throw new Error(d.error);
     showToast(`✅ Roster synced — ${d.count} agents found. Reloading scorecard…`,'ok');
-    // Reload scorecard so newly added agents appear
     await loadGoals();
   }catch(e){showToast('Roster sync failed: '+e.message,'err');}
   finally{btn.disabled=false;btn.textContent='👥 Sync Roster';}
+}
+
+async function sendTimeBlockNudge(){
+  const btn=document.getElementById('btn-tb-nudge');
+  // First show a confirm dialog so Barry can review before sending
+  const ok=confirm(
+    'This will email every active agent who has NOT yet set a prospecting block.\n\n'+
+    'Each email is personalized with their goal data and links to their My Block page.\n\n'+
+    'Send now?'
+  );
+  if(!ok)return;
+  btn.disabled=true;btn.textContent='⏳ Sending…';
+  showToast('⏰ Sending time block nudge emails…','ok');
+  try{
+    const r=await fetch('/api/goals/send-time-block-nudge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dry_run:false})});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    const skippedNames=(d.skipped_detail||[]).filter(s=>s.reason==='block already set').map(s=>s.agent.split(' ')[0]).join(', ');
+    const msg=`✅ ${d.sent} email${d.sent!==1?'s':''} sent.`+(skippedNames?` (${skippedNames} already have a block)`:'');
+    showToast(msg,'ok');
+    // Log details to console for Barry's reference
+    console.log('[Time Block Nudge]',d);
+  }catch(e){showToast('Send failed: '+e.message,'err');}
+  finally{btn.disabled=false;btn.textContent='⏰ Nudge: Set Time Block';}
 }
 
 function toggleEmailPanel(){

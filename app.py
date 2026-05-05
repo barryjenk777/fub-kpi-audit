@@ -3789,6 +3789,224 @@ def api_goals_scan_agents():
         return jsonify({"error": str(e)}), 500
 
 
+# ---- Time-block nudge email ----
+
+def _build_time_block_email_html(first_name: str, block_url: str, goal: dict | None) -> tuple[str, str]:
+    """
+    Build a personalized time-block nudge email in Barry's voice.
+    Returns (subject, html_body).
+    """
+    # ── Subject line ──────────────────────────────────────────────────────
+    if goal and goal.get("gci_goal"):
+        gci = int(goal["gci_goal"])
+        gci_fmt = f"${gci:,.0f}".replace(",000", "K") if gci >= 1000 else f"${gci:,}"
+        subject = f"{first_name} — your {gci_fmt} year needs this one thing"
+    else:
+        subject = f"{first_name} — can we talk about your schedule?"
+
+    # ── Goal math section (only if goal exists) ───────────────────────────
+    if goal and goal.get("gci_goal"):
+        targets = _db.compute_targets(goal)
+        closings = targets.get("closings_needed", 0)
+        wk_convos = targets.get("convos_needed_wk", 0)
+        gci = int(goal["gci_goal"])
+        gci_str = f"${gci:,}"
+        goal_block = f"""
+        <p style="margin:0 0 18px">You set a goal of <strong>{gci_str}</strong> this year.
+        Working backwards, that&rsquo;s roughly <strong>{closings:.0f} closings</strong> &mdash;
+        which means your model says you need about
+        <strong>{wk_convos:.0f} real conversations a week</strong> with new people to stay on track.</p>
+
+        <p style="margin:0 0 18px">That math doesn&rsquo;t happen by accident.
+        It happens by appointment &mdash; with yourself.</p>
+"""
+    else:
+        goal_block = """
+        <p style="margin:0 0 18px">Even without a number on paper yet, the principle is the same:
+        the conversations that build your year don&rsquo;t just happen.
+        You have to protect the time before someone else fills it.</p>
+"""
+
+    # ── Full HTML ─────────────────────────────────────────────────────────
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:Georgia,'Times New Roman',serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:32px 16px">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%">
+
+  <!-- Header bar -->
+  <tr><td style="background:#1a1a2e;padding:20px 36px">
+    <p style="margin:0;font-size:13px;color:#8888aa;font-family:Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase">Legacy Home Team</p>
+    <p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif">From Barry Jenkins</p>
+  </td></tr>
+
+  <!-- Body -->
+  <tr><td style="padding:36px 36px 28px">
+    <p style="margin:0 0 20px;font-size:17px;color:#111;line-height:1.65">{first_name},</p>
+
+    <p style="margin:0 0 18px;font-size:16px;color:#222;line-height:1.75">I was looking at the team schedule this week.</p>
+
+    <p style="margin:0 0 18px;font-size:16px;color:#222;line-height:1.75">Nobody&rsquo;s got their prospecting block set yet.</p>
+
+    <p style="margin:0 0 18px;font-size:16px;color:#222;line-height:1.75">I&rsquo;m not saying that to call anyone out &mdash;
+    I&rsquo;m saying it because I&rsquo;ve watched this pattern play out long enough to know:
+    that one thing is what separates the agents who hit their number from the ones who get to November
+    wondering where the year went.</p>
+
+    <div style="font-size:16px;color:#222;line-height:1.75">
+{goal_block}
+    </div>
+
+    <p style="margin:0 0 18px;font-size:16px;color:#222;line-height:1.75">The agents I&rsquo;ve watched do this well &mdash;
+    they&rsquo;re not smarter, they&rsquo;re not grinding harder than everyone else.
+    They just made a decision ahead of time about <em>when</em> they were going to pick up the phone.
+    And then they showed up.</p>
+
+    <p style="margin:0 0 18px;font-size:16px;color:#222;line-height:1.75">That&rsquo;s it.
+    That&rsquo;s the whole thing.</p>
+
+    <p style="margin:0 0 18px;font-size:16px;color:#222;line-height:1.75">Here&rsquo;s what I want you to do tonight.
+    Click the link below. It takes three minutes.
+    Pick the days. Pick the time. Pick how long.
+    We&rsquo;ll send you a calendar invite and it goes on the team dashboard so I can see who&rsquo;s locked in.</p>
+
+    <!-- CTA Button -->
+    <table cellpadding="0" cellspacing="0" style="margin:32px 0">
+      <tr><td style="background:#2563eb;border-radius:6px">
+        <a href="{block_url}" style="display:inline-block;padding:16px 36px;font-family:Arial,sans-serif;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;letter-spacing:.02em">
+          Set My Time Block &rarr;
+        </a>
+      </td></tr>
+    </table>
+
+    <p style="margin:0 0 10px;font-size:16px;color:#222;line-height:1.75">You didn&rsquo;t come this far to coast.</p>
+
+    <p style="margin:0 0 32px;font-size:16px;color:#222;line-height:1.75">&mdash; Barry</p>
+
+    <p style="margin:0;font-size:14px;color:#555;line-height:1.6;border-top:1px solid #eee;padding-top:20px">
+      <em>P.S. Once it&rsquo;s set, I can see it on the team dashboard.
+      There&rsquo;s nothing I want to see more this week than every agent on this team with their block locked in.</em>
+    </p>
+  </td></tr>
+
+  <!-- Footer -->
+  <tr><td style="background:#f8f8f8;padding:20px 36px;border-top:1px solid #eee">
+    <p style="margin:0;font-size:11px;color:#999;font-family:Arial,sans-serif;line-height:1.6;text-align:center">
+      Legacy Home Team &bull; Barry Jenkins &bull; Virginia&rsquo;s #1 Real Estate Team<br>
+      <a href="__UNSUB_URL__" style="color:#999;text-decoration:underline">Unsubscribe</a>
+    </p>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+    plain = f"""{first_name},
+
+I was looking at the team schedule this week.
+
+Nobody's got their prospecting block set yet.
+
+I'm not saying that to call anyone out — I'm saying it because I've watched this pattern play out long enough to know: that one thing is what separates the agents who hit their number from the ones who get to November wondering where the year went.
+
+{"Working backwards from your goal, your model says you need roughly " + str(int(_db.compute_targets(goal).get("convos_needed_wk", 0))) + " real conversations a week to stay on track. That math doesn't happen by accident. It happens by appointment — with yourself." if goal and goal.get("gci_goal") else "The conversations that build your year don't just happen. You have to protect the time."}
+
+The agents I've watched do this well — they just made a decision ahead of time about when they were going to pick up the phone. And then they showed up.
+
+Here's what I want you to do tonight. Click the link below. It takes three minutes. Pick the days, pick the time, pick how long.
+
+Set your time block: {block_url}
+
+You didn't come this far to coast.
+
+— Barry
+
+P.S. Once it's set, I can see it on the team dashboard. There's nothing I want to see more this week than every agent on this team with their block locked in."""
+
+    return subject, html, plain
+
+
+@app.route("/api/goals/send-time-block-nudge", methods=["POST"])
+def api_send_time_block_nudge():
+    """
+    Send a personalized time-block nudge email to every active agent
+    who has NOT yet set a prospecting block, using their goal data for motivation.
+    """
+    if not _db.is_available():
+        return jsonify({"error": "Database not connected"}), 503
+
+    dry_run = (request.json or {}).get("dry_run", False)
+    base_url = os.environ.get("BASE_URL", "").rstrip("/")
+    if not base_url:
+        base_url = request.host_url.rstrip("/")
+
+    try:
+        from pond_mailer import send_email
+
+        profiles   = {p["agent_name"]: p for p in _db.get_agent_profiles(active_only=True)}
+        all_goals  = {g["agent_name"]: g for g in _db.get_all_goals()}
+        all_blocks = {b["agent_name"]: b for b in _db.get_all_prospecting_blocks()}
+
+        results = []
+        skipped = []
+
+        for agent_name, profile in sorted(profiles.items()):
+            email = profile.get("email", "").strip()
+            if not email:
+                skipped.append({"agent": agent_name, "reason": "no email on file"})
+                continue
+
+            # Only send to agents with NO block set (or block with 0 days)
+            block = all_blocks.get(agent_name)
+            if block and block.get("prospecting_days") and len(block["prospecting_days"]) > 0:
+                skipped.append({"agent": agent_name, "reason": "block already set"})
+                continue
+
+            token = _db.get_token_for_agent(agent_name)
+            if not token:
+                token = _db.create_goal_token(agent_name)
+            if not token:
+                skipped.append({"agent": agent_name, "reason": "no token — run generate links first"})
+                continue
+
+            block_url = f"{base_url}/my-block/{token}"
+            goal = all_goals.get(agent_name)
+            first_name = agent_name.split()[0]
+
+            subject, html_body, plain_body = _build_time_block_email_html(first_name, block_url, goal)
+
+            try:
+                result = send_email(email, subject, plain_body, html_body, dry_run=dry_run)
+                results.append({
+                    "agent":   agent_name,
+                    "email":   email,
+                    "subject": subject,
+                    "status":  result.get("status"),
+                    "has_goal": bool(goal and goal.get("gci_goal")),
+                })
+                logger.info("[TIME BLOCK NUDGE] Sent to %s <%s> — dry_run=%s", agent_name, email, dry_run)
+            except Exception as _se:
+                results.append({"agent": agent_name, "email": email, "status": "error", "error": str(_se)})
+
+        return jsonify({
+            "ok":      True,
+            "sent":    len([r for r in results if r.get("status") in ("sent", "dry_run")]),
+            "skipped": len(skipped),
+            "dry_run": dry_run,
+            "results": results,
+            "skipped_detail": skipped,
+        })
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 # ---- Generate setup links for agents ----
 
 @app.route("/api/goals/generate-links", methods=["POST"])
