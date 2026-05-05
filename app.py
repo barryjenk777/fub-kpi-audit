@@ -855,6 +855,17 @@ def api_audit():
         data["from_cache"] = False
         data["cached_at"] = datetime.now(timezone.utc).isoformat()
 
+        # Inject prospecting block data per agent
+        try:
+            _blocks = _db.get_all_prospecting_blocks()
+            _blocks_by_name = {b["agent_name"]: b for b in _blocks}
+            for agent in data.get("agents", []):
+                agent["time_block"] = _blocks_by_name.get(agent["name"])
+            data["prospecting_blocks"] = _blocks_by_name
+        except Exception as _pb_err:
+            logger.warning("prospecting blocks inject (audit) failed: %s", _pb_err)
+            data["prospecting_blocks"] = {}
+
         # Cache default runs only
         if not min_calls and not min_convos and not max_ooc and weeks_back == 1:
             cache_set("audit", data)
@@ -1270,6 +1281,16 @@ def api_manager():
             "team_call_to_convo": team_c2c,
         }
 
+        # Inject prospecting blocks into each agent trend row
+        try:
+            _blocks = _db.get_all_prospecting_blocks()
+            _blocks_by_name = {b["agent_name"]: b for b in _blocks}
+            for ag in agent_trends:
+                ag["time_block"] = _blocks_by_name.get(ag["name"])
+        except Exception as _pb_err:
+            logger.warning("prospecting blocks inject (manager) failed: %s", _pb_err)
+            _blocks_by_name = {}
+
         result = {
             "agent_trends": agent_trends,
             "team_weeks": team_weeks,
@@ -1278,6 +1299,7 @@ def api_manager():
             "week_labels": [wd["label"] for wd in weeks_data],
             "from_cache": False,
             "cached_at": datetime.now(timezone.utc).isoformat(),
+            "prospecting_blocks": _blocks_by_name,
         }
         cache_set("manager", result)
         return jsonify(result)

@@ -1514,6 +1514,20 @@ function buildAgents(d){
         </div>
       </div>`;
 
+    // Time block indicator
+    const _tb=(d.prospecting_blocks||{})[a.name];
+    const _TB_DAYS=[['monday','M'],['tuesday','T'],['wednesday','W'],['thursday','Th'],['friday','F'],['saturday','Sa']];
+    let tbSection='';
+    if(_tb&&(_tb.prospecting_days||[]).length>0){
+      const _blk=new Set(_tb.prospecting_days);
+      const _dots=_TB_DAYS.map(([k,l])=>{const on=_blk.has(k);return`<span style="display:inline-flex;flex-direction:column;align-items:center;gap:1px;font-size:.58rem;color:${on?'var(--text)':'var(--muted)'};opacity:${on?1:.3}"><span style="width:8px;height:8px;border-radius:50%;background:${on?'var(--green)':'var(--surface3)'};display:inline-block"></span>${l}</span>`;}).join('');
+      const _dur=_tb.duration_minutes>=60?`${Math.floor(_tb.duration_minutes/60)}h${_tb.duration_minutes%60>0?_tb.duration_minutes%60+'m':''}`:`${_tb.duration_minutes}m`;
+      const _tm=_tb.start_time?_tb.start_time.slice(0,5):'';
+      tbSection=`<div style="display:flex;align-items:center;gap:8px;padding:.35rem .6rem;margin:.35rem 0 0;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.22);border-radius:var(--r-sm)"><span style="font-size:.62rem;color:var(--muted);white-space:nowrap">⏰</span><div style="display:flex;gap:5px;align-items:center">${_dots}</div><span style="margin-left:auto;font-size:.65rem;color:var(--green);font-weight:600;white-space:nowrap">${_dur}${_tm?' @ '+_tm:''}</span></div>`;
+    }else{
+      tbSection=`<div style="display:flex;align-items:center;gap:6px;padding:.3rem .6rem;margin:.35rem 0 0;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm)"><span style="font-size:.62rem;color:var(--muted)">⏰ No time block scheduled</span></div>`;
+    }
+
     h+=`<div class="kpi-card ${status}">
       <div class="kc-head">
         <div>
@@ -1546,6 +1560,7 @@ function buildAgents(d){
         ${m.appts_set>0?`<span class="flag flag-pass">${m.appts_set} appt${m.appts_set>1?'s':''} set</span>`:''}
         ${m.appts_met>0?`<span class="flag flag-pass">${m.appts_met} met</span>`:''}
       </div>
+      ${tbSection}
       ${cwSection}
     </div>`;
   });
@@ -1621,6 +1636,74 @@ function buildManager(d){
   const stars=at.filter(a=>a.current.calls>=kpi.min_calls&&a.current.convos>=kpi.min_convos);const grinders=at.filter(a=>a.current.calls>=kpi.min_calls&&a.current.convos<kpi.min_convos);const efficient=at.filter(a=>a.current.calls<kpi.min_calls&&a.current.convos>=kpi.min_convos);const disengaged=at.filter(a=>a.current.calls<kpi.min_calls&&a.current.convos<kpi.min_convos);
   h+=`<div class="sec-hdr"><div class="sec-title">💡 Effort vs Results Matrix</div></div>`;
   h+=`<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:1.2rem"><div style="background:var(--green-bg);border:1px solid var(--green);padding:12px;border-radius:var(--r)"><strong style="color:var(--green)">⭐ Stars</strong> — High calls + High convos<br><div style="margin-top:6px">${stars.length?stars.map(a=>`<span class="badge badge-green" style="margin:2px">${a.name}</span>`).join(''):'<span class="c-muted" style="font-size:12px">None this week</span>'}</div></div><div style="background:var(--yellow-bg);border:1px solid var(--yellow);padding:12px;border-radius:var(--r)"><strong style="color:var(--yellow)">💪 Grinders</strong> — High calls, few convos<br><div style="margin-top:6px">${grinders.length?grinders.map(a=>`<span class="badge badge-yellow" style="margin:2px">${a.name}</span>`).join(''):'<span class="c-muted" style="font-size:12px">None</span>'}</div></div><div style="background:var(--blue-bg);border:1px solid var(--blue);padding:12px;border-radius:var(--r)"><strong style="color:var(--blue)">🎯 Efficient</strong> — Low calls but converting<br><div style="margin-top:6px">${efficient.length?efficient.map(a=>`<span class="badge badge-blue" style="margin:2px">${a.name}</span>`).join(''):'<span class="c-muted" style="font-size:12px">None</span>'}</div></div><div style="background:var(--red-bg);border:1px solid var(--red);padding:12px;border-radius:var(--r)"><strong style="color:var(--red)">🚨 Disengaged</strong> — Low calls + Low convos<br><div style="margin-top:6px">${disengaged.length?disengaged.map(a=>`<span class="badge badge-red" style="margin:2px">${a.name}</span>`).join(''):'<span class="c-muted" style="font-size:12px">None</span>'}</div></div></div>`;
+
+  // ── Time Blocking Commitment Board ──────────────────────────────────────
+  {
+    const _TB_DAYS=[['monday','M'],['tuesday','T'],['wednesday','W'],['thursday','Th'],['friday','F'],['saturday','Sa']];
+    const _tbAgents=at.map(ag=>{
+      const bl=ag.time_block||null;
+      const days=bl&&bl.prospecting_days?bl.prospecting_days.length:0;
+      const dur=bl?bl.duration_minutes||0:0;
+      const wklyHrs=(days*dur)/60;
+      return{name:ag.name,block:bl,days,dur,wklyHrs};
+    }).sort((a,b)=>b.wklyHrs-a.wklyHrs);
+    const _hasBlock=_tbAgents.filter(a=>a.days>0);
+    const _noBlock=_tbAgents.filter(a=>a.days===0);
+    const _avgDays=_hasBlock.length>0?(_hasBlock.reduce((s,a)=>s+a.days,0)/_hasBlock.length).toFixed(1):0;
+    const _avgDur=_hasBlock.length>0?Math.round(_hasBlock.reduce((s,a)=>s+a.dur,0)/_hasBlock.length):0;
+    const _maxWkly=Math.max(..._tbAgents.map(a=>a.wklyHrs),1);
+
+    h+=`<div class="sec-hdr"><div class="sec-title">⏰ Time Blocking Commitment Board</div></div>`;
+    h+=`<div style="display:flex;gap:10px;margin-bottom:1rem;flex-wrap:wrap">
+      <div style="background:var(--surface2);border:1px solid var(--border);padding:10px 16px;border-radius:var(--r-sm);text-align:center;min-width:80px">
+        <div style="font-size:1.4rem;font-weight:800;color:${_hasBlock.length===_tbAgents.length?'var(--green)':_hasBlock.length>0?'var(--yellow)':'var(--red)'}">${_hasBlock.length}<span style="font-size:.85rem;font-weight:400;color:var(--muted)">/${_tbAgents.length}</span></div>
+        <div style="font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Agents Blocking</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);padding:10px 16px;border-radius:var(--r-sm);text-align:center;min-width:80px">
+        <div style="font-size:1.4rem;font-weight:800;color:var(--blue)">${_avgDays}</div>
+        <div style="font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Avg Days/Week</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);padding:10px 16px;border-radius:var(--r-sm);text-align:center;min-width:80px">
+        <div style="font-size:1.4rem;font-weight:800;color:var(--blue)">${_avgDur>0?(_avgDur>=60?Math.floor(_avgDur/60)+'h'+(_avgDur%60?_avgDur%60+'m':''):_avgDur+'m'):'—'}</div>
+        <div style="font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Avg Session</div>
+      </div>
+      ${_noBlock.length>0?`<div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);padding:10px 16px;border-radius:var(--r-sm);text-align:center;min-width:80px"><div style="font-size:1.4rem;font-weight:800;color:var(--red)">${_noBlock.length}</div><div style="font-size:.68rem;color:var(--red);text-transform:uppercase;letter-spacing:.05em">No Block Set</div></div>`:''}
+    </div>`;
+
+    h+=`<div style="overflow-x:auto;margin-bottom:1.2rem"><table style="width:100%;border-collapse:collapse;font-size:.8rem">
+    <thead><tr style="border-bottom:2px solid var(--border)">
+      <th style="text-align:left;padding:7px 10px;font-size:.68rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Agent</th>
+      ${_TB_DAYS.map(([,l])=>`<th style="text-align:center;padding:7px 5px;font-size:.68rem;color:var(--muted);font-weight:600;width:32px">${l}</th>`).join('')}
+      <th style="text-align:center;padding:7px 8px;font-size:.68rem;color:var(--muted);font-weight:600">Days</th>
+      <th style="text-align:center;padding:7px 8px;font-size:.68rem;color:var(--muted);font-weight:600">Session</th>
+      <th style="text-align:left;padding:7px 10px;font-size:.68rem;color:var(--muted);font-weight:600">Weekly Hours</th>
+    </tr></thead><tbody>`;
+    _tbAgents.forEach((ag,i)=>{
+      const _blk=new Set(ag.block?ag.block.prospecting_days||[]:[]);
+      const _cells=_TB_DAYS.map(([k])=>{const on=_blk.has(k);const intensity=on?(ag.wklyHrs/_maxWkly):0;const green=`rgba(34,197,94,${0.3+intensity*0.7})`;return`<td style="text-align:center;padding:5px 4px"><div style="width:22px;height:22px;border-radius:5px;margin:0 auto;background:${on?green:'var(--surface3)'};opacity:${on?1:.3};transition:background .2s" title="${on?ag.dur+'min block':'—'}"></div></td>`;}).join('');
+      const _wklyPct=Math.round(ag.wklyHrs/_maxWkly*100);
+      const _durStr=ag.dur?(ag.dur>=60?`${Math.floor(ag.dur/60)}h${ag.dur%60>0?ag.dur%60+'m':''}/day`:`${ag.dur}m/day`):'—';
+      const _wklyStr=ag.wklyHrs>0?(ag.wklyHrs>=1?ag.wklyHrs.toFixed(1)+'h':Math.round(ag.wklyHrs*60)+'m')+'  /wk':'—';
+      const _barColor=ag.days>=5?'var(--green)':ag.days>=3?'rgba(34,197,94,.6)':ag.days>=1?'var(--yellow)':'var(--surface3)';
+      const _medal=i===0&&ag.days>0?'🥇 ':i===1&&ag.days>0?'🥈 ':i===2&&ag.days>0?'🥉 ':'';
+      h+=`<tr style="border-bottom:1px solid var(--border);${i%2===1?'background:var(--surface2)':''}">
+        <td style="padding:6px 10px;font-weight:600">${_medal}${ag.name}${ag.days===0?'<span style="margin-left:6px;font-size:.62rem;background:rgba(239,68,68,.15);color:var(--red);padding:1px 5px;border-radius:3px;font-weight:400">needs block</span>':''}</td>
+        ${_cells}
+        <td style="text-align:center;padding:6px 8px;font-size:.9rem;font-weight:700;color:${ag.days>0?'var(--green)':'var(--muted)'}">${ag.days}</td>
+        <td style="text-align:center;padding:6px 8px;font-size:.73rem;color:var(--muted)">${_durStr}</td>
+        <td style="padding:6px 10px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="flex:1;height:8px;background:var(--surface3);border-radius:4px;overflow:hidden;max-width:120px">
+              <div style="height:100%;width:${_wklyPct}%;background:${_barColor};border-radius:4px"></div>
+            </div>
+            <span style="font-size:.72rem;font-weight:600;color:${ag.days>0?'var(--text)':'var(--muted)'};white-space:nowrap">${_wklyStr}</span>
+          </div>
+        </td>
+      </tr>`;
+    });
+    h+='</tbody></table></div>';
+  }
+
   return h;
 }
 async function loadManager(){const ld=document.getElementById('loading-manager'),db=document.getElementById('dashboard-manager');ld.style.display='flex';db.style.display='none';try{const r=await fetch('/api/manager',{signal:AbortSignal.timeout(240000)});const txt=await r.text();try{const d=JSON.parse(txt);if(d.error)db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Error</div><div class="alert-body">${d.error}</div></div></div>`;else{managerData=d;db.innerHTML=buildManager(d);}}catch(pe){db.innerHTML=`<div class="alert yellow"><span class="alert-icon">⏱️</span><div><div class="alert-title">Still warming up</div><div class="alert-body">Please wait 30 seconds and retry.<br><button class="btn btn-ghost btn-sm" onclick="loadManager()" style="margin-top:.5rem">↻ Retry</button></div></div></div>`;}}catch(e){db.innerHTML=`<div class="alert red"><span class="alert-icon">⏱️</span><div><div class="alert-title">Timeout</div><div class="alert-body"><button class="btn btn-ghost btn-sm" onclick="loadManager()">↻ Retry</button></div></div></div>`;}ld.style.display='none';db.style.display='block';}
