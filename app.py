@@ -849,6 +849,19 @@ def api_audit():
                             cached["cache_age"] = f"{age_mins // 60}h {age_mins % 60}m ago"
                     except Exception:
                         pass
+                # Always re-inject fresh blocks — they change independently of FUB data
+                try:
+                    _cb = _db.get_all_prospecting_blocks()
+                    _cb_map = {b["agent_name"]: b for b in _cb}
+                    _cb_lower = {k.lower(): v for k, v in _cb_map.items()}
+                    for _ag in cached.get("agents", []):
+                        _ag["time_block"] = (
+                            _cb_map.get(_ag["name"])
+                            or _cb_lower.get(_ag["name"].lower())
+                        )
+                    cached["prospecting_blocks"] = _cb_map
+                except Exception as _cbe:
+                    logger.warning("block re-inject on audit cache hit failed: %s", _cbe)
                 return jsonify(cached)
 
         data = run_audit_data(weeks_back, min_calls, min_convos, max_ooc)
@@ -859,8 +872,12 @@ def api_audit():
         try:
             _blocks = _db.get_all_prospecting_blocks()
             _blocks_by_name = {b["agent_name"]: b for b in _blocks}
+            _blocks_lower = {k.lower(): v for k, v in _blocks_by_name.items()}
             for agent in data.get("agents", []):
-                agent["time_block"] = _blocks_by_name.get(agent["name"])
+                agent["time_block"] = (
+                    _blocks_by_name.get(agent["name"])
+                    or _blocks_lower.get(agent["name"].lower())
+                )
             data["prospecting_blocks"] = _blocks_by_name
         except Exception as _pb_err:
             logger.warning("prospecting blocks inject (audit) failed: %s", _pb_err)
@@ -997,6 +1014,21 @@ def api_manager():
                         cached["cache_age"] = f"{age_mins // 60}h {age_mins % 60}m ago" if age_mins >= 60 else f"{age_mins}m ago"
                     except Exception:
                         pass
+                # Always re-inject fresh prospecting blocks — they change independently
+                # of the heavy FUB data pull that populates the rest of the cache.
+                try:
+                    _cb = _db.get_all_prospecting_blocks()
+                    _cb_map = {b["agent_name"]: b for b in _cb}
+                    # Case-insensitive fallback map
+                    _cb_lower = {k.lower(): v for k, v in _cb_map.items()}
+                    for _ag in cached.get("agent_trends", []):
+                        _ag["time_block"] = (
+                            _cb_map.get(_ag["name"])
+                            or _cb_lower.get(_ag["name"].lower())
+                        )
+                    cached["prospecting_blocks"] = _cb_map
+                except Exception as _cbe:
+                    logger.warning("block re-inject on cache hit failed: %s", _cbe)
                 return jsonify(cached)
 
         client = FUBClient()
@@ -1285,8 +1317,12 @@ def api_manager():
         try:
             _blocks = _db.get_all_prospecting_blocks()
             _blocks_by_name = {b["agent_name"]: b for b in _blocks}
+            _blocks_lower = {k.lower(): v for k, v in _blocks_by_name.items()}
             for ag in agent_trends:
-                ag["time_block"] = _blocks_by_name.get(ag["name"])
+                ag["time_block"] = (
+                    _blocks_by_name.get(ag["name"])
+                    or _blocks_lower.get(ag["name"].lower())
+                )
         except Exception as _pb_err:
             logger.warning("prospecting blocks inject (manager) failed: %s", _pb_err)
             _blocks_by_name = {}
