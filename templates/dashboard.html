@@ -1533,23 +1533,13 @@ function buildAgents(d){
       <div class="kc-current-week">
         <div class="kc-cw-label">📊 This Week${cw.days_elapsed>0?' ('+cw.label+')':''}</div>
         <div class="kc-cw-stats">
-          <span>${cwa.calls||0} calls</span>
+          <span style="color:${pace.color};font-weight:600">${cwa.calls||0} calls</span>
           <span style="color:var(--muted)">·</span>
           <span>${cwa.convos||0} convos</span>
-          ${(cwa.appts_set||0)>0?`<span style="color:var(--muted)">·</span><span>${cwa.appts_set} appt${cwa.appts_set>1?'s':''}</span>`:''}
-        </div>
-        <div class="kc-bar-row" style="margin-bottom:.2rem">
-          <div class="kc-bar-label">Calls</div>
-          <div class="kc-bar-track"><div class="kc-bar-fill" style="width:${cwCallPct}%;background:${pace.color}"></div></div>
-          <div class="kc-bar-val" style="color:${pace.color}">${cwa.calls||0}</div>
-        </div>
-        <div class="kc-bar-row">
-          <div class="kc-bar-label">Convos</div>
-          <div class="kc-bar-track"><div class="kc-bar-fill" style="width:${cwConvPct}%;background:${pace.color}"></div></div>
-          <div class="kc-bar-val" style="color:${pace.color}">${cwa.convos||0}</div>
+          ${(cwa.appts_set||0)>0?`<span style="color:var(--muted)">·</span><span style="color:var(--green)">${cwa.appts_set} appt${cwa.appts_set>1?'s':''}</span>`:''}
         </div>
         <div class="kc-cw-footer">
-          <span>${cwCallPct}% to ${minC}-call goal${cwa.projected_calls>0?' · proj '+cwa.projected_calls:''}</span>
+          <span style="font-size:.68rem;color:var(--muted)">${cwCallPct}% to ${minC}-call goal${cwa.projected_calls>0?' · proj '+cwa.projected_calls:''}</span>
           <span class="flag ${pace.cls}" style="font-size:.68rem">${pace.badge}</span>
         </div>
       </div>`;
@@ -1579,23 +1569,11 @@ function buildAgents(d){
       <div class="kc-metrics">
         <div><div class="kc-m-val" style="color:${callColor}">${m.outbound_calls}</div><div class="kc-m-label">Calls</div></div>
         <div><div class="kc-m-val" style="color:${convColor}">${m.conversations}</div><div class="kc-m-label">Convos</div></div>
-        <div><div class="kc-m-val">${m.appts_set}</div><div class="kc-m-label">Appts</div></div>
-        <div><div class="kc-m-val">${m.compliance_violations}</div><div class="kc-m-label">OOC</div></div>
-      </div>
-      <div class="kc-bars">
-        <div class="kc-bar-row">
-          <div class="kc-bar-label">Calls</div>
-          <div class="kc-bar-track"><div class="kc-bar-fill" style="width:${callPct}%;background:${callColor}"></div></div>
-          <div class="kc-bar-val" style="color:${callColor}">${m.outbound_calls}</div>
-        </div>
-        <div class="kc-bar-row">
-          <div class="kc-bar-label">Convos</div>
-          <div class="kc-bar-track"><div class="kc-bar-fill" style="width:${convPct}%;background:${convColor}"></div></div>
-          <div class="kc-bar-val" style="color:${convColor}">${m.conversations}</div>
-        </div>
+        <div><div class="kc-m-val" style="color:${m.appts_set>0?'var(--green)':'var(--text)'}">${m.appts_set}</div><div class="kc-m-label">Appts</div></div>
+        <div><div class="kc-m-val" style="color:${e.compliance_pass?'var(--text)':'var(--red)'}">${m.compliance_violations}</div><div class="kc-m-label">OOC</div></div>
       </div>
       <div class="kc-flags">
-        ${(a.failures||[]).map(f=>`<span class="flag flag-fail">${f}</span>`).join('')}
+        ${!e.compliance_pass?`<span class="flag flag-fail">OOC ${m.compliance_violations}/${d.thresholds?.max_ooc||30}</span>`:''}
         ${e.overall_pass?`<span class="flag flag-pass">All KPIs met</span>`:''}
         ${m.appts_set>0?`<span class="flag flag-pass">${m.appts_set} appt${m.appts_set>1?'s':''} set</span>`:''}
         ${m.appts_met>0?`<span class="flag flag-pass">${m.appts_met} met</span>`:''}
