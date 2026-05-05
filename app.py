@@ -7619,64 +7619,199 @@ Rules:
 
 def _pond_add_sms_reply_fub_note(fub, person_id, person_name, reply_text, sentiment_reason):
     """
-    Generate a CRM briefing note for an inbound SMS reply and post it to FUB.
+    Generate a rich CRM briefing note for an inbound SMS reply and post it to FUB.
 
-    Mirrors _pond_add_fub_note() but scoped to SMS context — tells the agent
-    which channel the reply came from, what the lead said, and the exact move.
-    Falls back to a plain template if Claude is unavailable.
+    Pulls three layers of context so the agent walks into the call prepared:
+      1. The original AI text we sent (what hook we used)
+      2. The lead's current behavioral brief (what they've viewed, saved, price range, etc.)
+      3. A specific 'YOUR MOVE' opener + one question to advance toward a showing or consult
+
     Returns True if note was posted successfully, False otherwise.
     """
     try:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        note_body = None
+        # ── 1. Pull the original SMS we sent ─────────────────────────────────
+        original_sms = None
+        try:
+            original_sms = _db.get_last_sms_sent(person_id)
+        except Exception as _e:
+            logger.warning("Could not retrieve original SMS for note: %s", _e)
 
-        if api_key:
-            try:
-                import anthropic
-                client = anthropic.Anthropic(api_key=api_key)
+        # ── 2. Re-fetch behavioral data from FUB ─────────────────────────────
+        behavior_lines = []
+        try:
+            from pond_mailer import analyze_behavior
+            events = fub.get_events_for_person(person_id, days=90, limit=100)
+            tags   = []  # tags not critical for behavior analysis here
+            beh    = analyze_behavior(events, tags)
+            b      = beh
 
-                prompt = f"""Write an internal CRM note for a real estate agent who just got a hot SMS lead hand-off.
-
-Context:
-- Lead name: {person_name or "this lead"}
-- Barry Jenkins (Legacy Home Team, Hampton Roads VA) sent them an automated AI text via his nurture system
-- The lead replied via SMS. AI sentiment: {sentiment_reason}
-- Their reply: {reply_text.strip()[:800]}
-
-Structure the note in three short sections with these exact labels:
-WHAT HAPPENED: (1 sentence — they replied to an AI text, what the AI read from the reply)
-WHAT THEY SAID: (2-3 sentence summary of the lead's actual reply in plain language)
-YOUR MOVE: (One specific, actionable opening line for the agent's call or text back, then one question to advance toward consult, showing, or next step)
-
-Rules:
-- Write as Barry briefing the agent, direct and energetic
-- Under 150 words total
-- No fluff, no greetings, no sign-offs
-- Plain text only, no markdown"""
-
-                response = client.messages.create(
-                    model="claude-3-5-haiku-20241022",
-                    max_tokens=300,
-                    messages=[{"role": "user", "content": prompt}],
+            # Most-viewed property — the #1 hook to reference on the call
+            if b.get("most_viewed") and b.get("most_viewed_ct", 0) >= 2:
+                p    = b["most_viewed"]
+                addr = f"{p.get('street')}, {p.get('city')}" if p.get("city") else p.get("street", "")
+                pval = p.get("price")
+                price_str = f" (${_safe_int(pval):,})" if pval else ""
+                behavior_lines.append(
+                    f"  * VIEWED {b['most_viewed_ct']}x: {addr}{price_str} "
+                    f"-- they keep coming back to this one. Open your call with this address."
                 )
-                note_body = response.content[0].text.strip()
-            except Exception as e:
-                logger.warning("Claude SMS note generation failed: %s", e)
+            elif b.get("registration_prop"):
+                rp    = b["registration_prop"]
+                raddr = f"{rp.get('street')}, {rp.get('city')}" if rp.get("city") else rp.get("street", "")
+                rpval = rp.get("price")
+                rprice = f" (${_safe_int(rpval):,})" if rpval else ""
+                behavior_lines.append(
+                    f"  * REGISTERED ON: {raddr}{rprice} "
+                    f"-- this is the property that made them give us their contact info."
+                )
 
-        # Fallback if Claude unavailable or fails
-        if not note_body:
-            note_body = (
-                f"🔥 HOT LEAD — {person_name or 'This lead'} replied to Barry's AI text.\n\n"
-                f"WHAT HAPPENED:\n"
-                f"Barry's system sent them an automated SMS.\n"
-                f"The lead replied. AI sentiment: {sentiment_reason}\n\n"
-                f"WHAT THEY SAID:\n{reply_text.strip()[:600]}\n\n"
-                f"YOUR MOVE:\n"
-                f"Text or call them now — they responded to a text, so text first. "
-                f"Open with: \"Hey, I saw you replied to our text — I'm Barry's agent and "
-                f"wanted to reach out personally.\" Then ask what they're looking for and "
-                f"get them booked for a consult or showing."
+            # Saved properties — second strongest signal
+            if b.get("saves"):
+                for sp in b["saves"][:3]:
+                    sa    = f"{sp.get('street')}, {sp.get('city')}" if sp.get("city") else sp.get("street", "")
+                    spval = sp.get("price")
+                    sprice = f" (${_safe_int(spval):,})" if spval else ""
+                    behavior_lines.append(f"  * SAVED: {sa}{sprice}")
+
+            # Price range + drift
+            if b.get("price_min") and b.get("price_max"):
+                price_line = f"  * PRICE RANGE: ${b['price_min']:,} to ${b['price_max']:,}"
+                if b.get("price_drift") and abs(b["price_drift"]) > 15000:
+                    direction = "UP" if b["price_drift"] > 0 else "DOWN"
+                    price_line += (
+                        f" -- search has drifted {direction} ${abs(b['price_drift']):,} "
+                        f"from where they started"
+                    )
+                behavior_lines.append(price_line)
+
+            # Cities
+            cities_list = sorted(b.get("cities") or [])
+            if cities_list:
+                if len(cities_list) == 1:
+                    behavior_lines.append(f"  * CITY: locked into {cities_list[0]}")
+                else:
+                    behavior_lines.append(f"  * SEARCHING IN: {', '.join(cities_list[:4])}")
+
+            # Beds
+            beds = sorted(b.get("beds_seen") or [])
+            if beds:
+                if len(beds) > 1:
+                    behavior_lines.append(f"  * BEDS: looking at {min(beds)}-{max(beds)} bedrooms")
+                else:
+                    behavior_lines.append(f"  * BEDS: {beds[0]} bedroom focus")
+
+            # Engagement depth
+            vc   = b.get("view_count", 0)
+            sc   = b.get("session_count", 0)
+            savc = b.get("save_count", 0)
+            if vc:
+                behavior_lines.append(
+                    f"  * SEARCH DEPTH: {vc} total views across {sc} separate sessions, {savc} saves"
+                )
+
+            # Recency
+            if b.get("hours_since_last") is not None:
+                hrs = b["hours_since_last"]
+                if hrs < 24:
+                    behavior_lines.append(f"  * LAST ACTIVE: {int(hrs)}h ago -- still hot")
+                elif hrs < 72:
+                    behavior_lines.append(f"  * LAST ACTIVE: {int(hrs/24)} days ago")
+                else:
+                    behavior_lines.append(f"  * LAST ACTIVE: {int(hrs/24)} days ago")
+
+        except Exception as _be:
+            logger.warning("Behavior re-fetch for FUB note failed (non-fatal): %s", _be)
+
+        # ── 3. Build the specific opener via Claude Haiku ─────────────────────
+        opener_text = None
+        try:
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if api_key:
+                import anthropic as _ant2
+                _ant_cl = _ant2.Anthropic(api_key=api_key)
+
+                # Give Claude Haiku just enough context to write one sharp opener
+                _beh_summary = "\n".join(behavior_lines[:6]) if behavior_lines else "No behavioral data available."
+                _orig_hook   = f'Our AI text: "{original_sms}"' if original_sms else "AI text not available."
+                _opener_prompt = f"""Write ONE specific opening line for a real estate agent calling/texting this lead back, then ONE follow-up question to advance toward a showing or consult.
+
+Lead: {person_name or "this lead"}
+{_orig_hook}
+Lead replied: "{reply_text.strip()[:400]}"
+AI read it as: {sentiment_reason}
+
+Their search data:
+{_beh_summary}
+
+Format:
+OPENER: [One sentence that references something specific from their search -- not generic]
+QUESTION: [One yes/no or either/or question that moves toward booking]
+
+Under 60 words total. No fluff. Barry's voice -- direct, warm, knowledgeable."""
+
+                _opener_resp = _ant_cl.messages.create(
+                    model="claude-3-5-haiku-20241022",
+                    max_tokens=120,
+                    messages=[{"role": "user", "content": _opener_prompt}],
+                )
+                opener_text = _opener_resp.content[0].text.strip()
+        except Exception as _oe:
+            logger.warning("Claude opener generation failed (non-fatal): %s", _oe)
+
+        # ── 4. Assemble the full note ─────────────────────────────────────────
+        note_parts = [
+            f"REPLY TO AI TEXT -- {sentiment_reason.upper()}",
+            "",
+            f"WHAT THEY SAID:",
+            f'"{reply_text.strip()[:600]}"',
+            "",
+        ]
+
+        if original_sms:
+            note_parts += [
+                "WHAT OUR AI TEXT SAID (the hook we used):",
+                f'"{original_sms[:400]}"',
+                "",
+            ]
+
+        if behavior_lines:
+            note_parts += [
+                "WHAT WE KNOW (use this on your call):",
+            ] + behavior_lines + [
+                "",
+                "HOW TO SEE THEIR FULL HISTORY IN FUB:",
+                "  Open their profile > Activity tab > filter IDX Activity.",
+                "  Every property they viewed, saved, and searched is there.",
+                "",
+            ]
+
+        if opener_text:
+            note_parts += [
+                "YOUR MOVE:",
+                opener_text,
+            ]
+        else:
+            # Fallback opener if Claude is down
+            _addr_hint = ""
+            if behavior_lines:
+                # grab the first address mention from behavior lines
+                for bl in behavior_lines[:2]:
+                    if "VIEWED" in bl or "SAVED" in bl or "REGISTERED" in bl:
+                        _addr_hint = bl.split(":", 1)[-1].strip().split("--")[0].strip()
+                        break
+            _open_line = (
+                f"'Hey {(person_name or 'there').split()[0]}, it's [your name] from Barry's team at Legacy Home Team. "
+                + (f"I saw you replied to our message about {_addr_hint}." if _addr_hint
+                   else "I saw you replied to Barry's text and wanted to reach out personally.")
+                + "'"
             )
+            note_parts += [
+                "YOUR MOVE:",
+                f"OPENER: {_open_line}",
+                "QUESTION: When are you free for a quick call to go over what you're seeing in the market?",
+            ]
+
+        note_body = "\n".join(note_parts)
 
         fub._request("POST", "notes", json_data={
             "personId": int(person_id),

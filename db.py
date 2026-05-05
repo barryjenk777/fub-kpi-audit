@@ -3548,6 +3548,29 @@ def get_pond_sms_person_by_phone(phone):
         return None, None
 
 
+def get_last_sms_sent(person_id):
+    """Return the body of the most recent non-dry-run SMS sent to this person.
+
+    Used by the reply webhook to include the original AI text in the FUB
+    agent briefing note, so the agent knows exactly what hook we used.
+    """
+    if not is_available() or not person_id:
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT body FROM pond_sms_log
+                    WHERE person_id = %s AND dry_run = FALSE
+                    ORDER BY sent_at DESC LIMIT 1
+                """, (int(person_id),))
+                row = cur.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        logger.warning("get_last_sms_sent failed for person %s: %s", person_id, e)
+        return None
+
+
 def ensure_pond_sms_reply_log_table():
     """Create pond_sms_reply_log table if it doesn't exist."""
     if not is_available():
