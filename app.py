@@ -44,6 +44,12 @@ from kpi_audit import (
 
 app = Flask(__name__)
 
+try:
+    from social.web import bp as social_bp
+    app.register_blueprint(social_bp)
+except Exception as _social_e:
+    print(f"[social] blueprint not registered: {_social_e}")
+
 # Initialize Postgres schema (no-op if DATABASE_URL not set)
 _db.init_db()
 

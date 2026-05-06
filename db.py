@@ -372,6 +372,20 @@ CREATE TABLE IF NOT EXISTS prospecting_blocks (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Social content engine: drafts for the multi-platform thought-leadership pipeline.
+-- One row per inbox file. The full draft (per-platform captions, statuses, media URLs)
+-- lives in the JSONB data column.
+CREATE TABLE IF NOT EXISTS social_drafts (
+    id            TEXT        PRIMARY KEY,           -- 10-char hex
+    drive_file_id TEXT        NOT NULL UNIQUE,       -- dedupe key from GDrive inbox
+    iso_week      TEXT        NOT NULL,              -- e.g. "2026-W19"
+    data          JSONB       NOT NULL,              -- the full draft document
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_social_drafts_week    ON social_drafts (iso_week);
+CREATE INDEX IF NOT EXISTS idx_social_drafts_updated ON social_drafts (updated_at DESC);
 """
 
 

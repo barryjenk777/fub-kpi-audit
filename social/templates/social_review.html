@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Social Review</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: #0f1419; color: #e7e9ea; max-width: 1100px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 22px; margin: 0 0 24px; }
+  .draft { background: #16181c; border: 1px solid #2f3336; border-radius: 12px; padding: 16px; margin-bottom: 16px; display: grid; grid-template-columns: 200px 1fr; gap: 16px; }
+  .draft img { width: 100%; border-radius: 8px; }
+  .meta { font-size: 12px; color: #8b98a5; margin-bottom: 8px; }
+  .tabs { display: flex; gap: 4px; margin: 8px 0; }
+  .tab { background: #1c2025; color: #8b98a5; border: 1px solid #2f3336; padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer; }
+  .tab.active { background: #1d9bf0; color: white; border-color: #1d9bf0; }
+  .tab .status { display: inline-block; margin-left: 6px; font-size: 10px; padding: 0 4px; border-radius: 4px; }
+  .status.draft { background: #4d4d4d; }
+  .status.approved { background: #00ba7c; }
+  .status.published { background: #1d9bf0; }
+  .status.skipped { background: #6b6b6b; }
+  .status.failed { background: #d12626; }
+  textarea { width: 100%; min-height: 220px; background: #0f1419; color: #e7e9ea; border: 1px solid #2f3336; border-radius: 8px; padding: 12px; font: 13px/1.5 -apple-system, sans-serif; resize: vertical; }
+  .actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+  button { background: #1d9bf0; color: white; border: 0; border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  button.secondary { background: #2f3336; }
+  button.danger { background: #d12626; }
+  button.ai { background: #8b5cf6; }
+  .revise { margin-top: 10px; padding: 10px; background: rgba(139,92,246,0.08); border: 1px solid rgba(139,92,246,0.3); border-radius: 8px; }
+  .revise-label { font-size: 11px; color: #a78bfa; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .revise input { width: 100%; background: #0f1419; color: #e7e9ea; border: 1px solid #2f3336; border-radius: 6px; padding: 8px 10px; font: 13px -apple-system, sans-serif; margin-bottom: 6px; }
+  .revise-hint { font-size: 11px; color: #8b98a5; margin-top: 4px; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-left: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty { color: #8b98a5; padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<h1>Social Review {% if drafts %}— {{ drafts|length }} draft{{ 's' if drafts|length != 1 else '' }}{% endif %}</h1>
+
+{% if not drafts %}
+<div class="empty">No drafts yet. Drop content into the GDrive Content Inbox folder, then run <code>/process-inbox</code>.</div>
+{% endif %}
+
+{% for d in drafts %}
+<div class="draft" id="draft-{{ d.id }}" data-draft-id="{{ d.id }}">
+  <div>
+    {% if d.media.hosted_url %}
+      <img src="{{ d.media.hosted_url }}" alt="{{ d.source.drive_file_name }}">
+    {% else %}
+      <div style="background:#1c2025;border-radius:8px;padding:40px 8px;text-align:center;color:#8b98a5;font-size:11px;">{{ d.source.kind }}<br>{{ d.source.drive_file_name }}</div>
+    {% endif %}
+    <div class="meta">{{ d.source.kind }} · {{ d.source.drive_file_name }}</div>
+    <div class="meta">{{ d.created_at }}</div>
+  </div>
+  <div>
+    <div class="tabs">
+      {% for plat, pdata in d.platforms.items() %}
+      <span class="tab {% if loop.first %}active{% endif %}" data-platform="{{ plat }}">
+        {{ plat }}
+        <span class="status {{ pdata.status }}">{{ pdata.status }}</span>
+      </span>
+      {% endfor %}
+    </div>
+    {% for plat, pdata in d.platforms.items() %}
+    <div class="caption-pane" data-platform="{{ plat }}" {% if not loop.first %}style="display:none"{% endif %}>
+      <textarea class="caption" data-platform="{{ plat }}">{{ pdata.caption }}</textarea>
+      <div class="revise">
+        <div class="revise-label">Send Claude back at it</div>
+        <input type="text" class="revise-prompt" data-platform="{{ plat }}" placeholder="e.g. shorter, more contrarian, tie it to the second book, less Hormozi more story, drop the list and make it one paragraph..." />
+        <button class="revise-btn ai" data-platform="{{ plat }}">Regenerate this {{ plat }} caption</button>
+        <div class="revise-hint">Claude reads the photo, current caption, and your direction. Returns a fresh draft. Save automatic.</div>
+      </div>
+    </div>
+    {% endfor %}
+    <div class="actions">
+      <button class="save">Save caption</button>
+      <button class="approve">Approve + publish (this platform)</button>
+      <button class="approve-all secondary">Approve + publish ALL platforms</button>
+      <button class="skip danger">Skip all</button>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+<script>
+document.querySelectorAll('.draft').forEach(card => {
+  const id = card.dataset.draftId;
+  const tabs = card.querySelectorAll('.tab');
+  const areas = card.querySelectorAll('.caption');
+
+  const panes = card.querySelectorAll('.caption-pane');
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    panes.forEach(p => p.style.display = (p.dataset.platform === t.dataset.platform) ? '' : 'none');
+  }));
+
+  function activePlatform() {
+    return card.querySelector('.tab.active').dataset.platform;
+  }
+  function activeArea() {
+    return card.querySelector(`.caption[data-platform="${activePlatform()}"]`);
+  }
+  function saveCaption(plat) {
+    const area = card.querySelector(`.caption[data-platform="${plat}"]`);
+    return fetch(`/social/draft/${id}/caption`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ platform: plat, caption: area.value })
+    });
+  }
+
+  card.querySelector('.save').addEventListener('click', async () => {
+    const r = await saveCaption(activePlatform());
+    const j = await r.json();
+    if (j.ok) alert(`Saved ${j.platform}.`);
+    else alert(`Save failed: ${JSON.stringify(j)}`);
+  });
+
+  card.querySelector('.approve').addEventListener('click', async () => {
+    const plat = activePlatform();
+    if (!confirm(`Publish to ${plat} now?`)) return;
+    await saveCaption(plat);
+    const r = await fetch(`/social/draft/${id}/approve`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ platforms: [plat] })
+    });
+    const j = await r.json();
+    alert(JSON.stringify(j.results, null, 2));
+    location.reload();
+  });
+
+  card.querySelector('.approve-all').addEventListener('click', async () => {
+    const plats = [...card.querySelectorAll('.caption')].map(a => a.dataset.platform);
+    if (!confirm(`Publish to ALL connected platforms (${plats.join(', ')}) now?`)) return;
+    for (const p of plats) await saveCaption(p);
+    const r = await fetch(`/social/draft/${id}/approve`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ platforms: plats })
+    });
+    const j = await r.json();
+    alert(JSON.stringify(j.results, null, 2));
+    location.reload();
+  });
+
+  card.querySelector('.skip').addEventListener('click', async () => {
+    if (!confirm('Skip all platforms for this draft?')) return;
+    await fetch(`/social/draft/${id}/skip`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+    location.reload();
+  });
+
+  card.querySelectorAll('.revise-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const plat = btn.dataset.platform;
+      const promptEl = card.querySelector(`.revise-prompt[data-platform="${plat}"]`);
+      const prompt = promptEl.value.trim();
+      if (!prompt) { promptEl.focus(); return; }
+      const orig = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `Regenerating <span class="spinner"></span>`;
+      try {
+        const r = await fetch(`/social/draft/${id}/revise`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ platform: plat, prompt: prompt })
+        });
+        const j = await r.json();
+        if (j.ok) {
+          card.querySelector(`.caption[data-platform="${plat}"]`).value = j.caption;
+          promptEl.value = '';
+        } else {
+          alert(`Revision failed: ${j.error}`);
+        }
+      } catch (e) {
+        alert(`Revision error: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = orig;
+      }
+    });
+  });
+});
+</script>
+</body>
+</html>
