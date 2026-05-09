@@ -212,35 +212,43 @@ apply_saved_settings()
 def _kpi_window(weeks_back=1):
     """Return (since, until) as UTC datetimes for the KPI evaluation window.
 
-    Window: Mon 00:00 ET → Sun 00:00 ET (exclusive) for the most recently
-    completed Mon–Sat work week, shifted back (weeks_back-1) additional weeks.
+    weeks_back=1 (default, live KPI):
+        Mon–Sat  → current work week, Monday 00:00 ET to right now.
+                   Matches what FUB shows under "last 7 days" so PASS/FAIL
+                   always reflects what Barry can see in FUB today.
+        Sunday   → most recently completed Mon–Sat (no work calls on Sunday).
 
-    Uses ET (not UTC) midnight boundaries so:
-      - Sunday-evening calls (8pm–midnight ET = midnight–4am UTC Mon) are NOT
-        counted toward the next week's Monday tally.
-      - Saturday-evening calls (8pm–midnight ET = midnight–4am UTC Sun) ARE
-        included in the correct week (they fall before Sun 00:00 ET).
+    weeks_back=2, 3, … (historical, used by manager email sparklines):
+        The completed Mon–Sat week ending (weeks_back-1) weeks ago.
 
-    Example (today ET = Sun Apr 13):
-        weeks_back=1 → Mon Apr 7 00:00 ET – Sun Apr 13 00:00 ET
-        weeks_back=2 → Mon Mar 31 00:00 ET – Sun Apr 6 00:00 ET
+    Uses ET midnight boundaries so weekend calls land in the correct week.
     """
     _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
     ET = timezone(timedelta(hours=_et_h))
-    today_et = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0)
-    # How many days ago was last Saturday? (Mon=0 … Sat=5 … Sun=6)
-    days_since_sat = (today_et.weekday() - 5) % 7
+    now_et  = datetime.now(ET)
+    today_et = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
+    dow = today_et.weekday()  # Mon=0 … Sat=5, Sun=6
+
+    # ── Current-week live window (weeks_back=1, Mon–Sat) ─────────────────────
+    if weeks_back == 1 and dow != 6:
+        since_et = today_et - timedelta(days=dow)  # This Monday 00:00 ET
+        until_et = now_et                           # Right now (live)
+        return since_et.astimezone(timezone.utc), until_et.astimezone(timezone.utc)
+
+    # ── Completed-week path ───────────────────────────────────────────────────
+    # Used for:
+    #   • weeks_back=1 on Sunday (last completed Mon–Sat)
+    #   • weeks_back≥2 (historical sparklines in manager email)
+    #
+    # Find the Saturday that closed the most-recently completed work week.
+    # If today IS Saturday the current week isn't done; step back one more week.
+    days_since_sat = (dow - 5) % 7
     if days_since_sat == 0:
-        days_since_sat = 7  # today IS Saturday; step back to the previous full week
-    # Midnight ET of last Saturday
+        days_since_sat = 7
     last_sat_start = today_et - timedelta(days=days_since_sat)
-    # Shift back for weeks_back > 1
     week_offset = timedelta(days=(weeks_back - 1) * 7)
-    # until = Sunday 00:00 ET after the target Saturday (exclusive — captures all of Sat ET)
-    until_et = last_sat_start + timedelta(days=1) - week_offset
-    # since = Monday 00:00 ET of that same work week (6 days before the Sunday boundary)
-    since_et = until_et - timedelta(days=6)
-    # Return as UTC for FUB API calls
+    until_et = last_sat_start + timedelta(days=1) - week_offset  # Sun 00:00 ET (exclusive)
+    since_et = until_et - timedelta(days=6)                      # Mon 00:00 ET
     return since_et.astimezone(timezone.utc), until_et.astimezone(timezone.utc)
 
 
@@ -414,12 +422,17 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
 
     try:
         if cw_days_elapsed > 0:
-            # Use DB cache (avoids FUB 2000-record cap filled by ISA calls).
-            # Fall back to live fetch only if cache is empty (pre-seed).
-            cw_calls = _db.get_cached_calls(since=cw_since2, until=cw_until2)
-            if not cw_calls:
-                cw_calls = client.get_calls(since=cw_since2, until=cw_until2)
-            cw_appts_raw = client.get_appointments(since=cw_since2, until=cw_until2)
+            # If the main audit already covers the current week (weeks_back=1, Mon–Sat),
+            # reuse its calls/appts — no need for a second FUB round-trip.
+            if _is_live_window:
+                cw_calls    = all_calls
+                cw_appts_raw = all_appointments
+            else:
+                # Historical audit week — fetch current week separately.
+                cw_calls = _db.get_cached_calls(since=cw_since2, until=cw_until2)
+                if not cw_calls:
+                    cw_calls = client.get_calls(since=cw_since2, until=cw_until2)
+                cw_appts_raw = client.get_appointments(since=cw_since2, until=cw_until2)
         else:
             cw_calls = []
             cw_appts_raw = []
@@ -470,15 +483,43 @@ def run_audit_data(weeks_back=1, min_calls=None, min_convos=None, max_ooc=None):
             "pace_status": _pace,
         }
 
-    routing_week_start = until + timedelta(days=1)  # Monday after the measured Saturday
-    routing_week_end = routing_week_start + timedelta(days=6)
+    # Detect live (current-week) vs completed-week window.
+    # In the live case `until` is approximately "now"; the completed case has
+    # `until` at a Sunday-midnight UTC boundary well in the past.
+    _now_utc = datetime.now(timezone.utc)
+    _is_live_window = abs((_now_utc - until).total_seconds()) < 300  # within 5 min of now
+
+    if _is_live_window:
+        _ET_h = -4 if 3 <= _now_utc.month <= 10 else -5
+        _ET   = timezone(timedelta(hours=_ET_h))
+        _since_et = since.astimezone(_ET)
+        period_start = _since_et.strftime("%b %-d")
+        period_end   = "Today"
+        # Routing week: the rest of this Mon–Sat (Sunday onward is off-week)
+        _sat_et = _since_et + timedelta(days=5)  # Saturday of current week
+        routing_week_start = (_sat_et + timedelta(days=1)).astimezone(timezone.utc)
+        routing_week_end   = routing_week_start + timedelta(days=6)
+        routing_week_label = (
+            f"{routing_week_start.strftime('%b %d')} – "
+            f"{routing_week_end.strftime('%b %d, %Y')}"
+        )
+    else:
+        period_start = since.strftime("%b %d")
+        period_end   = (until - timedelta(days=1)).strftime("%b %d, %Y")
+        routing_week_start = until + timedelta(days=1)
+        routing_week_end   = routing_week_start + timedelta(days=6)
+        routing_week_label = (
+            f"{routing_week_start.strftime('%b %d')} – "
+            f"{routing_week_end.strftime('%b %d, %Y')}"
+        )
+
     return {
         "agents": agents,
         "totals": totals,
         "period": {
-            "start": since.strftime("%b %d"),
-            "end": (until - timedelta(days=1)).strftime("%b %d, %Y"),  # Saturday inclusive
-            "routing_week": f"{routing_week_start.strftime('%b %d')} – {routing_week_end.strftime('%b %d, %Y')}",
+            "start": period_start,
+            "end":   period_end,
+            "routing_week": routing_week_label,
         },
         # Raw datetimes as ISO strings so api_send_email can reconstruct them
         "period_since_iso": since.isoformat(),
