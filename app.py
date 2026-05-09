@@ -6091,12 +6091,12 @@ def api_health():
 
     # Env var checks — boolean only, never expose values
     env_checks = {
-        "anthropic_api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
-        "sendgrid_api_key":  bool(os.environ.get("SENDGRID_API_KEY")),
-        "heygen_api_key":    bool(os.environ.get("HEYGEN_API_KEY")),
-        "fub_api_key":       bool(os.environ.get("FUB_API_KEY")),
-        "database_url":      bool(os.environ.get("DATABASE_URL")),
-        "twilio_sid":        bool(os.environ.get("TWILIO_ACCOUNT_SID")),
+        "anthropic_api_key":    bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "sendgrid_api_key":     bool(os.environ.get("SENDGRID_API_KEY")),
+        "heygen_api_key":       bool(os.environ.get("HEYGEN_API_KEY")),
+        "fub_api_key":          bool(os.environ.get("FUB_API_KEY")),
+        "database_url":         bool(os.environ.get("DATABASE_URL")),
+        "project_blue_api_key": bool(os.environ.get("PROJECT_BLUE_API_KEY")),
     }
 
     return jsonify({
@@ -9793,8 +9793,17 @@ def scheduled_new_lead_watchdog():
                 })
 
         if missed_sms and not missed_email:
-            print(f"[WATCHDOG] {len(missed_sms)} lead(s) missing SMS only (email OK) — "
-                  f"SMS re-trigger handled by next new_lead_check run")
+            # Email is fine but SMS never went out — most common cause is a quiet-hours
+            # block overnight (lead came in at 3am, SMS held until 8am window opens).
+            # Don't just defer to new_lead_check — actively re-trigger now so the watchdog
+            # serves as a guaranteed backup if the 5-min check missed it.
+            print(f"[WATCHDOG] {len(missed_sms)} lead(s) have email but no SMS — re-triggering mailer")
+            try:
+                from pond_mailer import run_new_lead_mailer
+                sms_catchup = run_new_lead_mailer(dry_run=False)
+                print(f"[WATCHDOG] SMS catch-up result: {sms_catchup}")
+            except Exception as _sms_e:
+                print(f"[WATCHDOG] SMS catch-up mailer failed: {_sms_e}")
 
         if not missed_email:
             print(f"[WATCHDOG] All {len(people)} recent Shark Tank lead(s) have email outreach — OK")
@@ -9888,6 +9897,30 @@ def scheduled_new_lead_watchdog():
 
     except Exception as e:
         print(f"[WATCHDOG] Watchdog error: {e}")
+
+
+def scheduled_quiet_hours_sms_catchup():
+    """
+    Daily at 8:02am ET — send SMSes to overnight leads whose quiet-hours block lifted.
+
+    Leads that arrive between 9pm and 8am have their SMS held by TCPA quiet hours
+    inside projectblue_client.send_message().  The every-5-min new_lead_check retries
+    them, but if there's any transient failure at the 8:00/8:05 mark this job acts as
+    an explicit morning catch-up.  It runs run_new_lead_mailer() at 8:02 ET, 2 minutes
+    into the quiet-hours window, so overnight leads always get their SMS within 2 min
+    of the legal open — not whenever the scheduler happens to land on them.
+    """
+    try:
+        from pond_mailer import run_new_lead_mailer
+        result = run_new_lead_mailer(dry_run=False)
+        sms_sent = result.get("sent", 0)
+        if sms_sent > 0:
+            print(f"[MORNING SMS CATCHUP] Sent SMS to {sms_sent} overnight lead(s)")
+        else:
+            print(f"[MORNING SMS CATCHUP] No overnight leads waiting for SMS — OK "
+                  f"(checked={result.get('checked', 0)}, eligible={result.get('eligible', 0)})")
+    except Exception as e:
+        print(f"[MORNING SMS CATCHUP] Error: {e}")
 
 
 def scheduled_serendipity():
@@ -10659,6 +10692,15 @@ def start_scheduler():
     _scheduler.add_job(scheduled_new_lead_watchdog, CronTrigger(minute="15,45", timezone=ET),
                        id="new_lead_watchdog", name="New lead outreach watchdog (every 30 min)",
                        max_instances=1, misfire_grace_time=120)
+
+    # Morning quiet-hours SMS catch-up: daily at 8:02am ET
+    # Fires run_new_lead_mailer() exactly 2 minutes after TCPA quiet hours open.
+    # Catches overnight leads (9pm–8am) whose SMS was held and sends them the moment
+    # the legal window opens — instead of waiting for the next 5-min new_lead_check.
+    _scheduler.add_job(scheduled_quiet_hours_sms_catchup,
+                       CronTrigger(hour=8, minute=2, timezone=ET),
+                       id="morning_sms_catchup", name="Morning quiet-hours SMS catch-up (8:02am ET)",
+                       max_instances=1, misfire_grace_time=300)
 
     # Serendipity Clause: every 10 minutes
     # Scans FUB events for behavioral triggers (save, repeat view, inactivity return)
