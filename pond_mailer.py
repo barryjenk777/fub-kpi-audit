@@ -2810,16 +2810,22 @@ def run_new_lead_mailer(dry_run=True):
     client = FUBClient()
     now = datetime.now(timezone.utc)
 
-    # Detect ET time bucket — shapes email tone and subject line
+    # Time bucket is computed per-lead from creation time (not run time).
+    # A 3am lead delayed 6 hours by a Railway redeploy still gets the
+    # "late_night" email angle — not a confusing daytime opener.
     from zoneinfo import ZoneInfo
-    _et_hour = now.astimezone(ZoneInfo("America/New_York")).hour
-    if _et_hour >= 23 or _et_hour < 4:
-        _time_bucket = "late_night"      # 11pm–4am: "can't sleep either?"
-    elif _et_hour < 7:
-        _time_bucket = "early_morning"   # 4am–7am:  "early riser too?"
-    else:
-        _time_bucket = "normal"          # 7am–11pm: caught at the computer
-    logger.debug("New lead mailer: time bucket = %s (%d:xx ET)", _time_bucket, _et_hour)
+    _ET = ZoneInfo("America/New_York")
+
+    def _time_bucket_for(created_utc_str: str) -> str:
+        """Return the time bucket based on when the lead was created ET."""
+        created = _parse_iso(created_utc_str)
+        hour = created.astimezone(_ET).hour
+        if hour >= 23 or hour < 4:
+            return "late_night"      # 11pm–4am: "can't sleep either?"
+        elif hour < 7:
+            return "early_morning"   # 4am–7am:  "early riser too?"
+        else:
+            return "normal"          # 7am–11pm: caught at the computer
 
     # Daily cap: count how many new_lead_immediate emails already sent today (ET)
     if not dry_run:
@@ -2866,6 +2872,13 @@ def run_new_lead_mailer(dry_run=True):
         last  = person.get("lastName") or ""
         name  = f"{first} {last}".strip() or f"ID:{pid}"
         tags  = person.get("tags") or []
+
+        # Time bucket from lead creation time — not run time.
+        # Ensures a 3am lead delayed by a redeploy still gets "late_night" tone.
+        _time_bucket = _time_bucket_for(person.get("created", ""))
+        logger.debug("New lead %s — time bucket: %s (created %s ET)",
+                     name, _time_bucket,
+                     _parse_iso(person.get("created","")).astimezone(_ET).strftime("%H:%M"))
 
         # Agent-claimed check — agent may have called and claimed this lead
         # during the 12-minute delay buffer before our immediate email fires.
