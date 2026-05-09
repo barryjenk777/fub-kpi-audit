@@ -804,6 +804,7 @@ def _weekly_reflection_copy(ctx, weekly_rank, team_size, weekly_calls, weekly_ap
     tone         = random.choice(["funny", "serious"])
     top_first    = weekly_top["name"].split()[0]
     top_convos   = weekly_top.get("convos", weekly_top.get("calls", 0))
+    top_calls    = weekly_top.get("calls", 0)
     is_top_week  = weekly_rank == 1
     is_bot_week  = weekly_rank == team_size
 
