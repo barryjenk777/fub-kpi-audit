@@ -2856,7 +2856,16 @@ def get_weekly_kpi_history(weeks=8):
 # ---------------------------------------------------------------------------
 
 def ensure_calls_cache_table():
-    """Create calls_cache table if not exists."""
+    """Create calls_cache table if not exists, and clear stale rows.
+
+    Schema note: `is_outbound` column is named for historical reasons but now
+    stores the `isIncoming` value from FUB (calls use isIncoming, not isOutbound).
+    get_cached_calls() returns it as "isIncoming" so downstream code stays consistent.
+
+    On startup, any rows where is_outbound IS NULL are dropped — these were written
+    by the old buggy code that tried to store c.get("isOutbound") which FUB never
+    returns for call records.  A forced re-seed happens on the next sync cycle.
+    """
     if not is_available():
         return
     try:
@@ -2878,6 +2887,16 @@ def ensure_calls_cache_table():
                     CREATE INDEX IF NOT EXISTS idx_calls_cache_user_id
                         ON calls_cache (user_id, created DESC);
                 """)
+                # Purge stale rows where is_outbound is NULL — these were written
+                # before the isOutbound→isIncoming fix and have no direction data.
+                # The next sync_calls_cache() run will back-fill from FUB.
+                cur.execute("""
+                    DELETE FROM calls_cache WHERE is_outbound IS NULL;
+                """)
+                deleted = cur.rowcount
+                if deleted:
+                    logger.info("ensure_calls_cache_table: purged %d stale rows "
+                                "(is_outbound=NULL, pre-isIncoming-fix)", deleted)
             conn.commit()
     except Exception as e:
         logger.warning("ensure_calls_cache_table failed: %s", e)
@@ -2887,7 +2906,12 @@ def upsert_calls_cache(calls):
     """Bulk upsert a list of FUB call dicts into calls_cache.
 
     Accepts FUB field names: id, userId, personId, created, duration,
-    isOutbound, direction.  Returns count of rows upserted.
+    isIncoming, direction.  Returns count of rows upserted.
+
+    NOTE: FUB's calls API returns `isIncoming` (bool), NOT `isOutbound`.
+    The `is_outbound` column stores the isIncoming value; get_cached_calls
+    returns it as "isIncoming" so count_calls_for_user() works identically
+    whether it receives live FUB records or cached records.
     """
     if not is_available() or not calls:
         return 0
@@ -2901,7 +2925,7 @@ def upsert_calls_cache(calls):
                 c.get("personId"),
                 c.get("created"),
                 c.get("duration"),
-                c.get("isOutbound"),
+                c.get("isIncoming"),   # FUB calls use isIncoming, not isOutbound
                 c.get("direction"),
             ))
         with get_conn() as conn:
@@ -2972,7 +2996,10 @@ def get_cached_calls(since, until=None):
                 "personId":   person_id,
                 "created":    created.isoformat() if hasattr(created, "isoformat") else created,
                 "duration":   duration,
-                "isOutbound": is_outbound,
+                # Column is named is_outbound for historical reasons but stores isIncoming.
+                # Return as "isIncoming" so count_calls_for_user() works the same
+                # whether it receives live FUB records or DB-cached records.
+                "isIncoming": is_outbound,
                 "direction":  direction,
             })
         return result

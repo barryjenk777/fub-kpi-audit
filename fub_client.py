@@ -460,8 +460,12 @@ class FUBClient:
                 seen_ids.add(cid)
 
                 if since_str and created < since_str:
+                    # Don't break — FUB sometimes returns calls slightly out of
+                    # chronological order within a batch.  Mark past_range so we
+                    # stop after this batch, but finish scanning the batch so we
+                    # don't drop in-range calls that appear after an early outlier.
                     past_range = True
-                    break
+                    continue
 
                 if until_str and created > until_str:
                     continue

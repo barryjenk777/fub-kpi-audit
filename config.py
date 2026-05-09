@@ -15,9 +15,12 @@ MIN_OUTBOUND_CALLS = 30
 # Minimum real conversations per week
 MIN_CONVERSATIONS = 5
 
-# Minimum call duration (seconds) to count as a conversation
-# FUB defines a "Conversation" as a call >= 120 seconds (2 minutes)
-CONVERSATION_THRESHOLD_SECONDS = 120
+# Minimum call duration (seconds) to count as a conversation.
+# FUB's "Connected Calls" metric uses > 0s (any answered call).
+# We use 60s so quick pickups / wrong-numbers don't inflate the count,
+# while still capturing real back-and-forth dialogue.
+# Previous value was 120s, which was too strict (missed ~30-60s conversations).
+CONVERSATION_THRESHOLD_SECONDS = 60
 
 # Maximum average speed-to-lead in minutes (for newly assigned leads)
 MAX_SPEED_TO_LEAD_MINUTES = 5
