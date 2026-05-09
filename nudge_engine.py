@@ -1304,7 +1304,7 @@ def _pb_today_info(prospecting_block) -> dict:
         end_fmt = ""
 
     is_today = today_name in [d.lower() for d in days_raw]
-    update_url = f"{BASE_URL}/my-block/{token}" if token else dashboard_url
+    update_url = f"{BASE_URL}/my-block/{token}" if token else BASE_URL
 
     if is_today:
         label = f"TODAY — {start_fmt} to {end_fmt}"
