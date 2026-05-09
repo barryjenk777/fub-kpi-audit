@@ -448,87 +448,87 @@ def run_morning_nudges(dry_run: bool = False):
         if _db.get_nudge_counts_today(name).get("morning", 0) > 0:
             continue
 
-        ctx          = _ctx(name)
-        leads        = _db.get_leadstream_top_leads(name, limit=3)
-        isa_transfers = _db.get_agent_isa_transfers(name)
-        goal_ctx     = _build_goal_ctx(name, all_goals, ytd_cache, agent["calls"])
-
-        worked_weekend = is_weekend and agent["score"] > 0
-
-        # Arc tracking — fetch before building email so we can avoid repeats
-        selected_arc = None
-
-        if is_weekend and not worked_weekend:
-            # Weekly reflection email — ranked by conversations, not raw calls
-            weekly_rank = next(
-                (i + 1 for i, a in enumerate(weekly_leaderboard) if a["name"] == name),
-                rank
-            )
-            weekly_agent = next((a for a in weekly_leaderboard if a["name"] == name), agent)
-            weekly_top   = weekly_leaderboard[0] if weekly_leaderboard else top_agent
-            weekly_team_avg = round(
-                sum(a["convos"] for a in weekly_leaderboard) / max(len(weekly_leaderboard), 1)
-            )
-            subject, body_text = _weekly_reflection_copy(
-                ctx=ctx,
-                weekly_rank=weekly_rank, team_size=team_size,
-                weekly_calls=weekly_agent["calls"],
-                weekly_convos=weekly_agent["convos"],
-                weekly_appts=weekly_agent["appts"],
-                weekly_team_avg=weekly_team_avg, weekly_top=weekly_top,
-                day_name=day_name, goal_ctx=goal_ctx,
-            )
-        elif is_weekend and worked_weekend:
-            # Weekend warrior — they actually prospected on a Saturday or Sunday
-            subject, body_text = _weekend_warrior_copy(
-                ctx=ctx, calls=agent["calls"], appts=agent["appts"],
-                texts=agent["texts"], day_name=day_name, goal_ctx=goal_ctx,
-                team_size=team_size,
-            )
-        else:
-            # Normal weekday email — use the Arc Engine (Phase 4)
-            trend_data   = _db.get_activity_trend(name)
-            recent_arcs  = _db.get_recent_arcs(name, days=7)
-            deal_summary = _db.get_deal_summary(name, year=today.year) or {}
-            streak_data  = _db.get_streak(name) or {}
-
-            situation = _arc.detect_situation(
-                agent_ctx=ctx,
-                goal_ctx=goal_ctx,
-                deal_summary=deal_summary,
-                streak_data=streak_data,
-                rank=rank,
-                team_size=team_size,
-                calls=agent["calls"],
-                trend_data=trend_data,
-            )
-
-            selected_arc = _arc.select_arc(situation, recent_arcs)
-            tone         = random.choice(["funny", "serious"])
-
-            subject, body_text = _arc.build_arc_email(
-                arc=selected_arc,
-                ctx=ctx,
-                situation=situation,
-                goal_ctx=goal_ctx,
-                deal_summary=deal_summary,
-                tone=tone,
-                top_agent=top_agent,
-                team_avg=team_avg_calls,
-                day_name=day_name,
-            )
-
-            logger.info(
-                "Arc engine [%s/%s] %s → arc=%s tone=%s",
-                rank, team_size, name, selected_arc, tone,
-            )
-
-        pb   = _db.get_prospecting_block(name)
-        html = _build_morning_html(body_text, leads, ctx.get("dashboard_url", ""),
-                                   isa_transfers=isa_transfers, goal_ctx=goal_ctx,
-                                   prospecting_block=pb, agent_name=name)
-
         try:
+            ctx          = _ctx(name)
+            leads        = _db.get_leadstream_top_leads(name, limit=3)
+            isa_transfers = _db.get_agent_isa_transfers(name)
+            goal_ctx     = _build_goal_ctx(name, all_goals, ytd_cache, agent["calls"])
+
+            worked_weekend = is_weekend and agent["score"] > 0
+
+            # Arc tracking — fetch before building email so we can avoid repeats
+            selected_arc = None
+
+            if is_weekend and not worked_weekend:
+                # Weekly reflection email — ranked by conversations, not raw calls
+                weekly_rank = next(
+                    (i + 1 for i, a in enumerate(weekly_leaderboard) if a["name"] == name),
+                    rank
+                )
+                weekly_agent = next((a for a in weekly_leaderboard if a["name"] == name), agent)
+                weekly_top   = weekly_leaderboard[0] if weekly_leaderboard else top_agent
+                weekly_team_avg = round(
+                    sum(a["convos"] for a in weekly_leaderboard) / max(len(weekly_leaderboard), 1)
+                )
+                subject, body_text = _weekly_reflection_copy(
+                    ctx=ctx,
+                    weekly_rank=weekly_rank, team_size=team_size,
+                    weekly_calls=weekly_agent["calls"],
+                    weekly_convos=weekly_agent["convos"],
+                    weekly_appts=weekly_agent["appts"],
+                    weekly_team_avg=weekly_team_avg, weekly_top=weekly_top,
+                    day_name=day_name, goal_ctx=goal_ctx,
+                )
+            elif is_weekend and worked_weekend:
+                # Weekend warrior — they actually prospected on a Saturday or Sunday
+                subject, body_text = _weekend_warrior_copy(
+                    ctx=ctx, calls=agent["calls"], appts=agent["appts"],
+                    texts=agent["texts"], day_name=day_name, goal_ctx=goal_ctx,
+                    team_size=team_size,
+                )
+            else:
+                # Normal weekday email — use the Arc Engine (Phase 4)
+                trend_data   = _db.get_activity_trend(name)
+                recent_arcs  = _db.get_recent_arcs(name, days=7)
+                deal_summary = _db.get_deal_summary(name, year=today.year) or {}
+                streak_data  = _db.get_streak(name) or {}
+
+                situation = _arc.detect_situation(
+                    agent_ctx=ctx,
+                    goal_ctx=goal_ctx,
+                    deal_summary=deal_summary,
+                    streak_data=streak_data,
+                    rank=rank,
+                    team_size=team_size,
+                    calls=agent["calls"],
+                    trend_data=trend_data,
+                )
+
+                selected_arc = _arc.select_arc(situation, recent_arcs)
+                tone         = random.choice(["funny", "serious"])
+
+                subject, body_text = _arc.build_arc_email(
+                    arc=selected_arc,
+                    ctx=ctx,
+                    situation=situation,
+                    goal_ctx=goal_ctx,
+                    deal_summary=deal_summary,
+                    tone=tone,
+                    top_agent=top_agent,
+                    team_avg=team_avg_calls,
+                    day_name=day_name,
+                )
+
+                logger.info(
+                    "Arc engine [%s/%s] %s → arc=%s tone=%s",
+                    rank, team_size, name, selected_arc, tone,
+                )
+
+            pb   = _db.get_prospecting_block(name)
+            html = _build_morning_html(body_text, leads, ctx.get("dashboard_url", ""),
+                                       isa_transfers=isa_transfers, goal_ctx=goal_ctx,
+                                       prospecting_block=pb, agent_name=name)
+
             if not dry_run:
                 import postmark_client as _pm
                 _pm.send(
@@ -540,9 +540,15 @@ def run_morning_nudges(dry_run: bool = False):
             _db.log_nudge(name, "morning", subject, status=send_status, arc=selected_arc)
             logger.info("Morning nudge [#%d/%d] → %s | %s", rank, team_size, name, subject[:60])
             sent += 1
+
         except Exception as e:
-            _db.log_nudge(name, "morning", subject, status="failed", arc=selected_arc)
-            logger.warning("Morning nudge failed for %s: %s", name, e)
+            logger.warning("Morning nudge failed for %s (skipping, others will still send): %s",
+                           name, e)
+            try:
+                _db.log_nudge(name, "morning", f"ERROR: {str(e)[:120]}", status="failed",
+                              arc=None)
+            except Exception:
+                pass
 
     logger.info("run_morning_nudges: sent %d emails", sent)
     return sent
