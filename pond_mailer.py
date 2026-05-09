@@ -3020,12 +3020,26 @@ def run_new_lead_mailer(dry_run=True):
                     # immediately. Video typically renders in 60-90s — will be
                     # ready long before most leads reply. video_id stored in DB
                     # so the webhook can retrieve it on consent reply.
+                    # Detect lead type for script and map routing
+                    _nl_src       = person.get("source") or ""
+                    _nl_src_norm  = _nl_src.lower().replace("-","").replace(" ","").replace("_","")
+                    _nl_is_z      = (
+                        any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER")
+                            for t in tags)
+                        or "zbuyer" in _nl_src_norm
+                    )
+                    _nl_is_seller = (
+                        not _nl_is_z and
+                        any(t in tags for t in ("Ylopo Prospecting", "Ylopo Seller"))
+                    )
+
                     _nl_video_id = None
                     if _nl_ab_variant == "video" and not dry_run:
                         try:
                             from heygen_client import (
                                 is_available as _hg_avail,
                                 generate_buyer_video_script as _hg_buyer_script,
+                                generate_seller_video_script as _hg_seller_script,
                                 generate_and_wait as _hg_generate,
                                 get_background_url as _hg_bg,
                                 DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
@@ -3035,22 +3049,45 @@ def run_new_lead_mailer(dry_run=True):
                                     list(behavior.get("cities") or [])[0]
                                     if behavior.get("cities") else "Hampton Roads"
                                 )
-                                _nl_mv = (behavior.get("most_viewed") or {})
-                                _nl_mv_street = _nl_mv.get("street") or ""
-                                _nl_script = _hg_buyer_script(
-                                    first_name=first,
-                                    city=_nl_city,
-                                    price_min=behavior.get("price_min"),
-                                    price_max=behavior.get("price_max"),
-                                    beds=sorted(behavior.get("beds_seen") or []) or None,
-                                    property_type=behavior.get("property_type"),
-                                    most_viewed_street=_nl_mv_street or None,
-                                    strategy="new_lead_immediate",
-                                    view_count=behavior.get("view_count", 0),
-                                    tags=tags,
-                                )
-                                _nl_bg = _hg_bg("buyer", city=_nl_city)
-                                print(f"    Generating HeyGen video for {name} ({_nl_city})...")
+                                _nl_mv     = behavior.get("most_viewed") or {}
+                                _nl_street = _nl_mv.get("street") or ""
+
+                                if _nl_is_z or _nl_is_seller:
+                                    # Seller/Zbuyer: property address map, seller script
+                                    _nl_bg = _hg_bg(
+                                        "seller" if _nl_is_seller else "zbuyer",
+                                        address=_nl_street,
+                                        city=_nl_city,
+                                    )
+                                    _nl_script = _hg_seller_script(
+                                        first_name=first,
+                                        street=_nl_street or "your home",
+                                        city=_nl_city,
+                                        tags=tags,
+                                    )
+                                    _nl_map_type = "seller/zbuyer (property zoom)"
+                                else:
+                                    # Buyer: most-viewed street map or city map, buyer script
+                                    _nl_bg = _hg_bg(
+                                        "buyer",
+                                        address=_nl_street,
+                                        city=_nl_city,
+                                    )
+                                    _nl_script = _hg_buyer_script(
+                                        first_name=first,
+                                        city=_nl_city,
+                                        price_min=behavior.get("price_min"),
+                                        price_max=behavior.get("price_max"),
+                                        beds=sorted(behavior.get("beds_seen") or []) or None,
+                                        property_type=behavior.get("property_type"),
+                                        most_viewed_street=_nl_street or None,
+                                        strategy="new_lead_immediate",
+                                        view_count=behavior.get("view_count", 0),
+                                        tags=tags,
+                                    )
+                                    _nl_map_type = "buyer (street/city zoom)"
+
+                                print(f"    Generating HeyGen video for {name} — {_nl_map_type}...")
                                 _nl_vid_result = _hg_generate(
                                     _nl_script,
                                     background_url=_nl_bg,
@@ -3062,12 +3099,12 @@ def run_new_lead_mailer(dry_run=True):
                                 if _nl_vid_result and _nl_vid_result.get("video_id"):
                                     _nl_video_id = _nl_vid_result["video_id"]
                                     print(f"    HeyGen video ready: {_nl_video_id}")
-                                    logger.info("HeyGen video generated for new lead %s: %s",
-                                                name, _nl_video_id)
+                                    logger.info("HeyGen video generated for new lead %s (%s): %s",
+                                                name, _nl_map_type, _nl_video_id)
                                 else:
                                     logger.warning("HeyGen video not ready for new lead %s — "
                                                    "falling back to voice on consent", name)
-                                    _nl_ab_variant = "voice"  # fallback
+                                    _nl_ab_variant = "voice"
                             else:
                                 logger.info("HeyGen not configured — new lead %s gets voice", name)
                                 _nl_ab_variant = "voice"
@@ -3110,17 +3147,9 @@ def run_new_lead_mailer(dry_run=True):
                           f"({_nl_result.get('status', '?')})")
 
                     # Lead audit email — Barry QAs every outreach
+                    # _nl_is_z and _nl_is_seller already computed above for video routing
                     try:
                         import lead_audit as _audit
-                        _nl_src = person.get("source") or ""
-                        _nl_is_z = any(
-                            t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER")
-                            for t in tags
-                        ) or "zbuyer" in _nl_src.lower().replace("-","").replace(" ","")
-                        _nl_is_seller = (
-                            not _nl_is_z and
-                            any(t in tags for t in ("Ylopo Prospecting", "Ylopo Seller"))
-                        )
                         _nl_lead_type = "zbuyer" if _nl_is_z else ("seller" if _nl_is_seller else "buyer")
                         _audit.send_outreach_audit(
                             person_id=pid,
