@@ -2988,8 +2988,9 @@ def run_new_lead_mailer(dry_run=True):
             logger.debug("New lead %s — already received a pond SMS, skipping", name)
         else:
             # TCPA quiet hours enforced inside _pb_nl.send_message()
-            # New leads always get "voice" A/B variant (no HeyGen video yet)
-            _nl_ab_variant = "voice"
+            # A/B test: 50% voice (ElevenLabs audio bubble), 50% video (HeyGen map)
+            import random as _rand_nl
+            _nl_ab_variant = "voice" if _rand_nl.random() < 0.5 else "video"
 
             # First text ever: weave opt-out into the message (TCPA compliance)
             _nl_hist_count = _db.count_pond_sms_sent(pid)
@@ -3014,6 +3015,67 @@ def run_new_lead_mailer(dry_run=True):
                 _nl_result = _pb_nl.send_message(_nl_phone, _nl_sms_body, dry_run=dry_run)
 
                 if _nl_result.get("success"):
+                    # ── Video variant: generate HeyGen video in background ─────
+                    # Start after the text goes out so the lead gets the opener
+                    # immediately. Video typically renders in 60-90s — will be
+                    # ready long before most leads reply. video_id stored in DB
+                    # so the webhook can retrieve it on consent reply.
+                    _nl_video_id = None
+                    if _nl_ab_variant == "video" and not dry_run:
+                        try:
+                            from heygen_client import (
+                                is_available as _hg_avail,
+                                generate_buyer_video_script as _hg_buyer_script,
+                                generate_and_wait as _hg_generate,
+                                get_background_url as _hg_bg,
+                                DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
+                            )
+                            if _hg_avail():
+                                _nl_city = _city_from_tags(tags) or (
+                                    list(behavior.get("cities") or [])[0]
+                                    if behavior.get("cities") else "Hampton Roads"
+                                )
+                                _nl_mv = (behavior.get("most_viewed") or {})
+                                _nl_mv_street = _nl_mv.get("street") or ""
+                                _nl_script = _hg_buyer_script(
+                                    first_name=first,
+                                    city=_nl_city,
+                                    price_min=behavior.get("price_min"),
+                                    price_max=behavior.get("price_max"),
+                                    beds=sorted(behavior.get("beds_seen") or []) or None,
+                                    property_type=behavior.get("property_type"),
+                                    most_viewed_street=_nl_mv_street or None,
+                                    strategy="new_lead_immediate",
+                                    view_count=behavior.get("view_count", 0),
+                                    tags=tags,
+                                )
+                                _nl_bg = _hg_bg("buyer", city=_nl_city)
+                                print(f"    Generating HeyGen video for {name} ({_nl_city})...")
+                                _nl_vid_result = _hg_generate(
+                                    _nl_script,
+                                    background_url=_nl_bg,
+                                    avatar_id=DEFAULT_AVATAR,
+                                    voice_id=DEFAULT_VOICE,
+                                    character_type=DEFAULT_AVATAR_TYPE,
+                                    timeout_seconds=240,
+                                )
+                                if _nl_vid_result and _nl_vid_result.get("video_id"):
+                                    _nl_video_id = _nl_vid_result["video_id"]
+                                    print(f"    HeyGen video ready: {_nl_video_id}")
+                                    logger.info("HeyGen video generated for new lead %s: %s",
+                                                name, _nl_video_id)
+                                else:
+                                    logger.warning("HeyGen video not ready for new lead %s — "
+                                                   "falling back to voice on consent", name)
+                                    _nl_ab_variant = "voice"  # fallback
+                            else:
+                                logger.info("HeyGen not configured — new lead %s gets voice", name)
+                                _nl_ab_variant = "voice"
+                        except Exception as _hg_nl_err:
+                            logger.warning("HeyGen generation failed for new lead %s: %s — "
+                                           "falling back to voice", name, _hg_nl_err)
+                            _nl_ab_variant = "voice"
+
                     _db.ensure_pond_sms_log_table()
                     _db.log_pond_sms(
                         pid, name, _nl_phone, _nl_sms_body,
@@ -3024,6 +3086,7 @@ def run_new_lead_mailer(dry_run=True):
                         status=_nl_result.get("status", "queued"),
                         channel="new_lead",
                         ab_variant=_nl_ab_variant,
+                        video_id=_nl_video_id,
                     )
                     # Log to FUB timeline
                     if not dry_run:
