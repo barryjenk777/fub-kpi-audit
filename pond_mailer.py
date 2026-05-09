@@ -2881,17 +2881,6 @@ def run_new_lead_mailer(dry_run=True):
                         name, ", ".join(_blocking))
             continue
 
-        # Already sent the immediate email?
-        if _db.has_received_new_lead_immediate(pid):
-            logger.debug("Skipping %s — already got new_lead_immediate", name)
-            continue
-
-        # Already in the drip? (had any pond email)
-        history = _db.get_lead_email_history(pid)
-        if history["emails_sent"] > 0:
-            logger.debug("Skipping %s — already in drip (%d emails)", name, history["emails_sent"])
-            continue
-
         # Pull IDX events — new leads may have very few, that's OK
         events = client.get_events_for_person(pid, days=7, limit=50)
         behavior = analyze_behavior(events, tags)
@@ -2908,6 +2897,18 @@ def run_new_lead_mailer(dry_run=True):
         _did_something = False
 
         # ── Email path ────────────────────────────────────────────────────────
+        # Check inside the email block — NOT at the outer loop level.
+        # A lead whose email went out at 3am but whose SMS was quiet-hours-blocked
+        # must still reach the SMS path when the mailer runs at 8am.
+        if to_email:
+            # Skip email if already sent or already in drip — but let SMS path continue
+            if _db.has_received_new_lead_immediate(pid):
+                logger.debug("%s — already got new_lead_immediate email, skipping email only", name)
+                to_email = None  # fall through to SMS check
+            elif _db.get_lead_email_history(pid).get("emails_sent", 0) > 0:
+                logger.debug("%s — already in drip, skipping email only", name)
+                to_email = None  # fall through to SMS check
+
         if to_email:
             # Generate the email
             try:
