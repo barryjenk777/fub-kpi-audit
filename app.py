@@ -9713,6 +9713,183 @@ def scheduled_new_lead_check():
         print(f"[SCHEDULER] New lead mailer error: {e}")
 
 
+def scheduled_new_lead_watchdog():
+    """
+    Every 30 minutes — safety net that ensures no new Shark Tank lead ever
+    silently misses outreach.
+
+    The normal new_lead_check fires every 5 min, but Railway redeploys,
+    APScheduler misfires, or uncaught exceptions can leave leads stranded.
+    This watchdog runs independently, checks the last 24 hours of Shark Tank
+    leads, and re-triggers the mailer for anyone who slipped through.
+
+    A single consolidated alert email goes to Barry listing every missed lead
+    so he has a paper trail even if the catch-up succeeds.  Alert emails are
+    throttled to once per 2 hours so a burst of misses doesn't spam the inbox.
+    """
+    _WATCHDOG_GRACE_MINUTES   = 45   # min age before we expect outreach to exist
+    _WATCHDOG_LOOKBACK_HOURS  = 24   # how far back to scan
+    _WATCHDOG_ALERT_COOLDOWN  = "new_lead_watchdog_alert"  # cooldown key
+    _WATCHDOG_ALERT_HOURS     = 2    # suppress duplicate alerts within this window
+
+    try:
+        api_key = os.environ.get("FUB_API_KEY", "")
+        if not api_key:
+            print("[WATCHDOG] FUB_API_KEY not set — skipping")
+            return
+
+        client   = FUBClient(api_key)
+        now_utc  = datetime.now(timezone.utc)
+        cutoff   = now_utc - timedelta(hours=_WATCHDOG_LOOKBACK_HOURS)
+
+        # Pull all Shark Tank (pond 4) leads created in the last 24 hours.
+        people = client.get_people(pond_id=4, created_since=cutoff, limit=200)
+        if not people:
+            print("[WATCHDOG] No recent Shark Tank leads — nothing to check")
+            return
+
+        missed_email = []   # leads missing email outreach
+        missed_sms   = []   # leads missing SMS (informational only)
+
+        for person in people:
+            pid       = person.get("id")
+            name      = (person.get("name") or "Unknown").strip()
+            created   = person.get("created") or ""
+            if not pid or not created:
+                continue
+
+            # Parse creation time and check age.
+            try:
+                from dateutil import parser as _dp
+                created_dt = _dp.parse(created)
+                if created_dt.tzinfo is None:
+                    created_dt = created_dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+
+            age_minutes = (now_utc - created_dt).total_seconds() / 60
+            if age_minutes < _WATCHDOG_GRACE_MINUTES:
+                continue  # Still within the normal 12-min delay + buffer — too soon
+
+            # Check email and SMS outreach logs.
+            got_email = _db.has_received_new_lead_immediate(pid)
+            got_sms   = _db.has_received_pond_sms(pid)
+
+            if not got_email:
+                missed_email.append({
+                    "pid":          pid,
+                    "name":         name,
+                    "age_minutes":  int(age_minutes),
+                    "got_sms":      got_sms,
+                    "source":       (person.get("source") or "unknown"),
+                })
+            elif not got_sms:
+                # Email fired but SMS didn't — less urgent, just log it.
+                missed_sms.append({
+                    "pid":         pid,
+                    "name":        name,
+                    "age_minutes": int(age_minutes),
+                    "source":      (person.get("source") or "unknown"),
+                })
+
+        if missed_sms and not missed_email:
+            print(f"[WATCHDOG] {len(missed_sms)} lead(s) missing SMS only (email OK) — "
+                  f"SMS re-trigger handled by next new_lead_check run")
+
+        if not missed_email:
+            print(f"[WATCHDOG] All {len(people)} recent Shark Tank lead(s) have email outreach — OK")
+            return
+
+        # One or more leads slipped through without email. Re-trigger the mailer now.
+        print(f"[WATCHDOG] {len(missed_email)} lead(s) missed email outreach — "
+              f"re-triggering run_new_lead_mailer()")
+        try:
+            from pond_mailer import run_new_lead_mailer
+            catchup = run_new_lead_mailer(dry_run=False)
+            print(f"[WATCHDOG] Catch-up mailer result: {catchup}")
+        except Exception as me:
+            print(f"[WATCHDOG] Catch-up mailer failed: {me}")
+
+        # Send Barry one alert email summarising the gap (throttled to once per 2 hrs).
+        if _already_fired_recently(_WATCHDOG_ALERT_COOLDOWN, within_hours=_WATCHDOG_ALERT_HOURS):
+            print("[WATCHDOG] Alert email suppressed — cooldown active")
+            return
+
+        try:
+            sg_key = os.environ.get("SENDGRID_API_KEY")
+            if not sg_key:
+                print("[WATCHDOG] SENDGRID_API_KEY not set — skipping alert email")
+                return
+
+            import sendgrid as _sg
+            from sendgrid.helpers.mail import Mail as _Mail
+
+            lines = [
+                "NEW LEAD OUTREACH WATCHDOG",
+                "=" * 52,
+                "",
+                f"Detected {len(missed_email)} lead(s) that were NOT emailed within",
+                f"{_WATCHDOG_GRACE_MINUTES} minutes of registration.",
+                "run_new_lead_mailer() was fired automatically to catch up.",
+                "",
+                "MISSED LEADS:",
+            ]
+            for m in missed_email:
+                sms_note = "no SMS either" if not m["got_sms"] else "SMS sent OK"
+                lines.append(
+                    f"  {m['name']} (FUB #{m['pid']}) — {m['age_minutes']} min old — "
+                    f"{m['source']} — {sms_note}"
+                )
+            lines += [
+                "",
+                "WHAT HAPPENED:",
+                "  Most likely: Railway redeploy or APScheduler misfire silenced",
+                "  new_lead_check during the window these leads came in.",
+                "  The catch-up mailer fired above — check Railway logs to confirm",
+                "  emails went out.",
+                "",
+                "WHAT TO DO:",
+                "  1. Check your inbox for the outreach audit emails for these leads.",
+                "  2. If you don't see them within 5 minutes, check Railway logs.",
+                "  3. You can also manually trigger: POST /api/new-lead-check",
+                "",
+                "=" * 52,
+                "Legacy Home Team AI Outreach",
+            ]
+
+            html_body = (
+                "<div style='font-family:-apple-system,Helvetica,sans-serif;"
+                "font-size:14px;line-height:1.7;color:#1a1a1a;"
+                "max-width:620px;margin:24px auto;white-space:pre-wrap'>"
+                + "\n".join(lines)
+                    .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    .replace("\n", "<br>")
+                + "</div>"
+            )
+
+            plain = "\n".join(lines)
+            subject = (
+                f"[ALERT] {len(missed_email)} new lead(s) missed outreach — "
+                f"catch-up triggered"
+            )
+            msg = _Mail(
+                from_email=config.EMAIL_FROM,
+                to_emails="barry@yourfriendlyagent.net",
+                subject=subject,
+                plain_text_content=plain,
+                html_content=html_body,
+            )
+            _sg.SendGridAPIClient(sg_key).send(msg)
+            _record_fired(_WATCHDOG_ALERT_COOLDOWN)
+            print(f"[WATCHDOG] Alert email sent — {len(missed_email)} missed lead(s)")
+
+        except Exception as ae:
+            print(f"[WATCHDOG] Alert email failed: {ae}")
+
+    except Exception as e:
+        print(f"[WATCHDOG] Watchdog error: {e}")
+
+
 def scheduled_serendipity():
     """Every 10 minutes — detect behavioral triggers and fire ready emails."""
     try:
@@ -10474,6 +10651,14 @@ def start_scheduler():
     _scheduler.add_job(scheduled_new_lead_check, CronTrigger(minute="*/5", timezone=ET),
                        id="new_lead_check", name="New lead immediate mailer (every 5 min)",
                        max_instances=1, misfire_grace_time=60)
+
+    # New lead watchdog: every 30 minutes
+    # Independent safety net — checks last 24hrs of Shark Tank leads for anyone
+    # who never got an email, re-triggers the mailer, and alerts Barry.
+    # Runs offset from new_lead_check (at :15 and :45) so it doesn't pile on.
+    _scheduler.add_job(scheduled_new_lead_watchdog, CronTrigger(minute="15,45", timezone=ET),
+                       id="new_lead_watchdog", name="New lead outreach watchdog (every 30 min)",
+                       max_instances=1, misfire_grace_time=120)
 
     # Serendipity Clause: every 10 minutes
     # Scans FUB events for behavioral triggers (save, repeat view, inactivity return)
