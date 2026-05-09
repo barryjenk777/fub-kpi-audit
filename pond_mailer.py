@@ -3219,11 +3219,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
     skipped_generation_error = 0
     max_to_process = limit or MAX_PER_RUN
 
-    import twilio_client as _tc
-    import sendblue_client as _sb
-    # Sendblue disabled — outbound not configured. Twilio only.
-    _sms_ready      = _tc.is_available()
-    _sendblue_ready = False
+    import projectblue_client as _pb
+    _pb_ready = _pb.is_available()
 
     # Hard cap on how many leads we'll check per run — prevents runaway loops
     # on large ponds (each event fetch = 1 API call at 0.35s rate limit).
@@ -3272,8 +3269,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         #   3. No suppression tags (opt-outs, wrong number, DO_NOT_CALL, etc.)
         _in_shark_tank    = person.get("_pond_id") == SHARK_TANK_POND_ID
         _sms_src_blocked  = _is_sms_blocked_source(person)
-        to_phone = _tc.get_primary_phone(person) if (_sms_ready and _in_shark_tank and not _sms_src_blocked) else None
-        _sms_blocked = _tc.sms_suppressed_by_tags(tags) if to_phone else []
+        to_phone = _pb.get_primary_phone(person) if (_pb_ready and _in_shark_tank and not _sms_src_blocked) else None
+        _sms_blocked = _pb.sms_suppressed_by_tags(tags) if to_phone else []
         _sms_eligible = bool(to_phone and not _sms_blocked)
 
         if not to_email and not _sms_eligible:
@@ -3369,15 +3366,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 logger.warning("SMS-only body empty for %s — skipping", name)
                 continue
 
-            # Prefer Sendblue (iMessage blue bubble) over Twilio green SMS
-            if _sendblue_ready:
-                _sms_result = _sb.send_imessage(to_phone, _sms_body, dry_run=dry_run)
-                _sms_channel = "sendblue"
-                _sms_sid     = _sms_result.get("message_handle")
-            else:
-                _sms_result  = _tc.send_sms(to_phone, _sms_body, dry_run=dry_run)
-                _sms_channel = "sms_only"
-                _sms_sid     = _sms_result.get("twilio_sid")
+            # Project Blue: iMessage-first (blue bubble), SMS fallback handled by PB
+            _sms_result  = _pb.send_message(to_phone, _sms_body, dry_run=dry_run)
+            _sms_channel = "projectblue"
+            _sms_sid     = _sms_result.get("pb_handle")
 
             if _sms_result.get("success"):
                 _db.log_pond_sms(pid, name, to_phone, _sms_body,
@@ -4292,12 +4284,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                         if _short_link not in _dual_body:
                             _dual_body = f"{_dual_body}\n\n{_short_link}"
 
-                    # Twilio MMS — thumbnail image inline, video link in body
-                    _dual_result  = _tc.send_sms(to_phone, _dual_body,
-                                                  media_url=_dual_media_url,
-                                                  dry_run=dry_run)
-                    _dual_channel = "twilio_mms_dual" if _is_high_intent else "twilio_mms_cross"
-                    _dual_sid     = _dual_result.get("twilio_sid")
+                    # Project Blue MMS — iMessage-first, thumbnail inline, video link in body
+                    _dual_result  = _pb.send_message(to_phone, _dual_body,
+                                                     media_url=_dual_media_url,
+                                                     dry_run=dry_run)
+                    _dual_channel = "pb_mms_dual" if _is_high_intent else "pb_mms_cross"
+                    _dual_sid     = _dual_result.get("pb_handle")
 
                     _sms_type_label = "dual SMS" if _is_high_intent else "cross-channel SMS"
 

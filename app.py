@@ -8392,6 +8392,221 @@ def webhook_twilio_sms():
         return _twiml()
 
 
+# ── Project Blue inbound webhook ──────────────────────────────────────────────
+
+@app.route("/webhook/projectblue", methods=["POST"])
+def webhook_projectblue():
+    """
+    Project Blue inbound webhook — receives iMessage/SMS replies from pond leads.
+
+    Project Blue POSTs JSON when a lead replies to one of our outbound texts.
+
+    Payload shape:
+        {
+          "message":         "Yes I'm interested",
+          "destination":     "+15559876543",   -- our PB line (who they texted)
+          "receivedAt":      "2026-05-08T...",
+          "direction":       "inbound",
+          "messageId":       456,
+          "guid":            "sample-guid-1234",
+          "linePhoneNumber": "+15559876543"    -- our PB line (same as destination for inbound)
+        }
+
+    For inbound webhooks the lead's phone is not in the payload directly.
+    We call GET /get-messages-api?direction=inbound&limit=1 filtered by our
+    line to retrieve the from_number, using guid as the dedup key.
+
+    Flow mirrors the Twilio handler exactly:
+      1. Extract fields from JSON payload
+      2. Skip outbound confirmations (direction != "inbound")
+      3. Look up lead's from_number via PB messages API using guid
+      4. STOP keyword hard-gate
+      5. Match phone to FUB lead via pond_sms_log
+      6. Sentiment analysis (Claude Haiku)
+      7. Positive  -> SMS_Conversion + FUB note + handoff text
+      8. Negative  -> SMS_OptOut
+      9. Neutral   -> FUB note
+     10. Log to pond_sms_reply_log + email Barry
+    """
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+
+        direction = data.get("direction", "")
+        if direction != "inbound":
+            # PB fires webhooks for outbound confirmations too — ignore them
+            return jsonify({"ok": True, "skipped": "outbound"}), 200
+
+        body_text   = (data.get("message") or "").strip()
+        guid        = data.get("guid", "")
+        message_id  = data.get("messageId")
+        our_line    = data.get("linePhoneNumber") or data.get("destination") or ""
+
+        logger.info("Project Blue inbound webhook: line=%s guid=%s body=%s",
+                    our_line, guid, body_text[:80])
+
+        # ── Resolve lead's phone via PB messages API ──────────────────────────
+        # The webhook payload doesn't include from_number directly for inbound.
+        # We query the most recent inbound messages on our line and match by guid.
+        from_phone = None
+        try:
+            import projectblue_client as _pb2
+            msgs = _pb2.get_messages(limit=10, direction="inbound")
+            for m in msgs.get("data", []):
+                if str(m.get("messageId") or m.get("id") or "") == str(message_id) or \
+                   m.get("guid") == guid:
+                    from_phone = m.get("from_number") or m.get("fromNumber")
+                    break
+        except Exception as _pe:
+            logger.warning("PB messages lookup failed: %s", _pe)
+
+        if not from_phone:
+            logger.warning("Project Blue webhook: could not resolve from_number for guid=%s", guid)
+            return jsonify({"ok": True, "skipped": "no_from_number"}), 200
+
+        if not body_text:
+            logger.warning("Project Blue webhook: empty body from %s", from_phone)
+            return jsonify({"ok": True}), 200
+
+        # ── STOP keyword hard-gate ─────────────────────────────────────────────
+        body_lower = body_text.lower().strip()
+        is_hard_stop = (
+            body_lower in _SMS_HARD_STOP_WORDS or
+            any(body_lower.startswith(w) for w in _SMS_HARD_STOP_WORDS)
+        )
+
+        if is_hard_stop:
+            logger.info("PB hard-stop from %s: %r", from_phone, body_text)
+            person_id_stop, person_name_stop = _db.get_pond_sms_person_by_phone(from_phone)
+            if person_id_stop:
+                try:
+                    from fub_client import FUBClient
+                    fub_stop = FUBClient()
+                    fub_stop.add_tag(person_id_stop, "SMS_OptOut")
+                except Exception as _se:
+                    logger.warning("SMS_OptOut tag failed for PB stop %s: %s", from_phone, _se)
+                _db.log_pond_sms_reply(
+                    person_id=person_id_stop,
+                    person_name=person_name_stop,
+                    phone_number=from_phone,
+                    reply_text=body_text[:2000],
+                    sentiment="negative",
+                    sentiment_score=1.0,
+                    routed=False,
+                    twilio_message_sid=guid,
+                )
+            return jsonify({"ok": True, "action": "opted_out"}), 200
+
+        # ── Match phone to FUB lead ────────────────────────────────────────────
+        person_id, person_name = _db.get_pond_sms_person_by_phone(from_phone)
+
+        if not person_id:
+            logger.info("PB inbound: no matching pond lead for %s", from_phone)
+            return jsonify({"ok": True, "skipped": "no_match"}), 200
+
+        logger.info("PB SMS reply matched: %s (ID: %s)", person_name, person_id)
+
+        # ── Sentiment ──────────────────────────────────────────────────────────
+        sentiment, sentiment_score, sentiment_reason = _pond_analyze_sentiment(
+            body_text, person_name
+        )
+        logger.info("PB SMS sentiment: %s (%.2f) — %s", sentiment, sentiment_score, sentiment_reason)
+
+        routed      = False
+        fub_note_ok = False
+
+        try:
+            from fub_client import FUBClient
+            fub = FUBClient()
+
+            if sentiment == "positive":
+                fub.add_tag(person_id, "SMS_Conversion")
+                fub.add_tag(person_id, "Claude_Text_Converted")
+                routed = True
+                fub_note_ok = _pond_add_sms_reply_fub_note(
+                    fub, person_id, person_name, body_text, sentiment_reason
+                )
+                _lead_first = (person_name or "").split()[0] if person_name else ""
+                _schedule_sms_handoff(
+                    person_id,
+                    from_phone,
+                    reply_text=body_text,
+                    lead_first_name=_lead_first,
+                    delay_seconds=270,
+                )
+            elif sentiment == "negative":
+                fub.add_tag(person_id, "SMS_OptOut")
+            else:
+                fub_note_ok = _pond_add_sms_reply_fub_note(
+                    fub, person_id, person_name, body_text, sentiment_reason
+                )
+        except Exception as e:
+            logger.error("FUB PB reply handling failed for %s (ID %s): %s",
+                         person_name, person_id, e)
+
+        # ── Log to DB ──────────────────────────────────────────────────────────
+        _db.log_pond_sms_reply(
+            person_id=person_id,
+            person_name=person_name,
+            phone_number=from_phone,
+            reply_text=body_text[:2000],
+            sentiment=sentiment,
+            sentiment_score=sentiment_score,
+            routed=routed,
+            twilio_message_sid=guid,   # reusing column for PB guid
+        )
+
+        # ── Notify Barry ───────────────────────────────────────────────────────
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail as _SGMail
+            sg_key = os.environ.get("SENDGRID_API_KEY")
+            if sg_key:
+                _emoji = {"positive": "🔥", "negative": "🚫", "neutral": "💬"}.get(sentiment, "📬")
+                _subj  = f"{_emoji} iMessage Reply from {person_name or from_phone} — {sentiment.upper()}"
+                _lines = [
+                    f"{person_name or 'A lead'} ({from_phone}) replied to your AI iMessage.",
+                    "",
+                    f"Sentiment: {sentiment.upper()} — {sentiment_reason}",
+                    "",
+                    "─── Their reply ────────────────────────────────────",
+                    body_text.strip()[:1200],
+                    "────────────────────────────────────────────────────",
+                    "",
+                ]
+                if routed:
+                    _lines.append("SMS_Conversion tag applied")
+                    _lines.append("Handoff text queued (4.5 min)")
+                    _lines.append(f"CRM note added: {'yes' if fub_note_ok else 'check logs'}")
+                elif sentiment == "negative":
+                    _lines.append("SMS_OptOut tag applied")
+                else:
+                    _lines.append(f"CRM note added: {'yes' if fub_note_ok else 'check logs'}")
+                _lines += ["", "— Legacy Home Team AI Outreach"]
+
+                _notify_body = "\n".join(_lines)
+                _notify_html = (
+                    "<div style='font-family:-apple-system,sans-serif;font-size:15px;"
+                    "line-height:1.7;color:#222;max-width:560px;margin:24px auto'>"
+                    + _notify_body.replace("\n", "<br>") + "</div>"
+                )
+                _sg_msg = _SGMail(
+                    from_email=config.EMAIL_FROM,
+                    to_emails=config.EMAIL_FROM,
+                    subject=_subj,
+                    plain_text_content=_notify_body,
+                    html_content=_notify_html,
+                )
+                SendGridAPIClient(sg_key).send(_sg_msg)
+        except Exception as _ne:
+            logger.warning("Barry notify email failed for PB reply: %s", _ne)
+
+        return jsonify({"ok": True}), 200
+
+    except Exception as e:
+        logger.error("Project Blue webhook unhandled error: %s", e, exc_info=True)
+        return jsonify({"ok": True, "error": "internal"}), 200
+
+
 @app.route("/api/pond-mailer/dashboard")
 def api_pond_mailer_dashboard():
     """
