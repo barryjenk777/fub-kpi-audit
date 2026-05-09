@@ -3313,7 +3313,7 @@ def days_since_last_pond_email(person_id):
 # ---------------------------------------------------------------------------
 
 def ensure_pond_sms_log_table():
-    """Create pond_sms_log table if it doesn't exist."""
+    """Create pond_sms_log table if it doesn't exist, and add new columns."""
     if not is_available():
         return
     try:
@@ -3339,6 +3339,17 @@ def ensure_pond_sms_log_table():
                     CREATE INDEX IF NOT EXISTS idx_pond_sms_person
                     ON pond_sms_log(person_id, sent_at DESC)
                 """)
+                # A/B test columns — added May 2026
+                # ab_variant: "voice" (ElevenLabs audio bubble) or "video" (HeyGen thumbnail)
+                # video_id:   HeyGen video ID so we can look it up on a consent reply
+                cur.execute("""
+                    ALTER TABLE pond_sms_log
+                    ADD COLUMN IF NOT EXISTS ab_variant VARCHAR(20)
+                """)
+                cur.execute("""
+                    ALTER TABLE pond_sms_log
+                    ADD COLUMN IF NOT EXISTS video_id VARCHAR(100)
+                """)
     except Exception as e:
         logger.warning("ensure_pond_sms_log_table failed: %s", e)
 
@@ -3346,14 +3357,20 @@ def ensure_pond_sms_log_table():
 def log_pond_sms(person_id, person_name, phone_number, body,
                  strategy, leadstream_tier="POND",
                  dry_run=False, twilio_sid=None,
-                 status="queued", channel="sms_only"):
+                 status="queued", channel="sms_only",
+                 ab_variant=None, video_id=None):
     """
     Record a sent pond SMS. Returns the inserted row id or None.
 
     channel values:
-        "sms_only"   — lead had no email; SMS was the only outreach
-        "dual"       — high-priority lead got both email and SMS same send
-        "new_lead"   — immediate SMS on new lead entry
+        "sms_only"     — lead had no email; SMS was the only outreach
+        "dual"         — high-priority lead got both email and SMS same send
+        "new_lead"     — immediate SMS on new lead entry
+        "projectblue"  — Project Blue iMessage-first send
+
+    ab_variant:
+        "voice"  — ElevenLabs audio bubble will be sent on consent reply
+        "video"  — HeyGen map thumbnail will be sent on consent reply
     """
     if not is_available():
         return None
@@ -3364,12 +3381,12 @@ def log_pond_sms(person_id, person_name, phone_number, body,
                     INSERT INTO pond_sms_log
                         (person_id, person_name, phone_number, body,
                          strategy, leadstream_tier, dry_run, twilio_sid,
-                         status, channel)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         status, channel, ab_variant, video_id)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (person_id, person_name, phone_number, body,
                       strategy, leadstream_tier, dry_run, twilio_sid,
-                      status, channel))
+                      status, channel, ab_variant, video_id))
                 row = cur.fetchone()
                 return row[0] if row else None
     except Exception as e:
@@ -3459,6 +3476,88 @@ def count_pond_sms_today(tz_name="America/New_York"):
     except Exception as e:
         logger.warning("count_pond_sms_today failed: %s", e)
         return 0
+
+
+def count_unreplied_pond_sms(person_id):
+    """
+    Return the number of outbound pond SMS sent to this lead since their
+    last inbound reply (or since the beginning if they've never replied).
+
+    Used to enforce the 2-text stop rule: if a lead has gotten 2+ texts
+    with no reply at all, Apple's spam engine starts flagging us. Hard stop.
+    """
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM pond_sms_log
+                    WHERE person_id = %s AND dry_run = FALSE
+                    AND sent_at > COALESCE(
+                        (SELECT MAX(received_at)
+                         FROM pond_sms_reply_log
+                         WHERE person_id = %s),
+                        '1970-01-01'::timestamp
+                    )
+                """, (person_id, person_id))
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+    except Exception as e:
+        logger.warning("count_unreplied_pond_sms failed for %s: %s", person_id, e)
+        return 0
+
+
+def get_ab_variant_for_lead(person_id):
+    """
+    Return the A/B variant assigned to this lead's most recent outbound SMS.
+    Values: "voice" | "video" | None (if never assigned or pre-A/B send).
+
+    Used in the inbound webhook to decide whether to send an ElevenLabs
+    audio bubble or a HeyGen thumbnail when the lead consents to a recording.
+    """
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT ab_variant FROM pond_sms_log
+                    WHERE person_id = %s AND dry_run = FALSE
+                    ORDER BY sent_at DESC
+                    LIMIT 1
+                """, (person_id,))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("get_ab_variant_for_lead failed for %s: %s", person_id, e)
+        return None
+
+
+def get_video_id_for_lead(person_id):
+    """
+    Return the HeyGen video_id stored with the most recent outbound SMS
+    for this lead. Used when ab_variant="video" to build the thumbnail URL
+    for the consent-reply follow-up.
+    Returns None if no video was attached.
+    """
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT video_id FROM pond_sms_log
+                    WHERE person_id = %s AND dry_run = FALSE
+                      AND video_id IS NOT NULL
+                    ORDER BY sent_at DESC
+                    LIMIT 1
+                """, (person_id,))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("get_video_id_for_lead failed for %s: %s", person_id, e)
+        return None
 
 
 def ensure_pond_reply_log_table():

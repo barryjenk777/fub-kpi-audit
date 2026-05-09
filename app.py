@@ -7506,6 +7506,62 @@ def api_pond_mailer_reply():
         return jsonify({"status": "ok", "error": str(e)}), 200
 
 
+def _is_consent_reply(body_text: str) -> bool:
+    """
+    Return True if the lead's reply is a consent to receive the recording
+    Barry offered ("would it be ok if i sent a quick recording?").
+
+    Intentionally loose — catches any clear "yes" signal without requiring
+    the exact word "yes". Does NOT use AI; pure pattern match so it never
+    costs tokens and never times out.
+
+    Distinct from buying sentiment: "ok" alone is consent but not necessarily
+    buying intent. Both can be true at once.
+    """
+    if not body_text:
+        return False
+
+    text = body_text.lower().strip()
+    # Remove trailing punctuation for exact-match tests
+    text_clean = text.rstrip("!. ")
+
+    # Exact single-token consents
+    _CONSENT_EXACT = {
+        "yes", "yeah", "yea", "yep", "yup", "ya", "yah",
+        "ok", "okay", "k", "kk",
+        "sure", "sure thing",
+        "go ahead", "go for it", "go",
+        "please", "please do",
+        "sounds good", "sounds great", "sounds perfect",
+        "absolutely", "definitely", "of course",
+        "for sure", "forsure",
+        "alright", "alrighty",
+        "send it", "send away", "shoot",
+        "do it", "let's go", "lets go",
+        "i'm in", "im in",
+        "that works", "works for me",
+        "yes please", "yes absolutely", "yes please do",
+        "of course please", "by all means",
+        "👍", "✅", "💯", "🙌",
+    }
+
+    if text_clean in _CONSENT_EXACT:
+        return True
+
+    # Starts-with patterns (catches "yes that would be great", "sure go ahead", etc.)
+    _CONSENT_STARTS = (
+        "yes ", "yeah ", "yep ", "yup ", "sure ", "ok ", "okay ",
+        "absolutely ", "definitely ", "of course ", "go ahead",
+        "please send", "please do", "please go",
+        "sounds good", "sounds great",
+        "for sure", "yes please",
+    )
+    if any(text.startswith(p) for p in _CONSENT_STARTS):
+        return True
+
+    return False
+
+
 def _pond_analyze_sentiment(reply_text, person_name=""):
     """
     Use Claude Haiku to classify a reply as positive / neutral / negative.
@@ -7981,14 +8037,16 @@ Output ONLY the SMS text. Nothing else."""
 def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name="",
                           delay_seconds=270):
     """
-    Fire a personalized handoff SMS to the lead ~4.5 minutes after a positive reply.
+    Fire a personalized handoff SMS to the lead after a positive/consent reply.
 
-    Waits for FUB automation to apply SMS_Conversion and assign the lead to an
-    agent via the priority-group rule. Then:
+    Default delay is 270s (4.5 min) for buying-intent replies, giving FUB
+    automation time to apply SMS_Conversion and assign the lead to an agent.
+    For consent-only replies (no buying signal yet) caller passes 900s so the
+    lead has time to listen to the voice note before we check in.
+
       1. Fetches the assigned agent's name + direct phone from FUB
-      2. Uses Claude Haiku to write a warm, specific handoff message that
-         references what the lead said and positions the agent compellingly
-      3. Sends it via Twilio
+      2. Uses Claude Haiku to write a warm, specific handoff message
+      3. Sends via Project Blue (iMessage-first)
 
     Runs in a daemon thread — Flask response returns immediately.
     """
@@ -7997,7 +8055,7 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
     def _send():
         try:
             from fub_client import FUBClient
-            from twilio_client import send_sms
+            import projectblue_client as _pb_handoff
             fub = FUBClient()
 
             # Fetch updated lead to see who FUB automation assigned
@@ -8028,12 +8086,12 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
                 agent_phone=agent_phone,
             )
 
-            result = send_sms(to_phone, body, dry_run=False)
+            result = _pb_handoff.send_message(to_phone, body, dry_run=False)
             if result.get("success"):
-                logger.info("Handoff SMS sent to %s (person %s, agent: %s, %d chars)",
+                logger.info("Handoff iMessage sent to %s (person %s, agent: %s, %d chars)",
                             to_phone, person_id, agent_first or "unassigned", len(body))
             else:
-                logger.warning("Handoff SMS failed for person %s: %s",
+                logger.warning("Handoff iMessage failed for person %s: %s",
                                person_id, result.get("error"))
         except Exception as _e:
             logger.error("SMS handoff timer failed for person %s: %s",
@@ -8527,9 +8585,127 @@ def webhook_projectblue():
         routed      = False
         fub_note_ok = False
 
+        # Consent detection runs outside the FUB try/except so it's always
+        # defined and can be safely referenced in the notify-Barry block below.
+        _consent = _is_consent_reply(body_text)
+
+        # Audit tracking — captured inside consent block, read by audit email below
+        _audit_voice_script = None
+        _audit_video_id     = None
+        _audit_video_url    = None
+        _audit_handoff_secs = None
+        _audit_behavior     = {}
+        _audit_lead_type    = "buyer"  # refined below when we fetch person record
+
         try:
             from fub_client import FUBClient
             fub = FUBClient()
+            if _consent:
+                logger.info("Consent reply detected from %s (%s): %r",
+                            person_name, from_phone, body_text[:60])
+                try:
+                    import elevenlabs_client as _el
+                    import projectblue_client as _pb_reply
+
+                    # Look up the A/B variant assigned when we sent the opener
+                    _ab_variant = _db.get_ab_variant_for_lead(person_id) or "voice"
+                    logger.info("A/B variant for %s: %s", person_name, _ab_variant)
+
+                    _base_url = os.environ.get("BASE_URL",
+                                               "https://web-production-3363cc.up.railway.app")
+
+                    if _ab_variant == "video":
+                        # Video variant: HeyGen thumbnail + link as MMS
+                        _stored_vid_id = _db.get_video_id_for_lead(person_id)
+                        if _stored_vid_id and _pb_reply.is_available():
+                            _thumb_url = f"{_base_url}/mthumb/{_stored_vid_id}"
+                            _vid_link  = f"{_base_url}/v/{_stored_vid_id}"
+                            _vid_body  = (
+                                f"here you go! tap the link for the full walkthrough\n"
+                                f"{_vid_link}"
+                            )
+                            _pb_reply.send_message(
+                                to_number=from_phone,
+                                body=_vid_body,
+                                media_url=_thumb_url,
+                            )
+                            _audit_video_id  = _stored_vid_id
+                            _audit_video_url = _vid_link
+                            logger.info("Video variant sent to %s (video_id=%s)",
+                                        person_name, _stored_vid_id)
+                        else:
+                            logger.warning("Video variant: no video_id for %s — falling back to voice",
+                                           person_name)
+                            _ab_variant = "voice"   # fall through to voice path
+
+                    if _ab_variant != "video":
+                        # Voice variant: ElevenLabs audio bubble in iMessage
+                        if _el.is_available() and _pb_reply.is_available():
+                            _vn_behavior = {}
+                            try:
+                                from fub_client import FUBClient as _FUBv
+                                from pond_mailer import analyze_behavior as _ab_fn
+                                _vn_fub    = _FUBv()
+                                _vn_events = _vn_fub.get_events_for_person(
+                                    person_id, days=90, limit=100)
+                                _vn_tags   = fub.get_person(person_id).get("tags", [])
+                                _vn_behavior = _ab_fn(_vn_events, _vn_tags)
+                            except Exception as _vbe:
+                                logger.warning("Voice note behavior fetch failed: %s", _vbe)
+
+                            # Lead type detection for voice note script routing.
+                            # Zbuyer: owns the home, wants a cash offer — totally different script.
+                            # Ylopo Prospecting/Seller: home value inquiry — market intel script.
+                            # Everything else: buyer browsing IDX.
+                            _vn_person_full = fub.get_person(person_id) if person_id else {}
+                            _vn_person_tags = _vn_person_full.get("tags") or []
+                            _vn_source = (_vn_person_full.get("source") or "").strip().lower()
+                            _vn_src_norm = _vn_source.replace("-","").replace(" ","").replace("_","")
+                            _is_zbuyer_vn = (
+                                any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER")
+                                    for t in _vn_person_tags)
+                                or "zbuyer" in _vn_src_norm
+                            )
+                            _is_seller_vn = (
+                                not _is_zbuyer_vn
+                                and any(t in _vn_person_tags
+                                        for t in ("Ylopo Prospecting", "Ylopo Seller"))
+                            )
+
+                            # Capture lead type for audit email
+                            _audit_lead_type = (
+                                "zbuyer" if _is_zbuyer_vn else
+                                ("seller" if _is_seller_vn else "buyer")
+                            )
+                            _audit_behavior = _vn_behavior
+
+                            script      = _el.generate_voice_note_script(
+                                person_name=person_name,
+                                behavior=_vn_behavior,
+                                strategy="",
+                                is_seller=_is_seller_vn,
+                                is_zbuyer=_is_zbuyer_vn,
+                            )
+                            _audit_voice_script = script   # capture for audit email
+                            audio_bytes = _el.generate_audio(script)
+                            if audio_bytes:
+                                audio_id  = _el.store_audio(audio_bytes)
+                                audio_url = f"{_base_url}/audio/{audio_id}"
+                                _pb_reply.send_message(
+                                    to_number=from_phone,
+                                    body="",
+                                    audio_url=audio_url,
+                                )
+                                logger.info("Voice note sent to %s (%d bytes, %d chars)",
+                                            from_phone, len(audio_bytes), len(script))
+                            else:
+                                logger.warning("ElevenLabs returned no audio for %s", person_name)
+                        else:
+                            logger.info("Voice note skipped — ElevenLabs or Project Blue not configured")
+                except Exception as _vne:
+                    logger.warning("Recording send failed (non-fatal): %s", _vne)
+
+            _lead_first = (person_name or "").split()[0] if person_name else ""
 
             if sentiment == "positive":
                 fub.add_tag(person_id, "SMS_Conversion")
@@ -8538,60 +8714,8 @@ def webhook_projectblue():
                 fub_note_ok = _pond_add_sms_reply_fub_note(
                     fub, person_id, person_name, body_text, sentiment_reason
                 )
-
-                # ── ElevenLabs voice note — fires immediately on "yes" reply ──
-                # Lead said yes to "would it be ok if i sent a quick recording"
-                # Generate Barry's voice, serve via /audio/<id>, send via PB.
-                try:
-                    import elevenlabs_client as _el
-                    import projectblue_client as _pb_reply
-                    if _el.is_available() and _pb_reply.is_available():
-                        # Re-fetch behavioral data to personalize the script
-                        _vn_events = []
-                        _vn_behavior = {}
-                        try:
-                            from fub_client import FUBClient as _FUBv
-                            from pond_mailer import analyze_behavior as _ab
-                            _vn_fub = _FUBv()
-                            _vn_events = _vn_fub.get_events_for_person(person_id, days=90, limit=100)
-                            _vn_tags = fub.get_person(person_id).get("tags", [])
-                            _vn_behavior = _ab(_vn_events, _vn_tags)
-                        except Exception as _vbe:
-                            logger.warning("Voice note behavior fetch failed (non-fatal): %s", _vbe)
-
-                        _is_seller_vn = any(t in (fub.get_person(person_id).get("tags") or [])
-                                            for t in ("Ylopo Prospecting", "Ylopo Seller")) \
-                                        if person_id else False
-
-                        script = _el.generate_voice_note_script(
-                            person_name=person_name,
-                            behavior=_vn_behavior,
-                            strategy="",
-                            is_seller=_is_seller_vn,
-                        )
-
-                        audio_bytes = _el.generate_audio(script)
-                        if audio_bytes:
-                            audio_id  = _el.store_audio(audio_bytes)
-                            base_url  = os.environ.get("BASE_URL",
-                                                       "https://web-production-3363cc.up.railway.app")
-                            audio_url = f"{base_url}/audio/{audio_id}"
-
-                            _pb_reply.send_message(
-                                to_number=from_phone,
-                                body="",          # audio bubble needs no text body
-                                audio_url=audio_url,
-                            )
-                            logger.info("Voice note sent to %s (%d bytes, script: %d chars)",
-                                        from_phone, len(audio_bytes), len(script))
-                        else:
-                            logger.warning("ElevenLabs returned no audio for %s", person_name)
-                    else:
-                        logger.info("Voice note skipped — ElevenLabs or Project Blue not configured")
-                except Exception as _vne:
-                    logger.warning("Voice note send failed (non-fatal): %s", _vne)
-
-                _lead_first = (person_name or "").split()[0] if person_name else ""
+                # 270s: give FUB automation time to assign the lead before handoff fires
+                _audit_handoff_secs = 270
                 _schedule_sms_handoff(
                     person_id,
                     from_phone,
@@ -8601,6 +8725,22 @@ def webhook_projectblue():
                 )
             elif sentiment == "negative":
                 fub.add_tag(person_id, "SMS_OptOut")
+            elif _consent:
+                # Consent with neutral buying intent: they said yes to the recording
+                # but didn't show buying signals yet. Log the FUB note AND schedule
+                # a soft follow-up 15 min later so an agent can check in after they've
+                # had time to listen to the voice note.
+                fub_note_ok = _pond_add_sms_reply_fub_note(
+                    fub, person_id, person_name, body_text, "consented to recording"
+                )
+                _audit_handoff_secs = 900
+                _schedule_sms_handoff(
+                    person_id,
+                    from_phone,
+                    reply_text=body_text,
+                    lead_first_name=_lead_first,
+                    delay_seconds=900,   # 15 min — time to listen to the note first
+                )
             else:
                 fub_note_ok = _pond_add_sms_reply_fub_note(
                     fub, person_id, person_name, body_text, sentiment_reason
@@ -8621,6 +8761,34 @@ def webhook_projectblue():
             twilio_message_sid=guid,   # reusing column for PB guid
         )
 
+        # ── Lead audit email — full breakdown so Barry can QA every touch ──────
+        try:
+            import lead_audit as _la
+            _orig_sms = None
+            try:
+                _orig_sms = _db.get_last_sms_sent(person_id)
+            except Exception:
+                pass
+            _la.send_response_audit(
+                person_id=person_id,
+                person_name=person_name or from_phone,
+                lead_type=_audit_lead_type,
+                phone=from_phone,
+                reply_text=body_text,
+                sentiment=sentiment,
+                sentiment_reason=sentiment_reason,
+                consent=_consent,
+                ab_variant=_db.get_ab_variant_for_lead(person_id) or "voice",
+                voice_script=_audit_voice_script,
+                video_id=_audit_video_id,
+                video_url=_audit_video_url,
+                handoff_delay_seconds=_audit_handoff_secs,
+                original_sms=_orig_sms,
+                behavior=_audit_behavior,
+            )
+        except Exception as _lae:
+            logger.warning("Lead audit email (response) failed: %s", _lae)
+
         # ── Notify Barry ───────────────────────────────────────────────────────
         try:
             from sendgrid import SendGridAPIClient
@@ -8628,11 +8796,18 @@ def webhook_projectblue():
             sg_key = os.environ.get("SENDGRID_API_KEY")
             if sg_key:
                 _emoji = {"positive": "🔥", "negative": "🚫", "neutral": "💬"}.get(sentiment, "📬")
+                if _consent and sentiment != "negative":
+                    _emoji = "🎙️" if (_db.get_ab_variant_for_lead(person_id) or "voice") == "voice" else "🎬"
                 _subj  = f"{_emoji} iMessage Reply from {person_name or from_phone} — {sentiment.upper()}"
                 _lines = [
                     f"{person_name or 'A lead'} ({from_phone}) replied to your AI iMessage.",
                     "",
                     f"Sentiment: {sentiment.upper()} — {sentiment_reason}",
+                ]
+                if _consent:
+                    _resolved_variant = _db.get_ab_variant_for_lead(person_id) or "voice"
+                    _lines.append(f"Consent: YES — {_resolved_variant} recording sent")
+                _lines += [
                     "",
                     "─── Their reply ────────────────────────────────────",
                     body_text.strip()[:1200],

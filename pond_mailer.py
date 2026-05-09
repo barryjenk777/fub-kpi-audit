@@ -2892,6 +2892,10 @@ def run_new_lead_mailer(dry_run=True):
             logger.debug("Skipping %s — already in drip (%d emails)", name, history["emails_sent"])
             continue
 
+        # Pull IDX events — new leads may have very few, that's OK
+        events = client.get_events_for_person(pid, days=7, limit=50)
+        behavior = analyze_behavior(events, tags)
+
         # Get email address
         emails = person.get("emails") or []
         to_email = next(
@@ -2900,69 +2904,185 @@ def run_new_lead_mailer(dry_run=True):
         )
         if not to_email and emails:
             to_email = emails[0].get("value")
-        if not to_email:
-            logger.debug("Skipping %s — no email", name)
-            continue
 
-        # Pull IDX events — new leads may have very few, that's OK
-        events = client.get_events_for_person(pid, days=7, limit=50)
-        behavior = analyze_behavior(events, tags)
+        _did_something = False
 
-        # Generate the email
-        try:
-            email_data = generate_new_lead_email(person, behavior, tags, dry_run=dry_run,
-                                                  time_bucket=_time_bucket)
-        except Exception as e:
-            logger.error("New lead email generation failed for %s: %s", name, e)
-            continue
-
-        subject_options = email_data.get("subject_options", [])
-        subject = subject_options[0] if subject_options else f"Quick question — {first or 'you'}"
-        body_text = email_data.get("body", "")
-
-        # Plain-text-only send — HTML removed for deliverability
-        body_html = None
-
-        print(f"\n  [NEW LEAD] {name} (ID: {pid})")
-        print(f"    Email: {to_email}")
-        print(f"    Created: {person.get('created', 'unknown')}")
-        print(f"    Subject: {subject}")
-
-        # Log before send
-        log_id = _db.log_pond_email(
-            person_id=pid, person_name=name, email_address=to_email,
-            subject=subject, strategy="new_lead_immediate",
-            leadstream_tier="NEW_LEAD",
-            behavior_summary=f"views:{behavior.get('view_count',0)} saves:{behavior.get('save_count',0)}",
-            sequence_num=1, dry_run=dry_run, sg_message_id=None,
-        )
-
-        try:
-            _send_to = to_override or to_email
-            result = send_email(_send_to, subject, body_text, body_html, dry_run=dry_run)
-        except Exception as e:
-            logger.error("Send failed for new lead %s: %s", name, e)
-            continue
-
-        if result.get("sg_message_id") and log_id:
-            _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
-
-        # Log to FUB timeline — 📧 note so agents see what went out.
-        # (FUB's /v1/emails endpoint returns 403 for API integrations — notes work.)
-        if not dry_run:
+        # ── Email path ────────────────────────────────────────────────────────
+        if to_email:
+            # Generate the email
             try:
-                from config import BARRY_FUB_USER_ID
-                client.log_email_sent(
-                    person_id=pid,
-                    subject=subject,
-                    message=body_text,
-                    user_id=BARRY_FUB_USER_ID,
-                )
-            except Exception as _fub_err:
-                logger.warning("FUB email log skipped for new lead %s: %s", name, _fub_err)
+                email_data = generate_new_lead_email(person, behavior, tags, dry_run=dry_run,
+                                                      time_bucket=_time_bucket)
+            except Exception as e:
+                logger.error("New lead email generation failed for %s: %s", name, e)
+                email_data = None
 
-        sent += 1
-        logger.info("New lead immediate email sent to %s (%s)", name, to_email)
+            if email_data:
+                subject_options = email_data.get("subject_options", [])
+                subject = subject_options[0] if subject_options else f"Quick question, {first or 'you'}"
+                body_text = email_data.get("body", "")
+
+                # Plain-text-only send — HTML removed for deliverability
+                body_html = None
+
+                print(f"\n  [NEW LEAD] {name} (ID: {pid})")
+                print(f"    Email: {to_email}")
+                print(f"    Created: {person.get('created', 'unknown')}")
+                print(f"    Subject: {subject}")
+
+                # Log before send
+                log_id = _db.log_pond_email(
+                    person_id=pid, person_name=name, email_address=to_email,
+                    subject=subject, strategy="new_lead_immediate",
+                    leadstream_tier="NEW_LEAD",
+                    behavior_summary=f"views:{behavior.get('view_count',0)} saves:{behavior.get('save_count',0)}",
+                    sequence_num=1, dry_run=dry_run, sg_message_id=None,
+                )
+
+                try:
+                    _send_to = to_override or to_email
+                    result = send_email(_send_to, subject, body_text, body_html, dry_run=dry_run)
+                    if result.get("sg_message_id") and log_id:
+                        _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
+                    _did_something = True
+                    logger.info("New lead immediate email sent to %s (%s)", name, to_email)
+                except Exception as e:
+                    logger.error("Send failed for new lead %s: %s", name, e)
+
+                # Log to FUB timeline — note so agents see what went out.
+                # (FUB's /v1/emails endpoint returns 403 for API integrations — notes work.)
+                if _did_something and not dry_run:
+                    try:
+                        from config import BARRY_FUB_USER_ID
+                        client.log_email_sent(
+                            person_id=pid,
+                            subject=subject,
+                            message=body_text,
+                            user_id=BARRY_FUB_USER_ID,
+                        )
+                    except Exception as _fub_err:
+                        logger.warning("FUB email log skipped for new lead %s: %s", name, _fub_err)
+        else:
+            logger.debug("New lead %s — no email address, SMS-only path", name)
+
+        # ── SMS path ──────────────────────────────────────────────────────────
+        # Fire the "would it be ok if I sent a quick recording?" opener via
+        # Project Blue (iMessage-first). This is the consent-gathering text that
+        # triggers a voice note send when the lead replies with "ok/sure/yes."
+        # Runs whether or not we sent an email — covers phone-only leads too.
+        import projectblue_client as _pb_nl
+        import random as _rand_nl
+
+        _nl_phone = _pb_nl.get_primary_phone(person)
+        _nl_sms_blocked = _pb_nl.sms_suppressed_by_tags(tags) if _nl_phone else []
+        _nl_src_blocked = _is_sms_blocked_source(person)
+
+        if not _nl_phone:
+            logger.debug("New lead %s — no phone, skipping SMS", name)
+        elif _nl_src_blocked:
+            logger.info("New lead %s — SMS blocked by source (%s)", name, person.get("source", ""))
+        elif _nl_sms_blocked:
+            logger.info("New lead %s — SMS suppressed by tag(s): %s",
+                        name, ", ".join(_nl_sms_blocked))
+        elif _db.has_received_pond_sms(pid):
+            logger.debug("New lead %s — already received a pond SMS, skipping", name)
+        else:
+            # TCPA quiet hours enforced inside _pb_nl.send_message()
+            # New leads always get "voice" A/B variant (no HeyGen video yet)
+            _nl_ab_variant = "voice"
+
+            # First text ever: weave opt-out into the message (TCPA compliance)
+            _nl_hist_count = _db.count_pond_sms_sent(pid)
+            _nl_needs_optout = (_nl_hist_count == 0)
+
+            print(f"\n  [NEW LEAD SMS] {name} (ID: {pid}) · {_nl_phone}")
+            print(f"    Channel: new_lead | A/B: {_nl_ab_variant}" +
+                  (" | FIRST TEXT — opt-out required" if _nl_needs_optout else ""))
+
+            try:
+                _nl_sms_body = generate_sms_body(
+                    person=person, behavior=behavior, strategy="new_lead_immediate",
+                    leadstream_tier="NEW_LEAD", tags=tags,
+                    is_seller=False, is_z=False,
+                    channel="new_lead", needs_optout=_nl_needs_optout, dry_run=dry_run,
+                )
+            except Exception as _nl_eg:
+                logger.error("New lead SMS generation failed for %s: %s", name, _nl_eg)
+                _nl_sms_body = None
+
+            if _nl_sms_body:
+                _nl_result = _pb_nl.send_message(_nl_phone, _nl_sms_body, dry_run=dry_run)
+
+                if _nl_result.get("success"):
+                    _db.ensure_pond_sms_log_table()
+                    _db.log_pond_sms(
+                        pid, name, _nl_phone, _nl_sms_body,
+                        strategy="new_lead_immediate",
+                        leadstream_tier="NEW_LEAD",
+                        dry_run=dry_run,
+                        twilio_sid=_nl_result.get("pb_handle"),
+                        status=_nl_result.get("status", "queued"),
+                        channel="new_lead",
+                        ab_variant=_nl_ab_variant,
+                    )
+                    # Log to FUB timeline
+                    if not dry_run:
+                        try:
+                            from config import BARRY_FUB_USER_ID
+                            client.log_sms_sent(
+                                person_id=pid,
+                                sms_body=_nl_sms_body,
+                                lead_type="buyer",
+                                channel="new_lead",
+                                user_id=BARRY_FUB_USER_ID,
+                            )
+                        except Exception as _nl_fub_err:
+                            logger.warning("FUB SMS log skipped for new lead %s: %s",
+                                           name, _nl_fub_err)
+
+                    _did_something = True
+                    logger.info("New lead SMS sent to %s (%s) via %s",
+                                name, _nl_phone, _nl_result.get("message_type", "?"))
+                    print(f"    SMS sent via {_nl_result.get('message_type', '?')} "
+                          f"({_nl_result.get('status', '?')})")
+
+                    # Lead audit email — Barry QAs every outreach
+                    try:
+                        import lead_audit as _audit
+                        _nl_src = person.get("source") or ""
+                        _nl_is_z = any(
+                            t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER")
+                            for t in tags
+                        ) or "zbuyer" in _nl_src.lower().replace("-","").replace(" ","")
+                        _nl_is_seller = (
+                            not _nl_is_z and
+                            any(t in tags for t in ("Ylopo Prospecting", "Ylopo Seller"))
+                        )
+                        _nl_lead_type = "zbuyer" if _nl_is_z else ("seller" if _nl_is_seller else "buyer")
+                        _audit.send_outreach_audit(
+                            person_id=pid,
+                            person_name=name,
+                            person_source=_nl_src,
+                            lead_type=_nl_lead_type,
+                            phone=_nl_phone,
+                            sms_body=_nl_sms_body,
+                            ab_variant=_nl_ab_variant,
+                            channel="new_lead",
+                            behavior=behavior,
+                            dry_run=dry_run,
+                        )
+                    except Exception as _ae:
+                        logger.warning("Lead audit email failed for %s: %s", name, _ae)
+                else:
+                    logger.warning("New lead SMS failed for %s: %s",
+                                   name, _nl_result.get("error"))
+
+        if not _did_something and not to_email and not _nl_phone:
+            logger.debug("Skipping new lead %s — no email or phone", name)
+            continue
+
+        if _did_something:
+            sent += 1
 
     return {"checked": len(new_leads), "eligible": len(eligible), "sent": sent}
 
@@ -3011,6 +3131,29 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
 
     _db.ensure_pond_email_log_table()
     _db.ensure_pond_sms_log_table()
+
+    # SMS warmup cap — enforces PB_DAILY_CAP env var (default 20).
+    # Start low on a new number (5-10/day); ramp up as the number warms.
+    # Set PB_DAILY_CAP in Railway env vars to control the ramp.
+    _pb_sms_daily_cap = int(os.environ.get("PB_DAILY_CAP", "20"))
+
+    # New-leads-only gate — when PB_NEW_LEADS_ONLY=true, the regular pond
+    # mailer sends NO SMS at all. Only run_new_lead_mailer() can fire texts.
+    # Flip to false in Railway once the number has a few days of new-lead
+    # warmup and you're ready to open SMS to the full pond.
+    _pb_new_leads_only = os.environ.get("PB_NEW_LEADS_ONLY", "true").lower() == "true"
+    if _pb_new_leads_only:
+        logger.info("PB_NEW_LEADS_ONLY=true — pond mailer SMS disabled; only new leads get texts")
+        print("[POND MAILER] SMS restricted to new leads only (PB_NEW_LEADS_ONLY=true)")
+    if not dry_run:
+        _sms_today = _db.count_pond_sms_today()
+        if _sms_today >= _pb_sms_daily_cap:
+            logger.info("SMS daily cap reached (%d/%d). Skipping SMS sends this run.",
+                        _sms_today, _pb_sms_daily_cap)
+            print(f"[POND MAILER] SMS daily cap reached ({_sms_today}/{_pb_sms_daily_cap}). "
+                  f"SMS sends paused; email run continues.")
+    else:
+        _sms_today = 0
 
     # Daily cap enforcement — count emails already sent today (ET) and reduce
     # this run's limit to stay within the daily ceiling.
@@ -3175,7 +3318,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         #   3. No suppression tags (opt-outs, wrong number, DO_NOT_CALL, etc.)
         _in_shark_tank    = person.get("_pond_id") == SHARK_TANK_POND_ID
         _sms_src_blocked  = _is_sms_blocked_source(person)
-        to_phone = _pb.get_primary_phone(person) if (_pb_ready and _in_shark_tank and not _sms_src_blocked) else None
+        to_phone = _pb.get_primary_phone(person) if (_pb_ready and _in_shark_tank and not _sms_src_blocked and not _pb_new_leads_only) else None
         _sms_blocked = _pb.sms_suppressed_by_tags(tags) if to_phone else []
         _sms_eligible = bool(to_phone and not _sms_blocked)
 
@@ -3214,14 +3357,33 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
             # Email blocked but SMS still open — clear to_email so we drop into SMS-only fork
             to_email = None
 
+        # Daily SMS cap gate — check before any SMS path so the cap applies
+        # to both the SMS-only path and the dual-channel SMS send.
+        _sms_cap_reached = (not dry_run and _sms_today >= _pb_sms_daily_cap)
+
         # ── SMS-only path ─────────────────────────────────────────────────────
         # Lead has no email address (or email was just suppressed) but has a
         # valid opted-in phone number. Run the same behavior/strategy/generation
         # pipeline but send a condensed SMS instead of an email.
         if not to_email and _sms_eligible:
+            if _sms_cap_reached:
+                logger.info("Skipping %s (SMS-only) — daily SMS cap reached (%d)", name, _pb_sms_daily_cap)
+                # Fall through: no email either, so this lead is just skipped this run
+                skipped_cooldown += 1
+                continue
+
             _sms_days = _db.days_since_last_pond_sms(pid)
             if _sms_days is not None and _sms_days < SMS_COOLDOWN_DAYS:
                 logger.debug("Skipping %s (SMS-only) — texted %.1fd ago", name, _sms_days)
+                skipped_cooldown += 1
+                continue
+
+            # 2-text stop rule: Apple spam detection fires when a thread has
+            # many outbound messages and zero replies. Hard stop after 2 unreplied.
+            _unreplied_count = _db.count_unreplied_pond_sms(pid) if not dry_run else 0
+            if _unreplied_count >= 2:
+                logger.info("Skipping %s (SMS-only) — %d unreplied texts, 2-text stop rule",
+                            name, _unreplied_count)
                 skipped_cooldown += 1
                 continue
 
@@ -3252,8 +3414,13 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
             _sms_hist_count = _db.count_pond_sms_sent(pid)
             _needs_optout   = (_sms_hist_count == 0) or (_sms_hist_count % 5 == 4)
 
+            # A/B variant: 50/50 voice (ElevenLabs) vs video (HeyGen) for the
+            # follow-up recording that fires when the lead consents.
+            import random as _rand
+            _sms_ab_variant = "voice" if _rand.random() < 0.5 else "video"
+
             print(f"\n  [SMS-ONLY] {name} (ID: {pid}) · {to_phone}")
-            print(f"    Tier: {_tier2} | Strategy: {_strat2}" +
+            print(f"    Tier: {_tier2} | Strategy: {_strat2} | A/B: {_sms_ab_variant}" +
                   (" | FIRST TEXT — opt-out required" if _sms_hist_count == 0 else ""))
 
             try:
@@ -3283,7 +3450,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                                  dry_run=dry_run,
                                  twilio_sid=_sms_sid,
                                  status=_sms_result.get("status", "queued"),
-                                 channel=_sms_channel)
+                                 channel=_sms_channel,
+                                 ab_variant=_sms_ab_variant)
                 # Log to FUB timeline — 📱 note so agents see what text went out
                 if not dry_run:
                     try:
@@ -3305,9 +3473,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                         client.add_tag_fast(pid, "Claude_Text_Drip", tags)
                     except Exception as _tag_err:
                         logger.warning("Claude_Text_Drip tag failed for %s: %s", name, _tag_err)
-                print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} SMS ({len(_sms_body)+52} chars)")
+                print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} SMS | A/B: {_sms_ab_variant} ({len(_sms_body)+52} chars)")
                 sms_only_sent += 1
                 sent += 1
+                _sms_today += 1  # track toward warmup cap within this run
+                # Jitter: 2-8s random delay between sends to look human and avoid
+                # carrier pattern detection. Skip on dry_run (no real send happened).
+                if not dry_run:
+                    import time as _time
+                    _jitter = _rand.uniform(2.0, 8.0)
+                    logger.debug("SMS jitter: sleeping %.1fs before next send", _jitter)
+                    _time.sleep(_jitter)
             elif _sms_result.get("status") == "quiet_hours":
                 # TCPA block — outside 8am–9pm ET; not an error, just reschedule
                 logger.info("SMS-only quiet_hours block for %s — will retry next run in window", name)
@@ -4125,14 +4301,24 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         #
         # Ylopo Prospecting sellers are excluded at _sms_eligible (source block).
         # SMS cooldown is checked independently of email cooldown.
-        if _sms_eligible:
+        if _sms_eligible and not _sms_cap_reached:
             _dual_sms_days = _db.days_since_last_pond_sms(pid)
-            if _dual_sms_days is None or _dual_sms_days >= SMS_COOLDOWN_DAYS:
+            # 2-text stop rule check for dual-channel path
+            _dual_unreplied = _db.count_unreplied_pond_sms(pid) if (not dry_run and _sms_eligible) else 0
+            if _dual_unreplied >= 2:
+                logger.info("Dual SMS skipped for %s — %d unreplied texts (2-text stop rule)",
+                            name, _dual_unreplied)
+
+            if (_dual_sms_days is None or _dual_sms_days >= SMS_COOLDOWN_DAYS) and _dual_unreplied < 2:
                 # TCPA opt-out: required on 1st text ever, then every 5th send
                 _dual_sms_count    = _db.count_pond_sms_sent(pid)
                 _dual_needs_optout = (_dual_sms_count == 0) or (_dual_sms_count % 5 == 4)
                 _is_high_intent    = is_z or any(t in tags for t in _tc.DUAL_CHANNEL_TAGS)
                 _dual_body         = None
+
+                # A/B variant for consent-reply follow-up
+                import random as _rand
+                _dual_ab_variant = "voice" if _rand.random() < 0.5 else "video"
 
                 if _is_high_intent:
                     # Claude-written urgent angle — different voice from email
@@ -4200,12 +4386,17 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     _sms_type_label = "dual SMS" if _is_high_intent else "cross-channel SMS"
 
                     if _dual_result.get("success"):
+                        # Store video_id with the log so the consent webhook can
+                        # fetch it when the lead replies yes to the recording offer.
+                        _log_vid_id = video_result.get("video_id") if video_result else None
                         _db.log_pond_sms(pid, name, to_phone, _dual_body,
                                          strategy=strategy, leadstream_tier=leadstream_tier,
                                          dry_run=dry_run,
                                          twilio_sid=_dual_sid,
                                          status=_dual_result.get("status", "queued"),
-                                         channel=_dual_channel)
+                                         channel=_dual_channel,
+                                         ab_variant=_dual_ab_variant,
+                                         video_id=_log_vid_id)
                         # Log to FUB timeline — 📱 note alongside the email note
                         if not dry_run:
                             try:
@@ -4229,8 +4420,15 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                                 logger.warning("Claude_Text_Drip tag (%s) failed for %s: %s",
                                                _sms_type_label, name, _dtag_err)
                         _vid_note = " + video 🎬" if _dual_media_url else ""
-                        print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} {_sms_type_label}{_vid_note} ({len(_dual_body)} chars)")
+                        print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} {_sms_type_label}{_vid_note} | A/B: {_dual_ab_variant} ({len(_dual_body)} chars)")
                         dual_sms_sent += 1
+                        _sms_today += 1  # track toward warmup cap within this run
+                        # Jitter between sends — looks human, avoids carrier flagging
+                        if not dry_run:
+                            import time as _time
+                            _jitter = _rand.uniform(2.0, 8.0)
+                            logger.debug("Dual SMS jitter: sleeping %.1fs", _jitter)
+                            _time.sleep(_jitter)
                     elif _dual_result.get("status") == "quiet_hours":
                         logger.info("%s quiet_hours block for %s — outside 8am–9pm ET",
                                     _sms_type_label.title(), name)

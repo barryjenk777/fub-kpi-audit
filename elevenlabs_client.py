@@ -129,30 +129,110 @@ def generate_voice_note_script(
     behavior: dict,
     strategy: str,
     is_seller: bool = False,
+    is_zbuyer: bool = False,
 ) -> str:
     """
     Use Claude Haiku to write the voice note script Barry will deliver.
 
     This fires AFTER the lead says yes to the permission question.
     The script should feel like Barry left them a personal voice message --
-    warm, specific to what they were looking at, ends with an open door.
+    warm, specific to what they were looking at, ends with a clear next step.
 
-    Returns a plain text script under ~200 words (about 60-90 seconds of audio).
+    is_zbuyer: True for cash-offer request leads (Zbuyer source / ZLEAD tag).
+               These are homeowners who want a cash number on their property.
+               Script is entirely different from a standard seller or buyer.
+    is_seller: True for Ylopo Prospecting homeowner leads (home value inquiry).
+               Different from Zbuyer — they want market data, not a cash offer.
+
+    Returns a plain text script under 80 words (about 30-45 seconds of audio).
     """
     try:
         import anthropic as _ant
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
-            return _fallback_script(person_name, behavior, is_seller)
+            return _fallback_script(person_name, behavior, is_seller, is_zbuyer)
 
         b = behavior or {}
         first = (person_name or "there").split()[0]
 
-        # Build a compact behavioral summary for the prompt
+        client = _ant.Anthropic(api_key=api_key)
+
+        # ── Zbuyer: cash offer request ────────────────────────────────────────
+        if is_zbuyer:
+            # Pull property address from behavior if available
+            prop_hint = ""
+            mv = b.get("most_viewed") or {}
+            street = mv.get("street") or ""
+            city   = mv.get("city") or ""
+            if street and city:
+                prop_hint = f"their property is at {street}, {city}"
+            elif city:
+                prop_hint = f"they're in {city}"
+
+            resp = client.messages.create(
+                model="claude-3-5-haiku-20241022",
+                max_tokens=250,
+                messages=[{"role": "user", "content": f"""Write a short voice note script for Barry Jenkins to send to {first}, a homeowner in Hampton Roads Virginia who just requested a cash offer on their home.
+
+Property context: {prop_hint if prop_hint else "Hampton Roads area home"}
+
+The lead just said yes to receiving a quick voice recording. Barry is leaving them a voice note.
+
+Barry's position: he works with the top cash buyers in Hampton Roads and can get them a real number as quickly as they want. He just needs to know when he can stop by briefly to review the offer process with them — no commitment, just so the offer is based on the actual condition of the home.
+
+Rules:
+- written to be SPOKEN, not read. natural speech patterns.
+- all lowercase except proper nouns
+- 3-5 sentences only. under 80 words.
+- start with "hey {first},"
+- establish that we can move as fast as they want on the cash offer
+- end with a soft ask about scheduling a quick stop-by to review the offer process — frame it as a formality so the number is accurate, not a sales call
+- warm and direct, like a friend who does this every week
+- Barry's style: confident without being pushy. the offer is real and fast.
+
+Output only the script text. Nothing else."""}],
+            )
+            return resp.content[0].text.strip()
+
+        # ── Regular seller: home value / Ylopo Prospecting ────────────────────
+        if is_seller:
+            notes = []
+            mv = b.get("most_viewed") or {}
+            if mv.get("street") and mv.get("city"):
+                notes.append(f"home is at {mv['street']}, {mv['city']}")
+            elif mv.get("city"):
+                notes.append(f"in {mv['city']}")
+
+            beh_summary = ". ".join(notes) if notes else "Hampton Roads area"
+
+            resp = client.messages.create(
+                model="claude-3-5-haiku-20241022",
+                max_tokens=250,
+                messages=[{"role": "user", "content": f"""Write a short voice note script for Barry Jenkins to send to {first}, a homeowner in Hampton Roads Virginia who inquired about their home's value.
+
+What we know: {beh_summary}
+
+The lead just said yes to receiving a quick voice recording. Barry is leaving them a voice note.
+
+Rules:
+- written to be SPOKEN, not read. natural speech patterns.
+- all lowercase except proper nouns
+- 3-5 sentences only. under 80 words.
+- start with "hey {first},"
+- reference what the market is doing in their area specifically
+- end with a clear next step — "just text me back" or invite them to connect so Barry can pull the real numbers for their street
+- warm and knowledgeable, like a friend who happens to be Hampton Roads' top agent
+- Barry's style: direct, no fluff, market intel as a gift not a pitch
+
+Output only the script text. Nothing else."""}],
+            )
+            return resp.content[0].text.strip()
+
+        # ── Buyer ─────────────────────────────────────────────────────────────
         notes = []
         if b.get("most_viewed"):
             mv = b["most_viewed"]
-            addr = mv.get("address") or mv.get("city") or ""
+            addr = mv.get("street") or mv.get("city") or ""
             ct = b.get("most_viewed_ct", 0)
             if addr:
                 notes.append(f"viewed {addr} {ct} time{'s' if ct != 1 else ''}")
@@ -169,13 +249,10 @@ def generate_voice_note_script(
 
         beh_summary = ". ".join(notes) if notes else "browsing homes in Hampton Roads"
 
-        lead_type = "homeowner interested in selling" if is_seller else "active home buyer"
-
-        client = _ant.Anthropic(api_key=api_key)
         resp = client.messages.create(
             model="claude-3-5-haiku-20241022",
-            max_tokens=300,
-            messages=[{"role": "user", "content": f"""Write a short voice note script for Barry Jenkins to send to {first}, a {lead_type} in Hampton Roads Virginia.
+            max_tokens=250,
+            messages=[{"role": "user", "content": f"""Write a short voice note script for Barry Jenkins to send to {first}, an active home buyer in Hampton Roads Virginia.
 
 What we know about them: {beh_summary}
 
@@ -184,11 +261,11 @@ The lead just said yes to receiving a quick voice recording. Barry is leaving th
 Rules:
 - written to be SPOKEN, not read. natural speech patterns.
 - all lowercase except proper nouns
-- 3-5 sentences only. under 80 words. voice notes should be short.
+- 3-5 sentences only. under 80 words.
 - start with "hey {first},"
-- reference one specific thing from what they were looking at
-- end with an open, easy question or "just lmk" -- not a hard sell
-- warm and personal, like a friend who knows the market
+- reference one specific thing from their actual search (property, area, or price range)
+- end with a clear soft CTA — "just text me back" or "give me a call" — give them a path
+- warm and personal, like a friend who knows the market cold
 - Barry's style: direct, knowledgeable, never pushy
 
 Output only the script text. Nothing else."""}],
@@ -197,33 +274,35 @@ Output only the script text. Nothing else."""}],
 
     except Exception as e:
         logger.warning("Voice note script generation failed: %s", e)
-        return _fallback_script(person_name, behavior, is_seller)
+        return _fallback_script(person_name, behavior, is_seller, is_zbuyer)
 
 
-def _fallback_script(person_name: str, behavior: dict, is_seller: bool) -> str:
+def _fallback_script(person_name: str, behavior: dict, is_seller: bool, is_zbuyer: bool = False) -> str:
     """Generic fallback script when Claude is unavailable."""
     first = (person_name or "there").split()[0]
     b = behavior or {}
 
-    if is_seller:
-        area = ""
+    if is_zbuyer:
         mv = b.get("most_viewed") or {}
-        if mv.get("city"):
-            area = f" in {mv['city']}"
+        area = f" on {mv['street']}" if mv.get("street") else (" in " + mv["city"] if mv.get("city") else "")
+        return (
+            f"hey {first}, so i work with the top cash buyers in hampton roads and we can move as fast as you want on this. "
+            f"the only thing i need is to stop by{area} real quick to review the offer process with you so the number we give you is accurate. "
+            f"just text me back and let me know when works."
+        )
+    elif is_seller:
+        mv = b.get("most_viewed") or {}
+        area = f" in {mv['city']}" if mv.get("city") else ""
         return (
             f"hey {first}, just wanted to drop you a quick note about what i'm seeing{area} right now. "
             f"the market has been moving and i wanted to give you a real picture of where things stand on your street. "
-            f"just let me know if you want to dig into the actual numbers."
+            f"just text me back and we can dig into the actual numbers together."
         )
     else:
-        area = ""
         mv = b.get("most_viewed") or {}
-        if mv.get("city"):
-            area = f" around {mv['city']}"
-        elif b.get("cities"):
-            area = f" around {list(b['cities'])[0]}"
+        area = f" around {mv['city']}" if mv.get("city") else (f" around {list(b['cities'])[0]}" if b.get("cities") else "")
         return (
             f"hey {first}, thanks for getting back to me. "
             f"i've been watching the inventory{area} pretty closely and wanted to give you a real rundown on what i'm seeing. "
-            f"there are a couple things worth knowing before you make any moves. just lmk if you want to talk through it."
+            f"there are a couple things worth knowing before you make any moves. just text me back or give me a call and we'll go through it."
         )

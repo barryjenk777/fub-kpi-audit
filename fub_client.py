@@ -125,27 +125,31 @@ def _build_sms_note(sms_body, lead_type, channel="sms_only"):
     else:
         ltype_label = "Buyer (IDX)"
 
-    channel_label = (
-        "Dual-Channel (email + SMS same send)" if channel == "dual"
-        else "SMS Touch"
-    )
+    if channel == "dual":
+        channel_label = "Dual-Channel (email + SMS same send)"
+    elif channel == "new_lead":
+        channel_label = "New Lead SMS (immediate — peak interest)"
+    else:
+        channel_label = "SMS Touch"
 
-    # Import sign-off lazily to avoid circular dependency
-    try:
-        from twilio_client import SMS_SIGN_OFF as _sign_off
-    except ImportError:
-        _sign_off = "— Barry Jenkins, Legacy Home Team · (757) 919-8874"
+    _sign_off = "— Barry Jenkins, Legacy Home Team · (757) 919-8874"
 
     full_text = f"{sms_body}\n{_sign_off}"
 
     if channel == "dual":
         agent_action = (
-            "This lead also received an email today — 2× touch surface.\n"
+            "This lead also received an email today — 2x touch surface.\n"
             "Call them — a warm call right after a personal text lands well."
+        )
+    elif channel == "new_lead":
+        agent_action = (
+            "New lead immediate text fired within 12 min of registration.\n"
+            "When they reply, Project Blue routes it back as a FUB note.\n"
+            "Call them — they just registered, this is peak interest."
         )
     else:
         agent_action = (
-            "Automated text sent. When they reply, Twilio routes it back as a CRM note.\n"
+            "Automated text sent. When they reply, Project Blue routes it back as a FUB note.\n"
             "Call them — a live call is always the best next step."
         )
 

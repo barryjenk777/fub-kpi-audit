@@ -181,6 +181,7 @@ def send_message(
     to_number: str,
     body: str,
     media_url: str = None,
+    audio_url: str = None,
     voice_memo: bool = False,
     line_id: str = None,
     dry_run: bool = False,
@@ -191,7 +192,10 @@ def send_message(
     Args:
         to_number:   E.164 phone number (+1XXXXXXXXXX)
         body:        Message text (plain ASCII, GSM-7 safe)
-        media_url:   Optional URL to image/video to attach (MMS)
+        media_url:   Optional URL to image/video to attach as MMS thumbnail
+        audio_url:   Optional URL to an MP3/audio file to send as an iMessage
+                     audio bubble (audioAttachmentUrl in PB API). Used for
+                     ElevenLabs voice notes. Requires iMessage delivery.
         voice_memo:  If True, Project Blue generates an AI voice memo from body
         line_id:     Optional UUID to force a specific sending line
         dry_run:     If True, log and return success without actually sending
@@ -221,6 +225,8 @@ def send_message(
     }
     if media_url:
         payload["mediaAttachmentUrl"] = media_url
+    if audio_url:
+        payload["audioAttachmentUrl"] = audio_url
     if voice_memo:
         payload["enableAiVoiceMemo"] = True
     if line_id:
