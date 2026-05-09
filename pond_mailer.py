@@ -2105,158 +2105,82 @@ Reference "my assistant" to tie back to the conversation they already had."""
         )
 
     # ── TCPA opt-out section ──────────────────────────────────────────────────
-    if channel == "cross":
-        word_limit = "50-70" if needs_optout else "40-65"
-    else:
-        word_limit = "25-50" if needs_optout else "25-40"
     optout_section = ""
     if needs_optout:
         optout_section = """
-OPT-OUT (MANDATORY -- TCPA compliance):
-Weave a casual opt-out into the MIDDLE of the message -- between the hook and the CTA.
-Not bolted onto the end. It reads like a natural breath in the conversation.
+OPT-OUT (required by law -- weave it in naturally):
+slip a casual opt-out into the middle of the message. not at the end. not bolted on.
+it should read like a breath between the hook and the question.
 
-Barry's style -- opt-out flows INTO the CTA, never stands alone:
-  "Sarah, inventory in your range just shifted -- you can tell me to stop reaching out anytime,
-   but is it worth a quick look at what changed?"
-  "Marcus, something on Kempsville worth knowing -- stop me whenever you want,
-   but want to hear it first?"
-  "Jordan, the numbers on your street moved -- we can end this anytime,
-   but worth a 5-minute call to see where things landed?"
+examples of how it sounds natural:
+  "hey sarah, you've saved 3 places this week, you can always tell me to stop texting, but all 3 are still available. still looking?"
+  "hey marcus, you keep going back to that kempsville place, lmk if you want me to stop, but i have a read on why. want to hear it?"
 
-Rules:
-  - Opt-out in the MIDDLE, after hook, before yes/no question
-  - One brief clause with a comma -- never a separate sentence
-  - Human and conversational. Never "reply STOP" -- too corporate.
-  - Word count bumped to 50 words for this message.
+rules:
+  - slip it in the middle, after the hook
+  - keep it to one casual phrase. never "reply STOP to opt out." too robotic.
+  - something like "lmk if you want me to stop texting" or "you can always tell me to stop"
 """
 
-    # ── Sentence structure rules by channel ───────────────────────────────────
+    # ── Prompt ────────────────────────────────────────────────────────────────
     if channel == "cross":
-        sentence_rules = f"""MESSAGE RULES ({word_limit} words, 3 sentences):
-
-S1 -- SPECIFIC DATA HOOK: Lead with something from their actual search. Address they viewed repeatedly,
-city + price range, or a market signal in their area. One concrete, specific fact. Proves you looked
-them up personally, not a blast.
-
-S2 -- MARKET INSIGHT: One genuinely useful piece of context tied to their search. Inventory shift,
-price movement in their range, what's selling vs. sitting, competition level. Real and specific.
-Not "it's a great time to buy."
-
-S3 -- EMAIL BRIDGE: Natural, low-key. "Sent you more in the email" or "put the full breakdown in the
-email I just sent." Easy. Not salesy. Do NOT mention a video, link, or attachment.
-
-OPENING: First name + comma. "Jordan," or "Sarah," -- no Hey, no Hi, just the name.
-NO em dashes. NO en dashes. Comma or period only. NO links. NO sign-off."""
+        channel_rules = """this is a cross-channel text going out alongside an email.
+3 sentences max. keep it short and casual. end with mentioning you sent an email too.
+example: "hey jordan, you've been back to chesapeake 4 times this month and inventory just shifted. sent you more in the email i just sent. worth a look?"
+"""
     else:
-        sentence_rules = f"""SMS RULES ({word_limit} words, 2 sentences max):
+        channel_rules = """pure iMessage text. 1-3 short sentences. that's it.
+the shorter the better. a 2-sentence text almost always outperforms a 5-sentence one.
+"""
 
-S1 -- THE OPEN LOOP (this is everything): Reference something SPECIFIC from their behavior --
-exact address, their view count on that property, their exact price range, their city.
-Then imply you have something they need to know WITHOUT giving it away.
-The specific detail proves you're not a bot. The withholding forces the reply.
+    prompt = f"""you are writing a casual iMessage for barry jenkins, hampton roads' #1 real estate agent.
 
-S2 -- ONE YES/NO CTA: One question. Answerable in a single word. "Worth a call?" "Still looking?"
-"Want to see?" Make replying feel easier than ignoring.
+THE MOST IMPORTANT RULES (non-negotiable):
+- write in all lowercase. this is iMessage, not email. "hey marcus" not "Hey Marcus."
+- keep it SHORT. 2-3 sentences absolute max. the shorter the better.
+- end with ONE simple question they can answer in one word. "still looking?" "want to hear it?" "worth a call?"
+- no sign-off. no "barry jenkins." no "legacy home team." just the message.
+- no em dashes, no en dashes. commas and periods only.
+- no "just checking in", "reaching out", "following up", "circling back"
+- no "dream home", "great opportunity", "hot market"
 
-OPENING: First name + comma. "Jordan," or "Sarah," -- no Hey, no Hi, just the name.
-NO em dashes. NO en dashes. Comma or period only. NO links. NO sign-off."""
+{channel_rules}
 
-    # ── The prompt ────────────────────────────────────────────────────────────
-    prompt = f"""You are writing a text message for Barry Jenkins -- Hampton Roads' #1 real estate agent
-(850+ homes per year, Virginia's top team). Barry texts like a brilliant friend who happens to know
-the market cold, not like a salesperson. Every text is written for one specific person based on their
-actual behavior on his website.
-
-WHO THIS PERSON IS:
+WHO THIS IS:
 {lead_context}
 
-CHANNEL CONTEXT:
-{channel_note}
+CONTEXT: {channel_note}
 
-{sentence_rules}
-
-THE BEHAVIORAL INTEL (your ammunition -- use the most specific details you have):
+WHAT YOU ACTUALLY KNOW ABOUT THEM (use the most specific detail):
 {brief}
 
 {optout_section}
 
-THE CRAFT OF HIGH-CONVERTING REAL ESTATE SMS:
+HONESTY RULE:
+you only know behavioral data from their website activity. do NOT imply you pulled seller history,
+MLS records, or any external data. you haven't. what you DO know is genuinely surprising to them
+(they don't expect you to know they've been back to a house 6 times). lead with what's true.
 
-The open loop IS the strategy. You know something specific about what this person has been doing
-on legacyhomesearch.com. Reference it precisely enough that they know you looked them up personally.
-Then withhold the interpretation until they reply. The gap between "he sees exactly what I'm doing"
-and "I need to know what he thinks" generates the reply.
+EXAMPLES OF WHAT GOOD LOOKS LIKE:
+repeat viewer: "hey marcus, you've been back to that harbour view condo 6 times. when someone does that it usually means one thing. want to figure out what's holding you?"
+price drift: "hey jordan, you started your search around $320k and now you're looking at $430k homes. i see that shift a lot. got 5 minutes?"
+saves pattern: "hey sarah, you've saved 3 places in the past two weeks and all three are still available. still looking?"
+multiple cities: "hey david, you've been looking across chesapeake, virginia beach, and norfolk for a while. i can usually tell from someone's saves which one they actually want. want to compare notes?"
+seller: "hey sarah, my assistant mentioned your place on harbour view. i looked at what's happening on that street. worth a quick call?"
+cross-channel: "hey jordan, you've been back to that chesapeake search 4 times and inventory just shifted. sent you more in the email. worth a look?"
 
-HONESTY RULE -- THIS IS NON-NEGOTIABLE:
-You only know what is in the behavioral brief above. Do NOT imply you pulled seller history,
-MLS records, building history, permit history, or any external property data. You have not.
-The behavioral data -- view counts, saves, price drift, search patterns -- IS your real intel.
-It is MORE surprising to a lead than fake property research, because they don't expect you to
-know they've been back to that house 6 times. Lead with what is true. It's enough.
+BAD (never write this):
+"Hi Jordan! I saw you've been looking at homes. I'd love to help you find your dream home!"
+"Sarah, just reaching out to see if you have any questions."
+"Marcus, it's a great time to buy! Let me know if you want to chat."
 
-WHAT THE OPEN LOOP LOOKS LIKE WHEN BUILT ON REAL DATA:
-
-REPEAT VIEWER (most powerful):
-  "Marcus, you've been back to that Harbour View condo 6 times. When someone does that,
-   it usually means one specific thing. Worth a quick call to figure out what's holding you?"
-
-  "Brittany, you've gone back to that house on Copperfield 4 times across two different sessions.
-   I have a theory on what that means. Want to hear it?"
-
-PRICE DRIFT (they don't know you can see this):
-  "Jordan, you started your search around $320k and now you're looking at $430k homes. I see
-   that shift a lot and I know exactly what's usually behind it. Got 5 minutes?"
-
-  "David, your search has moved up $60k from where you started. That usually tells me something
-   specific about what you haven't found yet. Want to talk through it?"
-
-SAVES PATTERN:
-  "Sarah, you've saved 3 homes in the past two weeks and all three are still available.
-   That pattern usually means one thing. Still actively looking?"
-
-  "Lisa, you signed up to see that place on Shore Drive and then kept searching. Usually means
-   something about it didn't close the deal for you. What was it?"
-
-SEARCH SPREAD (multiple cities = undecided):
-  "David, you've been looking across Chesapeake, Virginia Beach, and Norfolk for a while.
-   I can usually tell from someone's saves which one they actually want. Want to compare notes?"
-
-DEEP SEARCH (many views, long time):
-  "Marcus, you've looked at a lot of homes over the past couple months. That many views usually
-   points to one thing you haven't found yet. Want me to guess what it is, or tell me?"
-
-SELLER (AI handoff -- always honest since it's a real conversation):
-  "Sarah, my assistant mentioned your place on Harbour View. I looked at what's happening on
-   that street right now. Worth a quick call to go through the real numbers?"
-
-CROSS-CHANNEL (alongside email + video):
-  "Jordan, you've been back to that Chesapeake search 4 times this month and the inventory
-   in your range just shifted. Sent you more on this in the email I just sent."
-
-GENERIC (kills engagement -- never write this):
-  "Hi Jordan! I saw you've been looking at homes. I'd love to help you find your dream home!"
-  "Sarah, just reaching out to see if you have any questions about your home search."
-  "Marcus, hot market right now -- great time to buy! Let me know if you want to chat."
-
-ABSOLUTE RULES:
-  - ZERO em dashes, ZERO en dashes, ZERO curly quotes. Plain ASCII only. GSM-7 safe.
-    Use a comma or period where you want a dash. "Jordan, something came up" not "Jordan -- something came up."
-  - No "just", "reaching out", "following up", "checking in", "circling back"
-  - No "I noticed" -- lead with the observation, not yourself
-  - No "dream home", "perfect fit", "exciting opportunity", "hot market"
-  - NEVER imply you pulled seller history, MLS data, or external property records. You haven't.
-  - The cliffhanger must be something you can ACTUALLY deliver on from the behavioral data.
-  - One yes/no question to close. That's it.
-  - No links, no sign-off, no credentials
-
-Output ONLY the raw SMS body. No explanation. No label. No sign-off. Just the text."""
+output ONLY the raw message text. nothing else. no labels, no explanation."""
 
     ant_client = _ant.Anthropic(api_key=api_key)
     if channel == "cross":
-        _max_tok = 220 if needs_optout else 180
+        _max_tok = 180 if needs_optout else 140
     else:
-        _max_tok = 160 if needs_optout else 120
+        _max_tok = 120 if needs_optout else 90
     response = ant_client.messages.create(
         model="claude-opus-4-5",
         max_tokens=_max_tok,
@@ -4258,12 +4182,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             _dual_body += "\n\nReply STOP to opt out."
 
                 if _dual_body:
-                    # MMS via Twilio — attach /mthumb/<id> (640×360 JPEG, ~35KB).
-                    # Raw HeyGen thumbnails (~900KB) and videos (2+ MB) both fail
-                    # carrier MMS size limits (~600KB). /mthumb compresses on-the-fly.
-                    # Short URL (/go/<8-char>) keeps the link compact in the SMS body.
+                    # iMessage MMS rules: NEVER send media on first contact.
+                    # Sending an image/video as the first message triggers spam
+                    # filters and violates Project Blue / iMessage best practices.
+                    # Media is only attached on message 2+ once the thread is warm.
                     _dual_media_url = None
-                    if video_result and video_result.get("video_id"):
+                    if video_result and video_result.get("video_id") and _dual_sms_count > 0:
                         _base = os.environ.get("BASE_URL",
                                                "https://web-production-3363cc.up.railway.app")
                         _vid_id = video_result["video_id"]
