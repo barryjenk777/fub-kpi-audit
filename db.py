@@ -2856,15 +2856,15 @@ def get_weekly_kpi_history(weeks=8):
 # ---------------------------------------------------------------------------
 
 def ensure_calls_cache_table():
-    """Create calls_cache table if not exists, and clear stale rows.
+    """Create calls_cache table if not exists.
 
-    Schema note: `is_outbound` column is named for historical reasons but now
-    stores the `isIncoming` value from FUB (calls use isIncoming, not isOutbound).
-    get_cached_calls() returns it as "isIncoming" so downstream code stays consistent.
+    Schema note: `is_outbound` column stores the `isIncoming` value from FUB
+    (calls use isIncoming, not isOutbound). get_cached_calls() returns it as
+    "isIncoming" so count_calls_for_user() works identically on cached records.
 
-    On startup, any rows where is_outbound IS NULL are dropped — these were written
-    by the old buggy code that tried to store c.get("isOutbound") which FUB never
-    returns for call records.  A forced re-seed happens on the next sync cycle.
+    NOTE: do NOT add a DELETE/TRUNCATE here — this function is called every
+    30 minutes by sync_calls_cache() and purging rows would destroy the
+    accumulated call history that the KPI audit depends on.
     """
     if not is_available():
         return
@@ -2887,16 +2887,6 @@ def ensure_calls_cache_table():
                     CREATE INDEX IF NOT EXISTS idx_calls_cache_user_id
                         ON calls_cache (user_id, created DESC);
                 """)
-                # Purge stale rows where is_outbound is NULL — these were written
-                # before the isOutbound→isIncoming fix and have no direction data.
-                # The next sync_calls_cache() run will back-fill from FUB.
-                cur.execute("""
-                    DELETE FROM calls_cache WHERE is_outbound IS NULL;
-                """)
-                deleted = cur.rowcount
-                if deleted:
-                    logger.info("ensure_calls_cache_table: purged %d stale rows "
-                                "(is_outbound=NULL, pre-isIncoming-fix)", deleted)
             conn.commit()
     except Exception as e:
         logger.warning("ensure_calls_cache_table failed: %s", e)
@@ -2938,7 +2928,8 @@ def upsert_calls_cache(calls):
                          duration, is_outbound, direction, synced_at)
                     VALUES %s
                     ON CONFLICT (fub_call_id) DO UPDATE
-                        SET synced_at = NOW()
+                        SET is_outbound = EXCLUDED.is_outbound,
+                            synced_at   = NOW()
                     """,
                     rows,
                     template="(%s, %s, %s, %s::timestamptz, %s, %s, %s, NOW())",
