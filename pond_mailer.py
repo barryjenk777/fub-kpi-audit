@@ -3028,7 +3028,7 @@ def run_new_lead_mailer(dry_run=True):
             if _nl_sms_body:
                 # Sign the first text so the lead knows who's reaching out
                 if _nl_hist_count == 0:
-                    _nl_sms_body += "\n\nBarry w/ LPT Realty"
+                    _nl_sms_body += "\nBarry w/ LPT Realty"
                 _nl_result = _pb_nl.send_message(_nl_phone, _nl_sms_body, dry_run=dry_run)
 
                 if _nl_result.get("success"):
@@ -3550,7 +3550,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
 
             # Sign the first text so the lead knows who's reaching out
             if _sms_hist_count == 0:
-                _sms_body += "\n\nBarry w/ LPT Realty"
+                _sms_body += "\nBarry w/ LPT Realty"
 
             # Project Blue: iMessage-first (blue bubble), SMS fallback handled by PB
             _sms_result  = _pb.send_message(to_phone, _sms_body, dry_run=dry_run)
@@ -4463,7 +4463,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 if _dual_body:
                     # Sign the first text so the lead knows who's reaching out
                     if _dual_sms_count == 0:
-                        _dual_body += "\n\nBarry w/ LPT Realty"
+                        _dual_body += "\nBarry w/ LPT Realty"
 
                     # iMessage MMS rules: NEVER send media on first contact.
                     # Sending an image/video as the first message triggers spam
