@@ -2450,6 +2450,7 @@ def get_nudge_counts_today(agent_name):
                 cur.execute("""
                     SELECT nudge_type, COUNT(*) FROM nudge_log
                     WHERE  agent_name = %s
+                      AND  status IN ('sent', 'dry_run')
                       AND  sent_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'America/New_York')
                                        AT TIME ZONE 'America/New_York'
                     GROUP  BY nudge_type
