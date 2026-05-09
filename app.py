@@ -8401,32 +8401,30 @@ def webhook_projectblue():
 
     Project Blue POSTs JSON when a lead replies to one of our outbound texts.
 
-    Payload shape:
+    Payload shape (confirmed from Project Blue):
         {
           "message":         "Yes I'm interested",
-          "destination":     "+15559876543",   -- our PB line (who they texted)
-          "receivedAt":      "2026-05-08T...",
+          "destination":     "+15551234567",   -- the LEAD's phone (who we originally texted)
+          "receivedAt":      "2026-05-09T...",
           "direction":       "inbound",
           "messageId":       456,
           "guid":            "sample-guid-1234",
-          "linePhoneNumber": "+15559876543"    -- our PB line (same as destination for inbound)
+          "linePhoneNumber": "+15559876543"    -- our Project Blue line
         }
 
-    For inbound webhooks the lead's phone is not in the payload directly.
-    We call GET /get-messages-api?direction=inbound&limit=1 filtered by our
-    line to retrieve the from_number, using guid as the dedup key.
+    For inbound: destination = lead's phone, linePhoneNumber = our line.
+    No secondary API call needed.
 
     Flow mirrors the Twilio handler exactly:
-      1. Extract fields from JSON payload
+      1. Extract fields — destination IS the lead's phone
       2. Skip outbound confirmations (direction != "inbound")
-      3. Look up lead's from_number via PB messages API using guid
-      4. STOP keyword hard-gate
-      5. Match phone to FUB lead via pond_sms_log
-      6. Sentiment analysis (Claude Haiku)
-      7. Positive  -> SMS_Conversion + FUB note + handoff text
-      8. Negative  -> SMS_OptOut
-      9. Neutral   -> FUB note
-     10. Log to pond_sms_reply_log + email Barry
+      3. STOP keyword hard-gate
+      4. Match phone to FUB lead via pond_sms_log
+      5. Sentiment analysis (Claude Haiku)
+      6. Positive  -> SMS_Conversion + FUB note + handoff text
+      7. Negative  -> SMS_OptOut
+      8. Neutral   -> FUB note
+      9. Log to pond_sms_reply_log + email Barry
     """
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -8436,32 +8434,17 @@ def webhook_projectblue():
             # PB fires webhooks for outbound confirmations too — ignore them
             return jsonify({"ok": True, "skipped": "outbound"}), 200
 
-        body_text   = (data.get("message") or "").strip()
-        guid        = data.get("guid", "")
-        message_id  = data.get("messageId")
-        our_line    = data.get("linePhoneNumber") or data.get("destination") or ""
+        body_text  = (data.get("message") or "").strip()
+        guid       = data.get("guid", "")
+        from_phone = (data.get("destination") or "").strip()   # lead's phone
+        our_line   = (data.get("linePhoneNumber") or "").strip()
 
-        logger.info("Project Blue inbound webhook: line=%s guid=%s body=%s",
-                    our_line, guid, body_text[:80])
-
-        # ── Resolve lead's phone via PB messages API ──────────────────────────
-        # The webhook payload doesn't include from_number directly for inbound.
-        # We query the most recent inbound messages on our line and match by guid.
-        from_phone = None
-        try:
-            import projectblue_client as _pb2
-            msgs = _pb2.get_messages(limit=10, direction="inbound")
-            for m in msgs.get("data", []):
-                if str(m.get("messageId") or m.get("id") or "") == str(message_id) or \
-                   m.get("guid") == guid:
-                    from_phone = m.get("from_number") or m.get("fromNumber")
-                    break
-        except Exception as _pe:
-            logger.warning("PB messages lookup failed: %s", _pe)
+        logger.info("Project Blue inbound: from=%s line=%s guid=%s body=%s",
+                    from_phone, our_line, guid, body_text[:80])
 
         if not from_phone:
-            logger.warning("Project Blue webhook: could not resolve from_number for guid=%s", guid)
-            return jsonify({"ok": True, "skipped": "no_from_number"}), 200
+            logger.warning("Project Blue webhook: missing destination (lead phone)")
+            return jsonify({"ok": True, "skipped": "no_from_phone"}), 200
 
         if not body_text:
             logger.warning("Project Blue webhook: empty body from %s", from_phone)
