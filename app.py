@@ -6603,6 +6603,36 @@ def _get_cdn_url(video_id: str) -> str | None:
         return None
 
 
+@app.route("/audio/<audio_id>")
+def serve_audio(audio_id: str):
+    """
+    Serve a generated ElevenLabs voice note for Project Blue delivery.
+
+    Audio is stored in-memory in elevenlabs_client._audio_store with a 10-minute
+    TTL. Project Blue fetches this URL as audioAttachmentUrl when sending the
+    iMessage audio bubble. The file only needs to be accessible for a few seconds.
+    """
+    try:
+        import elevenlabs_client as _el
+        audio_bytes = _el.get_audio(audio_id)
+        if not audio_bytes:
+            return "", 404
+        from flask import Response as _Resp
+        return _Resp(
+            audio_bytes,
+            status=200,
+            mimetype="audio/mpeg",
+            headers={
+                "Content-Disposition": f'attachment; filename="voicenote-{audio_id}.mp3"',
+                "Content-Length": str(len(audio_bytes)),
+                "Cache-Control": "no-store",
+            },
+        )
+    except Exception as e:
+        logger.error("Audio serve failed for %s: %s", audio_id, e)
+        return "", 500
+
+
 @app.route("/mthumb/<video_id>")
 def mms_thumb(video_id: str):
     """
@@ -8508,6 +8538,59 @@ def webhook_projectblue():
                 fub_note_ok = _pond_add_sms_reply_fub_note(
                     fub, person_id, person_name, body_text, sentiment_reason
                 )
+
+                # ── ElevenLabs voice note — fires immediately on "yes" reply ──
+                # Lead said yes to "would it be ok if i sent a quick recording"
+                # Generate Barry's voice, serve via /audio/<id>, send via PB.
+                try:
+                    import elevenlabs_client as _el
+                    import projectblue_client as _pb_reply
+                    if _el.is_available() and _pb_reply.is_available():
+                        # Re-fetch behavioral data to personalize the script
+                        _vn_events = []
+                        _vn_behavior = {}
+                        try:
+                            from fub_client import FUBClient as _FUBv
+                            from pond_mailer import analyze_behavior as _ab
+                            _vn_fub = _FUBv()
+                            _vn_events = _vn_fub.get_events_for_person(person_id, days=90, limit=100)
+                            _vn_tags = fub.get_person(person_id).get("tags", [])
+                            _vn_behavior = _ab(_vn_events, _vn_tags)
+                        except Exception as _vbe:
+                            logger.warning("Voice note behavior fetch failed (non-fatal): %s", _vbe)
+
+                        _is_seller_vn = any(t in (fub.get_person(person_id).get("tags") or [])
+                                            for t in ("Ylopo Prospecting", "Ylopo Seller")) \
+                                        if person_id else False
+
+                        script = _el.generate_voice_note_script(
+                            person_name=person_name,
+                            behavior=_vn_behavior,
+                            strategy="",
+                            is_seller=_is_seller_vn,
+                        )
+
+                        audio_bytes = _el.generate_audio(script)
+                        if audio_bytes:
+                            audio_id  = _el.store_audio(audio_bytes)
+                            base_url  = os.environ.get("BASE_URL",
+                                                       "https://web-production-3363cc.up.railway.app")
+                            audio_url = f"{base_url}/audio/{audio_id}"
+
+                            _pb_reply.send_message(
+                                to_number=from_phone,
+                                body="",          # audio bubble needs no text body
+                                audio_url=audio_url,
+                            )
+                            logger.info("Voice note sent to %s (%d bytes, script: %d chars)",
+                                        from_phone, len(audio_bytes), len(script))
+                        else:
+                            logger.warning("ElevenLabs returned no audio for %s", person_name)
+                    else:
+                        logger.info("Voice note skipped — ElevenLabs or Project Blue not configured")
+                except Exception as _vne:
+                    logger.warning("Voice note send failed (non-fatal): %s", _vne)
+
                 _lead_first = (person_name or "").split()[0] if person_name else ""
                 _schedule_sms_handoff(
                     person_id,

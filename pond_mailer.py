@@ -2108,79 +2108,61 @@ Reference "my assistant" to tie back to the conversation they already had."""
     optout_section = ""
     if needs_optout:
         optout_section = """
-OPT-OUT (required by law -- weave it in naturally):
-slip a casual opt-out into the middle of the message. not at the end. not bolted on.
-it should read like a breath between the hook and the question.
-
-examples of how it sounds natural:
-  "hey sarah, you've saved 3 places this week, you can always tell me to stop texting, but all 3 are still available. still looking?"
-  "hey marcus, you keep going back to that kempsville place, lmk if you want me to stop, but i have a read on why. want to hear it?"
-
-rules:
-  - slip it in the middle, after the hook
-  - keep it to one casual phrase. never "reply STOP to opt out." too robotic.
-  - something like "lmk if you want me to stop texting" or "you can always tell me to stop"
+OPT-OUT (required by law -- weave it in naturally between the observation and the ask):
+  "hey marcus, saw you were looking around harbour view, lmk if you want me to stop texting. would it be ok if i sent a quick recording of some info on that area?"
+  "hey sarah, saw you saved that place on shore drive, you can always tell me to stop. would it be ok if i sent a quick recording about that street?"
+keep it casual. one short phrase. never "reply STOP to opt out."
 """
 
     # ── Prompt ────────────────────────────────────────────────────────────────
     if channel == "cross":
-        channel_rules = """this is a cross-channel text going out alongside an email.
-3 sentences max. keep it short and casual. end with mentioning you sent an email too.
-example: "hey jordan, you've been back to chesapeake 4 times this month and inventory just shifted. sent you more in the email i just sent. worth a look?"
+        # Cross-channel: still permission-based but ties to email
+        channel_rules = """this is going alongside an email. 2 sentences max.
+example: "hey jordan, saw you've been looking around chesapeake. sent you an email too but would it be ok if i sent a quick recording of some info on that area?"
 """
     else:
-        channel_rules = """pure iMessage text. 1-3 short sentences. that's it.
-the shorter the better. a 2-sentence text almost always outperforms a 5-sentence one.
-"""
+        channel_rules = """pure iMessage. 2 sentences max. that's it."""
 
-    prompt = f"""you are writing a casual iMessage for barry jenkins, hampton roads' #1 real estate agent.
+    prompt = f"""you are writing a casual iMessage opener for barry jenkins, hampton roads' #1 real estate agent.
 
-THE MOST IMPORTANT RULES (non-negotiable):
-- write in all lowercase. this is iMessage, not email. "hey marcus" not "Hey Marcus."
-- keep it SHORT. 2-3 sentences absolute max. the shorter the better.
-- end with ONE simple question they can answer in one word. "still looking?" "want to hear it?" "worth a call?"
-- no sign-off. no "barry jenkins." no "legacy home team." just the message.
+THE FORMAT IS FIXED -- follow it exactly:
+sentence 1: "hey [first name], saw you were looking around [specific area/detail from their search]."
+sentence 2: "would it be ok if i sent a quick recording of some info on [that area / what i'm seeing there / that neighborhood]?"
+
+THE MOST IMPORTANT RULES:
+- all lowercase. always. "hey marcus" not "Hey Marcus."
+- 2 sentences only. no more.
+- sentence 1 must reference ONE specific thing from their actual search (area, property, price range, city)
+- sentence 2 is always a permission ask for a voice recording. keep the wording close to the examples.
+- no sign-off, no name at the end, no "barry jenkins", no "legacy home team"
 - no em dashes, no en dashes. commas and periods only.
-- no "just checking in", "reaching out", "following up", "circling back"
-- no "dream home", "great opportunity", "hot market"
-
-{channel_rules}
+- no "just", "reaching out", "following up", "checking in"
 
 WHO THIS IS:
 {lead_context}
 
 CONTEXT: {channel_note}
 
-WHAT YOU ACTUALLY KNOW ABOUT THEM (use the most specific detail):
+WHAT YOU KNOW ABOUT THEM (pick the single most specific detail for sentence 1):
 {brief}
 
 {optout_section}
 
-HONESTY RULE:
-you only know behavioral data from their website activity. do NOT imply you pulled seller history,
-MLS records, or any external data. you haven't. what you DO know is genuinely surprising to them
-(they don't expect you to know they've been back to a house 6 times). lead with what's true.
+EXAMPLES -- these are exactly the right tone and length:
+buyer (repeat viewer):   "hey marcus, saw you were looking around harbour view. would it be ok if i sent a quick recording of some info on that area?"
+buyer (saved property):  "hey sarah, saw you saved that place on shore drive. would it be ok if i sent a quick recording about that street?"
+buyer (price range):     "hey jordan, saw you've been looking at places around $380k in chesapeake. would it be ok if i sent a quick recording on what i'm seeing there?"
+buyer (multiple cities): "hey david, saw you've been looking around chesapeake and virginia beach. would it be ok if i sent a quick recording to help narrow it down?"
+seller:                  "hey lisa, saw you were looking into your home value on harbour view. would it be ok if i sent a quick recording of what i'm seeing on that street?"
+cross-channel:           "hey jordan, saw you've been looking around chesapeake. sent you an email too but would it be ok if i sent a quick recording of some info on that area?"
 
-EXAMPLES OF WHAT GOOD LOOKS LIKE:
-repeat viewer: "hey marcus, you've been back to that harbour view condo 6 times. when someone does that it usually means one thing. want to figure out what's holding you?"
-price drift: "hey jordan, you started your search around $320k and now you're looking at $430k homes. i see that shift a lot. got 5 minutes?"
-saves pattern: "hey sarah, you've saved 3 places in the past two weeks and all three are still available. still looking?"
-multiple cities: "hey david, you've been looking across chesapeake, virginia beach, and norfolk for a while. i can usually tell from someone's saves which one they actually want. want to compare notes?"
-seller: "hey sarah, my assistant mentioned your place on harbour view. i looked at what's happening on that street. worth a quick call?"
-cross-channel: "hey jordan, you've been back to that chesapeake search 4 times and inventory just shifted. sent you more in the email. worth a look?"
-
-BAD (never write this):
-"Hi Jordan! I saw you've been looking at homes. I'd love to help you find your dream home!"
-"Sarah, just reaching out to see if you have any questions."
-"Marcus, it's a great time to buy! Let me know if you want to chat."
-
-output ONLY the raw message text. nothing else. no labels, no explanation."""
+output ONLY the raw message. nothing else."""
 
     ant_client = _ant.Anthropic(api_key=api_key)
     if channel == "cross":
-        _max_tok = 180 if needs_optout else 140
-    else:
         _max_tok = 120 if needs_optout else 90
+    else:
+        _max_tok = 100 if needs_optout else 75
     response = ant_client.messages.create(
         model="claude-opus-4-5",
         max_tokens=_max_tok,
