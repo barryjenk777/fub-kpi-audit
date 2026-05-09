@@ -9771,6 +9771,15 @@ def scheduled_new_lead_watchdog():
             if age_minutes < _WATCHDOG_GRACE_MINUTES:
                 continue  # Still within the normal 12-min delay + buffer — too soon
 
+            # Skip leads that are suppressed — they'll never get outreach by design.
+            # Counting them as "missed" is a false alarm that fires the alert loop.
+            tags = person.get("tags") or []
+            from pond_mailer import _email_suppression_tags
+            _supp = _email_suppression_tags(tags)
+            if _supp:
+                print(f"[WATCHDOG] Skipping {name} — suppressed by tag(s): {', '.join(_supp)}")
+                continue
+
             # Check email and SMS outreach logs.
             got_email = _db.has_received_new_lead_immediate(pid)
             got_sms   = _db.has_received_pond_sms(pid)
