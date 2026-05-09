@@ -8725,6 +8725,9 @@ def webhook_projectblue():
                 )
             elif sentiment == "negative":
                 fub.add_tag(person_id, "SMS_OptOut")
+                fub_note_ok = _pond_add_sms_reply_fub_note(
+                    fub, person_id, person_name, body_text, sentiment_reason
+                )
             elif _consent:
                 # Consent with neutral buying intent: they said yes to the recording
                 # but didn't show buying signals yet. Log the FUB note AND schedule
