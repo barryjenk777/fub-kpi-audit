@@ -3006,9 +3006,9 @@ def run_new_lead_mailer(dry_run=True):
             import random as _rand_nl
             _nl_ab_variant = "voice" if _rand_nl.random() < 0.5 else "video"
 
-            # First text ever: weave opt-out into the message (TCPA compliance)
+            # Project Blue sends iMessage — not carrier SMS, no 10DLC opt-out required.
             _nl_hist_count = _db.count_pond_sms_sent(pid)
-            _nl_needs_optout = (_nl_hist_count == 0)
+            _nl_needs_optout = False
 
             print(f"\n  [NEW LEAD SMS] {name} (ID: {pid}) · {_nl_phone}")
             print(f"    Channel: new_lead | A/B: {_nl_ab_variant}" +
@@ -3516,9 +3516,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 skipped_no_strategy += 1
                 continue
 
-            # TCPA opt-out: required on 1st text ever, then every 5th send
+            # Project Blue sends iMessage — not carrier SMS, no 10DLC opt-out required.
             _sms_hist_count = _db.count_pond_sms_sent(pid)
-            _needs_optout   = (_sms_hist_count == 0) or (_sms_hist_count % 5 == 4)
+            _needs_optout   = False
 
             # A/B variant: 50/50 voice (ElevenLabs) vs video (HeyGen) for the
             # follow-up recording that fires when the lead consents.
@@ -4416,9 +4416,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             name, _dual_unreplied)
 
             if (_dual_sms_days is None or _dual_sms_days >= SMS_COOLDOWN_DAYS) and _dual_unreplied < 2:
-                # TCPA opt-out: required on 1st text ever, then every 5th send
+                # Project Blue sends iMessage — not carrier SMS, no 10DLC opt-out required.
                 _dual_sms_count    = _db.count_pond_sms_sent(pid)
-                _dual_needs_optout = (_dual_sms_count == 0) or (_dual_sms_count % 5 == 4)
+                _dual_needs_optout = False
                 _is_high_intent    = is_z or any(t in tags for t in _tc.DUAL_CHANNEL_TAGS)
                 _dual_body         = None
 
@@ -4451,9 +4451,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     except Exception as _csms_err:
                         logger.warning("Cross-channel SMS generation failed for %s: %s", name, _csms_err)
                         # Graceful fallback so we still send something
-                        _dual_body = f"Hey {first_name} — sent you an email too with a quick video I put together for you."
-                        if _dual_needs_optout:
-                            _dual_body += "\n\nReply STOP to opt out."
+                        _dual_body = f"hey {first_name}, sent you an email too with a quick video i put together for you."
 
                 if _dual_body:
                     # iMessage MMS rules: NEVER send media on first contact.
