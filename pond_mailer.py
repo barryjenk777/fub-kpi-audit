@@ -4434,6 +4434,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 # Project Blue sends iMessage — not carrier SMS, no 10DLC opt-out required.
                 _dual_sms_count    = _db.count_pond_sms_sent(pid)
                 _dual_needs_optout = False
+                import twilio_client as _tc
                 _is_high_intent    = is_z or any(t in tags for t in _tc.DUAL_CHANNEL_TAGS)
                 _dual_body         = None
 
