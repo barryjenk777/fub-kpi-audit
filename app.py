@@ -9802,31 +9802,21 @@ def scheduled_new_lead_watchdog():
                 })
 
         if missed_sms and not missed_email:
-            # Email is fine but SMS never went out — most common cause is a quiet-hours
-            # block overnight (lead came in at 3am, SMS held until 8am window opens).
-            # Don't just defer to new_lead_check — actively re-trigger now so the watchdog
-            # serves as a guaranteed backup if the 5-min check missed it.
-            print(f"[WATCHDOG] {len(missed_sms)} lead(s) have email but no SMS — re-triggering mailer")
-            try:
-                from pond_mailer import run_new_lead_mailer
-                sms_catchup = run_new_lead_mailer(dry_run=False)
-                print(f"[WATCHDOG] SMS catch-up result: {sms_catchup}")
-            except Exception as _sms_e:
-                print(f"[WATCHDOG] SMS catch-up mailer failed: {_sms_e}")
+            # Email fired but SMS didn't — log it. The 5-min new_lead_check will
+            # handle the retry automatically; the 7am catch-up covers overnight leads.
+            # Do NOT re-trigger the mailer here — that caused race conditions where
+            # the watchdog and the scheduler both sent texts to the same lead.
+            print(f"[WATCHDOG] {len(missed_sms)} lead(s) have email but no SMS — 5-min checker will retry")
 
         if not missed_email:
             print(f"[WATCHDOG] All {len(people)} recent Shark Tank lead(s) have email outreach — OK")
             return
 
-        # One or more leads slipped through without email. Re-trigger the mailer now.
+        # One or more leads slipped through without email — log and alert only.
+        # The 5-min new_lead_check runs independently; re-triggering here causes
+        # duplicate sends when both fire within the same window.
         print(f"[WATCHDOG] {len(missed_email)} lead(s) missed email outreach — "
-              f"re-triggering run_new_lead_mailer()")
-        try:
-            from pond_mailer import run_new_lead_mailer
-            catchup = run_new_lead_mailer(dry_run=False)
-            print(f"[WATCHDOG] Catch-up mailer result: {catchup}")
-        except Exception as me:
-            print(f"[WATCHDOG] Catch-up mailer failed: {me}")
+              f"5-min checker will retry on next run")
 
         # Send Barry one alert email summarising the gap (throttled to once per 2 hrs).
         if _already_fired_recently(_WATCHDOG_ALERT_COOLDOWN, within_hours=_WATCHDOG_ALERT_HOURS):

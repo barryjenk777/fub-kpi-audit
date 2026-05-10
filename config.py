@@ -424,7 +424,7 @@ LEADSTREAM_ALLOWED_POND_IDS = {4, 7}
 SHARK_TANK_POND_ID = 4
 BARRY_FUB_USER_ID  = 1   # Barry Jenkins — attributes email notes in FUB timeline
 # Minutes after lead creation before the immediate email fires (feels human, not instant)
-NEW_LEAD_EMAIL_DELAY_MINUTES = 12
+NEW_LEAD_EMAIL_DELAY_MINUTES = 5
 # How far back to look for new leads per check run (scheduler runs every 5 min)
 # Hard outer fence: never email a lead created more than this many minutes ago.
 # 1440 = 24 hours — Barry's rule: "don't send for anything created longer than 1 day ago"
