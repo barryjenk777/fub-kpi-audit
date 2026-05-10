@@ -4139,7 +4139,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     get_background_url,
                     make_video_plain_text,
                     make_video_email_html,
-                    AVATAR_SUIT, AVATAR_SUIT_TYPE, DEFAULT_VOICE,
+                    DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     _addrs_fu   = person.get("addresses") or []
@@ -4166,8 +4166,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     bg_url = get_background_url(_lead_type, address=_street_fu, city=_city_fu)
                     video_result = generate_and_wait(
                         script, background_url=bg_url,
-                        avatar_id=AVATAR_SUIT, voice_id=DEFAULT_VOICE,
-                        avatar_style="normal", character_type=AVATAR_SUIT_TYPE,
+                        avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
+                        avatar_style="circle", character_type=DEFAULT_AVATAR_TYPE,
                         timeout_seconds=480,
                     )
 
@@ -4228,12 +4228,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                         email_data["subject"]      = _subj_options[0]
                         email_data["all_subjects"] = _subj_options
 
-                        _avatar_used = AVATAR_SUIT
+                        _avatar_used = DEFAULT_AVATAR
                         _hg_slots_left -= 1  # consume one HeyGen slot
                         heygen_sent += 1
-                        logger.info("HeyGen Email 2 suit video built for %s (%s, %.1fs) — %d slots remain",
+                        logger.info("HeyGen Email 2 map video built for %s (%s, %.1fs) — %d slots remain",
                                     name, _lead_type, video_result.get("duration", 0), _hg_slots_left)
-                        print(f"    ▶ HeyGen Email 2 suit ({_lead_type}): {video_result['video_url'][:60]}...")
+                        print(f"    ▶ HeyGen Email 2 map ({_lead_type}): {video_result['video_url'][:60]}...")
                     else:
                         heygen_failed += 1
                         logger.warning("HeyGen Email 2 video not ready for %s (%s) — text-only",
@@ -4258,7 +4258,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     get_background_url,
                     make_video_plain_text,
                     make_video_email_html,
-                    AVATAR_SUIT, AVATAR_SUIT_TYPE, DEFAULT_VOICE,
+                    DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
                 if heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     _addrs_e4   = person.get("addresses") or []
@@ -4282,8 +4282,8 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     bg_url = get_background_url(_lead_type4, address=_street_e4, city=_city_e4)
                     video_result = generate_and_wait(
                         script, background_url=bg_url,
-                        avatar_id=AVATAR_SUIT, voice_id=DEFAULT_VOICE,
-                        avatar_style="normal", character_type=AVATAR_SUIT_TYPE,
+                        avatar_id=DEFAULT_AVATAR, voice_id=DEFAULT_VOICE,
+                        avatar_style="circle", character_type=DEFAULT_AVATAR_TYPE,
                         timeout_seconds=480,
                     )
 
@@ -4347,9 +4347,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                         email_data["subject"]      = _subj_options4[0]
                         email_data["all_subjects"] = _subj_options4
 
-                        _avatar_used = AVATAR_SUIT
+                        _avatar_used = DEFAULT_AVATAR
                         _hg_slots_left -= 1  # consume one HeyGen slot
-                        logger.info("HeyGen Email 4 drip video built for %s (%.1fs) — %d slots remain",
+                        logger.info("HeyGen Email 4 map video built for %s (%.1fs) — %d slots remain",
                                     name, video_result.get("duration", 0), _hg_slots_left)
                         print(f"    ▶ HeyGen Email 4 drip: {video_result['video_url'][:60]}...")
                     else:
