@@ -115,7 +115,11 @@ def sms_suppressed_by_tags(tags: list) -> list:
 
 def is_within_sms_quiet_hours(tz_name: str = "America/New_York") -> bool:
     """
-    Return True if current time is within TCPA-safe hours: 8am-9pm local.
+    Return True if current time is within send-safe hours: 7am-10pm local.
+
+    Project Blue sends via iMessage (data protocol), not carrier SMS, so TCPA's
+    strict 8am-9pm window doesn't legally apply. Real-estate window is 7am-10pm:
+    early risers check phones at 7am, most leads are still up at 9-10pm.
     Returns False (blocked) on timezone errors -- safe default.
     """
     from datetime import datetime
@@ -127,7 +131,7 @@ def is_within_sms_quiet_hours(tz_name: str = "America/New_York") -> bool:
             import pytz
             tz = pytz.timezone(tz_name)
         local_now = datetime.now(tz)
-        return 8 <= local_now.hour < 21
+        return 7 <= local_now.hour < 22
     except Exception as e:
         logger.warning("is_within_sms_quiet_hours: check failed (%s) -- blocking send", e)
         return False
