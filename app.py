@@ -9902,11 +9902,10 @@ def scheduled_quiet_hours_sms_catchup():
     """
     Daily at 7:02am ET — send SMSes to overnight leads whose send-window block lifted.
 
-    Leads that arrive between 10pm and 7am have their SMS held because PB only sends
-    during 7am-10pm ET (iMessage window — not carrier SMS, so TCPA strict hours
-    don't apply, but we still respect a reasonable overnight window).
-    This job fires 2 minutes after 7am so overnight leads always get their text
-    within minutes of the window opening instead of waiting for the next 5-min tick.
+    Leads that arrive between 9pm and 8am have their SMS held because PB only sends
+    during 8am-9pm ET. This job fires 2 minutes after 8am so overnight leads always
+    get their text within minutes of the window opening instead of waiting for the
+    next 5-min tick.
     """
     try:
         from pond_mailer import run_new_lead_mailer
@@ -10693,11 +10692,10 @@ def start_scheduler():
 
     # Morning quiet-hours SMS catch-up: daily at 7:02am ET
     # Fires run_new_lead_mailer() exactly 2 minutes after the iMessage send window
-    # opens (7am). PB sends via iMessage, not carrier SMS, so the window is 7am-10pm
-    # instead of 8am-9pm. Catches overnight leads whose SMS was held.
+    # opens (8am). Catches overnight leads whose SMS was held.
     _scheduler.add_job(scheduled_quiet_hours_sms_catchup,
-                       CronTrigger(hour=7, minute=2, timezone=ET),
-                       id="morning_sms_catchup", name="Morning quiet-hours SMS catch-up (7:02am ET)",
+                       CronTrigger(hour=8, minute=2, timezone=ET),
+                       id="morning_sms_catchup", name="Morning quiet-hours SMS catch-up (8:02am ET)",
                        max_instances=1, misfire_grace_time=300)
 
     # Serendipity Clause: every 10 minutes

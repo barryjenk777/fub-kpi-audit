@@ -3011,8 +3011,8 @@ def run_new_lead_mailer(dry_run=True):
             # on a body that will be thrown away by send_message(). The 7am catch-up
             # job will retry these leads once the window opens.
             if not _pb_nl.is_within_sms_quiet_hours() and not dry_run:
-                logger.info("New lead %s — SMS held (outside send window, will retry at 7am)", name)
-                print(f"\n  [NEW LEAD SMS] {name} (ID: {pid}) — held, outside 7am-10pm window")
+                logger.info("New lead %s — SMS held (outside send window, will retry at 8am)", name)
+                print(f"\n  [NEW LEAD SMS] {name} (ID: {pid}) — held, outside 8am-9pm window")
                 continue
 
             _nl_hist_count = _db.count_pond_sms_sent(pid)
