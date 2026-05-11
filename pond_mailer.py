@@ -3018,15 +3018,31 @@ def run_new_lead_mailer(dry_run=True):
             _nl_hist_count = _db.count_pond_sms_sent(pid)
             _nl_needs_optout = False
 
+            # Detect lead type BEFORE generating the SMS body so the prompt
+            # gets the correct framing. Zbuyer = homeowner requesting cash offer,
+            # needs a seller/cash-offer script — NOT a "saw you looking around" buyer opener.
+            _nl_src      = person.get("source") or ""
+            _nl_src_norm = _nl_src.lower().replace("-","").replace(" ","").replace("_","")
+            _nl_is_z     = (
+                any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER")
+                    for t in tags)
+                or "zbuyer" in _nl_src_norm
+            )
+            _nl_is_seller = (
+                not _nl_is_z and
+                any(t in tags for t in ("Ylopo Prospecting", "Ylopo Seller"))
+            )
+
+            _nl_lead_type = "zbuyer" if _nl_is_z else ("seller" if _nl_is_seller else "buyer")
             print(f"\n  [NEW LEAD SMS] {name} (ID: {pid}) · {_nl_phone}")
-            print(f"    Channel: new_lead | A/B: {_nl_ab_variant}" +
+            print(f"    Channel: new_lead | A/B: {_nl_ab_variant} | lead_type: {_nl_lead_type}" +
                   (" | FIRST TEXT — opt-out required" if _nl_needs_optout else ""))
 
             try:
                 _nl_sms_body = generate_sms_body(
                     person=person, behavior=behavior, strategy="new_lead_immediate",
                     leadstream_tier="NEW_LEAD", tags=tags,
-                    is_seller=False, is_z=False,
+                    is_seller=_nl_is_seller, is_z=_nl_is_z,
                     channel="new_lead", needs_optout=_nl_needs_optout, dry_run=dry_run,
                 )
             except Exception as _nl_eg:
@@ -3045,18 +3061,7 @@ def run_new_lead_mailer(dry_run=True):
                     # immediately. Video typically renders in 60-90s — will be
                     # ready long before most leads reply. video_id stored in DB
                     # so the webhook can retrieve it on consent reply.
-                    # Detect lead type for script and map routing
-                    _nl_src       = person.get("source") or ""
-                    _nl_src_norm  = _nl_src.lower().replace("-","").replace(" ","").replace("_","")
-                    _nl_is_z      = (
-                        any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER")
-                            for t in tags)
-                        or "zbuyer" in _nl_src_norm
-                    )
-                    _nl_is_seller = (
-                        not _nl_is_z and
-                        any(t in tags for t in ("Ylopo Prospecting", "Ylopo Seller"))
-                    )
+                    # _nl_is_z / _nl_is_seller already detected above before SMS body gen.
 
                     _nl_video_id = None
                     if _nl_ab_variant == "video" and not dry_run:
