@@ -3008,7 +3008,7 @@ def run_new_lead_mailer(dry_run=True):
 
             # Project Blue sends iMessage — not carrier SMS, no 10DLC opt-out required.
             # Check quiet hours BEFORE generating — don't waste a Claude API call
-            # on a body that will be thrown away by send_message(). The 7am catch-up
+            # on a body that will be thrown away by send_message(). The 8am catch-up
             # job will retry these leads once the window opens.
             if not _pb_nl.is_within_sms_quiet_hours() and not dry_run:
                 logger.info("New lead %s — SMS held (outside send window, will retry at 8am)", name)

@@ -9803,7 +9803,7 @@ def scheduled_new_lead_watchdog():
 
         if missed_sms and not missed_email:
             # Email fired but SMS didn't — log it. The 5-min new_lead_check will
-            # handle the retry automatically; the 7am catch-up covers overnight leads.
+            # handle the retry automatically; the 8am catch-up covers overnight leads.
             # Do NOT re-trigger the mailer here — that caused race conditions where
             # the watchdog and the scheduler both sent texts to the same lead.
             print(f"[WATCHDOG] {len(missed_sms)} lead(s) have email but no SMS — 5-min checker will retry")
@@ -9900,7 +9900,7 @@ def scheduled_new_lead_watchdog():
 
 def scheduled_quiet_hours_sms_catchup():
     """
-    Daily at 7:02am ET — send SMSes to overnight leads whose send-window block lifted.
+    Daily at 8:02am ET — send SMSes to overnight leads whose send-window block lifted.
 
     Leads that arrive between 9pm and 8am have their SMS held because PB only sends
     during 8am-9pm ET. This job fires 2 minutes after 8am so overnight leads always
@@ -10690,7 +10690,7 @@ def start_scheduler():
                        id="new_lead_watchdog", name="New lead outreach watchdog (every 30 min)",
                        max_instances=1, misfire_grace_time=120)
 
-    # Morning quiet-hours SMS catch-up: daily at 7:02am ET
+    # Morning quiet-hours SMS catch-up: daily at 8:02am ET
     # Fires run_new_lead_mailer() exactly 2 minutes after the iMessage send window
     # opens (8am). Catches overnight leads whose SMS was held.
     _scheduler.add_job(scheduled_quiet_hours_sms_catchup,
