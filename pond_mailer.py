@@ -3162,7 +3162,7 @@ def run_new_lead_mailer(dry_run=True):
                             client.log_sms_sent(
                                 person_id=pid,
                                 sms_body=_nl_sms_body,
-                                lead_type="buyer",
+                                lead_type=_nl_lead_type,
                                 channel="new_lead",
                                 user_id=BARRY_FUB_USER_ID,
                             )
@@ -3656,6 +3656,13 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
             strategy      = "ylopo_prospecting"
             leadstream_tier = "AI_NEEDS_FOLLOW_UP" if "AI_NEEDS_FOLLOW_UP" in tags else "POND"
             logger.debug("%s — Ylopo Prospecting seller, skipping IDX fetch", name)
+        elif is_z:
+            # Zbuyers are homeowners requesting cash offers — they have no IDX events.
+            # Gating on MIN_EVENTS_TO_EMAIL would silently drop every Zbuyer lead.
+            behavior      = analyze_behavior([], tags)
+            strategy      = "ylopo_prospecting"   # reuses seller email path (cash-offer framing)
+            leadstream_tier = "AI_NEEDS_FOLLOW_UP" if "AI_NEEDS_FOLLOW_UP" in tags else "POND"
+            logger.debug("%s — Zbuyer lead, skipping IDX fetch", name)
         else:
             # Pull IDX events — each fetch = 1 FUB API call, so count against cap
             candidates_checked += 1
@@ -3688,7 +3695,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 continue
 
         # Log what we found
-        _lead_type_label = "YLOPO-SELLER" if is_ylopo_seller else strategy.upper()
+        _lead_type_label = "Z-BUYER" if is_z else ("YLOPO-SELLER" if is_ylopo_seller else strategy.upper())
         if sequence_num == 1:
             seq_label = "sprint #1/3"
         elif sequence_num == 2:
@@ -4530,7 +4537,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                         if not dry_run:
                             try:
                                 from config import BARRY_FUB_USER_ID
-                                _lt_dual = "zbuyer" if is_z else "buyer"
+                                _lt_dual = "zbuyer" if is_z else ("seller" if is_ylopo_seller else "buyer")
                                 client.log_sms_sent(
                                     person_id=pid,
                                     sms_body=_dual_body,

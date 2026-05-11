@@ -7933,7 +7933,7 @@ Under 200 words total. Direct and useful. No fluff."""
         return False
 
 
-def _generate_handoff_sms(lead_first, reply_text, agent_first, agent_phone):
+def _generate_handoff_sms(lead_first, reply_text, agent_first, agent_phone, lead_type="buyer"):
     """
     Use Claude Haiku to write a personalized, warm handoff SMS.
 
@@ -7986,19 +7986,40 @@ def _generate_handoff_sms(lead_first, reply_text, agent_first, agent_phone):
         import anthropic as _ant
         client = _ant.Anthropic(api_key=api_key)
 
+        _lead_context = {
+            "zbuyer": (
+                "This lead is a HOMEOWNER who submitted a cash offer request. "
+                "They want to know what their home is worth as a cash sale vs. listing. "
+                "Frame the agent as a cash-offer expert who can show them both numbers — "
+                "not a buyer's agent, not someone who will pitch them on listing."
+            ),
+            "seller": (
+                "This lead is a HOMEOWNER who engaged with Barry's AI about their home value. "
+                "They are thinking about selling. Frame the agent as someone who knows the local "
+                "market and can give them a real number — not a generic listing pitch."
+            ),
+            "buyer": (
+                "This lead is a BUYER browsing homes in Hampton Roads. "
+                "Frame the agent as someone who knows exactly what they're looking for and "
+                "can help them move fast in this market."
+            ),
+        }.get(lead_type, "")
+
         prompt = f"""You are Barry Jenkins' AI assistant at Legacy Home Team — Virginia's #1 real estate team (850+ homes/year, Hampton Roads VA).
 
 A lead just replied positively to one of Barry's AI outreach texts. You're sending a final handoff SMS before a human agent takes over the conversation.
 
 CONTEXT:
 Lead's first name: {lead_first}
+Lead type: {lead_type}
+{_lead_context}
 What the lead just said: "{reply_text[:300]}"
 Assigned agent's first name: {agent_first or "our agent"}
 {phone_line}
 
 WRITE a 35-45 word handoff SMS that:
 1. Opens with the lead's first name + a single warm sentence that acknowledges their reply authentically (NOT generic — it should feel like you actually read what they said)
-2. Introduces the agent by first name as the specific expert being sent their way — make them sound worth talking to
+2. Introduces the agent by first name as the specific expert being sent their way — frame them as the right person for THIS lead's situation (buyer/seller/cash-offer as appropriate)
 3. If you have the agent's phone: mention it naturally as "they'll reach out from [number]"
 4. Closes with one line that creates genuine anticipation — something that makes them want to pick up when the agent calls
 
@@ -8035,7 +8056,7 @@ Output ONLY the SMS text. Nothing else."""
 
 
 def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name="",
-                          delay_seconds=270):
+                          delay_seconds=270, lead_type="buyer"):
     """
     Fire a personalized handoff SMS to the lead after a positive/consent reply.
 
@@ -8047,6 +8068,8 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
       1. Fetches the assigned agent's name + direct phone from FUB
       2. Uses Claude Haiku to write a warm, specific handoff message
       3. Sends via Project Blue (iMessage-first)
+
+    lead_type: "buyer" | "seller" | "zbuyer" — controls Claude prompt framing.
 
     Runs in a daemon thread — Flask response returns immediately.
     """
@@ -8084,6 +8107,7 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
                 reply_text=reply_text,
                 agent_first=agent_first,
                 agent_phone=agent_phone,
+                lead_type=lead_type,
             )
 
             result = _pb_handoff.send_message(to_phone, body, dry_run=False)
@@ -8203,9 +8227,19 @@ def webhook_sendblue():
             fub.add_tag_fast(person_id, "SMS_Conversion", [])
             _pond_add_fub_note(fub, person_id, person_name, body_text,
                                "iMessage Reply", sentiment_reason)
+            try:
+                _sb_person = fub.get_person(person_id)
+                _sb_tags   = _sb_person.get("tags") or []
+                _sb_src    = (_sb_person.get("source") or "").lower().replace("-","").replace(" ","").replace("_","")
+                _sb_is_z   = (any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER") for t in _sb_tags) or "zbuyer" in _sb_src)
+                _sb_is_s   = not _sb_is_z and any(t in _sb_tags for t in ("Ylopo Prospecting", "Ylopo Seller"))
+                _sb_ltype  = "zbuyer" if _sb_is_z else ("seller" if _sb_is_s else "buyer")
+            except Exception:
+                _sb_ltype = "buyer"
             _schedule_sms_handoff(
                 person_id=person_id, to_phone=from_number,
                 reply_text=body_text, lead_first_name=(person_name or "").split()[0],
+                lead_type=_sb_ltype,
             )
 
         elif sentiment == "negative":
@@ -8391,12 +8425,22 @@ def webhook_twilio_sms():
                 # then send a Claude-generated message introducing their agent by name + number.
                 # Pass the lead's actual reply so Claude can write something specific to them.
                 _lead_first = (person_name or "").split()[0] if person_name else ""
+                try:
+                    _tw_person = fub.get_person(person_id)
+                    _tw_tags   = _tw_person.get("tags") or []
+                    _tw_src    = (_tw_person.get("source") or "").lower().replace("-","").replace(" ","").replace("_","")
+                    _tw_is_z   = (any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER") for t in _tw_tags) or "zbuyer" in _tw_src)
+                    _tw_is_s   = not _tw_is_z and any(t in _tw_tags for t in ("Ylopo Prospecting", "Ylopo Seller"))
+                    _tw_ltype  = "zbuyer" if _tw_is_z else ("seller" if _tw_is_s else "buyer")
+                except Exception:
+                    _tw_ltype = "buyer"
                 _schedule_sms_handoff(
                     person_id,
                     from_phone,
                     reply_text=body_text,
                     lead_first_name=_lead_first,
                     delay_seconds=270,
+                    lead_type=_tw_ltype,
                 )
 
             elif sentiment == "negative":
@@ -8614,6 +8658,32 @@ def webhook_projectblue():
                     _base_url = os.environ.get("BASE_URL",
                                                "https://web-production-3363cc.up.railway.app")
 
+                    # Detect lead type upfront — needed for audit email AND handoff SMS
+                    # framing regardless of which A/B variant (voice or video) fires.
+                    try:
+                        _consent_person = fub.get_person(person_id) if person_id else {}
+                        _consent_tags   = _consent_person.get("tags") or []
+                        _consent_source = (_consent_person.get("source") or "").strip().lower()
+                        _consent_src_norm = _consent_source.replace("-","").replace(" ","").replace("_","")
+                        _is_zbuyer_consent = (
+                            any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER")
+                                for t in _consent_tags)
+                            or "zbuyer" in _consent_src_norm
+                        )
+                        _is_seller_consent = (
+                            not _is_zbuyer_consent
+                            and any(t in _consent_tags
+                                    for t in ("Ylopo Prospecting", "Ylopo Seller"))
+                        )
+                        _audit_lead_type = (
+                            "zbuyer" if _is_zbuyer_consent else
+                            ("seller" if _is_seller_consent else "buyer")
+                        )
+                    except Exception as _lte:
+                        logger.warning("Consent lead-type detection failed: %s", _lte)
+                        _is_zbuyer_consent = False
+                        _is_seller_consent = False
+
                     if _ab_variant == "video":
                         # Video variant: HeyGen thumbnail + link as MMS
                         _stored_vid_id = _db.get_video_id_for_lead(person_id)
@@ -8653,30 +8723,9 @@ def webhook_projectblue():
                             except Exception as _vbe:
                                 logger.warning("Voice note behavior fetch failed: %s", _vbe)
 
-                            # Lead type detection for voice note script routing.
-                            # Zbuyer: owns the home, wants a cash offer — totally different script.
-                            # Ylopo Prospecting/Seller: home value inquiry — market intel script.
-                            # Everything else: buyer browsing IDX.
-                            _vn_person_full = fub.get_person(person_id) if person_id else {}
-                            _vn_person_tags = _vn_person_full.get("tags") or []
-                            _vn_source = (_vn_person_full.get("source") or "").strip().lower()
-                            _vn_src_norm = _vn_source.replace("-","").replace(" ","").replace("_","")
-                            _is_zbuyer_vn = (
-                                any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER")
-                                    for t in _vn_person_tags)
-                                or "zbuyer" in _vn_src_norm
-                            )
-                            _is_seller_vn = (
-                                not _is_zbuyer_vn
-                                and any(t in _vn_person_tags
-                                        for t in ("Ylopo Prospecting", "Ylopo Seller"))
-                            )
-
-                            # Capture lead type for audit email
-                            _audit_lead_type = (
-                                "zbuyer" if _is_zbuyer_vn else
-                                ("seller" if _is_seller_vn else "buyer")
-                            )
+                            # Reuse lead type already detected above — no second FUB call needed.
+                            _is_zbuyer_vn = _is_zbuyer_consent
+                            _is_seller_vn = _is_seller_consent
                             _audit_behavior = _vn_behavior
 
                             script      = _el.generate_voice_note_script(
@@ -8722,6 +8771,7 @@ def webhook_projectblue():
                     reply_text=body_text,
                     lead_first_name=_lead_first,
                     delay_seconds=270,
+                    lead_type=_audit_lead_type,
                 )
             elif sentiment == "negative":
                 fub.add_tag(person_id, "SMS_OptOut")
@@ -8743,6 +8793,7 @@ def webhook_projectblue():
                     reply_text=body_text,
                     lead_first_name=_lead_first,
                     delay_seconds=900,   # 15 min — time to listen to the note first
+                    lead_type=_audit_lead_type,
                 )
             else:
                 fub_note_ok = _pond_add_sms_reply_fub_note(
