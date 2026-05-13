@@ -2969,6 +2969,20 @@ def run_new_lead_mailer(dry_run=True):
                         _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
                     _did_something = True
                     logger.info("New lead immediate email sent to %s (%s)", name, to_email)
+                    if not dry_run:
+                        try:
+                            _db.log_automation_event(
+                                event_type="email_sent",
+                                person_id=pid,
+                                person_name=name,
+                                channel="email",
+                                payload={"sequence_num": 1, "strategy": "new_lead_immediate",
+                                         "subject": subject[:120], "sg_id": result.get("sg_message_id")},
+                                triggered_by="pond_mailer.new_lead",
+                                ai_generated=True,
+                            )
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.error("Send failed for new lead %s: %s", name, e)
 
@@ -3184,6 +3198,21 @@ def run_new_lead_mailer(dry_run=True):
                                 name, _nl_phone, _nl_result.get("message_type", "?"))
                     print(f"    SMS sent via {_nl_result.get('message_type', '?')} "
                           f"({_nl_result.get('status', '?')})")
+                    if not dry_run:
+                        try:
+                            _db.log_automation_event(
+                                event_type="sms_sent",
+                                person_id=pid,
+                                person_name=name,
+                                channel=_nl_result.get("message_type", "iMessage"),
+                                payload={"strategy": "new_lead_immediate",
+                                         "ab_variant": _nl_ab_variant,
+                                         "status": _nl_result.get("status", "queued")},
+                                triggered_by="pond_mailer.new_lead",
+                                ai_generated=True,
+                            )
+                        except Exception:
+                            pass
 
                     # Lead audit email — Barry QAs every outreach
                     # _nl_is_z and _nl_is_seller already computed above for video routing
@@ -3613,6 +3642,21 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 sms_only_sent += 1
                 sent += 1
                 _sms_today += 1  # track toward warmup cap within this run
+                if not dry_run:
+                    try:
+                        _db.log_automation_event(
+                            event_type="sms_sent",
+                            person_id=pid,
+                            person_name=name,
+                            channel=_sms_channel,
+                            payload={"strategy": _strat2, "leadstream_tier": _tier2,
+                                     "ab_variant": _sms_ab_variant,
+                                     "status": _sms_result.get("status", "queued")},
+                            triggered_by="pond_mailer.sms_only",
+                            ai_generated=True,
+                        )
+                    except Exception:
+                        pass
                 # Jitter: 2-8s random delay between sends to look human and avoid
                 # carrier pattern detection. Skip on dry_run (no real send happened).
                 if not dry_run:
@@ -4572,6 +4616,23 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                         print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'} {_sms_type_label}{_vid_note} | A/B: {_dual_ab_variant} ({len(_dual_body)} chars)")
                         dual_sms_sent += 1
                         _sms_today += 1  # track toward warmup cap within this run
+                        if not dry_run:
+                            try:
+                                _db.log_automation_event(
+                                    event_type="sms_sent",
+                                    person_id=pid,
+                                    person_name=name,
+                                    channel=_dual_channel,
+                                    payload={"strategy": "dual_channel",
+                                             "leadstream_tier": leadstream_tier,
+                                             "ab_variant": _dual_ab_variant,
+                                             "has_video": bool(_dual_media_url),
+                                             "status": _dual_result.get("status", "queued")},
+                                    triggered_by="pond_mailer.dual_sms",
+                                    ai_generated=True,
+                                )
+                            except Exception:
+                                pass
                         # Jitter between sends — looks human, avoids carrier flagging
                         if not dry_run:
                             import time as _time
@@ -4606,6 +4667,22 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 )
             except Exception as _fub_err:
                 logger.warning("FUB email log skipped for %s: %s", name, _fub_err)
+
+        if not dry_run:
+            try:
+                _db.log_automation_event(
+                    event_type="email_sent",
+                    person_id=pid,
+                    person_name=name,
+                    channel="email",
+                    payload={"sequence_num": sequence_num, "strategy": strategy,
+                             "leadstream_tier": leadstream_tier,
+                             "subject": email_data.get("subject", "")[:120]},
+                    triggered_by="pond_mailer.drip",
+                    ai_generated=True,
+                )
+            except Exception:
+                pass
 
         sent += 1
         print(f"    ✓ {'[DRY RUN] Would send' if dry_run else 'Sent'}")

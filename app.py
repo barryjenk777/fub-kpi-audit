@@ -7772,6 +7772,18 @@ def api_pond_mailer_reply():
             routed=routed,
             fub_task_id=task_id,
         )
+        try:
+            _db.log_automation_event(
+                event_type="reply_received",
+                person_id=person_id,
+                person_name=person_name,
+                channel="email",
+                payload={"sentiment": sentiment, "routed": routed,
+                         "sentiment_score": sentiment_score},
+                triggered_by="api_pond_mailer_reply",
+            )
+        except Exception:
+            pass
 
         # ── Notify assigned agent instantly ────────────────────────────────
         try:
@@ -8398,6 +8410,19 @@ def _notify_agent_of_reply(person_id, person_name, phone, reply_text, sentiment,
         SendGridAPIClient(sg_key).send(msg)
         logger.info("Agent reply notification sent to %s (userId=%s) for person %s (%s)",
                     agent_email, assigned_uid, person_id, sentiment)
+        try:
+            _db.log_automation_event(
+                event_type="agent_notified",
+                person_id=person_id,
+                person_name=person_name,
+                agent_name=agent_first,
+                channel=channel,
+                payload={"sentiment": sentiment, "agent_email": agent_email,
+                         "agent_fub_uid": assigned_uid},
+                triggered_by="_notify_agent_of_reply",
+            )
+        except Exception:
+            pass
         return True
 
     except Exception as e:
@@ -8938,6 +8963,18 @@ def webhook_twilio_sms():
             routed=routed,
             twilio_message_sid=msg_sid,
         )
+        try:
+            _db.log_automation_event(
+                event_type="reply_received",
+                person_id=person_id,
+                person_name=person_name,
+                channel="SMS",
+                payload={"sentiment": sentiment, "routed": routed,
+                         "sentiment_score": sentiment_score},
+                triggered_by="webhook_twilio_sms",
+            )
+        except Exception:
+            pass
 
         # ── Notify assigned agent instantly ────────────────────────────────────
         try:
@@ -9299,6 +9336,18 @@ def webhook_projectblue():
             routed=routed,
             twilio_message_sid=guid,   # reusing column for PB guid
         )
+        try:
+            _db.log_automation_event(
+                event_type="reply_received",
+                person_id=person_id,
+                person_name=person_name,
+                channel="iMessage",
+                payload={"sentiment": sentiment, "routed": routed,
+                         "sentiment_score": sentiment_score},
+                triggered_by="webhook_projectblue",
+            )
+        except Exception:
+            pass
 
         # ── Notify assigned agent instantly ────────────────────────────────────
         # Fires for ALL sentiments — agent needs to know even on negative/neutral.
