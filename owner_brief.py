@@ -170,37 +170,48 @@ def _build_conversion(fub_client, db):
     except Exception as e:
         logger.warning("owner_brief upcoming appts failed: %s", e)
 
-    # Deal closings from deal_log
+    # Deal closings + active contracts from deal_log
     closings_mtd = []
     closings_ytd_count = 0
     gci_mtd = 0.0
     gci_ytd = 0.0
+    active_contracts = []
+    pipeline_gci = 0.0
     try:
         today = now.date()
         month_start = today.replace(day=1)
         year_start  = today.replace(month=1, day=1)
+        year_end    = today.replace(month=12, day=31)
 
-        profiles = db.get_agent_profiles(active_only=False)
-        agent_ytd_map = {}
-        for p in profiles:
-            ytd = db.get_agent_ytd_summary(p["agent_name"]) or {}
-            agent_ytd_map[p["agent_name"]] = ytd
+        def _gci(d):
+            return float(d.get("gci") or d.get("gci_estimated") or 0)
 
-        # Sum from deal_log for MTD
-        mtd_deals = db.get_deals_in_range(str(month_start), str(today))
+        # Closed deals MTD
+        mtd_deals = db.get_deals_in_range(str(month_start), str(today), stage="closing")
         for d in mtd_deals:
             closings_mtd.append({
                 "agent":      d.get("agent_name"),
                 "close_date": str(d.get("close_date", "")),
-                "gci":        float(d.get("gci") or 0),
+                "gci":        _gci(d),
                 "sale_price": float(d.get("sale_price") or 0),
-                "source":     d.get("source", ""),
             })
-            gci_mtd += float(d.get("gci") or 0)
+            gci_mtd += _gci(d)
 
-        ytd_deals = db.get_deals_in_range(str(year_start), str(today))
+        # Closed deals YTD
+        ytd_deals = db.get_deals_in_range(str(year_start), str(today), stage="closing")
         closings_ytd_count = len(ytd_deals)
-        gci_ytd = sum(float(d.get("gci") or 0) for d in ytd_deals)
+        gci_ytd = sum(_gci(d) for d in ytd_deals)
+
+        # Active contracts in pipeline (opened this year)
+        contracts = db.get_deals_in_range(str(year_start), str(year_end), stage="contract")
+        for d in contracts:
+            active_contracts.append({
+                "agent":         d.get("agent_name"),
+                "contract_date": str(d.get("contract_date", "")),
+                "sale_price":    float(d.get("sale_price") or 0),
+                "gci":           _gci(d),
+            })
+            pipeline_gci += _gci(d)
 
     except Exception as e:
         logger.warning("owner_brief conversion deals section failed: %s", e)
@@ -217,11 +228,18 @@ def _build_conversion(fub_client, db):
         "upcoming_appointments": upcoming,
         "ai_outreach_conversions_7d": pond_7d,
         "closings": {
-            "mtd_count": len(closings_mtd),
-            "mtd_gci":   round(gci_mtd, 2),
-            "ytd_count": closings_ytd_count,
-            "ytd_gci":   round(gci_ytd, 2),
-            "mtd_deals": closings_mtd,
+            "mtd_count":       len(closings_mtd),
+            "mtd_gci":         round(gci_mtd, 2),
+            "ytd_count":       closings_ytd_count,
+            "ytd_gci":         round(gci_ytd, 2),
+            "mtd_deals":       closings_mtd,
+            "note":            "GCI estimated from sale_price x agent commission_pct in goals. 0 = agent has no goal set or FUB deal has no price.",
+        },
+        "pipeline_contracts": {
+            "active_count":  len(active_contracts),
+            "pipeline_gci":  round(pipeline_gci, 2),
+            "contracts":     active_contracts[:20],
+            "note":          "Contracts not yet closed — projected GCI in pipeline.",
         },
     }
 
@@ -342,6 +360,128 @@ def _build_manager_sla(fub_client, db):
     return result
 
 
+# ── Agent accountability section ─────────────────────────────────────────────
+
+def _build_agent_accountability(db):
+    """
+    Per-agent GCI pace vs goal and call activity from cached YTD data.
+    Uses agent_ytd_cache (updated by goals_sync job Mon/Thu 6am ET) and
+    agent goals from the goals table.
+
+    Returns a list of agent dicts plus team-level GCI totals.
+    """
+    result = {
+        "data_quality": "live",
+        "ytd_team_gci": 0.0,
+        "ytd_team_closings": 0,
+        "team_gci_goal": 0.0,
+        "team_gci_pace_pct": None,
+        "agents": [],
+        "below_call_pace": [],   # agents averaging < 25 calls/week
+        "behind_gci_goal": [],   # agents at < 70% of prorated GCI goal
+        "cache_note": None,
+    }
+
+    try:
+        now = datetime.now(timezone.utc)
+        year = now.year
+
+        # Weeks elapsed since Jan 1 (minimum 1 to avoid div/0)
+        jan1 = datetime(year, 1, 1, tzinfo=timezone.utc)
+        weeks_elapsed = max((now - jan1).days / 7, 1)
+
+        # Load goals and YTD actuals
+        all_goals   = db.get_all_goals(year=year)         # list of goal dicts
+        ytd_cache   = db.get_ytd_cache(year=year)         # {name: {calls_ytd, appts_ytd, ...}}
+        cache_ts    = db.get_cache_updated_at(year=year)
+        result["cache_note"] = f"ytd_cache updated {cache_ts}" if cache_ts else "ytd_cache empty — goals_sync may not have run yet"
+
+        goal_map = {g["agent_name"]: g for g in all_goals}
+
+        team_gci_goal = 0.0
+        team_ytd_gci  = 0.0
+        team_ytd_closings = 0
+
+        for agent_name, ytd in ytd_cache.items():
+            goal = goal_map.get(agent_name, {})
+            gci_goal = float(goal.get("gci_goal") or 0)
+            team_gci_goal += gci_goal
+
+            # GCI actuals from agent_ytd_summary (deal_log + ytd cache)
+            ytd_gci_data = db.get_agent_ytd_summary(agent_name, year=year)
+            gci_ytd      = float(ytd_gci_data.get("gci_ytd") or 0)
+            closings_ytd = int(ytd_gci_data.get("closings_ytd") or 0)
+            team_ytd_gci      += gci_ytd
+            team_ytd_closings += closings_ytd
+
+            calls_ytd  = int(ytd.get("calls_ytd") or 0)
+            appts_ytd  = int(ytd.get("appts_ytd") or 0)
+            calls_per_week = round(calls_ytd / weeks_elapsed, 1)
+
+            # GCI pace: annualize the YTD GCI rate
+            year_fraction = weeks_elapsed / 52
+            gci_pace_annualized = round(gci_ytd / year_fraction, 2) if year_fraction > 0 and gci_ytd > 0 else 0.0
+
+            # Prorated goal = gci_goal * (weeks_elapsed / 52)
+            prorated_goal = round(gci_goal * year_fraction, 2)
+            gci_pace_pct  = round(gci_ytd / prorated_goal * 100, 1) if prorated_goal > 0 else None
+
+            status = "no_goal"
+            if gci_goal > 0 and gci_pace_pct is not None:
+                if gci_pace_pct >= 90:
+                    status = "on_pace"
+                elif gci_pace_pct >= 70:
+                    status = "slightly_behind"
+                else:
+                    status = "behind"
+
+            agent_row = {
+                "agent_name":           agent_name,
+                "gci_goal":             gci_goal,
+                "gci_ytd":              gci_ytd,
+                "closings_ytd":         closings_ytd,
+                "gci_pace_annualized":  gci_pace_annualized,
+                "gci_pace_pct":         gci_pace_pct,
+                "prorated_goal":        prorated_goal,
+                "status":               status,
+                "calls_ytd":            calls_ytd,
+                "calls_per_week":       calls_per_week,
+                "appts_ytd":            appts_ytd,
+            }
+            result["agents"].append(agent_row)
+
+            # Flag lists for quick Perplexity access
+            if calls_ytd > 0 and calls_per_week < 25:
+                result["below_call_pace"].append({
+                    "agent_name":     agent_name,
+                    "calls_per_week": calls_per_week,
+                    "calls_ytd":      calls_ytd,
+                })
+            if status == "behind":
+                result["behind_gci_goal"].append({
+                    "agent_name":    agent_name,
+                    "gci_pace_pct":  gci_pace_pct,
+                    "gci_ytd":       gci_ytd,
+                    "prorated_goal": prorated_goal,
+                })
+
+        result["agents"].sort(key=lambda x: x.get("gci_ytd", 0), reverse=True)
+        result["ytd_team_gci"]       = round(team_ytd_gci, 2)
+        result["ytd_team_closings"]  = team_ytd_closings
+        result["team_gci_goal"]      = round(team_gci_goal, 2)
+
+        if team_gci_goal > 0:
+            year_fraction = weeks_elapsed / 52
+            prorated_team = team_gci_goal * year_fraction
+            result["team_gci_pace_pct"] = round(team_ytd_gci / prorated_team * 100, 1) if prorated_team > 0 else None
+
+    except Exception as e:
+        logger.warning("_build_agent_accountability failed: %s", e)
+        result["data_quality"] = f"error — {e}"
+
+    return result
+
+
 # ── Tech health section ───────────────────────────────────────────────────────
 
 def _build_tech_health(db):
@@ -373,7 +513,8 @@ def _build_tech_health(db):
 
 # ── Top-3 AI recommendations ──────────────────────────────────────────────────
 
-def _build_recommendations(lead_gen, conversion, pipeline, manager, tech):
+def _build_recommendations(lead_gen, conversion, pipeline, manager, tech,
+                           accountability=None):
     """
     Generate up to 3 plain-English action items for Barry based on the data.
     Deterministic rule-based — no Claude call here (keep this endpoint fast).
@@ -453,6 +594,20 @@ def _build_recommendations(lead_gen, conversion, pipeline, manager, tech):
             ),
         })
 
+    # Agents behind GCI goal
+    if accountability:
+        behind = accountability.get("behind_gci_goal", [])
+        if behind:
+            names = ", ".join(a["agent_name"].split()[0] for a in behind[:3])
+            actions.append({
+                "priority": len(actions) + 1,
+                "category": "agent_accountability",
+                "action": (
+                    f"{len(behind)} agent(s) below 70% of prorated GCI goal: {names}. "
+                    f"Pull their call pace and appointment set rate in today's 1-on-1."
+                ),
+            })
+
     # Cap the list at 3 most important
     return sorted(actions, key=lambda x: x["priority"])[:3]
 
@@ -475,12 +630,14 @@ def build_owner_daily_brief(fub_client=None, db=None):
 
     now = datetime.now(timezone.utc)
 
-    lead_gen   = _build_lead_gen(fub_client)
-    conversion = _build_conversion(fub_client, db)
-    pipeline   = _build_pipeline_risks(fub_client, db)
-    manager    = _build_manager_sla(fub_client, db)
-    tech       = _build_tech_health(db)
-    actions    = _build_recommendations(lead_gen, conversion, pipeline, manager, tech)
+    lead_gen      = _build_lead_gen(fub_client)
+    conversion    = _build_conversion(fub_client, db)
+    pipeline      = _build_pipeline_risks(fub_client, db)
+    manager       = _build_manager_sla(fub_client, db)
+    accountability = _build_agent_accountability(db)
+    tech          = _build_tech_health(db)
+    actions       = _build_recommendations(lead_gen, conversion, pipeline, manager, tech,
+                                           accountability=accountability)
 
     raw = {
         "schema_version":    "1.0",
@@ -491,6 +648,7 @@ def build_owner_daily_brief(fub_client=None, db=None):
         "conversion":        conversion,
         "pipeline_risks":    pipeline,
         "manager_sla":       manager,
+        "agent_accountability": accountability,
         "tech_health":       tech,
         "top_3_actions":     actions,
         "reference_urls": {

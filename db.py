@@ -357,8 +357,9 @@ CREATE TABLE IF NOT EXISTS isa_transfers (
     agent_name    TEXT
 );
 -- Migration: add columns to existing deployments
-ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS lead_name  TEXT;
-ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS agent_name TEXT;
+ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS lead_name     TEXT;
+ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS agent_name    TEXT;
+ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS first_call_at TIMESTAMPTZ;  -- set when agent logs first outbound call
 
 -- Prospecting time block schedule (set during goal wizard step 7)
 -- Stores which days/time the agent has committed to prospect each week.
@@ -1066,7 +1067,7 @@ def compute_targets(goal: dict) -> dict:
 # Dotloop → FUB stage labels that indicate a signed contract
 CONTRACT_STAGES = {
     "under contract", "contract pending", "pending", "active under contract",
-    "under contract – taking backups", "option period",
+    "under contract – taking backups", "option period", "offer",
 }
 # Stage labels that indicate a closed/settled deal
 CLOSING_STAGES = {
@@ -1219,6 +1220,30 @@ def delete_isa_transfer(person_id: str) -> bool:
                 return cur.rowcount > 0
     except Exception as e:
         logger.warning("delete_isa_transfer failed for %s: %s", person_id, e)
+        return False
+
+
+def mark_isa_first_call(person_id: str) -> bool:
+    """
+    Set first_call_at = NOW() on the isa_transfers row for this person,
+    if it hasn't been set yet. Call this from the FUB webhook when an
+    outbound call is logged for a person who has an active ISA transfer.
+    Returns True if updated, False if row not found or already marked.
+    """
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE isa_transfers
+                       SET first_call_at = NOW()
+                     WHERE person_id = %s
+                       AND first_call_at IS NULL
+                """, (str(person_id),))
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("mark_isa_first_call failed for %s: %s", person_id, e)
         return False
 
 
@@ -5452,22 +5477,44 @@ def get_pond_brief_stats_7d():
 # Owner Brief — deal_log helpers
 # ---------------------------------------------------------------------------
 
-def get_deals_in_range(since_date: str, until_date: str) -> list:
+def get_deals_in_range(since_date: str, until_date: str,
+                       stage: str = "closing") -> list:
     """
-    Return deal_log rows where close_date is in [since_date, until_date].
-    Dates as ISO strings: '2026-05-01'.
+    Return deal_log rows in [since_date, until_date].
+    stage='closing': filters to closed deals, ordered by close_date.
+    stage='contract': filters to active contracts, ordered by contract_date.
+    stage='all': returns both, ordered by COALESCE(close_date, contract_date).
     """
     if not is_available():
         return []
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT agent_name, close_date, sale_price, gci, source
-                    FROM   deal_log
-                    WHERE  close_date BETWEEN %s AND %s
-                    ORDER  BY close_date DESC
-                """, (since_date, until_date))
+                if stage == "closing":
+                    cur.execute("""
+                        SELECT agent_name, close_date, contract_date,
+                               sale_price, gci_estimated AS gci, source, stage
+                        FROM   deal_log
+                        WHERE  close_date BETWEEN %s AND %s
+                        ORDER  BY close_date DESC
+                    """, (since_date, until_date))
+                elif stage == "contract":
+                    cur.execute("""
+                        SELECT agent_name, close_date, contract_date,
+                               sale_price, gci_estimated AS gci, source, stage
+                        FROM   deal_log
+                        WHERE  stage = 'contract'
+                          AND  COALESCE(contract_date, close_date) BETWEEN %s AND %s
+                        ORDER  BY contract_date DESC NULLS LAST
+                    """, (since_date, until_date))
+                else:
+                    cur.execute("""
+                        SELECT agent_name, close_date, contract_date,
+                               sale_price, gci_estimated AS gci, source, stage
+                        FROM   deal_log
+                        WHERE  COALESCE(close_date, contract_date) BETWEEN %s AND %s
+                        ORDER  BY COALESCE(close_date, contract_date) DESC
+                    """, (since_date, until_date))
                 cols = [d[0] for d in cur.description]
                 return [dict(zip(cols, r)) for r in cur.fetchall()]
     except Exception as e:

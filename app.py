@@ -5560,6 +5560,16 @@ def webhook_fub():
     if not is_outbound:
         return jsonify({"ok": True, "action": "ignored_inbound"})
 
+    # Mark ISA first call — stamps first_call_at on isa_transfers row so
+    # the owner brief's isa_handoffs_no_action count reflects reality.
+    if "call" in event_lower:
+        try:
+            _isa_marked = _db.mark_isa_first_call(str(person_id))
+            if _isa_marked:
+                logger.info("ISA first call marked for person %s", person_id)
+        except Exception as _isa_e:
+            logger.warning("mark_isa_first_call failed (non-fatal): %s", _isa_e)
+
     # Remove LeadStream tags immediately
     try:
         from config import LEADSTREAM_TAG, LEADSTREAM_POND_TAG
