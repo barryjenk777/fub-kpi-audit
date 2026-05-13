@@ -7441,6 +7441,19 @@ def api_pond_mailer_reply():
             fub_task_id=task_id,
         )
 
+        # ── Notify assigned agent instantly ────────────────────────────────
+        try:
+            _notify_agent_of_reply(
+                person_id=person_id,
+                person_name=person_name,
+                phone=clean_from,   # email address used as identifier
+                reply_text=body_text,
+                sentiment=sentiment,
+                channel="email",
+            )
+        except Exception as _anr:
+            logger.warning("Agent email reply notification failed (non-fatal): %s", _anr)
+
         # ── Notify Barry of the reply ──────────────────────────────────────
         try:
             from sendgrid import SendGridAPIClient
@@ -7930,6 +7943,133 @@ Under 200 words total. Direct and useful. No fluff."""
         return True
     except Exception as e:
         logger.warning("Could not add FUB note for SMS reply (person %s): %s", person_id, e)
+        return False
+
+
+def _notify_agent_of_reply(person_id, person_name, phone, reply_text, sentiment,
+                           channel="SMS", fub_person=None):
+    """
+    Fire an instant email to the assigned agent when a pond lead replies.
+
+    Args:
+        person_id:   FUB person ID of the replying lead
+        person_name: Display name of the lead
+        phone:       Lead's phone number (for reference)
+        reply_text:  Raw text of the lead's reply
+        sentiment:   "positive" | "negative" | "neutral"
+        channel:     "SMS" | "iMessage" | "email" (display only)
+        fub_person:  Pre-fetched FUB person dict (avoids extra API call if available)
+
+    Returns True if notification sent, False otherwise. Non-fatal on all errors.
+    """
+    try:
+        sg_key = os.environ.get("SENDGRID_API_KEY")
+        if not sg_key:
+            return False
+
+        from fub_client import FUBClient
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail as _SGMail
+
+        # Get assigned agent's FUB user ID
+        fub = FUBClient()
+        person = fub_person or fub.get_person(person_id)
+        assigned_uid = person.get("assignedUserId") or person.get("ownerId")
+        if not assigned_uid:
+            logger.info("_notify_agent_of_reply: no assigned agent for person %s", person_id)
+            return False
+
+        # Skip if assigned to Barry — he already gets the global reply email
+        from config import BARRY_FUB_USER_ID
+        if assigned_uid == BARRY_FUB_USER_ID:
+            return False
+
+        # Look up agent email from agent_profiles
+        agent_email = None
+        agent_first = None
+        try:
+            profiles = _db.get_agent_profiles(active_only=False)
+            match = next((p for p in profiles if p.get("fub_user_id") == assigned_uid), None)
+            if match:
+                agent_email = match.get("email")
+                agent_first = (match.get("agent_name") or "").split()[0]
+        except Exception as _pe:
+            logger.warning("_notify_agent_of_reply: agent_profiles lookup failed: %s", _pe)
+
+        if not agent_email:
+            # Fallback: pull email from FUB users list
+            try:
+                users = fub._request("GET", "users") or {}
+                for u in users.get("users", []):
+                    if u.get("id") == assigned_uid:
+                        agent_email = u.get("email")
+                        agent_first = (u.get("name") or "").split()[0]
+                        break
+            except Exception as _ue:
+                logger.warning("_notify_agent_of_reply: FUB users fallback failed: %s", _ue)
+
+        if not agent_email:
+            logger.info("_notify_agent_of_reply: no email found for userId=%s", assigned_uid)
+            return False
+
+        lead_first = (person_name or "").split()[0] or "your lead"
+        fub_url    = f"https://app.followupboss.com/2/people/detail/{person_id}"
+        sentiment_label = {"positive": "INTERESTED", "negative": "opted out",
+                           "neutral": "replied (neutral)"}.get(sentiment, sentiment.upper())
+
+        subject = f"{'CALL NOW' if sentiment == 'positive' else 'Lead Reply'}: {person_name or phone} just replied on {channel}"
+
+        plain = (
+            f"Hey {agent_first or 'there'},\n\n"
+            f"{person_name or phone} just replied to an AI {channel} — sentiment: {sentiment_label}.\n\n"
+            f"What they said:\n\n    \"{reply_text[:600].strip()}\"\n\n"
+        )
+        if sentiment == "positive":
+            plain += (
+                f"This lead is warm. Call them in the next 5 minutes:\n"
+                f"  Phone: {phone}\n"
+                f"  FUB:   {fub_url}\n\n"
+                f"The AI is sending them a voice note now. When you call, reference what they said.\n"
+            )
+        else:
+            plain += (
+                f"FUB record: {fub_url}\n"
+            )
+        plain += "\n— Legacy Home Team AI Outreach"
+
+        html = (
+            "<div style='font-family:-apple-system,sans-serif;font-size:15px;"
+            "line-height:1.7;color:#222;max-width:560px;margin:24px auto'>"
+            f"<p>Hey {agent_first or 'there'},</p>"
+            f"<p><strong>{person_name or phone}</strong> just replied to an AI {channel}.</p>"
+            f"<blockquote style='border-left:3px solid #e0e0e0;margin:12px 0;padding:8px 16px;"
+            f"color:#555'>{reply_text[:600].strip()}</blockquote>"
+        )
+        if sentiment == "positive":
+            html += (
+                f"<p style='font-size:18px;font-weight:bold;color:#c0392b'>CALL THEM NOW</p>"
+                f"<p>Phone: <a href='tel:{phone}'>{phone}</a><br>"
+                f"<a href='{fub_url}'>Open in Follow Up Boss</a></p>"
+                f"<p>The AI sent them a voice note. When you call, lead with what they said above.</p>"
+            )
+        else:
+            html += f"<p><a href='{fub_url}'>Open in Follow Up Boss</a></p>"
+        html += "<p style='color:#888;font-size:13px'>Legacy Home Team AI Outreach</p></div>"
+
+        msg = _SGMail(
+            from_email=config.EMAIL_FROM,
+            to_emails=agent_email,
+            subject=subject,
+            plain_text_content=plain,
+            html_content=html,
+        )
+        SendGridAPIClient(sg_key).send(msg)
+        logger.info("Agent reply notification sent to %s (userId=%s) for person %s (%s)",
+                    agent_email, assigned_uid, person_id, sentiment)
+        return True
+
+    except Exception as e:
+        logger.warning("_notify_agent_of_reply failed for person %s: %s", person_id, e)
         return False
 
 
@@ -8467,6 +8607,19 @@ def webhook_twilio_sms():
             twilio_message_sid=msg_sid,
         )
 
+        # ── Notify assigned agent instantly ────────────────────────────────────
+        try:
+            _notify_agent_of_reply(
+                person_id=person_id,
+                person_name=person_name,
+                phone=from_phone,
+                reply_text=body_text,
+                sentiment=sentiment,
+                channel="SMS",
+            )
+        except Exception as _anr:
+            logger.warning("Agent reply notification failed (non-fatal): %s", _anr)
+
         # ── Notify Barry ───────────────────────────────────────────────────────
         try:
             from sendgrid import SendGridAPIClient
@@ -8814,6 +8967,27 @@ def webhook_projectblue():
             routed=routed,
             twilio_message_sid=guid,   # reusing column for PB guid
         )
+
+        # ── Notify assigned agent instantly ────────────────────────────────────
+        # Fires for ALL sentiments — agent needs to know even on negative/neutral.
+        # Uses pre-fetched _consent_person if available (saves one FUB API call).
+        try:
+            _prefetched_person = None
+            try:
+                _prefetched_person = locals().get("_consent_person") or None
+            except Exception:
+                pass
+            _notify_agent_of_reply(
+                person_id=person_id,
+                person_name=person_name,
+                phone=from_phone,
+                reply_text=body_text,
+                sentiment=sentiment,
+                channel="iMessage",
+                fub_person=_prefetched_person,
+            )
+        except Exception as _anr:
+            logger.warning("Agent reply notification failed (non-fatal): %s", _anr)
 
         # ── Lead audit email — full breakdown so Barry can QA every touch ──────
         try:

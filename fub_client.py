@@ -850,41 +850,17 @@ class FUBClient:
             note_body = f"📧 EMAIL SENT\nSubject: \"{subject}\"\n\n{preview}"
 
         try:
+            # FUB /v1/notes rejects userId even when it matches the API key owner (userId=1).
+            # Omitting userId causes FUB to attribute the note to the API key owner
+            # automatically — same result, no 400 error, no retry needed.
             payload = {"personId": int(person_id), "body": note_body}
-            if user_id:
-                payload["userId"] = user_id
-            try:
-                result = self._request("POST", "notes", json_data=payload)
-                logger.info("FUB note posted for person %s (seq %s)", person_id, sequence_num)
-                print(f"    📝 FUB note posted (person {person_id}, seq {sequence_num})")
-                return result
-            except Exception as e_with_user:
-                # userId may be rejected if it references a system account.
-                # Retry without it — note will post as the API key owner.
-                if user_id:
-                    logger.warning(
-                        "FUB note with userId=%s failed for person %s: %s — retrying without userId",
-                        user_id, person_id, e_with_user,
-                    )
-                    try:
-                        payload.pop("userId", None)
-                        result = self._request("POST", "notes", json_data=payload)
-                        logger.info("FUB note posted (no userId) for person %s (seq %s)", person_id, sequence_num)
-                        print(f"    📝 FUB note posted without userId (person {person_id}, seq {sequence_num})")
-                        return result
-                    except Exception as e_no_user:
-                        logger.warning(
-                            "FUB note failed (both attempts) for person %s: %s",
-                            person_id, e_no_user,
-                        )
-                        print(f"    ⚠️  FUB note FAILED for person {person_id}: {e_no_user}")
-                        return None
-                else:
-                    logger.warning("FUB note failed for person %s: %s", person_id, e_with_user)
-                    print(f"    ⚠️  FUB note FAILED for person {person_id}: {e_with_user}")
-                    return None
+            result = self._request("POST", "notes", json_data=payload)
+            logger.info("FUB note posted for person %s (seq %s)", person_id, sequence_num)
+            print(f"    📝 FUB note posted (person {person_id}, seq {sequence_num})")
+            return result
         except Exception as e:
-            logger.warning("FUB email note log error for person %s: %s", person_id, e)
+            logger.warning("FUB note failed for person %s: %s", person_id, e)
+            print(f"    ⚠️  FUB note FAILED for person {person_id}: {e}")
             return None
 
     def log_sms_sent(self, person_id, sms_body, lead_type, channel="sms_only",
@@ -903,40 +879,18 @@ class FUBClient:
             channel=channel,
         )
         try:
+            # FUB /v1/notes rejects userId even when it matches the API key owner (userId=1).
+            # Omitting userId causes FUB to attribute the note to the API key owner
+            # automatically — same result, no 400 error, no retry needed.
             payload = {"personId": int(person_id), "body": note_body}
-            if user_id:
-                payload["userId"] = user_id
-            try:
-                result = self._request("POST", "notes", json_data=payload)
-                logger.info("FUB SMS note posted for person %s (%s)", person_id, channel)
-                print(f"    📱 FUB SMS note posted (person {person_id}, {channel})")
-                return result
-            except Exception as e_with_user:
-                # userId may be rejected if it references a system account.
-                # Retry without it — note will post as the API key owner.
-                if user_id:
-                    logger.warning(
-                        "FUB SMS note with userId=%s failed for person %s: %s "
-                        "— retrying without userId",
-                        user_id, person_id, e_with_user,
-                    )
-                    try:
-                        payload.pop("userId", None)
-                        result = self._request("POST", "notes", json_data=payload)
-                        logger.info("FUB SMS note posted (no userId) for person %s", person_id)
-                        print(f"    📱 FUB SMS note posted without userId (person {person_id})")
-                        return result
-                    except Exception as e_no_user:
-                        logger.warning(
-                            "FUB SMS note failed (both attempts) for person %s: %s",
-                            person_id, e_no_user,
-                        )
-                        print(f"    ⚠️  FUB SMS note FAILED for person {person_id}: {e_no_user}")
-                        return None
-                else:
-                    logger.warning("FUB SMS note failed for person %s: %s", person_id, e_with_user)
-                    print(f"    ⚠️  FUB SMS note FAILED for person {person_id}: {e_with_user}")
-                    return None
+            result = self._request("POST", "notes", json_data=payload)
+            logger.info("FUB SMS note posted for person %s (%s)", person_id, channel)
+            print(f"    📱 FUB SMS note posted (person {person_id}, {channel})")
+            return result
+        except Exception as e:
+            logger.warning("FUB SMS note failed for person %s: %s", person_id, e)
+            print(f"    ⚠️  FUB SMS note FAILED for person {person_id}: {e}")
+            return None
         except Exception as e:
             logger.warning("FUB SMS note log error for person %s: %s", person_id, e)
             return None

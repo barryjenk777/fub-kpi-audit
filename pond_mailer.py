@@ -3392,6 +3392,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
     heygen_sent = 0           # emails where a HeyGen video was successfully attached
     heygen_failed = 0         # HeyGen generation attempts that failed or timed out
     heygen_last_error = None  # most recent HeyGen error message (for diagnostics)
+    _hg_cap_downgraded = []   # Email-1 leads who got text-only because cap was hit
     skipped_cooldown = 0
     skipped_no_email = 0
     skipped_no_activity = 0
@@ -3751,6 +3752,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         if _hg_slots_left == 0:
             logger.info("HeyGen daily cap of %d reached (%d used) — video skipped for %s",
                         _HG_CAP, _hg_used_today, name)
+            # Track Email 1 leads downgraded to text-only — Barry gets an alert after the run
+            if sequence_num == 1:
+                _hg_cap_downgraded.append({"name": name, "pid": pid, "lead_type": _lead_type_label})
         # Score gate applies to Email 2+ only; Email 1 always gets a video (every new
         # lead deserves a personalized opener — the score gate is for conserving credits
         # on follow-up emails, not first contact).
@@ -4624,10 +4628,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     f"{'─' * 48}\n"
                     f"Barry Jenkins AI Nurture · Legacy Home Team"
                 )
+                # userId omitted: FUB rejects userId=1 on notes; omitting attributes to API key owner (Barry)
                 client._request("POST", "notes", json_data={
                     "personId": int(pid),
                     "body": _complete_note,
-                    "userId": BARRY_FUB_USER_ID,
                 })
                 logger.info("Nurture complete: tagged %s (seq %d)", name, sequence_num)
                 print(f"    🏁 NURTURE_COMPLETE tag applied — agent follow-up needed")
@@ -4653,6 +4657,41 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         print(f"  ⚠ WARNING: Ponds {sorted(LEADSTREAM_ALLOWED_POND_IDS)} returned 0 leads — check FUB pond assignments.")
     print(f"{'='*60}\n")
 
+    # ── HeyGen cap alert — email Barry when leads were downgraded ────────────────
+    if _hg_cap_downgraded and not dry_run:
+        try:
+            import sendgrid as _sg
+            from sendgrid.helpers.mail import Mail as _SgMail
+            _sg_key = os.environ.get("SENDGRID_API_KEY")
+            if _sg_key:
+                from config import HEYGEN_DAILY_CAP as _HG_CAP_ALERT
+                _cap_lines = [
+                    f"HeyGen hit its {_HG_CAP_ALERT}/day cap during today's pond mailer run.",
+                    f"The following {len(_hg_cap_downgraded)} Email-1 lead(s) got text-only instead of a personalized video:",
+                    "",
+                ]
+                for _dl in _hg_cap_downgraded:
+                    _fub_url = f"https://app.followupboss.com/2/people/detail/{_dl['pid']}"
+                    _cap_lines.append(f"  - {_dl['name']} ({_dl['lead_type']}) — {_fub_url}")
+                _cap_lines += [
+                    "",
+                    "To fix: either raise HEYGEN_DAILY_CAP in config.py or schedule the afternoon run earlier.",
+                    "These leads still received a Claude-written email — no drop was missed.",
+                    "",
+                    "— Legacy Home Team AI Outreach",
+                ]
+                _cap_body = "\n".join(_cap_lines)
+                _cap_msg = _SgMail(
+                    from_email=os.environ.get("FROM_EMAIL", "barry@yourfriendlyagent.net"),
+                    to_emails=os.environ.get("FROM_EMAIL", "barry@yourfriendlyagent.net"),
+                    subject=f"HeyGen cap hit — {len(_hg_cap_downgraded)} lead(s) got text-only today",
+                    plain_text_content=_cap_body,
+                )
+                _sg.SendGridAPIClient(_sg_key).send(_cap_msg)
+                logger.info("HeyGen cap alert sent to Barry (%d downgraded leads)", len(_hg_cap_downgraded))
+        except Exception as _hca:
+            logger.warning("HeyGen cap alert email failed: %s", _hca)
+
     return {
         "sent":                      sent,
         "sms_only_sent":             sms_only_sent,
@@ -4667,6 +4706,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
         "skipped_no_activity":       skipped_no_activity,
         "skipped_no_strategy":       skipped_no_strategy,
         "skipped_generation_error":  skipped_generation_error,
+        "heygen_cap_downgraded":     len(_hg_cap_downgraded),
         "dry_run":                   dry_run,
     }
 
