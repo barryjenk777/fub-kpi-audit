@@ -390,9 +390,10 @@ def _build_agent_accountability(db):
         jan1 = datetime(year, 1, 1, tzinfo=timezone.utc)
         weeks_elapsed = max((now - jan1).days / 7, 1)
 
-        # Load goals and YTD actuals
+        # Load goals and YTD actuals — all in 3 DB round-trips (not N per agent)
         all_goals   = db.get_all_goals(year=year)         # list of goal dicts
         ytd_cache   = db.get_ytd_cache(year=year)         # {name: {calls_ytd, appts_ytd, ...}}
+        gci_ytd_map = db.get_all_agent_gci_ytd(year=year) # {name: {gci_ytd, closings_ytd}}
         cache_ts    = db.get_cache_updated_at(year=year)
         result["cache_note"] = f"ytd_cache updated {cache_ts}" if cache_ts else "ytd_cache empty — goals_sync may not have run yet"
 
@@ -407,10 +408,10 @@ def _build_agent_accountability(db):
             gci_goal = float(goal.get("gci_goal") or 0)
             team_gci_goal += gci_goal
 
-            # GCI actuals from agent_ytd_summary (deal_log + ytd cache)
-            ytd_gci_data = db.get_agent_ytd_summary(agent_name, year=year)
-            gci_ytd      = float(ytd_gci_data.get("gci_ytd") or 0)
-            closings_ytd = int(ytd_gci_data.get("closings_ytd") or 0)
+            # GCI actuals from batch deal_log query (one query for all agents)
+            gci_data     = gci_ytd_map.get(agent_name, {})
+            gci_ytd      = float(gci_data.get("gci_ytd") or 0)
+            closings_ytd = int(gci_data.get("closings_ytd") or 0)
             team_ytd_gci      += gci_ytd
             team_ytd_closings += closings_ytd
 

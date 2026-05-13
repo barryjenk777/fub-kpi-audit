@@ -5477,6 +5477,37 @@ def get_pond_brief_stats_7d():
 # Owner Brief — deal_log helpers
 # ---------------------------------------------------------------------------
 
+def get_all_agent_gci_ytd(year: int = None) -> dict:
+    """
+    Return GCI YTD and closing count for ALL agents in one query from deal_log.
+    Much faster than calling get_agent_ytd_summary() per agent in a loop.
+    Returns {agent_name: {"gci_ytd": float, "closings_ytd": int}}.
+    """
+    if not is_available():
+        return {}
+    if year is None:
+        year = datetime.now(timezone.utc).year
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COALESCE(SUM(gci_estimated), 0) AS gci_ytd,
+                           COUNT(*)                         AS closings_ytd
+                    FROM   deal_log
+                    WHERE  year = %s
+                      AND  stage = 'closing'
+                    GROUP  BY agent_name
+                """, (year,))
+                return {
+                    r[0]: {"gci_ytd": float(r[1] or 0), "closings_ytd": int(r[2] or 0)}
+                    for r in cur.fetchall()
+                }
+    except Exception as e:
+        logger.warning("get_all_agent_gci_ytd failed: %s", e)
+        return {}
+
+
 def get_deals_in_range(since_date: str, until_date: str,
                        stage: str = "closing") -> list:
     """

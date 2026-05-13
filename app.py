@@ -6092,6 +6092,22 @@ def api_debug_calls():
 # JSON schema version 1.0 — see /api/owner/contract for the annotated spec.
 
 _OWNER_BRIEF_CACHE_SECONDS = 600   # 10 minutes
+_owner_brief_rebuild_lock = None   # threading.Lock, initialized lazily
+
+
+def _owner_brief_rebuild_bg(cache_key):
+    """
+    Background thread: rebuild the owner brief and warm the cache.
+    Non-fatal — logs errors but never raises.
+    """
+    try:
+        import owner_brief as _ob
+        brief = _ob.build_owner_daily_brief()
+        brief["from_cache"] = False
+        cache_set(cache_key, brief)
+        logger.info("owner_brief background rebuild complete")
+    except Exception as e:
+        logger.error("owner_brief background rebuild failed: %s", e, exc_info=True)
 
 
 @app.route("/api/owner/daily-brief")
@@ -6102,21 +6118,80 @@ def api_owner_daily_brief():
     Returns the full owner_daily_brief JSON object. Cached 10 minutes.
     Designed to be polled by Perplexity to act as a virtual team owner.
 
-    Add ?force=true to bypass cache.
-    Add ?nocache=true as alias.
+    ?force=true  — triggers a background rebuild, returns current cache immediately.
+                   If no cache exists yet, builds synchronously (first hit only).
+    ?nocache=true — alias for force=true.
+    ?sync=true   — forces a synchronous rebuild (slow, for debugging only).
 
     Schema version: 1.0
     """
+    import threading
+
     force = request.args.get("force", "").lower() in ("true", "1") \
             or request.args.get("nocache", "").lower() in ("true", "1")
+    sync_rebuild = request.args.get("sync", "").lower() in ("true", "1")
 
     cache_key = "owner_daily_brief"
-    if not force:
-        cached = cache_get(cache_key)
-        if cached:
-            cached["from_cache"] = True
-            return jsonify(cached)
 
+    # Always try cache first
+    cached = cache_get(cache_key)
+
+    if force and not sync_rebuild:
+        # Fire background rebuild — return current cache immediately
+        t = threading.Thread(
+            target=_owner_brief_rebuild_bg,
+            args=(cache_key,),
+            daemon=True,
+            name="owner_brief_rebuild",
+        )
+        t.start()
+        logger.info("owner_brief: background rebuild triggered by ?force=true")
+
+        if cached:
+            # Return stale cache right now; background thread will refresh it
+            cached["from_cache"] = True
+            cached["rebuild_triggered"] = True
+            return jsonify(cached)
+        else:
+            # No cache yet — wait for the thread (first-ever build)
+            t.join(timeout=30)
+            fresh = cache_get(cache_key)
+            if fresh:
+                fresh["from_cache"] = False
+                return jsonify(fresh)
+            return jsonify({
+                "ok": False,
+                "schema_version": "1.0",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "data_status": "building",
+                "error": "Brief is still building. Retry in 30 seconds.",
+                "top_3_actions": [],
+            }), 202
+
+    if sync_rebuild:
+        # Explicit slow synchronous rebuild (debug/admin only)
+        try:
+            import owner_brief as _ob
+            brief = _ob.build_owner_daily_brief()
+            brief["from_cache"] = False
+            cache_set(cache_key, brief)
+            return jsonify(brief)
+        except Exception as e:
+            logger.error("api_owner_daily_brief sync rebuild failed: %s", e, exc_info=True)
+            return jsonify({
+                "ok": False,
+                "schema_version": "1.0",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "data_status": "error",
+                "error": str(e),
+                "top_3_actions": [],
+            }), 500
+
+    if cached:
+        cached["from_cache"] = True
+        return jsonify(cached)
+
+    # No cache and no force — build synchronously, cache, return
     try:
         import owner_brief as _ob
         brief = _ob.build_owner_daily_brief()
@@ -6124,11 +6199,14 @@ def api_owner_daily_brief():
         cache_set(cache_key, brief)
         return jsonify(brief)
     except Exception as e:
-        logger.error("api_owner_daily_brief failed: %s", e, exc_info=True)
+        logger.error("api_owner_daily_brief cold build failed: %s", e, exc_info=True)
         return jsonify({
+            "ok": False,
             "schema_version": "1.0",
-            "error": str(e),
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "data_status": "error",
+            "error": str(e),
+            "top_3_actions": [],
         }), 500
 
 
