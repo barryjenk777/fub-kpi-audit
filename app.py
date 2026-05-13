@@ -6091,6 +6091,413 @@ def api_debug_calls():
 # These three endpoints are designed for Perplexity consumption.
 # JSON schema version 1.0 — see /api/owner/contract for the annotated spec.
 
+# ---------------------------------------------------------------------------
+# Perplexity Bridge — read-only, PII-stripped, auth-gated CEO endpoints
+# ---------------------------------------------------------------------------
+# Auth: set PERPLEXITY_API_KEY in Railway env vars.
+# Pass as ?key=TOKEN or Authorization: Bearer TOKEN header.
+# If env var is not set, endpoints are open (log a warning).
+#
+# Architecture: direct polling (Perplexity hits on demand).
+# The owner_brief cache serves sub-300ms — no middleware needed.
+# ---------------------------------------------------------------------------
+
+def _perplexity_auth() -> bool:
+    """Returns True if the request carries the correct Perplexity API key."""
+    expected = os.environ.get("PERPLEXITY_API_KEY", "").strip()
+    if not expected:
+        logger.warning("PERPLEXITY_API_KEY not set — /api/perplexity/* is open")
+        return True  # unconfigured = open; operator should set the key
+    provided = (
+        request.args.get("key", "").strip()
+        or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+        or request.headers.get("X-Api-Key", "").strip()
+    )
+    return provided == expected
+
+
+def _abbrev_name(full_name: str) -> str:
+    """'James Greear' -> 'James G.'  Strips PII from lead names."""
+    if not full_name or full_name.lower() in ("unknown", ""):
+        return "Unknown"
+    parts = full_name.strip().split()
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0]} {parts[-1][0]}."
+
+
+def _perplexity_shape_brief(brief: dict) -> dict:
+    """
+    Transform the full owner_daily_brief into a Perplexity-safe payload:
+    - Flat, operator-readable structure
+    - No phone numbers, no email addresses, no raw CRM arrays
+    - Lead names truncated to 'First L.'
+    - Explicit data_gaps[] so Perplexity doesn't hallucinate from missing fields
+    - top_priorities first so Perplexity leads with action
+    """
+    now_iso = brief.get("generated_at", "")
+    lg      = brief.get("lead_gen", {})
+    co      = brief.get("conversion", {})
+    pr      = brief.get("pipeline_risks", {})
+    ms      = brief.get("manager_sla", {})
+    aa      = brief.get("agent_accountability", {})
+    th      = brief.get("tech_health", {})
+
+    apts    = co.get("appointments", {})
+    cl      = co.get("closings", {})
+    pc      = co.get("pipeline_contracts", {})
+    isa     = ms.get("isa", {})
+    joe     = ms.get("joe", {})
+
+    # Detect data gaps explicitly so Perplexity knows what's missing
+    data_gaps = []
+    if apts.get("show_rate") is None:
+        data_gaps.append("show_rate: agents not logging appointment outcomes in FUB")
+    if cl.get("ytd_gci", 0) == 0 and aa.get("team_gci_goal", 0) > 0:
+        data_gaps.append("gci_ytd: agents have not marked Close Date on deals in FUB — $0 is a tracking gap, not a business reality")
+    if not lg.get("speed_to_lead", {}).get("enabled"):
+        data_gaps.append("speed_to_lead: disabled in config — no live tracking")
+    if th.get("total_events", 0) == 0:
+        data_gaps.append("automation_events: event log table deployed today, populates after next outreach run")
+    if th.get("sms_sent", 0) == 0 and (th.get("pb_used_today") or 0) > 0:
+        data_gaps.append(f"sms_sent_24h in tech_health shows 0 but {th.get('pb_used_today')} SMS were actually sent today — event log still warming up")
+
+    # Upcoming appointments — first name + last initial only
+    upcoming = []
+    for a in co.get("upcoming_appointments", [])[:5]:
+        upcoming.append({
+            "agent":  (a.get("agent_name") or "?").split()[0],
+            "lead":   _abbrev_name(a.get("lead_name", "Unknown")),
+            "when":   (a.get("start") or "")[:10],
+            "title":  (a.get("title") or "")[:80],
+        })
+
+    # Overdue appointment outcomes — agent + truncated lead name + hours
+    overdue_apts = []
+    for r in pr.get("apt_outcome_overdue", []):
+        overdue_apts.append({
+            "agent":      r.get("agent_name"),
+            "lead":       _abbrev_name(r.get("person_name", "Unknown")),
+            "hours_past": r.get("hours_past"),
+            "fub_url":    r.get("fub_url"),   # FUB URLs are internal, not PII
+        })
+
+    # ISA handoffs — agent + truncated lead name + hours
+    isa_no_call = []
+    for r in pr.get("isa_handoffs_no_action", []):
+        isa_no_call.append({
+            "agent":       r.get("agent_name"),
+            "lead":        _abbrev_name(r.get("person_name", "Unknown")),
+            "hours_since": r.get("hours_since"),
+            "fub_url":     r.get("fub_url"),
+        })
+
+    # Agent outliers — separate call-pace and GCI pace problems
+    below_calls = [
+        {"agent": a["agent_name"], "calls_per_week": a["calls_per_week"],
+         "appts_ytd": aa.get("agents", [{}])[0].get("appts_ytd", 0) if aa.get("agents") else 0,
+         "flag": "critical" if a["calls_per_week"] < 2 else "low"}
+        for a in aa.get("below_call_pace", [])
+    ]
+    # Enrich with appts_ytd from agents list
+    agents_map = {a["agent_name"]: a for a in aa.get("agents", [])}
+    for b in below_calls:
+        agent_row = agents_map.get(b["agent"], {})
+        b["appts_ytd"] = agent_row.get("appts_ytd", 0)
+        b["calls_ytd"] = agent_row.get("calls_ytd", 0)
+
+    behind_gci = [
+        {"agent": a["agent_name"], "gci_pace_pct": a["gci_pace_pct"],
+         "gci_ytd": a["gci_ytd"], "prorated_goal": a["prorated_goal"]}
+        for a in aa.get("behind_gci_goal", [])
+    ]
+
+    top_setters = sorted(
+        [{"agent": a["agent_name"], "appts_ytd": a["appts_ytd"],
+          "calls_per_week": a["calls_per_week"]}
+         for a in aa.get("agents", []) if a.get("appts_ytd", 0) > 0],
+        key=lambda x: x["appts_ytd"], reverse=True
+    )[:5]
+
+    # AI outreach 7d
+    pond = co.get("ai_outreach_conversions_7d", {})
+    email_7d = pond.get("email", {})
+    sms_7d   = pond.get("sms", {})
+
+    return {
+        "ok":             True,
+        "schema_version": "1.0",
+        "generated_at":   now_iso,
+        "business_date":  brief.get("business_date"),
+        "from_cache":     brief.get("from_cache", True),
+        "data_gaps":      data_gaps,
+
+        "top_priorities": brief.get("top_3_actions", []),
+
+        "lead_gen": {
+            "new_leads_24h":     lg.get("last_24h", {}).get("total", 0),
+            "by_source_24h":     lg.get("last_24h", {}).get("by_source", {}),
+            "new_leads_7d":      lg.get("last_7d", {}).get("total", 0),
+            "by_source_7d":      lg.get("last_7d", {}).get("by_source", {}),
+            "speed_to_lead":     "disabled" if not lg.get("speed_to_lead", {}).get("enabled") else "live",
+        },
+
+        "appointments": {
+            "total_set_30d":    apts.get("total_appointments", 0),
+            "show_rate":        apts.get("show_rate"),
+            "outcomes_missing": apts.get("outcome_missing", 0),
+            "by_agent":         apts.get("by_agent", []),
+            "upcoming":         upcoming,
+            "overdue_outcomes": overdue_apts,
+        },
+
+        "pipeline": {
+            "active_contracts":  pc.get("active_count", 0),
+            "pipeline_gci":      pc.get("pipeline_gci", 0),
+            "closings_mtd":      cl.get("mtd_count", 0),
+            "gci_mtd":           cl.get("mtd_gci", 0),
+            "closings_ytd":      cl.get("ytd_count", 0),
+            "gci_ytd":           cl.get("ytd_gci", 0),
+            "team_gci_goal":     aa.get("team_gci_goal", 0),
+            "team_gci_pace_pct": aa.get("team_gci_pace_pct"),
+        },
+
+        "isa_sla": {
+            "name":                    isa.get("name"),
+            "transfers_today":         isa.get("transfers_today", 0),
+            "transfers_7d":            isa.get("transfers_7d", 0),
+            "handoffs_no_agent_call":  len(isa_no_call),
+            "oldest_handoff_hours":    max((r["hours_since"] for r in isa_no_call), default=0),
+            "handoff_list":            isa_no_call[:10],
+        },
+
+        "joe_sla": {
+            "dropped_ball_leads": joe.get("dropped_ball_leads", 0),
+            "coaching_overdue":   joe.get("coaching_overdue", 0),
+        },
+
+        "agent_outliers": {
+            "below_call_pace":        below_calls,
+            "behind_gci_goal":        behind_gci,
+            "top_appointment_setters": top_setters,
+        },
+
+        "ai_outreach_7d": {
+            "emails_sent":          email_7d.get("sent", 0),
+            "email_unique_leads":   email_7d.get("unique_leads", 0),
+            "email_replies":        email_7d.get("conversions", {}).get("replies", 0),
+            "email_positive":       email_7d.get("conversions", {}).get("positive", 0),
+            "sms_sent":             sms_7d.get("sent", 0),
+            "sms_unique_leads":     sms_7d.get("unique_leads", 0),
+            "sms_replies":          sms_7d.get("conversions", {}).get("replies", 0),
+            "sms_positive":         sms_7d.get("conversions", {}).get("positive", 0),
+        },
+
+        "tech_health": {
+            "sms_cap_used":       th.get("pb_used_today", 0),
+            "sms_cap_total":      th.get("pb_daily_cap", 25),
+            "sms_cap_remaining":  th.get("pb_remaining", 0),
+            "heygen_cap_used":    th.get("hg_used_today", 0),
+            "heygen_cap_total":   th.get("hg_daily_cap", 12),
+            "heygen_at_cap":      (th.get("hg_used_today", 0) >= th.get("hg_daily_cap", 12)),
+            "automation_errors_24h": th.get("errors", 0),
+            "job_failures_24h":   th.get("job_failures", 0),
+        },
+    }
+
+
+@app.route("/api/perplexity/brief")
+def api_perplexity_brief():
+    """
+    GET /api/perplexity/brief
+
+    PII-stripped, Perplexity-safe CEO brief. Auth via ?key= or Bearer token.
+    Served from the owner_daily_brief cache — sub-300ms.
+    Add ?force=true to trigger a background cache refresh.
+    """
+    if not _perplexity_auth():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    import threading
+    force = request.args.get("force", "").lower() in ("true", "1")
+    cache_key = "owner_daily_brief"
+    cached = cache_get(cache_key)
+
+    if force and cached:
+        # Kick off background rebuild, return current cache now
+        t = threading.Thread(target=_owner_brief_rebuild_bg, args=(cache_key,),
+                             daemon=True, name="perplexity_rebuild")
+        t.start()
+
+    if not cached:
+        # Cold build — synchronous, first hit only
+        try:
+            import owner_brief as _ob
+            cached = _ob.build_owner_daily_brief()
+            cache_set(cache_key, cached)
+        except Exception as e:
+            logger.error("api_perplexity_brief cold build failed: %s", e)
+            return jsonify({
+                "ok": False, "error": str(e),
+                "data_gaps": ["brief_unavailable: internal build error"],
+                "top_priorities": [],
+            }), 500
+
+    try:
+        shaped = _perplexity_shape_brief(cached)
+        if force:
+            shaped["rebuild_triggered"] = True
+        return jsonify(shaped)
+    except Exception as e:
+        logger.error("api_perplexity_brief shape failed: %s", e)
+        return jsonify({"ok": False, "error": str(e), "top_priorities": []}), 500
+
+
+@app.route("/api/perplexity/lead-issues")
+def api_perplexity_lead_issues():
+    """
+    GET /api/perplexity/lead-issues
+
+    Prioritized issue list with PII stripped. Always fresh (not cached).
+    """
+    if not _perplexity_auth():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    try:
+        import owner_brief as _ob
+        raw = _ob.build_lead_issues()
+        # Strip raw person IDs from issue list, keep FUB URLs and names abbreviated
+        clean_issues = []
+        for issue in raw.get("issues", []):
+            clean_issues.append({
+                "issue_type":  issue.get("issue_type"),
+                "severity":    issue.get("severity"),
+                "agent_name":  issue.get("agent_name"),
+                "lead":        _abbrev_name(issue.get("person_name", "Unknown")),
+                "detail":      issue.get("detail"),
+                "fub_url":     issue.get("fub_url"),
+            })
+        return jsonify({
+            "ok":           True,
+            "generated_at": raw.get("generated_at"),
+            "total_issues": raw.get("total_issues", 0),
+            "high":         raw.get("high", 0),
+            "medium":       raw.get("medium", 0),
+            "issues":       clean_issues,
+        })
+    except Exception as e:
+        logger.error("api_perplexity_lead_issues failed: %s", e)
+        return jsonify({"ok": False, "error": str(e), "issues": []}), 500
+
+
+@app.route("/api/perplexity/tech-issues")
+def api_perplexity_tech_issues():
+    """
+    GET /api/perplexity/tech-issues
+
+    System health, cap warnings, and automation errors. Always fresh.
+    """
+    if not _perplexity_auth():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    try:
+        import owner_brief as _ob
+        raw = _ob.build_tech_issues()
+        return jsonify({"ok": True, **raw})
+    except Exception as e:
+        logger.error("api_perplexity_tech_issues failed: %s", e)
+        return jsonify({"ok": False, "error": str(e), "errors": []}), 500
+
+
+@app.route("/api/perplexity/contract")
+def api_perplexity_contract():
+    """
+    GET /api/perplexity/contract
+
+    Annotated schema for /api/perplexity/brief.
+    Share this with Perplexity so it can reliably parse the payload.
+    No auth required — schema is not sensitive.
+    """
+    return jsonify({
+        "schema_version": "1.0",
+        "endpoint":       "/api/perplexity/brief",
+        "auth":           "?key=TOKEN or Authorization: Bearer TOKEN",
+        "cache_ttl_sec":  600,
+        "refresh":        "Add ?force=true to trigger a background rebuild",
+        "fields": {
+            "ok":             "bool — false if the brief failed to build",
+            "generated_at":   "ISO timestamp — when the underlying brief was built",
+            "business_date":  "YYYY-MM-DD in Eastern time",
+            "from_cache":     "bool — true if served from cache",
+            "data_gaps":      "string[] — fields that are known to be missing/unreliable and why",
+            "top_priorities": "array — top 3 operator actions for Barry today, in priority order",
+            "lead_gen": {
+                "new_leads_24h":  "int — new leads in last 24h",
+                "by_source_24h":  "dict — count by source (ylopo, zbuyer, batchleads, etc.)",
+                "new_leads_7d":   "int — capped at 2000 (FUB API pagination limit)",
+                "by_source_7d":   "dict — 7d source breakdown",
+                "speed_to_lead":  "'live' or 'disabled'",
+            },
+            "appointments": {
+                "total_set_30d":    "int — appointments set in last 30 days",
+                "show_rate":        "float or null — null until agents log outcomes in FUB",
+                "outcomes_missing": "int — appointments with no outcome logged",
+                "by_agent":         "array — per-agent appointment counts and outcome status",
+                "upcoming":         "array — next appointments (agent first name, lead 'First L.', date)",
+                "overdue_outcomes":  "array — past appointments with no outcome (agent, lead, hours_past)",
+            },
+            "pipeline": {
+                "active_contracts":  "int — open contracts not yet closed",
+                "pipeline_gci":      "float — estimated GCI in active contracts",
+                "closings_mtd":      "int — closings this month",
+                "gci_mtd":           "float — GCI this month",
+                "closings_ytd":      "int — closings year-to-date",
+                "gci_ytd":           "float — GCI YTD (0 = data gap, see data_gaps)",
+                "team_gci_goal":     "float — combined annual GCI goal across all agents",
+                "team_gci_pace_pct": "float or null — YTD GCI as % of prorated annual goal",
+            },
+            "isa_sla": {
+                "name":                   "ISA name (Fhalen Tendencia)",
+                "transfers_today":        "int — leads transferred to agents today",
+                "transfers_7d":           "int — transfers in last 7 days",
+                "handoffs_no_agent_call": "int — transfers where no agent call has been logged",
+                "oldest_handoff_hours":   "float — hours since oldest uncalled handoff",
+                "handoff_list":           "array — up to 10 uncalled handoffs (agent, lead, hours_since)",
+            },
+            "joe_sla": {
+                "dropped_ball_leads": "int — leads with Fhalen_Pending tag, no update in 5+ days",
+                "coaching_overdue":   "int — agents overdue for coaching check-in",
+            },
+            "agent_outliers": {
+                "below_call_pace":         "array — agents averaging < 25 calls/week (agent, calls_per_week, flag)",
+                "behind_gci_goal":         "array — agents below 70% of prorated GCI goal",
+                "top_appointment_setters": "array — top 5 agents by appointments set YTD",
+            },
+            "ai_outreach_7d": {
+                "emails_sent":        "int — pond emails sent in last 7 days",
+                "email_unique_leads": "int — unique leads emailed",
+                "email_replies":      "int — replies received",
+                "email_positive":     "int — positive sentiment replies (routed to agent)",
+                "sms_sent":           "int — pond SMS sent in last 7 days",
+                "sms_positive":       "int — positive SMS replies (routed to agent)",
+            },
+            "tech_health": {
+                "sms_cap_used":          "int — Project Blue SMS sent today",
+                "sms_cap_total":         "int — daily SMS cap",
+                "sms_cap_remaining":     "int — remaining SMS capacity today",
+                "heygen_cap_used":       "int — HeyGen videos generated today",
+                "heygen_at_cap":         "bool — true if HeyGen daily cap hit",
+                "automation_errors_24h": "int — failed automation events in last 24h",
+                "job_failures_24h":      "int — scheduler job failures in last 24h",
+            },
+        },
+        "companion_endpoints": {
+            "/api/perplexity/lead-issues":  "prioritized issue list, always fresh",
+            "/api/perplexity/tech-issues":  "system health and cap warnings",
+            "/api/perplexity/contract":     "this document",
+        },
+    })
+
+
+# ---------------------------------------------------------------------------
 _OWNER_BRIEF_CACHE_SECONDS = 600   # 10 minutes
 _owner_brief_rebuild_lock = None   # threading.Lock, initialized lazily
 
