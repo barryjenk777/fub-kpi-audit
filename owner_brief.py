@@ -27,6 +27,26 @@ def _et_date(dt_utc) -> str:
         return dt_utc.strftime("%Y-%m-%d")
 
 
+def _jsonify(obj):
+    """
+    Recursively convert any non-JSON-serializable values (datetime, Decimal, date)
+    in a dict/list structure to JSON-safe types. Returns a new object.
+    """
+    from datetime import datetime as _dt, date as _date
+    from decimal import Decimal
+    if isinstance(obj, dict):
+        return {k: _jsonify(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_jsonify(v) for v in obj]
+    if isinstance(obj, _dt):
+        return obj.isoformat()
+    if isinstance(obj, _date):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return obj
+
+
 # ── Source normalisation map ──────────────────────────────────────────────────
 # Groups raw FUB source strings into owner-friendly buckets.
 _SOURCE_BUCKETS = {
@@ -462,7 +482,7 @@ def build_owner_daily_brief(fub_client=None, db=None):
     tech       = _build_tech_health(db)
     actions    = _build_recommendations(lead_gen, conversion, pipeline, manager, tech)
 
-    return {
+    raw = {
         "schema_version":    "1.0",
         "generated_at":      now.isoformat(),
         "business_date":     _et_date(now),
@@ -483,6 +503,7 @@ def build_owner_daily_brief(fub_client=None, db=None):
             "scheduler_health":  "/api/health",
         },
     }
+    return _jsonify(raw)
 
 
 # ── Lead-issues detail list ───────────────────────────────────────────────────
@@ -570,13 +591,13 @@ def build_lead_issues(fub_client=None, db=None):
     sev_order = {"high": 0, "medium": 1, "low": 2}
     issues.sort(key=lambda x: sev_order.get(x.get("severity", "low"), 2))
 
-    return {
+    return _jsonify({
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "total_issues": len(issues),
         "high":   sum(1 for i in issues if i.get("severity") == "high"),
         "medium": sum(1 for i in issues if i.get("severity") == "medium"),
         "issues": issues,
-    }
+    })
 
 
 # ── Tech-issues detail list ───────────────────────────────────────────────────
@@ -628,10 +649,10 @@ def build_tech_issues(db=None):
     except Exception as ex:
         logger.warning("build_tech_issues cap check: %s", ex)
 
-    return {
+    return _jsonify({
         "generated_at":  datetime.now(timezone.utc).isoformat(),
         "window_hours":  24,
         "total_errors":  len(errors),
         "warnings":      warnings,
         "errors":        issues,
-    }
+    })
