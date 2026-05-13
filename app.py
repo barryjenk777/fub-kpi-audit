@@ -5487,15 +5487,74 @@ def webhook_fub():
     event = payload.get("event") or payload.get("type", "")
     event_data = payload.get("data") or payload
 
+    event_lower = event.lower()
+
+    # ── Appointment events → sync to our appointments table ────────────────
+    if "appointment" in event_lower:
+        try:
+            appt_id  = event_data.get("id") or event_data.get("appointmentId")
+            start_str = event_data.get("start") or event_data.get("startDate") or ""
+            if appt_id and start_str:
+                from config import APT_OUTCOME_IDS
+                outcome_id = event_data.get("outcomeId")
+                outcome    = APT_OUTCOME_IDS.get(outcome_id) if outcome_id else None
+                status = "showed"   if outcome == "Met with Client" else \
+                         "no_show"  if outcome in ("No show",)      else \
+                         "canceled" if event_data.get("canceled")   else "scheduled"
+
+                invitees = event_data.get("invitees", [])
+                person_id_appt = next(
+                    (i.get("personId") for i in invitees if i.get("personId")), None
+                )
+                person_name_appt = next(
+                    (i.get("name") for i in invitees if i.get("personId")), "Unknown"
+                )
+                agent_uid_appt = next(
+                    (i.get("userId") for i in invitees if i.get("userId") and not i.get("personId")), None
+                )
+                agent_name_appt = next(
+                    (i.get("name") for i in invitees if i.get("userId") and not i.get("personId")), None
+                )
+                try:
+                    start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    start_dt = None
+
+                if start_dt:
+                    _db.upsert_appointment(
+                        fub_appt_id=appt_id,
+                        person_id=person_id_appt,
+                        person_name=person_name_appt,
+                        agent_name=agent_name_appt,
+                        agent_fub_uid=agent_uid_appt,
+                        start_time=start_dt,
+                        title=event_data.get("title", ""),
+                        status=status,
+                        outcome=outcome,
+                    )
+                    _db.log_automation_event(
+                        event_type="apt_confirmed" if "create" in event_lower else "apt_updated",
+                        person_id=person_id_appt,
+                        person_name=person_name_appt,
+                        agent_name=agent_name_appt,
+                        payload={"fub_appt_id": appt_id, "status": status, "outcome": outcome},
+                        triggered_by="webhook_fub",
+                    )
+                    logger.info("FUB webhook: appointment %s synced (status=%s)", appt_id, status)
+        except Exception as _ae:
+            logger.warning("FUB webhook appointment sync failed: %s", _ae)
+        return jsonify({"ok": True, "action": "appointment_synced"})
+
+    # ── Person events — no person_id = ignore ──────────────────────────────
     person_id = event_data.get("personId")
     if not person_id:
         return jsonify({"ok": True, "action": "ignored_no_person"})
 
     # Determine if this is an outbound contact
     is_outbound = False
-    if "call" in event.lower():
+    if "call" in event_lower:
         is_outbound = not event_data.get("isIncoming", True)
-    elif "text" in event.lower():
+    elif "text" in event_lower:
         is_outbound = event_data.get("isOutbound", False)
 
     if not is_outbound:
@@ -6016,6 +6075,279 @@ def api_debug_calls():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Owner Brief API ───────────────────────────────────────────────────────────
+# These three endpoints are designed for Perplexity consumption.
+# JSON schema version 1.0 — see /api/owner/contract for the annotated spec.
+
+_OWNER_BRIEF_CACHE_SECONDS = 600   # 10 minutes
+
+
+@app.route("/api/owner/daily-brief")
+def api_owner_daily_brief():
+    """
+    GET /api/owner/daily-brief
+
+    Returns the full owner_daily_brief JSON object. Cached 10 minutes.
+    Designed to be polled by Perplexity to act as a virtual team owner.
+
+    Add ?force=true to bypass cache.
+    Add ?nocache=true as alias.
+
+    Schema version: 1.0
+    """
+    force = request.args.get("force", "").lower() in ("true", "1") \
+            or request.args.get("nocache", "").lower() in ("true", "1")
+
+    cache_key = "owner_daily_brief"
+    if not force:
+        cached = cache_get(cache_key)
+        if cached:
+            cached["from_cache"] = True
+            return jsonify(cached)
+
+    try:
+        import owner_brief as _ob
+        brief = _ob.build_owner_daily_brief()
+        brief["from_cache"] = False
+        cache_set(cache_key, brief)
+        return jsonify(brief)
+    except Exception as e:
+        logger.error("api_owner_daily_brief failed: %s", e, exc_info=True)
+        return jsonify({
+            "schema_version": "1.0",
+            "error": str(e),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }), 500
+
+
+@app.route("/api/owner/lead-issues")
+def api_owner_lead_issues():
+    """
+    GET /api/owner/lead-issues
+
+    Returns a prioritized list of specific leads needing human attention:
+    - Overdue appointment outcomes (no-show candidates)
+    - ISA handoffs with no agent call in 2h
+    - Dropped-ball leads (Fhalen_Pending, stale)
+
+    Not cached — always fresh.
+    """
+    try:
+        import owner_brief as _ob
+        return jsonify(_ob.build_lead_issues())
+    except Exception as e:
+        logger.error("api_owner_lead_issues failed: %s", e, exc_info=True)
+        return jsonify({"error": str(e), "issues": []}), 500
+
+
+@app.route("/api/owner/tech-issues")
+def api_owner_tech_issues():
+    """
+    GET /api/owner/tech-issues
+
+    Returns automation errors, API failures, and cap warnings from the
+    last 24 hours (automation_event_log WHERE success=FALSE).
+    Not cached — always fresh.
+    """
+    try:
+        import owner_brief as _ob
+        return jsonify(_ob.build_tech_issues())
+    except Exception as e:
+        logger.error("api_owner_tech_issues failed: %s", e, exc_info=True)
+        return jsonify({"error": str(e), "errors": []}), 500
+
+
+@app.route("/api/owner/contract")
+def api_owner_contract():
+    """
+    GET /api/owner/contract
+
+    Returns the annotated JSON schema for /api/owner/daily-brief.
+    Share this with Perplexity so it can reliably parse the response.
+    """
+    return jsonify({
+        "schema_version": "1.0",
+        "endpoint": "/api/owner/daily-brief",
+        "method": "GET",
+        "cache_ttl_seconds": _OWNER_BRIEF_CACHE_SECONDS,
+        "force_refresh": "?force=true",
+        "authentication": "none — read-only public endpoint",
+        "note": "All timestamps are ISO 8601 UTC. Monetary values are USD floats.",
+        "top_level_fields": {
+            "schema_version":   "string — always '1.0'",
+            "generated_at":     "ISO 8601 UTC timestamp of when the brief was built",
+            "business_date":    "YYYY-MM-DD in America/New_York timezone",
+            "team":             "string — 'Legacy Home Team'",
+            "from_cache":       "bool — true if served from 10-min cache",
+            "lead_gen":         "See lead_gen schema below",
+            "conversion":       "See conversion schema below",
+            "pipeline_risks":   "See pipeline_risks schema below",
+            "manager_sla":      "See manager_sla schema below",
+            "tech_health":      "See tech_health schema below",
+            "top_3_actions":    "array of {priority, category, action} — AI-generated recommendations",
+            "reference_urls":   "dict of useful internal URLs for drilling down",
+        },
+        "lead_gen": {
+            "last_24h.total":       "int — new leads created in last 24h",
+            "last_24h.by_source":   "dict — bucket → count (ylopo/zbuyer/referral/ppc/social/other)",
+            "last_7d.total":        "int — new leads created in last 7 days",
+            "last_7d.by_source":    "dict — same buckets",
+            "speed_to_lead.enabled": "bool — ENABLE_SPEED_TO_LEAD config flag",
+            "speed_to_lead.note":   "string — context if disabled",
+            "data_quality":         "'live' | 'partial — <reason>'",
+        },
+        "conversion": {
+            "appointments.data_quality": "'live' | 'sparse — table recently created' | 'unavailable'",
+            "appointments.show_rate":    "float % or null if no outcome data",
+            "appointments.by_agent":     "array of {agent, total_set, showed, no_showed, show_rate}",
+            "upcoming_appointments":     "array of next 14d appointments: {lead_name, agent_name, start, title}",
+            "closings.mtd_count":        "int — deals closed this calendar month",
+            "closings.mtd_gci":          "float USD — GCI this month",
+            "closings.ytd_count":        "int — deals closed YTD",
+            "closings.ytd_gci":          "float USD — GCI year to date",
+            "ai_outreach_conversions_7d.email.sent": "int — AI emails sent in 7d",
+            "ai_outreach_conversions_7d.email.conversions.routed": "int — email leads that converted",
+            "ai_outreach_conversions_7d.sms.sent":  "int — AI SMS sent in 7d",
+            "ai_outreach_conversions_7d.sms.conversions.routed":  "int — SMS leads that converted",
+        },
+        "pipeline_risks": {
+            "apt_outcome_overdue": "array of appointments past start_time with no outcome — no-show candidates",
+            "isa_handoffs_no_action": "array of ISA transfers with no agent call in 2h+",
+            "ooc_by_agent": "not yet implemented — check /api/audit for OOC data",
+        },
+        "manager_sla": {
+            "joe.dropped_ball_leads":    "int — Fhalen_Pending leads stale for STALE_LEAD_DAYS+",
+            "joe.dropped_ball_list":     "array of {person_id, name, days_stale, assigned_agent, fub_url}",
+            "isa.transfers_7d":          "int — ISA transfers this week",
+            "isa.transfers_today":       "int — ISA transfers today",
+        },
+        "tech_health": {
+            "total_events":     "int — automation events in last 24h",
+            "errors":           "int — failed automation events in last 24h",
+            "sms_sent":         "int — AI SMS sends logged",
+            "emails_sent":      "int — AI email sends logged",
+            "heygen_cap_hits":  "int — times HeyGen cap was reached",
+            "pb_daily_cap":     "int — Project Blue SMS daily cap",
+            "pb_used_today":    "int — SMS sent today",
+            "pb_remaining":     "int — SMS budget remaining today",
+            "hg_daily_cap":     "int — HeyGen video daily cap",
+            "hg_used_today":    "int — videos generated today",
+            "hg_remaining":     "int — video budget remaining",
+            "top_errors":       "array of {message, count, last_seen} — most frequent errors",
+        },
+        "related_endpoints": {
+            "/api/owner/lead-issues":  "prioritized list of specific leads needing action",
+            "/api/owner/tech-issues":  "automation errors + cap warnings in last 24h",
+            "/api/health":             "scheduler job status + live DB/service checks",
+            "/api/audit":              "full weekly KPI audit per agent",
+            "/api/appointments":       "full FUB appointment list with tag lifecycle",
+            "/api/pond-mailer/stats":  "AI email/SMS send stats",
+        },
+    })
+
+
+@app.route("/api/owner/sync-appointments", methods=["POST"])
+def api_owner_sync_appointments():
+    """
+    POST /api/owner/sync-appointments
+
+    Syncs the last 30 days of FUB appointments into the local appointments table.
+    Run once to backfill, then rely on the FUB webhook for real-time updates.
+    """
+    try:
+        from fub_client import FUBClient
+        fub = FUBClient()
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(days=30)
+        until = now + timedelta(days=14)
+
+        appts = fub.get_appointments(since=since, until=until)
+
+        # Reuse the existing agent/person resolution from build_appointment_data()
+        agents_dict  = auto_detect_agents(fub)
+        agent_map    = {u.get("id"): name for name, u in agents_dict.items()}
+        agent_map[1] = "Barry Jenkins"
+
+        from config import APT_SET_TAG, APT_OUTCOME_NEEDED_TAG, APT_STALE_TAG
+        from config import APT_OUTCOME_IDS
+
+        synced = 0
+        person_cache = {}
+
+        for appt in appts:
+            appt_id   = appt.get("id")
+            if not appt_id:
+                continue
+            start_str  = appt.get("start", "")
+            outcome_id = appt.get("outcomeId")
+            outcome    = APT_OUTCOME_IDS.get(outcome_id) if outcome_id else None
+            invitees   = appt.get("invitees", [])
+
+            try:
+                start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                continue
+
+            person_id   = None
+            person_name = "Unknown"
+            agent_name  = None
+            agent_uid   = None
+
+            for inv in invitees:
+                if inv.get("personId") and not person_id:
+                    person_id   = inv["personId"]
+                    person_name = inv.get("name", "Unknown")
+                if inv.get("userId") and not agent_uid:
+                    agent_uid   = inv["userId"]
+                    agent_name  = agent_map.get(agent_uid, inv.get("name"))
+
+            # Source and tags from FUB person record (cached)
+            source   = None
+            apt_set  = False
+            onn_tag  = False
+            stale    = False
+            if person_id:
+                if person_id not in person_cache:
+                    try:
+                        person_cache[person_id] = fub.get_person(person_id)
+                    except Exception:
+                        person_cache[person_id] = {}
+                p_data = person_cache[person_id]
+                source  = p_data.get("source")
+                tags    = p_data.get("tags") or []
+                apt_set = APT_SET_TAG in tags
+                onn_tag = APT_OUTCOME_NEEDED_TAG in tags
+                stale   = APT_STALE_TAG in tags
+
+            status = "showed" if outcome == "Met with Client" else \
+                     "no_show" if outcome in ("No show",) else \
+                     "canceled" if appt.get("canceled") else "scheduled"
+
+            _db.upsert_appointment(
+                fub_appt_id=appt_id,
+                person_id=person_id,
+                person_name=person_name,
+                agent_name=agent_name,
+                agent_fub_uid=agent_uid,
+                source=source,
+                start_time=start_dt,
+                title=appt.get("title", ""),
+                status=status,
+                outcome=outcome,
+                apt_set_tag=apt_set,
+                outcome_needed_tag=onn_tag,
+                stale_tag=stale,
+            )
+            synced += 1
+
+        logger.info("Appointment sync: %d appointments written to DB", synced)
+        return jsonify({"ok": True, "synced": synced, "total_from_fub": len(appts)})
+
+    except Exception as e:
+        logger.error("api_owner_sync_appointments failed: %s", e, exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/health")
@@ -10819,6 +11151,210 @@ def scheduled_onboarding_escalation():
         _db.release_job_lock("onboarding_escalation")
 
 
+def scheduled_owner_daily_brief():
+    """
+    Daily job (7am ET): build the owner brief and email it to Barry.
+
+    Aggregates lead gen, conversion, pipeline risks, manager SLAs, and tech
+    health into one email so Barry has a complete business picture before 8am.
+    Also warms the /api/owner/daily-brief cache so Perplexity gets a fast
+    response on its first morning fetch.
+    """
+    if not _db.try_acquire_job_lock("owner_daily_brief"):
+        return
+    try:
+        import owner_brief as _ob
+
+        brief = _ob.build_owner_daily_brief()
+
+        # Warm the cache
+        cache_set("owner_daily_brief", brief)
+        logger.info("Owner daily brief built and cached")
+
+        # Send email to Barry
+        sg_key = os.environ.get("SENDGRID_API_KEY")
+        if not sg_key:
+            logger.warning("scheduled_owner_daily_brief: no SENDGRID_API_KEY — skipping email")
+            return
+
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail as _SGMail
+
+        now_et = datetime.now(
+            __import__("zoneinfo", fromlist=["ZoneInfo"]).ZoneInfo("America/New_York")
+        )
+        date_str = now_et.strftime("%A, %B %-d")
+
+        lg = brief.get("lead_gen", {})
+        cv = brief.get("conversion", {})
+        pi = brief.get("pipeline_risks", {})
+        mg = brief.get("manager_sla", {})
+        th = brief.get("tech_health", {})
+        actions = brief.get("top_3_actions", [])
+
+        # ── Plain text ────────────────────────────────────────────────────────
+        lines = [
+            f"LEGACY HOME TEAM — OWNER BRIEF for {date_str}",
+            "=" * 52,
+            "",
+            "LEAD GEN (last 24h)",
+            f"  New leads:   {lg.get('last_24h', {}).get('total', 0)}",
+        ]
+        for src, cnt in (lg.get("last_24h", {}).get("by_source") or {}).items():
+            lines.append(f"    {src}: {cnt}")
+        lines += [
+            f"  Last 7 days: {lg.get('last_7d', {}).get('total', 0)} total",
+            "",
+            "CONVERSION",
+        ]
+        apt = cv.get("appointments", {})
+        show_rate = apt.get("show_rate")
+        lines.append(
+            f"  Show rate:   {show_rate}%" if show_rate is not None
+            else f"  Show rate:   {apt.get('data_quality', 'no data yet')}"
+        )
+        cls = cv.get("closings", {})
+        lines += [
+            f"  Closings MTD: {cls.get('mtd_count', 0)} (${cls.get('mtd_gci', 0):,.0f} GCI)",
+            f"  Closings YTD: {cls.get('ytd_count', 0)} (${cls.get('ytd_gci', 0):,.0f} GCI)",
+        ]
+        ai7d = cv.get("ai_outreach_conversions_7d", {})
+        email7d = (ai7d.get("email") or {})
+        sms7d   = (ai7d.get("sms") or {})
+        lines += [
+            "",
+            "AI OUTREACH (last 7d)",
+            f"  Emails sent: {email7d.get('sent', 0)} | Conversions: {(email7d.get('conversions') or {}).get('routed', 0)}",
+            f"  SMS sent:    {sms7d.get('sent', 0)} | Conversions: {(sms7d.get('conversions') or {}).get('routed', 0)}",
+            "",
+            "PIPELINE RISKS",
+        ]
+        ov_apts = pi.get("apt_outcome_overdue", [])
+        isa_na  = pi.get("isa_handoffs_no_action", [])
+        lines.append(f"  Overdue apt outcomes:     {len(ov_apts)}")
+        lines.append(f"  ISA handoffs no action:   {len(isa_na)}")
+        if ov_apts:
+            for a in ov_apts[:3]:
+                lines.append(
+                    f"    - {a.get('person_name','?')} ({a.get('agent_name','?')}) "
+                    f"— {a.get('hours_past','?')}h ago"
+                )
+        lines += [
+            "",
+            "MANAGER / ISA",
+            f"  Joe dropped-ball leads:   {mg.get('joe', {}).get('dropped_ball_leads', 0)}",
+            f"  ISA transfers this week:  {mg.get('isa', {}).get('transfers_7d', 0)}",
+            "",
+            "TECH HEALTH (last 24h)",
+            f"  Automation events:  {th.get('total_events', 0)}",
+            f"  Errors:             {th.get('errors', 0)}",
+            f"  SMS used/cap:       {th.get('pb_used_today', '?')}/{th.get('pb_daily_cap', '?')}",
+            f"  HeyGen used/cap:    {th.get('hg_used_today', '?')}/{th.get('hg_daily_cap', '?')}",
+            "",
+            "TOP 3 ACTIONS FOR TODAY",
+        ]
+        for i, act in enumerate(actions, 1):
+            lines.append(f"  {i}. [{act.get('category','').upper()}] {act.get('action','')}")
+
+        lines += [
+            "",
+            "─" * 52,
+            f"Full brief: https://web-production-3363cc.up.railway.app/api/owner/daily-brief",
+            f"Lead issues: https://web-production-3363cc.up.railway.app/api/owner/lead-issues",
+            "— Legacy Home Team AI System",
+        ]
+        plain = "\n".join(lines)
+
+        # ── HTML ──────────────────────────────────────────────────────────────
+        def _row(label, value, highlight=False):
+            color = "#c0392b" if highlight else "#333"
+            return (
+                f"<tr><td style='padding:4px 12px 4px 0;color:#666;font-size:13px'>{label}</td>"
+                f"<td style='padding:4px 0;font-weight:bold;color:{color};font-size:13px'>{value}</td></tr>"
+            )
+
+        apt_show = f"{show_rate}%" if show_rate is not None else apt.get("data_quality", "no data yet")
+
+        action_html = "".join(
+            f"<li style='margin:6px 0;font-size:14px'>"
+            f"<strong>[{a.get('category','').upper()}]</strong> {a.get('action','')}</li>"
+            for a in actions
+        )
+
+        risk_html = ""
+        if ov_apts:
+            risk_html += "<p style='margin:4px 0;font-size:13px;color:#c0392b'><strong>Overdue appointments:</strong></p><ul>"
+            for a in ov_apts[:5]:
+                risk_html += (
+                    f"<li style='font-size:13px'>{a.get('person_name','?')} "
+                    f"({a.get('agent_name','?')}) — {a.get('hours_past','?')}h ago "
+                    f"<a href='{a.get('fub_url','#')}'>FUB</a></li>"
+                )
+            risk_html += "</ul>"
+
+        html = f"""
+<div style='font-family:-apple-system,sans-serif;max-width:600px;margin:24px auto;color:#222'>
+<h2 style='margin:0 0 4px;font-size:20px'>Legacy Home Team — Owner Brief</h2>
+<p style='margin:0 0 20px;color:#888;font-size:13px'>{date_str}</p>
+
+<h3 style='font-size:14px;text-transform:uppercase;color:#888;margin:0 0 8px;border-bottom:1px solid #eee;padding-bottom:4px'>Lead Gen</h3>
+<table style='border-collapse:collapse;width:100%'>
+{_row('New leads (24h)', lg.get('last_24h', {}).get('total', 0), highlight=lg.get('last_24h', {}).get('total', 0) < 3)}
+{_row('New leads (7d)', lg.get('last_7d', {}).get('total', 0))}
+</table>
+
+<h3 style='font-size:14px;text-transform:uppercase;color:#888;margin:20px 0 8px;border-bottom:1px solid #eee;padding-bottom:4px'>Conversion</h3>
+<table style='border-collapse:collapse;width:100%'>
+{_row('Show rate (30d)', apt_show)}
+{_row('Closings MTD', f"{cls.get('mtd_count', 0)} (${cls.get('mtd_gci', 0):,.0f} GCI)")}
+{_row('Closings YTD', f"{cls.get('ytd_count', 0)} (${cls.get('ytd_gci', 0):,.0f} GCI)")}
+{_row('AI email conversions (7d)', (email7d.get('conversions') or {}).get('routed', 0))}
+{_row('AI SMS conversions (7d)',   (sms7d.get('conversions') or {}).get('routed', 0))}
+</table>
+
+<h3 style='font-size:14px;text-transform:uppercase;color:#888;margin:20px 0 8px;border-bottom:1px solid #eee;padding-bottom:4px'>Pipeline Risks</h3>
+<table style='border-collapse:collapse;width:100%'>
+{_row('Overdue apt outcomes', len(ov_apts), highlight=len(ov_apts) > 0)}
+{_row('ISA handoffs no action', len(isa_na), highlight=len(isa_na) > 0)}
+{_row('Joe dropped-ball leads', mg.get('joe', {}).get('dropped_ball_leads', 0))}
+</table>
+{risk_html}
+
+<h3 style='font-size:14px;text-transform:uppercase;color:#888;margin:20px 0 8px;border-bottom:1px solid #eee;padding-bottom:4px'>Tech Health (24h)</h3>
+<table style='border-collapse:collapse;width:100%'>
+{_row('Automation events', th.get('total_events', 0))}
+{_row('Errors', th.get('errors', 0), highlight=th.get('errors', 0) > 5)}
+{_row('SMS used/cap', f"{th.get('pb_used_today','?')}/{th.get('pb_daily_cap','?')}")}
+{_row('HeyGen used/cap', f"{th.get('hg_used_today','?')}/{th.get('hg_daily_cap','?')}")}
+</table>
+
+<h3 style='font-size:14px;text-transform:uppercase;color:#888;margin:20px 0 8px;border-bottom:1px solid #eee;padding-bottom:4px'>Top 3 Actions Today</h3>
+<ol style='margin:0;padding-left:20px'>{action_html}</ol>
+
+<p style='margin:24px 0 4px;font-size:12px;color:#aaa'>
+  <a href='https://web-production-3363cc.up.railway.app/api/owner/daily-brief'>Full JSON brief</a> ·
+  <a href='https://web-production-3363cc.up.railway.app/api/owner/lead-issues'>Lead issues</a> ·
+  <a href='https://web-production-3363cc.up.railway.app/'>Dashboard</a>
+</p>
+</div>"""
+
+        msg = _SGMail(
+            from_email=config.EMAIL_FROM,
+            to_emails=config.EMAIL_FROM,
+            subject=f"Owner Brief — {date_str} | {len(ov_apts)} overdue, {th.get('errors', 0)} errors",
+            plain_text_content=plain,
+            html_content=html,
+        )
+        SendGridAPIClient(sg_key).send(msg)
+        logger.info("Owner daily brief email sent")
+
+    except Exception as e:
+        logger.error("scheduled_owner_daily_brief failed: %s", e, exc_info=True)
+        _alert_on_job_failure("owner_daily_brief", str(e))
+    finally:
+        _db.release_job_lock("owner_daily_brief")
+
+
 def scheduled_gone_dark_alert():
     """
     Weekly job (Monday 7am ET): email Barry a list of agents who haven't
@@ -11096,6 +11632,13 @@ def start_scheduler():
     _scheduler.add_job(scheduled_onboarding_escalation,
                        CronTrigger(hour=8, minute=0, timezone=ET),
                        id="onboarding_escalation", name="Onboarding escalation (daily 8am)",
+                       max_instances=1, coalesce=True)
+
+    # Owner daily brief: every morning at 7am ET
+    # Builds the JSON brief, warms the Perplexity cache, and emails Barry.
+    _scheduler.add_job(scheduled_owner_daily_brief,
+                       CronTrigger(hour=7, minute=0, timezone=ET),
+                       id="owner_daily_brief", name="Owner daily brief (7am ET)",
                        max_instances=1, coalesce=True)
 
     # Gone dark alert: Monday 7am ET

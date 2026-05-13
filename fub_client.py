@@ -814,6 +814,31 @@ class FUBClient:
         all_people = self.get_all_people()
         return [p for p in all_people if tag in (p.get("tags") or [])]
 
+    def search_people_by_tag(self, tag, limit=50):
+        """
+        Return people who currently carry `tag`. Uses FUB tag= filter with
+        client-side verification since FUB tag filtering is unreliable.
+        Capped at `limit` to avoid full-account scans.
+        """
+        try:
+            params = {"limit": min(limit, 100), "tag": tag}
+            candidates = self._get_paginated("people", params, max_pages=5)
+            return [p for p in candidates if tag in (p.get("tags") or [])][:limit]
+        except Exception as e:
+            logger.warning("search_people_by_tag(%s) failed: %s", tag, e)
+            return []
+
+    def get_people_since(self, created_since, limit=500):
+        """
+        Return people created at or after `created_since` (datetime).
+        Wraps get_people(created_since=...) with a sensible page limit.
+        """
+        try:
+            return self.get_people(created_since=created_since, limit=100)
+        except Exception as e:
+            logger.warning("get_people_since failed: %s", e)
+            return []
+
     def get_all_people(self):
         """Fetch all leads in FUB (no filter). Used for client-side tag filtering."""
         return self._get_paginated("people", {"limit": 100})

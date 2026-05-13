@@ -372,6 +372,80 @@ CREATE TABLE IF NOT EXISTS prospecting_blocks (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ── Owner Brief backbone ────────────────────────────────────────────────────
+
+-- appointments: synced from FUB and written through from the FUB webhook.
+-- Enables show-rate calculation, no-show recovery, and outcome capture.
+CREATE TABLE IF NOT EXISTS appointments (
+    id                  SERIAL PRIMARY KEY,
+    fub_appt_id         INTEGER UNIQUE NOT NULL,
+    person_id           INTEGER,
+    person_name         TEXT,
+    agent_name          TEXT,
+    agent_fub_uid       INTEGER,
+    source              TEXT,
+    start_time          TIMESTAMPTZ NOT NULL,
+    end_time            TIMESTAMPTZ,
+    title               TEXT,
+    status              TEXT DEFAULT 'scheduled',   -- scheduled/confirmed/canceled/no_show/showed
+    outcome             TEXT,                       -- showed/no_show/reschedule (from FUB outcomeId)
+    outcome_logged_at   TIMESTAMPTZ,
+    outcome_logged_by   TEXT,
+    apt_set_tag         BOOLEAN DEFAULT FALSE,
+    outcome_needed_tag  BOOLEAN DEFAULT FALSE,
+    stale_tag           BOOLEAN DEFAULT FALSE,
+    fub_synced_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_appt_person   ON appointments (person_id);
+CREATE INDEX IF NOT EXISTS idx_appt_agent    ON appointments (agent_name, start_time DESC);
+CREATE INDEX IF NOT EXISTS idx_appt_start    ON appointments (start_time DESC);
+CREATE INDEX IF NOT EXISTS idx_appt_status   ON appointments (status, start_time DESC);
+
+-- agent_weekly_snapshots: Monday-of-week snapshot for KPI trending in 1-on-1s.
+-- Written every Monday morning by a scheduled job.
+CREATE TABLE IF NOT EXISTS agent_weekly_snapshots (
+    id                  SERIAL PRIMARY KEY,
+    agent_name          TEXT NOT NULL REFERENCES agent_profiles(agent_name) ON DELETE CASCADE,
+    week_start          DATE NOT NULL,              -- Monday of the snapshot week
+    calls               INTEGER DEFAULT 0,
+    conversations       INTEGER DEFAULT 0,
+    appointments_set    INTEGER DEFAULT 0,
+    appointments_showed INTEGER DEFAULT 0,
+    gci_closings        NUMERIC(12,2) DEFAULT 0,
+    deals_closed        INTEGER DEFAULT 0,
+    ooc_count           INTEGER DEFAULT 0,
+    priority_group      BOOLEAN DEFAULT FALSE,
+    snapshot_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (agent_name, week_start)
+);
+CREATE INDEX IF NOT EXISTS idx_snap_agent ON agent_weekly_snapshots (agent_name, week_start DESC);
+
+-- automation_event_log: full audit trail for every system action.
+-- Every send, tag, notification, handoff, and error writes one row here.
+CREATE TABLE IF NOT EXISTS automation_event_log (
+    id              BIGSERIAL PRIMARY KEY,
+    event_type      TEXT NOT NULL,      -- sms_sent/email_sent/reply_received/agent_notified/
+                                        --   tag_applied/handoff_fired/apt_confirmed/apt_no_show/
+                                        --   heygen_cap/pb_cap/api_error/job_failed/etc.
+    person_id       INTEGER,
+    person_name     TEXT,
+    agent_name      TEXT,
+    channel         TEXT,               -- email/sms/imessage/voice
+    payload         JSONB,              -- full event context
+    triggered_by    TEXT,               -- pond_mailer/serendipity/webhook_pb/scheduler/manual
+    ai_generated    BOOLEAN DEFAULT FALSE,
+    success         BOOLEAN DEFAULT TRUE,
+    error_message   TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_aelog_type    ON automation_event_log (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_aelog_person  ON automation_event_log (person_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_aelog_error   ON automation_event_log (success, created_at DESC)
+    WHERE success = FALSE;
+CREATE INDEX IF NOT EXISTS idx_aelog_created ON automation_event_log (created_at DESC);
 """
 
 
@@ -4909,3 +4983,624 @@ def mark_prospecting_invite_sent(agent_name: str) -> bool:
     except Exception as e:
         logger.warning("mark_prospecting_invite_sent failed for %s: %s", agent_name, e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Owner Brief — automation_event_log
+# ---------------------------------------------------------------------------
+
+def log_automation_event(event_type, person_id=None, person_name=None,
+                         agent_name=None, channel=None, payload=None,
+                         triggered_by=None, ai_generated=False,
+                         success=True, error_message=None):
+    """
+    Write one row to automation_event_log.
+    Non-fatal — logs a warning and returns None on DB failure.
+
+    event_type values (use these exact strings for reliable Perplexity parsing):
+        sms_sent, email_sent, reply_received, agent_notified, tag_applied,
+        handoff_fired, apt_confirmed, apt_no_show, apt_recovery_sent,
+        heygen_cap_hit, pb_cap_hit, heygen_generated, api_error, job_failed,
+        note_posted, leadstream_scored, serendipity_fired
+    """
+    if not is_available():
+        return None
+    try:
+        import json as _json
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO automation_event_log
+                        (event_type, person_id, person_name, agent_name,
+                         channel, payload, triggered_by, ai_generated,
+                         success, error_message)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    event_type, person_id, person_name, agent_name,
+                    channel,
+                    _json.dumps(payload or {}),
+                    triggered_by, ai_generated, success, error_message,
+                ))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("log_automation_event failed (%s): %s", event_type, e)
+        return None
+
+
+def get_automation_events(hours=24, event_type=None, success=None,
+                          person_id=None, limit=200):
+    """Return recent automation_event_log rows as list of dicts."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                clauses = ["created_at >= NOW() - (%s * INTERVAL '1 hour')"]
+                params  = [hours]
+                if event_type:
+                    clauses.append("event_type = %s"); params.append(event_type)
+                if success is not None:
+                    clauses.append("success = %s"); params.append(success)
+                if person_id:
+                    clauses.append("person_id = %s"); params.append(person_id)
+                where = " AND ".join(clauses)
+                cur.execute(f"""
+                    SELECT id, event_type, person_id, person_name, agent_name,
+                           channel, payload, triggered_by, ai_generated,
+                           success, error_message, created_at
+                    FROM   automation_event_log
+                    WHERE  {where}
+                    ORDER  BY created_at DESC
+                    LIMIT  %s
+                """, params + [limit])
+                cols = [d[0] for d in cur.description]
+                rows = cur.fetchall()
+        return [dict(zip(cols, r)) for r in rows]
+    except Exception as e:
+        logger.warning("get_automation_events failed: %s", e)
+        return []
+
+
+def get_tech_health_summary(hours=24):
+    """
+    Aggregate automation_event_log for the owner tech-health section.
+    Returns counts by event_type, error count, and top error messages.
+    """
+    if not is_available():
+        return {"available": False}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*)                                      AS total_events,
+                        COUNT(*) FILTER (WHERE success = FALSE)       AS errors,
+                        COUNT(*) FILTER (WHERE event_type='sms_sent') AS sms_sent,
+                        COUNT(*) FILTER (WHERE event_type='email_sent') AS emails_sent,
+                        COUNT(*) FILTER (WHERE event_type='reply_received') AS replies,
+                        COUNT(*) FILTER (WHERE event_type='agent_notified') AS agent_notifs,
+                        COUNT(*) FILTER (WHERE event_type='heygen_cap_hit') AS heygen_cap_hits,
+                        COUNT(*) FILTER (WHERE event_type='pb_cap_hit')     AS pb_cap_hits,
+                        COUNT(*) FILTER (WHERE event_type='job_failed')     AS job_failures,
+                        COUNT(*) FILTER (WHERE event_type='api_error')      AS api_errors
+                    FROM automation_event_log
+                    WHERE created_at >= NOW() - (%s * INTERVAL '1 hour')
+                """, (hours,))
+                row = cur.fetchone()
+                summary = {
+                    "total_events":  row[0] or 0,
+                    "errors":        row[1] or 0,
+                    "sms_sent":      row[2] or 0,
+                    "emails_sent":   row[3] or 0,
+                    "replies":       row[4] or 0,
+                    "agent_notifs":  row[5] or 0,
+                    "heygen_cap_hits": row[6] or 0,
+                    "pb_cap_hits":   row[7] or 0,
+                    "job_failures":  row[8] or 0,
+                    "api_errors":    row[9] or 0,
+                }
+
+                # Top error messages
+                cur.execute("""
+                    SELECT error_message, COUNT(*) AS cnt, MAX(created_at) AS last_seen
+                    FROM   automation_event_log
+                    WHERE  success = FALSE
+                      AND  created_at >= NOW() - (%s * INTERVAL '1 hour')
+                      AND  error_message IS NOT NULL
+                    GROUP  BY error_message
+                    ORDER  BY cnt DESC
+                    LIMIT  10
+                """, (hours,))
+                summary["top_errors"] = [
+                    {"message": r[0], "count": r[1],
+                     "last_seen": r[2].isoformat() if r[2] else None}
+                    for r in cur.fetchall()
+                ]
+
+        summary["available"] = True
+        summary["window_hours"] = hours
+        return summary
+    except Exception as e:
+        logger.warning("get_tech_health_summary failed: %s", e)
+        return {"available": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Owner Brief — appointments
+# ---------------------------------------------------------------------------
+
+def upsert_appointment(fub_appt_id, person_id=None, person_name=None,
+                       agent_name=None, agent_fub_uid=None, source=None,
+                       start_time=None, end_time=None, title=None,
+                       status="scheduled", outcome=None,
+                       apt_set_tag=False, outcome_needed_tag=False,
+                       stale_tag=False):
+    """Insert or update one appointment record from FUB data. Non-fatal."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO appointments
+                        (fub_appt_id, person_id, person_name, agent_name,
+                         agent_fub_uid, source, start_time, end_time, title,
+                         status, outcome, apt_set_tag, outcome_needed_tag,
+                         stale_tag, fub_synced_at, updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                    ON CONFLICT (fub_appt_id) DO UPDATE SET
+                        person_id           = EXCLUDED.person_id,
+                        person_name         = EXCLUDED.person_name,
+                        agent_name          = EXCLUDED.agent_name,
+                        agent_fub_uid       = EXCLUDED.agent_fub_uid,
+                        source              = EXCLUDED.source,
+                        start_time          = EXCLUDED.start_time,
+                        end_time            = EXCLUDED.end_time,
+                        title               = EXCLUDED.title,
+                        status              = EXCLUDED.status,
+                        outcome             = EXCLUDED.outcome,
+                        apt_set_tag         = EXCLUDED.apt_set_tag,
+                        outcome_needed_tag  = EXCLUDED.outcome_needed_tag,
+                        stale_tag           = EXCLUDED.stale_tag,
+                        fub_synced_at       = NOW(),
+                        updated_at          = NOW()
+                """, (
+                    fub_appt_id, person_id, person_name, agent_name,
+                    agent_fub_uid, source, start_time, end_time, title,
+                    status, outcome, apt_set_tag, outcome_needed_tag,
+                    stale_tag,
+                ))
+        return True
+    except Exception as e:
+        logger.warning("upsert_appointment failed (fub_id=%s): %s", fub_appt_id, e)
+        return False
+
+
+def get_appointment_stats(days=30):
+    """
+    Aggregate appointment metrics for the owner brief.
+    Returns set/showed/no-show counts by agent and overall.
+    """
+    if not is_available():
+        return {"available": False, "data_quality": "appointments table unavailable"}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Check if we have any data at all
+                cur.execute("SELECT COUNT(*) FROM appointments WHERE start_time >= NOW() - (%s * INTERVAL '1 day')", (days,))
+                total = cur.fetchone()[0] or 0
+
+                if total == 0:
+                    return {
+                        "available": True,
+                        "data_quality": "sparse — table created recently, syncing from FUB",
+                        "total_appointments": 0,
+                        "show_rate": None,
+                        "by_agent": [],
+                    }
+
+                cur.execute("""
+                    SELECT
+                        COALESCE(agent_name, 'Unassigned')        AS agent,
+                        COUNT(*)                                   AS total_set,
+                        COUNT(*) FILTER (WHERE outcome = 'showed') AS showed,
+                        COUNT(*) FILTER (WHERE outcome = 'no_show') AS no_showed,
+                        COUNT(*) FILTER (WHERE outcome IS NULL
+                            AND start_time < NOW())                AS outcome_missing,
+                        COUNT(*) FILTER (WHERE outcome_needed_tag) AS outcome_needed,
+                        COUNT(*) FILTER (WHERE stale_tag)          AS stale
+                    FROM appointments
+                    WHERE start_time >= NOW() - (%s * INTERVAL '1 day')
+                    GROUP BY agent_name
+                    ORDER BY total_set DESC
+                """, (days,))
+                by_agent = [
+                    {
+                        "agent":           r[0],
+                        "total_set":       r[1],
+                        "showed":          r[2],
+                        "no_showed":       r[3],
+                        "outcome_missing": r[4],
+                        "outcome_needed":  r[5],
+                        "stale":           r[6],
+                        "show_rate":       round(r[2] / r[1] * 100, 1) if r[1] > 0 else None,
+                    }
+                    for r in cur.fetchall()
+                ]
+
+                # Overall
+                showed  = sum(a["showed"]    for a in by_agent)
+                no_show = sum(a["no_showed"] for a in by_agent)
+                with_outcome = showed + no_show
+
+                return {
+                    "available": True,
+                    "data_quality": "live",
+                    "window_days": days,
+                    "total_appointments": total,
+                    "showed": showed,
+                    "no_showed": no_show,
+                    "outcome_missing": sum(a["outcome_missing"] for a in by_agent),
+                    "show_rate": round(showed / with_outcome * 100, 1) if with_outcome else None,
+                    "by_agent": by_agent,
+                }
+    except Exception as e:
+        logger.warning("get_appointment_stats failed: %s", e)
+        return {"available": False, "error": str(e)}
+
+
+def get_overdue_appointments(hours_past=4):
+    """
+    Appointments whose start_time passed > hours_past hours ago with no outcome.
+    These are no-show candidates needing recovery.
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT fub_appt_id, person_id, person_name, agent_name,
+                           start_time, title, outcome_needed_tag, stale_tag
+                    FROM   appointments
+                    WHERE  start_time < NOW() - (%s * INTERVAL '1 hour')
+                      AND  start_time > NOW() - INTERVAL '30 days'
+                      AND  outcome IS NULL
+                      AND  status NOT IN ('canceled')
+                    ORDER  BY start_time DESC
+                    LIMIT  50
+                """, (hours_past,))
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_overdue_appointments failed: %s", e)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Owner Brief — agent_weekly_snapshots
+# ---------------------------------------------------------------------------
+
+def upsert_weekly_snapshot(agent_name, week_start, calls=0, conversations=0,
+                           appointments_set=0, appointments_showed=0,
+                           gci_closings=0, deals_closed=0,
+                           ooc_count=0, priority_group=False):
+    """Write or update the weekly snapshot for one agent. Non-fatal."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO agent_weekly_snapshots
+                        (agent_name, week_start, calls, conversations,
+                         appointments_set, appointments_showed,
+                         gci_closings, deals_closed, ooc_count,
+                         priority_group, snapshot_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                    ON CONFLICT (agent_name, week_start) DO UPDATE SET
+                        calls               = EXCLUDED.calls,
+                        conversations       = EXCLUDED.conversations,
+                        appointments_set    = EXCLUDED.appointments_set,
+                        appointments_showed = EXCLUDED.appointments_showed,
+                        gci_closings        = EXCLUDED.gci_closings,
+                        deals_closed        = EXCLUDED.deals_closed,
+                        ooc_count           = EXCLUDED.ooc_count,
+                        priority_group      = EXCLUDED.priority_group,
+                        snapshot_at         = NOW()
+                """, (agent_name, week_start, calls, conversations,
+                      appointments_set, appointments_showed,
+                      gci_closings, deals_closed, ooc_count, priority_group))
+        return True
+    except Exception as e:
+        logger.warning("upsert_weekly_snapshot failed for %s: %s", agent_name, e)
+        return False
+
+
+def get_weekly_snapshot_trend(agent_name, weeks=4):
+    """
+    Return last N weekly snapshots for an agent, newest first.
+    Used for KPI trending in coaching briefs and the owner brief.
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT week_start, calls, conversations, appointments_set,
+                           appointments_showed, gci_closings, deals_closed,
+                           ooc_count, priority_group, snapshot_at
+                    FROM   agent_weekly_snapshots
+                    WHERE  agent_name = %s
+                    ORDER  BY week_start DESC
+                    LIMIT  %s
+                """, (agent_name, weeks))
+                cols = [d[0] for d in cur.description]
+                rows = cur.fetchall()
+        return [dict(zip(cols, r)) for r in rows]
+    except Exception as e:
+        logger.warning("get_weekly_snapshot_trend failed for %s: %s", agent_name, e)
+        return []
+
+
+def get_all_weekly_snapshots_this_week():
+    """Return the most recent snapshot for every agent (current week)."""
+    if not is_available():
+        return []
+    try:
+        from datetime import date
+        today = date.today()
+        monday = today - timedelta(days=today.weekday())
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, week_start, calls, conversations,
+                           appointments_set, gci_closings, ooc_count, priority_group
+                    FROM   agent_weekly_snapshots
+                    WHERE  week_start = %s
+                    ORDER  BY calls DESC
+                """, (monday,))
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_all_weekly_snapshots_this_week failed: %s", e)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Owner Brief — pond metrics helpers
+# ---------------------------------------------------------------------------
+
+def get_pond_brief_stats(hours=24):
+    """
+    Pull email+SMS metrics for the owner brief from pond logs.
+    Returns sends, conversions, cap usage for the given window.
+    """
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Email stats
+                cur.execute("""
+                    SELECT COUNT(*) AS sent,
+                           COUNT(DISTINCT person_id) AS unique_leads,
+                           COUNT(*) FILTER (WHERE sequence_num = 1) AS email_1s
+                    FROM pond_email_log
+                    WHERE sent_at >= NOW() - (%s * INTERVAL '1 hour')
+                      AND dry_run = FALSE
+                """, (hours,))
+                er = cur.fetchone()
+                email_stats = {
+                    "sent": er[0] or 0,
+                    "unique_leads": er[1] or 0,
+                    "email_1s": er[2] or 0,
+                }
+
+                # SMS stats
+                cur.execute("""
+                    SELECT COUNT(*) AS sent,
+                           COUNT(DISTINCT person_id) AS unique_leads
+                    FROM pond_sms_log
+                    WHERE sent_at >= NOW() - (%s * INTERVAL '1 hour')
+                      AND dry_run = FALSE
+                """, (hours,))
+                sr = cur.fetchone()
+                sms_stats = {"sent": sr[0] or 0, "unique_leads": sr[1] or 0}
+
+                # Conversions (email)
+                cur.execute("""
+                    SELECT COUNT(*) AS replies,
+                           COUNT(*) FILTER (WHERE sentiment = 'positive') AS positive,
+                           COUNT(*) FILTER (WHERE routed = TRUE) AS routed
+                    FROM pond_reply_log
+                    WHERE received_at >= NOW() - (%s * INTERVAL '1 hour')
+                """, (hours,))
+                er2 = cur.fetchone()
+                email_conv = {"replies": er2[0] or 0, "positive": er2[1] or 0, "routed": er2[2] or 0}
+
+                # Conversions (SMS/iMessage)
+                cur.execute("""
+                    SELECT COUNT(*) AS replies,
+                           COUNT(*) FILTER (WHERE sentiment = 'positive') AS positive,
+                           COUNT(*) FILTER (WHERE routed = TRUE) AS routed
+                    FROM pond_sms_reply_log
+                    WHERE received_at >= NOW() - (%s * INTERVAL '1 hour')
+                """, (hours,))
+                sr2 = cur.fetchone()
+                sms_conv = {"replies": sr2[0] or 0, "positive": sr2[1] or 0, "routed": sr2[2] or 0}
+
+        return {
+            "window_hours": hours,
+            "email": {**email_stats, "conversions": email_conv},
+            "sms":   {**sms_stats,   "conversions": sms_conv},
+        }
+    except Exception as e:
+        logger.warning("get_pond_brief_stats failed: %s", e)
+        return {"error": str(e)}
+
+
+def get_pond_brief_stats_7d():
+    """7-day version of pond_brief_stats for the weekly view in the owner brief."""
+    return get_pond_brief_stats(hours=168)
+
+
+# ---------------------------------------------------------------------------
+# Owner Brief — deal_log helpers
+# ---------------------------------------------------------------------------
+
+def get_deals_in_range(since_date: str, until_date: str) -> list:
+    """
+    Return deal_log rows where close_date is in [since_date, until_date].
+    Dates as ISO strings: '2026-05-01'.
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, close_date, sale_price, gci, source
+                    FROM   deal_log
+                    WHERE  close_date BETWEEN %s AND %s
+                    ORDER  BY close_date DESC
+                """, (since_date, until_date))
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_deals_in_range failed: %s", e)
+        return []
+
+
+def get_agent_ytd_summary(agent_name: str, year: int = None) -> dict:
+    """
+    Return YTD GCI and deal count for one agent from agent_ytd_cache.
+    Falls back to deal_log aggregate if cache miss.
+    """
+    if not is_available():
+        return {}
+    if year is None:
+        year = datetime.now(timezone.utc).year
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT gci_ytd, closings_ytd, updated_at
+                    FROM   agent_ytd_cache
+                    WHERE  agent_name = %s AND year = %s
+                    LIMIT  1
+                """, (agent_name, year))
+                row = cur.fetchone()
+        if row:
+            return {
+                "gci_ytd":     float(row[0] or 0),
+                "closings_ytd": int(row[1] or 0),
+                "updated_at":  row[2].isoformat() if row[2] else None,
+            }
+        # Fallback: sum from deal_log
+        year_start = f"{year}-01-01"
+        year_end   = f"{year}-12-31"
+        deals = get_deals_in_range(year_start, year_end)
+        agent_deals = [d for d in deals if d.get("agent_name") == agent_name]
+        return {
+            "gci_ytd":     round(sum(float(d.get("gci") or 0) for d in agent_deals), 2),
+            "closings_ytd": len(agent_deals),
+            "updated_at":  None,
+        }
+    except Exception as e:
+        logger.warning("get_agent_ytd_summary failed for %s: %s", agent_name, e)
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Owner Brief — ISA transfer helpers
+# ---------------------------------------------------------------------------
+
+def get_isa_transfers_pending_action(hours: int = 2) -> list:
+    """
+    Return ISA transfers created more than `hours` ago where no agent call
+    has been logged since (detected via isa_transfers.first_call_at IS NULL).
+    Falls back to checking transfer_date vs now for tables without first_call_at.
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Check if first_call_at column exists
+                cur.execute("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'isa_transfers' AND column_name = 'first_call_at'
+                """)
+                has_col = bool(cur.fetchone())
+
+                if has_col:
+                    cur.execute("""
+                        SELECT person_id, lead_name, agent_name, transfer_date,
+                               EXTRACT(EPOCH FROM (NOW() - transfer_date))/3600 AS hours_since
+                        FROM   isa_transfers
+                        WHERE  transfer_date >= NOW() - INTERVAL '7 days'
+                          AND  transfer_date <  NOW() - (%s * INTERVAL '1 hour')
+                          AND  first_call_at IS NULL
+                        ORDER  BY transfer_date DESC
+                        LIMIT  20
+                    """, (hours,))
+                else:
+                    # No first_call_at column — return all recent transfers
+                    cur.execute("""
+                        SELECT person_id, lead_name, agent_name, transfer_date,
+                               EXTRACT(EPOCH FROM (NOW() - transfer_date))/3600 AS hours_since
+                        FROM   isa_transfers
+                        WHERE  transfer_date >= NOW() - INTERVAL '7 days'
+                          AND  transfer_date <  NOW() - (%s * INTERVAL '1 hour')
+                        ORDER  BY transfer_date DESC
+                        LIMIT  20
+                    """, (hours,))
+
+                cols = [d[0] for d in cur.description]
+                rows = cur.fetchall()
+
+        results = []
+        for r in rows:
+            row = dict(zip(cols, r))
+            row["person_id"]    = row.get("person_id")
+            row["person_name"]  = row.get("lead_name", "Unknown")
+            row["hours_since"]  = round(float(row.get("hours_since") or 0), 1)
+            row["fub_url"] = (
+                f"https://app.followupboss.com/2/people/detail/{row['person_id']}"
+                if row.get("person_id") else None
+            )
+            results.append(row)
+        return results
+
+    except Exception as e:
+        logger.warning("get_isa_transfers_pending_action failed: %s", e)
+        return []
+
+
+def get_isa_transfer_stats_7d() -> dict:
+    """Return ISA transfer volume and rate metrics for the last 7 days."""
+    if not is_available():
+        return {"data_quality": "unavailable"}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*) AS total,
+                        COUNT(*) FILTER (WHERE transfer_date >= NOW() - INTERVAL '1 day') AS today
+                    FROM isa_transfers
+                    WHERE transfer_date >= NOW() - INTERVAL '7 days'
+                """)
+                row = cur.fetchone()
+        return {
+            "transfers_7d": row[0] or 0,
+            "transfers_today": row[1] or 0,
+            "data_quality": "live",
+        }
+    except Exception as e:
+        logger.warning("get_isa_transfer_stats_7d failed: %s", e)
+        return {"data_quality": f"error: {e}"}
