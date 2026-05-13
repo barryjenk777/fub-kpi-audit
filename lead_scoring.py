@@ -608,16 +608,17 @@ class LeadScorer:
         except Exception as e:
             logger.warning("Could not fetch recent calls for pond suppression: %s", e)
 
-        # Check recent outbound texts (all agents)
+        # Check recent outbound texts via our own DB — FUB's /v1/textMessages
+        # endpoint requires personId/phone/threadId (not userId), making bulk
+        # "all recent texts" queries impossible through the FUB API. Our pond_sms_log
+        # records every Project Blue send, so use it as the authoritative text log.
         try:
-            texts = self.client.get_text_messages(since=since)
-            for text in texts:
-                if text.get("isOutbound"):
-                    pid = text.get("personId")
-                    if pid:
-                        contacted.add(pid)
+            import db as _db_ls
+            recently_texted = _db_ls.get_recently_texted_person_ids(hours=2)
+            for pid in recently_texted:
+                contacted.add(pid)
         except Exception as e:
-            logger.warning("Could not fetch recent texts for pond suppression: %s", e)
+            logger.warning("Could not fetch recent pond texts from DB: %s", e)
 
         logger.info("Pond suppression: %d leads contacted in last 2h", len(contacted))
         return contacted

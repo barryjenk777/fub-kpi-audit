@@ -1772,7 +1772,7 @@ FINAL QUALITY CHECK — run this before outputting:
 
     data = json.loads(raw)
     subject_options = data.get("subject_options", [])
-    subject = subject_options[0] if subject_options else f"Following up — {first_name}"
+    subject = random.choice(subject_options) if subject_options else f"Quick question, {first_name}"
     claude_body = data.get("body", "")
 
     # Plain text: convert markdown links to readable "label (url)" format
@@ -2529,6 +2529,15 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
     # Reply-to: SendGrid inbound parse intercepts replies for sentiment routing
     msg.reply_to = SgEmail("reply@inbound.yourfriendlyagent.net", FROM_NAME)
 
+    # List-Unsubscribe header — RFC 2369 / RFC 8058 compliance.
+    # Gmail and Outlook show a native one-click unsubscribe button when this is present.
+    # Without it, leads who want out click "Report Spam" instead, which damages
+    # sender reputation for everyone. Using our signed unsubscribe URL so the click
+    # lands in FUB and applies the opt-out tag automatically.
+    from sendgrid.helpers.mail import Header as SgHeader
+    msg.add_header(SgHeader("List-Unsubscribe", f"<{_unsub}>"))
+    msg.add_header(SgHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"))
+
     # BCC Barry on every email so he can see exactly what's going out
     # Skip BCC if TO is already Barry (e.g. test sends) — SendGrid rejects duplicate addresses
     _to_normalized = to_email.lower().strip() if isinstance(to_email, str) else ""
@@ -2933,7 +2942,7 @@ def run_new_lead_mailer(dry_run=True):
 
             if email_data:
                 subject_options = email_data.get("subject_options", [])
-                subject = subject_options[0] if subject_options else f"Quick question, {first or 'you'}"
+                subject = random.choice(subject_options) if subject_options else f"Quick question, {first or 'you'}"
                 body_text = email_data.get("body", "")
 
                 # Plain-text-only send — HTML removed for deliverability

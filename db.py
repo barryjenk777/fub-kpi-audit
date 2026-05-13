@@ -3454,6 +3454,31 @@ def has_received_pond_sms(person_id):
         return False
 
 
+def get_recently_texted_person_ids(hours=2):
+    """
+    Return set of person_ids that received an outbound pond SMS in the last N hours.
+
+    Used by LeadStream pond suppression as a replacement for the FUB textMessages
+    API, which requires personId/phone filters and cannot return all-agent recent
+    texts in bulk. Our pond_sms_log captures every Project Blue send.
+    """
+    if not is_available():
+        return set()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT person_id
+                    FROM pond_sms_log
+                    WHERE dry_run = FALSE
+                      AND sent_at >= NOW() - (%s * INTERVAL '1 hour')
+                """, (hours,))
+                return {row[0] for row in cur.fetchall()}
+    except Exception as e:
+        logger.warning("get_recently_texted_person_ids failed: %s", e)
+        return set()
+
+
 def count_pond_sms_sent(person_id):
     """Return total non-dry-run SMS ever sent to this lead.
 
