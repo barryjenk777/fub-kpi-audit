@@ -6867,11 +6867,21 @@ def api_mcp():
         return resp
 
     response = _handle_mcp_request(body)
-    # Always return 200 application/json — never 204.
-    # Flask sets Content-Type: text/html on ALL empty/204 responses;
-    # Perplexity's MCP client rejects anything that isn't application/json.
+
+    # Notification ACK (notifications/initialized, notifications/cancelled, etc.)
+    # MCP spec: server MUST return 202 with no body for client notifications.
+    # Perplexity's MCP library (pydantic) validates response body as JSONRPCMessage,
+    # so we cannot return {} (fails validation) or empty string (fails JSON parse).
+    # Solution: 202 with Content-Type: application/json and no body —
+    # delete Flask's auto-set text/html content-type so the library skips body parsing.
     if response is None:
-        response = {}   # notification ACK: empty JSON object
+        from flask import Response as _Resp
+        r = _Resp(status=202)
+        r.headers["Content-Type"] = "application/json"
+        for k, v in cors.items():
+            r.headers[k] = v
+        return r
+
     resp = jsonify(response)
     for k, v in cors.items():
         resp.headers[k] = v
