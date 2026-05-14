@@ -6811,10 +6811,11 @@ def api_mcp():
     """
     cors = _mcp_cors_headers()
 
-    # OPTIONS preflight — no auth, just headers
+    # OPTIONS preflight — no auth, just CORS headers
     if request.method == "OPTIONS":
-        resp = app.make_response("")
-        resp.status_code = 204
+        resp = app.make_response("{}")
+        resp.status_code = 200
+        resp.headers["Content-Type"] = "application/json"
         for k, v in cors.items():
             resp.headers[k] = v
         return resp
