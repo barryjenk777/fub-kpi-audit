@@ -6493,8 +6493,337 @@ def api_perplexity_contract():
             "/api/perplexity/lead-issues":  "prioritized issue list, always fresh",
             "/api/perplexity/tech-issues":  "system health and cap warnings",
             "/api/perplexity/contract":     "this document",
+            "/mcp":                         "MCP server for Perplexity Pro and other MCP clients",
         },
     })
+
+
+# ===========================================================================
+# MCP SERVER  (Model Context Protocol — Perplexity Pro / Claude / etc.)
+# POST /mcp   — JSON-RPC 2.0, Streamable HTTP transport
+# GET  /mcp   — discovery / health check
+# Auth: Bearer <PERPLEXITY_API_KEY>  |  X-Api-Key header  |  ?key= param
+# Protocol version: 2024-11-05
+# ===========================================================================
+
+_MCP_SERVER_NAME    = "legacy-home-team-kpi"
+_MCP_SERVER_VERSION = "1.0.0"
+_MCP_PROTOCOL_VER   = "2024-11-05"
+
+_MCP_TOOLS = [
+    {
+        "name": "get_daily_brief",
+        "description": (
+            "Returns today's complete business brief for Legacy Home Team "
+            "(Virginia's #1 real estate team, 850+ homes/year). Covers lead flow, "
+            "upcoming appointments, overdue outcomes, ISA handoff SLA, pipeline GCI vs goal, "
+            "agent accountability, AI outreach stats, and tech health. "
+            "Call this first for any general question about the team or business."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "force_refresh": {
+                    "type": "boolean",
+                    "description": "Trigger a background cache refresh. Use if data feels stale."
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_top_priorities",
+        "description": (
+            "Returns the top 3 action items Barry should handle today, ranked by urgency. "
+            "Each item has a category (appointments, isa_sla, tech_health, ai_outreach) "
+            "and a plain-English action. Use when Barry asks what is urgent or what to focus on."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_isa_handoffs",
+        "description": (
+            "Returns ISA (Fhalen Tendencia) transfer data: leads handed off to agents "
+            "that have not yet received an agent outbound call, sorted by hours since handoff. "
+            "Over 2h = stale, over 24h = critical. Use for ISA or Joe accountability questions."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_appointments",
+        "description": (
+            "Returns appointment data: upcoming appointments (next 7 days), appointments "
+            "past their scheduled time with no outcome logged in FUB (show/no-show), "
+            "and 30-day stats by agent. Use for show rate, outcome logging, or no-show follow-up."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_agent_accountability",
+        "description": (
+            "Returns per-agent production data: GCI YTD, prorated GCI goal, pace %, "
+            "calls per week, appointments YTD. Agents flagged 'critical' or 'low' on call pace. "
+            "NOTE: GCI shows $0 because agents have not logged Close Date in FUB — "
+            "this is a data entry gap, not a business reality. "
+            "Use for coaching conversations, accountability checks, or team performance review."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_lead_flow",
+        "description": (
+            "Returns new lead counts by source for the last 24h and last 7 days. "
+            "Sources: Ylopo, Zbuyer, BatchLeads, referral, other. "
+            "Use when asked about lead volume, source mix, or pipeline fill rate."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_tech_health",
+        "description": (
+            "Returns system health: HeyGen video cap (daily limit, at cap flag), "
+            "Project Blue SMS cap (used, total, remaining today), and automation error count. "
+            "Use when asked about outreach capacity, cap warnings, or system errors."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+]
+
+
+def _mcp_get_brief(force_refresh=False):
+    """Pull owner brief from cache (or build synchronously if cold)."""
+    import threading
+    cache_key = "owner_daily_brief"
+    cached = cache_get(cache_key)
+
+    if force_refresh and cached:
+        t = threading.Thread(
+            target=_owner_brief_rebuild_bg, args=(cache_key,),
+            daemon=True, name="mcp_brief_refresh"
+        )
+        t.start()
+        cached["refresh_triggered"] = True
+        return cached
+
+    if cached:
+        return cached
+
+    # Cold build — block for up to 30s
+    try:
+        import owner_brief as _ob
+        brief = _ob.build_owner_daily_brief()
+        brief["from_cache"] = False
+        cache_set(cache_key, brief)
+        return brief
+    except Exception as e:
+        logger.error("_mcp_get_brief cold build failed: %s", e)
+        return None
+
+
+def _mcp_tool_get_daily_brief(args):
+    return _mcp_get_brief(force_refresh=args.get("force_refresh", False)) \
+           or {"error": "Brief unavailable — app may be starting up. Retry in 30s."}
+
+
+def _mcp_tool_get_top_priorities(args):
+    b = _mcp_get_brief()
+    if not b:
+        return {"error": "Brief unavailable. Retry in 30s."}
+    return {
+        "business_date":  b.get("business_date"),
+        "top_priorities": b.get("top_priorities", []),
+        "data_gaps":      b.get("data_gaps", []),
+    }
+
+
+def _mcp_tool_get_isa_handoffs(args):
+    b = _mcp_get_brief()
+    if not b:
+        return {"error": "Brief unavailable. Retry in 30s."}
+    isa = b.get("isa_sla", {})
+    return {
+        "business_date":          b.get("business_date"),
+        "isa_name":               isa.get("name"),
+        "transfers_today":        isa.get("transfers_today"),
+        "transfers_7d":           isa.get("transfers_7d"),
+        "handoffs_no_agent_call": isa.get("handoffs_no_agent_call"),
+        "oldest_handoff_hours":   isa.get("oldest_handoff_hours"),
+        "handoff_list":           isa.get("handoff_list", []),
+    }
+
+
+def _mcp_tool_get_appointments(args):
+    b = _mcp_get_brief()
+    if not b:
+        return {"error": "Brief unavailable. Retry in 30s."}
+    apt = b.get("appointments", {})
+    return {
+        "business_date":    b.get("business_date"),
+        "total_set_30d":    apt.get("total_set_30d"),
+        "show_rate":        apt.get("show_rate"),
+        "outcomes_missing": apt.get("outcomes_missing"),
+        "overdue_outcomes": apt.get("overdue_outcomes", []),
+        "upcoming":         apt.get("upcoming", []),
+        "by_agent":         apt.get("by_agent", []),
+    }
+
+
+def _mcp_tool_get_agent_accountability(args):
+    b = _mcp_get_brief()
+    if not b:
+        return {"error": "Brief unavailable. Retry in 30s."}
+    ao = b.get("agent_outliers", {})
+    pl = b.get("pipeline", {})
+    return {
+        "business_date":            b.get("business_date"),
+        "team_gci_ytd":             pl.get("gci_ytd"),
+        "team_gci_goal":            pl.get("team_gci_goal"),
+        "team_gci_pace_pct":        pl.get("team_gci_pace_pct"),
+        "behind_gci_goal":          ao.get("behind_gci_goal", []),
+        "below_call_pace":          ao.get("below_call_pace", []),
+        "top_appointment_setters":  ao.get("top_appointment_setters", []),
+        "data_note": (
+            "GCI shows $0 because agents have not marked Close Date on FUB deals. "
+            "This is a tracking gap, not a business reality."
+        ),
+    }
+
+
+def _mcp_tool_get_lead_flow(args):
+    b = _mcp_get_brief()
+    if not b:
+        return {"error": "Brief unavailable. Retry in 30s."}
+    lg = b.get("lead_gen", {})
+    return {
+        "business_date":   b.get("business_date"),
+        "new_leads_24h":   lg.get("new_leads_24h"),
+        "new_leads_7d":    lg.get("new_leads_7d"),
+        "by_source_24h":   lg.get("by_source_24h", {}),
+        "by_source_7d":    lg.get("by_source_7d", {}),
+        "speed_to_lead":   lg.get("speed_to_lead"),
+    }
+
+
+def _mcp_tool_get_tech_health(args):
+    b = _mcp_get_brief()
+    if not b:
+        return {"error": "Brief unavailable. Retry in 30s."}
+    th = b.get("tech_health", {})
+    return {
+        "business_date":          b.get("business_date"),
+        "heygen_at_cap":          th.get("heygen_at_cap"),
+        "heygen_used":            th.get("heygen_cap_used"),
+        "heygen_total":           th.get("heygen_cap_total"),
+        "sms_cap_used":           th.get("sms_cap_used"),
+        "sms_cap_total":          th.get("sms_cap_total"),
+        "sms_cap_remaining":      th.get("sms_cap_remaining"),
+        "automation_errors_24h":  th.get("automation_errors_24h"),
+        "ai_outreach_7d":         b.get("ai_outreach_7d", {}),
+    }
+
+
+_MCP_TOOL_HANDLERS = {
+    "get_daily_brief":          _mcp_tool_get_daily_brief,
+    "get_top_priorities":       _mcp_tool_get_top_priorities,
+    "get_isa_handoffs":         _mcp_tool_get_isa_handoffs,
+    "get_appointments":         _mcp_tool_get_appointments,
+    "get_agent_accountability": _mcp_tool_get_agent_accountability,
+    "get_lead_flow":            _mcp_tool_get_lead_flow,
+    "get_tech_health":          _mcp_tool_get_tech_health,
+}
+
+
+def _handle_mcp_request(body: dict):
+    """Dispatch a JSON-RPC 2.0 MCP request. Returns response dict or None."""
+    import json as _json
+    req_id = body.get("id")
+    method = body.get("method", "")
+    params = body.get("params") or {}
+
+    def ok(result):
+        return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+    def err(code, message):
+        return {"jsonrpc": "2.0", "id": req_id,
+                "error": {"code": code, "message": message}}
+
+    if method == "initialize":
+        return ok({
+            "protocolVersion": _MCP_PROTOCOL_VER,
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {
+                "name":        _MCP_SERVER_NAME,
+                "version":     _MCP_SERVER_VERSION,
+                "description": (
+                    "Legacy Home Team KPI — real-time data for Virginia's #1 real estate team. "
+                    "Lead flow, ISA SLA, agent accountability, pipeline GCI, tech health."
+                ),
+            },
+        })
+
+    if method in ("notifications/initialized", "notifications/cancelled"):
+        return None  # client notifications — no response
+
+    if method == "ping":
+        return ok({})
+
+    if method == "tools/list":
+        return ok({"tools": _MCP_TOOLS})
+
+    if method == "tools/call":
+        name    = params.get("name", "")
+        args    = params.get("arguments") or {}
+        handler = _MCP_TOOL_HANDLERS.get(name)
+        if not handler:
+            return err(-32601, f"Unknown tool: {name}")
+        try:
+            result = handler(args)
+            is_err = isinstance(result, dict) and "error" in result
+            return ok({
+                "content": [{"type": "text", "text": _json.dumps(result, default=str)}],
+                "isError": is_err,
+            })
+        except Exception as e:
+            logger.error("MCP tool %s failed: %s", name, e, exc_info=True)
+            return err(-32603, f"Tool error: {e}")
+
+    return err(-32601, f"Method not found: {method}")
+
+
+@app.route("/mcp", methods=["GET", "POST"])
+def api_mcp():
+    """
+    MCP server endpoint (Streamable HTTP transport).
+    GET  — discovery ping, returns server info and tool list.
+    POST — JSON-RPC 2.0 tool calls from Perplexity Pro or other MCP clients.
+    Auth: Authorization: Bearer <key>  |  X-Api-Key: <key>  |  ?key=<key>
+    """
+    # Auth
+    if not _perplexity_auth():   # reuse same auth helper
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if request.method == "GET":
+        return jsonify({
+            "server":   _MCP_SERVER_NAME,
+            "version":  _MCP_SERVER_VERSION,
+            "protocol": f"MCP {_MCP_PROTOCOL_VER}",
+            "tools":    [t["name"] for t in _MCP_TOOLS],
+            "connect":  "POST /mcp with JSON-RPC 2.0 body",
+        })
+
+    # POST
+    body = request.get_json(silent=True)
+    if not body:
+        return jsonify({
+            "jsonrpc": "2.0", "id": None,
+            "error": {"code": -32700, "message": "Parse error: expected JSON body"},
+        }), 400
+
+    response = _handle_mcp_request(body)
+    if response is None:
+        return "", 204   # notification acknowledged
+
+    return jsonify(response)
 
 
 # ---------------------------------------------------------------------------
