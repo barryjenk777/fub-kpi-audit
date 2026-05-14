@@ -44,6 +44,20 @@ from kpi_audit import (
 
 app = Flask(__name__)
 
+
+@app.before_request
+def _log_every_request():
+    """Log all incoming requests — helps diagnose MCP client behavior."""
+    logger.info(
+        "REQ %s %s | UA: %.60s | Origin: %s | CT: %s",
+        request.method,
+        request.full_path if request.query_string else request.path,
+        request.headers.get("User-Agent", "?"),
+        request.headers.get("Origin", "-"),
+        request.headers.get("Content-Type", "-"),
+    )
+
+
 # Initialize Postgres schema (no-op if DATABASE_URL not set)
 _db.init_db()
 
@@ -6853,13 +6867,11 @@ def api_mcp():
         return resp
 
     response = _handle_mcp_request(body)
+    # Always return 200 application/json — never 204.
+    # Flask sets Content-Type: text/html on ALL empty/204 responses;
+    # Perplexity's MCP client rejects anything that isn't application/json.
     if response is None:
-        resp = app.make_response("")
-        resp.status_code = 204
-        for k, v in cors.items():
-            resp.headers[k] = v
-        return resp
-
+        response = {}   # notification ACK: empty JSON object
     resp = jsonify(response)
     for k, v in cors.items():
         resp.headers[k] = v
