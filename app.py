@@ -6790,40 +6790,79 @@ def _handle_mcp_request(body: dict):
     return err(-32601, f"Method not found: {method}")
 
 
-@app.route("/mcp", methods=["GET", "POST"])
+def _mcp_cors_headers():
+    """CORS headers required for browser-based MCP clients (e.g. Perplexity)."""
+    return {
+        "Access-Control-Allow-Origin":  "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Api-Key",
+        "Access-Control-Max-Age":       "86400",
+    }
+
+
+@app.route("/mcp", methods=["GET", "POST", "OPTIONS"])
 def api_mcp():
     """
     MCP server endpoint (Streamable HTTP transport).
-    GET  — discovery ping, returns server info and tool list.
-    POST — JSON-RPC 2.0 tool calls from Perplexity Pro or other MCP clients.
+    OPTIONS — CORS preflight (no auth required).
+    GET     — discovery ping, returns server info and tool list.
+    POST    — JSON-RPC 2.0 tool calls from Perplexity Pro or other MCP clients.
     Auth: Authorization: Bearer <key>  |  X-Api-Key: <key>  |  ?key=<key>
     """
-    # Auth
-    if not _perplexity_auth():   # reuse same auth helper
-        return jsonify({"error": "Unauthorized"}), 401
+    cors = _mcp_cors_headers()
+
+    # OPTIONS preflight — no auth, just headers
+    if request.method == "OPTIONS":
+        resp = app.make_response("")
+        resp.status_code = 204
+        for k, v in cors.items():
+            resp.headers[k] = v
+        return resp
+
+    # Auth for GET + POST
+    if not _perplexity_auth():
+        resp = jsonify({"error": "Unauthorized"})
+        resp.status_code = 401
+        for k, v in cors.items():
+            resp.headers[k] = v
+        return resp
 
     if request.method == "GET":
-        return jsonify({
+        resp = jsonify({
             "server":   _MCP_SERVER_NAME,
             "version":  _MCP_SERVER_VERSION,
             "protocol": f"MCP {_MCP_PROTOCOL_VER}",
             "tools":    [t["name"] for t in _MCP_TOOLS],
             "connect":  "POST /mcp with JSON-RPC 2.0 body",
         })
+        for k, v in cors.items():
+            resp.headers[k] = v
+        return resp
 
     # POST
     body = request.get_json(silent=True)
     if not body:
-        return jsonify({
+        resp = jsonify({
             "jsonrpc": "2.0", "id": None,
             "error": {"code": -32700, "message": "Parse error: expected JSON body"},
-        }), 400
+        })
+        resp.status_code = 400
+        for k, v in cors.items():
+            resp.headers[k] = v
+        return resp
 
     response = _handle_mcp_request(body)
     if response is None:
-        return "", 204   # notification acknowledged
+        resp = app.make_response("")
+        resp.status_code = 204
+        for k, v in cors.items():
+            resp.headers[k] = v
+        return resp
 
-    return jsonify(response)
+    resp = jsonify(response)
+    for k, v in cors.items():
+        resp.headers[k] = v
+    return resp
 
 
 # ---------------------------------------------------------------------------
