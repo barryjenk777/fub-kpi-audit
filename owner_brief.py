@@ -572,7 +572,9 @@ def _build_recommendations(lead_gen, conversion, pipeline, manager, tech,
         })
 
     # Low AI outreach
-    sms_24h = tech.get("sms_sent", 0)
+    # Use pb_used_today (from pond_sms_log) as the reliable signal.
+    # tech.get("sms_sent") reads automation_event_log which is new and still warming up.
+    sms_24h = tech.get("pb_used_today") or tech.get("sms_sent", 0)
     if sms_24h == 0:
         actions.append({
             "priority": len(actions) + 1,
