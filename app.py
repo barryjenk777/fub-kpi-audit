@@ -12575,6 +12575,50 @@ def start_scheduler():
         print(f"  → {job.name} | next: {job.next_run_time}")
 
 
+# ---------------------------------------------------------------------------
+# JSON error handlers — ensures all 4xx/5xx return application/json,
+# never text/html. Required for MCP clients (Perplexity) that validate
+# content-type on every response including error pages.
+# ---------------------------------------------------------------------------
+
+@app.errorhandler(404)
+def _err_404(e):
+    resp = jsonify({"error": "not_found", "message": str(e)})
+    resp.status_code = 404
+    return resp
+
+
+@app.errorhandler(405)
+def _err_405(e):
+    resp = jsonify({"error": "method_not_allowed", "message": str(e)})
+    resp.status_code = 405
+    return resp
+
+
+@app.errorhandler(500)
+def _err_500(e):
+    resp = jsonify({"error": "internal_error", "message": "An internal error occurred."})
+    resp.status_code = 500
+    return resp
+
+
+# MCP OAuth discovery — MCP 2025-03-26 spec requires clients to GET this
+# endpoint before connecting. We don't use OAuth; return 404 JSON so the
+# client falls back to Bearer/API-key auth instead of failing on text/html.
+@app.route("/.well-known/oauth-authorization-server", methods=["GET", "OPTIONS"])
+def mcp_oauth_discovery():
+    if request.method == "OPTIONS":
+        return "", 204
+    return jsonify({
+        "error": "oauth_not_supported",
+        "message": (
+            "This server uses API key authentication. "
+            "Pass your key as: Authorization: Bearer <key>  "
+            "or X-Api-Key: <key>  or ?key=<key> query param."
+        ),
+    }), 404
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
