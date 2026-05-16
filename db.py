@@ -1404,9 +1404,9 @@ def upsert_ytd_cache(agent_name: str, year: int, calls_ytd: int, appts_ytd: int,
                     INSERT INTO agent_ytd_cache (agent_name, year, calls_ytd, appts_ytd, convos_ytd, updated_at)
                     VALUES (%s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (agent_name, year) DO UPDATE SET
-                        calls_ytd  = EXCLUDED.calls_ytd,
-                        appts_ytd  = EXCLUDED.appts_ytd,
-                        convos_ytd = EXCLUDED.convos_ytd,
+                        calls_ytd  = GREATEST(agent_ytd_cache.calls_ytd,  EXCLUDED.calls_ytd),
+                        appts_ytd  = GREATEST(agent_ytd_cache.appts_ytd,  EXCLUDED.appts_ytd),
+                        convos_ytd = GREATEST(agent_ytd_cache.convos_ytd, EXCLUDED.convos_ytd),
                         updated_at = NOW()
                 """, (agent_name, year, calls_ytd, appts_ytd, convos_ytd))
         return True

@@ -11960,16 +11960,18 @@ def scheduled_sync_goals_data():
             }
 
             _convo_thresh = config.CONVERSATION_THRESHOLD_SECONDS
-            calls_by_uid  = {}
-            convos_by_uid = {}
+            calls_by_uid  = {}   # outbound dials only — matches FUB "Calls Made"
+            convos_by_uid = {}   # any-direction 120s+ — matches FUB "Conversations"
             for call in ytd_calls:
-                if call.get("isIncoming"):
-                    continue
                 uid = call.get("userId")
                 if not uid:
                     continue
-                calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+                is_incoming = bool(call.get("isIncoming"))
                 dur = call.get("duration", 0) or 0
+                # Calls Made = outbound only (do NOT skip inbound before this check)
+                if not is_incoming:
+                    calls_by_uid[uid] = calls_by_uid.get(uid, 0) + 1
+                # Conversations = any direction >= threshold (FUB counts inbound too)
                 if dur >= _convo_thresh:
                     convos_by_uid[uid] = convos_by_uid.get(uid, 0) + 1
 
@@ -11987,13 +11989,23 @@ def scheduled_sync_goals_data():
                     if uid:
                         appts_by_uid[uid] = appts_by_uid.get(uid, 0) + 1
 
+            # Merge with daily_activity sums as a floor for each agent.
+            # Reasons: (1) FUB /v1/calls is capped at 2000 records team-wide —
+            # for a high-volume team this silently truncates older calls in the
+            # YTD window. (2) daily_activity is synced incrementally (no cap)
+            # and uses GREATEST protection so it never goes backwards.
+            # Taking max() of both sources means neither a truncated API response
+            # nor a missing daily_activity row can undercount.
+            da_ytd = _db.get_all_ytd_from_daily_activity(year=year)
+
             cached = 0
             for agent_name, fub_uid in fub_users.items():
                 if agent_name in config.EXCLUDED_USERS:
                     continue
-                calls = calls_by_uid.get(fub_uid, 0)
-                convos = convos_by_uid.get(fub_uid, 0)
-                appts = appts_by_uid.get(fub_uid, 0)
+                da = da_ytd.get(agent_name, {})
+                calls = max(calls_by_uid.get(fub_uid, 0), da.get("calls_ytd", 0))
+                convos = max(convos_by_uid.get(fub_uid, 0), da.get("convos_ytd", 0))
+                appts = max(appts_by_uid.get(fub_uid, 0), da.get("appts_ytd", 0))
                 if _db.upsert_ytd_cache(agent_name, year, calls, appts, convos_ytd=convos):
                     cached += 1
 
