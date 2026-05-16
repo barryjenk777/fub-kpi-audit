@@ -8802,6 +8802,27 @@ def _is_consent_reply(body_text: str) -> bool:
     if any(text.startswith(p) for p in _CONSENT_STARTS):
         return True
 
+    # Strip leading greeting words — catches "hey yeah that's fine",
+    # "hi yes please", "lol yeah go for it", etc.
+    # Real replies often open with a social buffer before the actual consent.
+    _GREETING_PREFIXES = (
+        "hey ", "hi ", "hiya ", "hello ", "lol ", "haha ",
+        "ha ", "oh ", "wow ", "omg ", "ok so ", "okay so ",
+        "well ", "ugh ", "aww ", "ah ", "sure, ",
+    )
+    stripped = text
+    for pfx in _GREETING_PREFIXES:
+        if stripped.startswith(pfx):
+            stripped = stripped[len(pfx):].lstrip()
+            break   # strip one greeting layer then re-test
+
+    if stripped != text:
+        stripped_clean = stripped.rstrip("!. ")
+        if stripped_clean in _CONSENT_EXACT:
+            return True
+        if any(stripped.startswith(p) for p in _CONSENT_STARTS):
+            return True
+
     return False
 
 
