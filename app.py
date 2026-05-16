@@ -10073,9 +10073,12 @@ def webhook_projectblue():
         try:
             from fub_client import FUBClient
             fub = FUBClient()
-            if _consent:
-                logger.info("Consent reply detected from %s (%s): %r",
-                            person_name, from_phone, body_text[:60])
+            # Send the recording to anyone who isn't negative/opted-out —
+            # explicit consent, positive, AND neutral all get the video/voice.
+            _send_recording = (sentiment != "negative")
+            if _send_recording:
+                logger.info("Recording send triggered for %s (%s): sentiment=%s consent=%s body=%r",
+                            person_name, from_phone, sentiment, _consent, body_text[:60])
                 try:
                     import elevenlabs_client as _el
                     import projectblue_client as _pb_reply
@@ -10207,13 +10210,16 @@ def webhook_projectblue():
                 fub_note_ok = _pond_add_sms_reply_fub_note(
                     fub, person_id, person_name, body_text, sentiment_reason
                 )
-            elif _consent:
-                # Consent with neutral buying intent: they said yes to the recording
-                # but didn't show buying signals yet. Log the FUB note AND schedule
-                # a soft follow-up 15 min later so an agent can check in after they've
-                # had time to listen to the voice note.
+            else:
+                # Neutral — recording already sent above.
+                # Tag and route same as positive so an agent follows up after
+                # the lead has had time to watch/listen (15 min delay).
+                fub.add_tag(person_id, "SMS_Conversion")
+                fub.add_tag(person_id, "Claude_Text_Converted")
+                routed = True
                 fub_note_ok = _pond_add_sms_reply_fub_note(
-                    fub, person_id, person_name, body_text, "consented to recording"
+                    fub, person_id, person_name, body_text,
+                    "neutral reply — recording sent, agent follow-up queued"
                 )
                 _audit_handoff_secs = 900
                 _schedule_sms_handoff(
@@ -10221,12 +10227,8 @@ def webhook_projectblue():
                     from_phone,
                     reply_text=body_text,
                     lead_first_name=_lead_first,
-                    delay_seconds=900,   # 15 min — time to listen to the note first
+                    delay_seconds=900,   # 15 min — time to watch the recording first
                     lead_type=_audit_lead_type,
-                )
-            else:
-                fub_note_ok = _pond_add_sms_reply_fub_note(
-                    fub, person_id, person_name, body_text, sentiment_reason
                 )
         except Exception as e:
             logger.error("FUB PB reply handling failed for %s (ID %s): %s",
