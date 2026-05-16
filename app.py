@@ -10221,13 +10221,13 @@ def webhook_projectblue():
                     fub, person_id, person_name, body_text,
                     "neutral reply — recording sent, agent follow-up queued"
                 )
-                _audit_handoff_secs = 900
+                _audit_handoff_secs = 270
                 _schedule_sms_handoff(
                     person_id,
                     from_phone,
                     reply_text=body_text,
                     lead_first_name=_lead_first,
-                    delay_seconds=900,   # 15 min — time to watch the recording first
+                    delay_seconds=270,   # treat neutral as full conversion
                     lead_type=_audit_lead_type,
                 )
         except Exception as e:
