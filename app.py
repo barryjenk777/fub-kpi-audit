@@ -12634,17 +12634,19 @@ def start_scheduler():
 
 # ---------------------------------------------------------------------------
 # ONE-TIME: Retroactive neutral reply processing
-# POST /api/admin/replay-neutrals?key=lht-perp-2026&days=5&dry_run=true
-# Finds neutral replies that were NOT routed and sends recording + tags.
+# POST /api/admin/replay-conversions?key=lht-perp-2026&days=7&dry_run=true
+# Finds neutral + positive replies that were NOT routed and sends recording + tags.
+# Also accessible at the old /replay-neutrals path for backwards compat.
 # ---------------------------------------------------------------------------
 
-@app.route("/api/admin/replay-neutrals", methods=["POST"])
-def api_admin_replay_neutrals():
-    """Retroactively process neutral SMS replies that got no recording/routing."""
+@app.route("/api/admin/replay-conversions", methods=["POST"])
+@app.route("/api/admin/replay-neutrals",    methods=["POST"])
+def api_admin_replay_conversions():
+    """Retroactively process neutral + positive SMS replies that got no recording/routing."""
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
 
-    days     = int(request.args.get("days", 5))
+    days     = int(request.args.get("days", 7))
     dry_run  = request.args.get("dry_run", "true").lower() in ("true", "1")
 
     import psycopg2, os as _os
@@ -12655,13 +12657,13 @@ def api_admin_replay_neutrals():
     conn = psycopg2.connect(db_url)
     cur  = conn.cursor()
     cur.execute("""
-        SELECT person_id, person_name, phone_number, reply_text, created_at
+        SELECT id, person_id, person_name, phone_number, reply_text, sentiment, received_at
         FROM pond_sms_reply_log
-        WHERE sentiment = 'neutral'
+        WHERE sentiment IN ('neutral', 'positive')
           AND routed    = FALSE
-          AND created_at >= NOW() - INTERVAL %s
-        ORDER BY created_at DESC
-    """, (f"{days} days",))
+          AND received_at >= NOW() - (%s || ' days')::INTERVAL
+        ORDER BY received_at DESC
+    """, (str(days),))
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -12669,20 +12671,22 @@ def api_admin_replay_neutrals():
     results = []
     base_url = _os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app")
 
-    for person_id, person_name, phone_number, reply_text, created_at in rows:
+    for row_id, person_id, person_name, phone_number, reply_text, sentiment, received_at in rows:
         entry = {
+            "row_id":      row_id,
             "person_id":   person_id,
             "person_name": person_name,
             "phone":       phone_number,
             "reply":       (reply_text or "")[:80],
-            "created_at":  created_at.isoformat(),
+            "sentiment":   sentiment,
+            "received_at": received_at.isoformat() if received_at else None,
             "actions":     [],
             "dry_run":     dry_run,
         }
 
         if not dry_run:
             try:
-                # Send recording
+                # Send recording (video or voice depending on A/B variant)
                 import projectblue_client as _pb
                 import elevenlabs_client as _el
                 ab_variant = _db.get_ab_variant_for_lead(person_id) or "voice"
@@ -12714,10 +12718,11 @@ def api_admin_replay_neutrals():
                 fub = _FUB()
                 fub.add_tag(person_id, "SMS_Conversion")
                 fub.add_tag(person_id, "Claude_Text_Converted")
-                entry["actions"].append("tags applied")
+                entry["actions"].append("tags applied: SMS_Conversion, Claude_Text_Converted")
 
+                note_context = f"{sentiment} reply — recording sent retroactively"
                 _pond_add_sms_reply_fub_note(fub, person_id, person_name, reply_text,
-                                              "neutral reply — recording sent retroactively")
+                                              note_context)
                 entry["actions"].append("FUB note added")
 
                 lead_first = (person_name or "").split()[0] if person_name else ""
@@ -12731,15 +12736,16 @@ def api_admin_replay_neutrals():
                 cur2  = conn2.cursor()
                 cur2.execute("""
                     UPDATE pond_sms_reply_log SET routed = TRUE
-                    WHERE person_id = %s AND created_at = %s
-                """, (person_id, created_at))
+                    WHERE id = %s
+                """, (row_id,))
                 conn2.commit()
                 cur2.close()
                 conn2.close()
+                entry["actions"].append("marked routed in DB")
 
             except Exception as _e:
                 entry["actions"].append(f"ERROR: {_e}")
-                logger.error("replay-neutrals failed for %s: %s", person_name, _e)
+                logger.error("replay-conversions failed for %s (row %s): %s", person_name, row_id, _e)
         else:
             entry["actions"].append("dry_run — no action taken")
 
