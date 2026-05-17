@@ -12633,6 +12633,128 @@ def start_scheduler():
 
 
 # ---------------------------------------------------------------------------
+# ONE-TIME: Retroactive neutral reply processing
+# POST /api/admin/replay-neutrals?key=lht-perp-2026&days=5&dry_run=true
+# Finds neutral replies that were NOT routed and sends recording + tags.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/admin/replay-neutrals", methods=["POST"])
+def api_admin_replay_neutrals():
+    """Retroactively process neutral SMS replies that got no recording/routing."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    days     = int(request.args.get("days", 5))
+    dry_run  = request.args.get("dry_run", "true").lower() in ("true", "1")
+
+    import psycopg2, os as _os
+    db_url = _os.environ.get("DATABASE_URL", "")
+    if not db_url:
+        return jsonify({"error": "DATABASE_URL not set"}), 500
+
+    conn = psycopg2.connect(db_url)
+    cur  = conn.cursor()
+    cur.execute("""
+        SELECT person_id, person_name, phone_number, reply_text, created_at
+        FROM pond_sms_reply_log
+        WHERE sentiment = 'neutral'
+          AND routed    = FALSE
+          AND created_at >= NOW() - INTERVAL %s
+        ORDER BY created_at DESC
+    """, (f"{days} days",))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    results = []
+    base_url = _os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app")
+
+    for person_id, person_name, phone_number, reply_text, created_at in rows:
+        entry = {
+            "person_id":   person_id,
+            "person_name": person_name,
+            "phone":       phone_number,
+            "reply":       (reply_text or "")[:80],
+            "created_at":  created_at.isoformat(),
+            "actions":     [],
+            "dry_run":     dry_run,
+        }
+
+        if not dry_run:
+            try:
+                # Send recording
+                import projectblue_client as _pb
+                import elevenlabs_client as _el
+                ab_variant = _db.get_ab_variant_for_lead(person_id) or "voice"
+                if ab_variant == "video":
+                    vid_id = _db.get_video_id_for_lead(person_id)
+                    if vid_id and _pb.is_available():
+                        vid_link  = f"{base_url}/v/{vid_id}"
+                        thumb_url = f"{base_url}/mthumb/{vid_id}"
+                        _pb.send_message(to_number=phone_number,
+                                         body=f"here you go! tap the link for the full walkthrough\n{vid_link}",
+                                         media_url=thumb_url)
+                        entry["actions"].append(f"video sent: {vid_id}")
+                    else:
+                        ab_variant = "voice"
+
+                if ab_variant != "video":
+                    if _el.is_available() and _pb.is_available():
+                        script      = _el.generate_voice_note_script(person_name=person_name,
+                                                                      behavior={}, strategy="")
+                        audio_bytes = _el.generate_audio(script)
+                        if audio_bytes:
+                            audio_id  = _el.store_audio(audio_bytes)
+                            audio_url = f"{base_url}/audio/{audio_id}"
+                            _pb.send_message(to_number=phone_number, body="", audio_url=audio_url)
+                            entry["actions"].append("voice note sent")
+
+                # Tag + route
+                from fub_client import FUBClient as _FUB
+                fub = _FUB()
+                fub.add_tag(person_id, "SMS_Conversion")
+                fub.add_tag(person_id, "Claude_Text_Converted")
+                entry["actions"].append("tags applied")
+
+                _pond_add_sms_reply_fub_note(fub, person_id, person_name, reply_text,
+                                              "neutral reply — recording sent retroactively")
+                entry["actions"].append("FUB note added")
+
+                lead_first = (person_name or "").split()[0] if person_name else ""
+                _schedule_sms_handoff(person_id, phone_number, reply_text=reply_text,
+                                      lead_first_name=lead_first, delay_seconds=60,
+                                      lead_type="buyer")
+                entry["actions"].append("handoff scheduled (60s)")
+
+                # Mark as routed in DB
+                conn2 = psycopg2.connect(db_url)
+                cur2  = conn2.cursor()
+                cur2.execute("""
+                    UPDATE pond_sms_reply_log SET routed = TRUE
+                    WHERE person_id = %s AND created_at = %s
+                """, (person_id, created_at))
+                conn2.commit()
+                cur2.close()
+                conn2.close()
+
+            except Exception as _e:
+                entry["actions"].append(f"ERROR: {_e}")
+                logger.error("replay-neutrals failed for %s: %s", person_name, _e)
+        else:
+            entry["actions"].append("dry_run — no action taken")
+
+        results.append(entry)
+
+    return jsonify({
+        "ok":      True,
+        "dry_run": dry_run,
+        "days":    days,
+        "found":   len(results),
+        "results": results,
+    })
+
+
+# ---------------------------------------------------------------------------
 # JSON error handlers — ensures all 4xx/5xx return application/json,
 # never text/html. Required for MCP clients (Perplexity) that validate
 # content-type on every response including error pages.
