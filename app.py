@@ -9250,6 +9250,12 @@ def _notify_agent_of_reply(person_id, person_name, phone, reply_text, sentiment,
                 except Exception as _ue:
                     logger.warning("_notify_agent_of_reply: FUB users fallback failed: %s", _ue)
 
+        # Apply per-agent email overrides (e.g. agent prefers Gmail over FUB account email)
+        if assigned_uid and assigned_uid in config.AGENT_EMAIL_OVERRIDES:
+            agent_email = config.AGENT_EMAIL_OVERRIDES[assigned_uid]
+            logger.info("_notify_agent_of_reply: using email override for userId=%s: %s",
+                        assigned_uid, agent_email)
+
         bcc_email = os.environ.get("BARRY_EMAIL", config.BARRY_EMAIL)
 
         if not agent_email:

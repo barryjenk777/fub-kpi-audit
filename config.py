@@ -424,6 +424,12 @@ LEADSTREAM_ALLOWED_POND_IDS = {4, 7}
 SHARK_TANK_POND_ID = 4
 BARRY_FUB_USER_ID  = 1   # Barry Jenkins — attributes email notes in FUB timeline
 BARRY_EMAIL        = "barry@yourfriendlyagent.net"  # BCC on all agent conversion notifications
+
+# Preferred notification email overrides keyed by FUB user ID.
+# Use when an agent's FUB account email differs from where they actually read mail.
+AGENT_EMAIL_OVERRIDES = {
+    52: "mattmoubray83@gmail.com",   # Matt Moubray — prefers Gmail over moubrayhome.com
+}
 # Minutes after lead creation before the immediate email fires (feels human, not instant)
 NEW_LEAD_EMAIL_DELAY_MINUTES = 5
 # How far back to look for new leads per check run (scheduler runs every 5 min)
