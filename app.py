@@ -9198,18 +9198,14 @@ Under 200 words total. Direct and useful. No fluff."""
 
 
 def _notify_agent_of_reply(person_id, person_name, phone, reply_text, sentiment,
-                           channel="SMS", fub_person=None):
+                           channel="SMS", fub_person=None, recording_type=None):
     """
-    Fire an instant email to the assigned agent when a pond lead replies.
+    Email the assigned agent when a pond lead replies — with BCC to Barry.
 
-    Args:
-        person_id:   FUB person ID of the replying lead
-        person_name: Display name of the lead
-        phone:       Lead's phone number (for reference)
-        reply_text:  Raw text of the lead's reply
-        sentiment:   "positive" | "negative" | "neutral"
-        channel:     "SMS" | "iMessage" | "email" (display only)
-        fub_person:  Pre-fetched FUB person dict (avoids extra API call if available)
+    Designed to fire AFTER FUB automation has had time to reassign the lead
+    (call via a ~120s timer from the webhook, not immediately).
+
+    recording_type: "voice" | "video" | None — tells the agent what the AI sent.
 
     Returns True if notification sent, False otherwise. Non-fatal on all errors.
     """
@@ -9221,91 +9217,133 @@ def _notify_agent_of_reply(person_id, person_name, phone, reply_text, sentiment,
         from fub_client import FUBClient
         from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import Mail as _SGMail
+        from sendgrid.helpers.mail import To, Bcc
 
-        # Get assigned agent's FUB user ID
         fub = FUBClient()
-        person = fub_person or fub.get_person(person_id)
+        # Re-fetch person so we get post-automation assignment, not pre-tag snapshot
+        person = fub.get_person(person_id)
         assigned_uid = person.get("assignedUserId") or person.get("ownerId")
-        if not assigned_uid:
-            logger.info("_notify_agent_of_reply: no assigned agent for person %s", person_id)
-            return False
 
-        # Skip if assigned to Barry — he already gets the global reply email
-        from config import BARRY_FUB_USER_ID
-        if assigned_uid == BARRY_FUB_USER_ID:
-            return False
-
-        # Look up agent email from agent_profiles
         agent_email = None
         agent_first = None
-        try:
-            profiles = _db.get_agent_profiles(active_only=False)
-            match = next((p for p in profiles if p.get("fub_user_id") == assigned_uid), None)
-            if match:
-                agent_email = match.get("email")
-                agent_first = (match.get("agent_name") or "").split()[0]
-        except Exception as _pe:
-            logger.warning("_notify_agent_of_reply: agent_profiles lookup failed: %s", _pe)
 
-        if not agent_email:
-            # Fallback: pull email from FUB users list
+        if assigned_uid:
+            # Try agent_profiles first (fast DB lookup)
             try:
-                users = fub._request("GET", "users") or {}
-                for u in users.get("users", []):
-                    if u.get("id") == assigned_uid:
-                        agent_email = u.get("email")
-                        agent_first = (u.get("name") or "").split()[0]
-                        break
-            except Exception as _ue:
-                logger.warning("_notify_agent_of_reply: FUB users fallback failed: %s", _ue)
+                profiles = _db.get_agent_profiles(active_only=False)
+                match = next((p for p in profiles if p.get("fub_user_id") == assigned_uid), None)
+                if match:
+                    agent_email = match.get("email")
+                    agent_first = (match.get("agent_name") or "").split()[0]
+            except Exception as _pe:
+                logger.warning("_notify_agent_of_reply: agent_profiles lookup failed: %s", _pe)
+
+            if not agent_email:
+                # Fallback: pull from FUB users list
+                try:
+                    users = fub._request("GET", "users") or {}
+                    for u in users.get("users", []):
+                        if u.get("id") == assigned_uid:
+                            agent_email = u.get("email")
+                            agent_first = (u.get("name") or "").split()[0]
+                            break
+                except Exception as _ue:
+                    logger.warning("_notify_agent_of_reply: FUB users fallback failed: %s", _ue)
+
+        bcc_email = os.environ.get("BARRY_EMAIL", config.BARRY_EMAIL)
 
         if not agent_email:
-            logger.info("_notify_agent_of_reply: no email found for userId=%s", assigned_uid)
-            return False
+            # No agent assigned yet — send straight to Barry so no lead falls through
+            agent_email = bcc_email
+            agent_first = "Barry"
+            logger.info("_notify_agent_of_reply: no agent assigned for person %s — sending to Barry", person_id)
 
-        lead_first = (person_name or "").split()[0] or "your lead"
+        lead_first = (person_name or "").split()[0] or "the lead"
         fub_url    = f"https://app.followupboss.com/2/people/detail/{person_id}"
-        sentiment_label = {"positive": "INTERESTED", "negative": "opted out",
-                           "neutral": "replied (neutral)"}.get(sentiment, sentiment.upper())
 
-        subject = f"{'CALL NOW' if sentiment == 'positive' else 'Lead Reply'}: {person_name or phone} just replied on {channel}"
+        # What did the AI send them?
+        if recording_type == "video":
+            ai_sent_line = "Barry's AI already sent them a personalized HeyGen video. They watched Barry on their phone."
+        elif recording_type == "voice":
+            ai_sent_line = "Barry's AI already sent them a voice note in Barry's cloned voice. They heard Barry speak."
+        else:
+            ai_sent_line = "Barry's AI outreach system triggered this reply."
 
-        plain = (
-            f"Hey {agent_first or 'there'},\n\n"
-            f"{person_name or phone} just replied to an AI {channel} — sentiment: {sentiment_label}.\n\n"
-            f"What they said:\n\n    \"{reply_text[:600].strip()}\"\n\n"
+        is_conversion = sentiment in ("positive", "neutral")
+        subject = (
+            f"CALL NOW: {person_name or phone} just said YES to Legacy Home Team AI"
+            if is_conversion else
+            f"Lead Reply: {person_name or phone} ({sentiment})"
         )
-        if sentiment == "positive":
+
+        # Plain text
+        plain = (
+            f"Hey {agent_first},\n\n"
+            f"{'YOU HAVE A HOT LEAD.' if is_conversion else 'A lead just replied.'}\n\n"
+            f"{person_name or phone} replied to a Barry AI iMessage.\n\n"
+            f"Here's exactly what they said:\n\n"
+            f'    "{reply_text[:600].strip()}"\n\n'
+        )
+        if is_conversion:
             plain += (
-                f"This lead is warm. Call them in the next 5 minutes:\n"
+                f"{ai_sent_line}\n\n"
+                f"They're primed. The AI is sending them a text right now introducing you by name "
+                f"and saying you'll call. You have a short window before they move on.\n\n"
+                f"CALL THEM NOW:\n"
                 f"  Phone: {phone}\n"
                 f"  FUB:   {fub_url}\n\n"
-                f"The AI is sending them a voice note now. When you call, reference what they said.\n"
+                f"Lead with what they said. Don't pitch — they already said yes. Just set the appointment.\n\n"
             )
         else:
-            plain += (
-                f"FUB record: {fub_url}\n"
+            plain += f"FUB record: {fub_url}\n\n"
+        plain += "— Legacy Home Team AI Outreach"
+
+        # HTML
+        urgency_banner = ""
+        if is_conversion:
+            urgency_banner = (
+                "<div style='background:#c0392b;color:#fff;padding:14px 20px;"
+                "border-radius:6px;font-size:20px;font-weight:bold;letter-spacing:0.5px;"
+                "margin-bottom:20px'>CALL NOW. This lead is hot.</div>"
             )
-        plain += "\n— Legacy Home Team AI Outreach"
 
         html = (
-            "<div style='font-family:-apple-system,sans-serif;font-size:15px;"
-            "line-height:1.7;color:#222;max-width:560px;margin:24px auto'>"
-            f"<p>Hey {agent_first or 'there'},</p>"
-            f"<p><strong>{person_name or phone}</strong> just replied to an AI {channel}.</p>"
-            f"<blockquote style='border-left:3px solid #e0e0e0;margin:12px 0;padding:8px 16px;"
-            f"color:#555'>{reply_text[:600].strip()}</blockquote>"
+            "<div style='font-family:-apple-system,BlinkMacSystemFont,sans-serif;"
+            "font-size:15px;line-height:1.7;color:#222;max-width:580px;margin:24px auto'>"
+            f"{urgency_banner}"
+            f"<p>Hey {agent_first},</p>"
+            f"<p><strong>{person_name or phone}</strong> just replied to a Barry AI iMessage "
+            f"and they are <strong>{'interested' if is_conversion else sentiment}</strong>.</p>"
+            f"<p style='margin:4px 0;color:#888;font-size:13px'>What they said:</p>"
+            f"<blockquote style='border-left:4px solid {'#c0392b' if is_conversion else '#ccc'};"
+            f"margin:8px 0 16px;padding:10px 18px;background:#f9f9f9;"
+            f"border-radius:0 4px 4px 0;font-style:italic;color:#333'>"
+            f"{reply_text[:600].strip()}</blockquote>"
         )
-        if sentiment == "positive":
+
+        if is_conversion:
             html += (
-                f"<p style='font-size:18px;font-weight:bold;color:#c0392b'>CALL THEM NOW</p>"
-                f"<p>Phone: <a href='tel:{phone}'>{phone}</a><br>"
-                f"<a href='{fub_url}'>Open in Follow Up Boss</a></p>"
-                f"<p>The AI sent them a voice note. When you call, lead with what they said above.</p>"
+                f"<p style='color:#555'>{ai_sent_line} The AI is sending them a text right now "
+                f"introducing you by name and saying you'll call. "
+                f"<strong>You have a short window.</strong></p>"
+                f"<table style='margin:20px 0;border-collapse:collapse'>"
+                f"<tr><td style='padding:8px 16px 8px 0;font-weight:bold;color:#555'>Phone</td>"
+                f"<td><a href='tel:{phone}' style='font-size:18px;font-weight:bold;"
+                f"color:#c0392b;text-decoration:none'>{phone}</a></td></tr>"
+                f"<tr><td style='padding:8px 16px 8px 0;font-weight:bold;color:#555'>FUB</td>"
+                f"<td><a href='{fub_url}' style='color:#2980b9'>Open lead record</a></td></tr>"
+                f"</table>"
+                f"<p style='background:#fff8e1;border:1px solid #ffe082;border-radius:4px;"
+                f"padding:12px 16px;color:#333'>Lead with what they said. Don't pitch — "
+                f"they already said yes. Just set the appointment.</p>"
             )
         else:
-            html += f"<p><a href='{fub_url}'>Open in Follow Up Boss</a></p>"
-        html += "<p style='color:#888;font-size:13px'>Legacy Home Team AI Outreach</p></div>"
+            html += f"<p><a href='{fub_url}' style='color:#2980b9'>Open lead record in FUB</a></p>"
+
+        html += (
+            "<p style='color:#aaa;font-size:12px;margin-top:24px;border-top:1px solid #eee;"
+            "padding-top:12px'>Legacy Home Team AI Outreach</p></div>"
+        )
 
         msg = _SGMail(
             from_email=config.EMAIL_FROM,
@@ -9314,9 +9352,13 @@ def _notify_agent_of_reply(person_id, person_name, phone, reply_text, sentiment,
             plain_text_content=plain,
             html_content=html,
         )
+        # BCC Barry on every agent notification
+        if agent_email != bcc_email:
+            msg.bcc = bcc_email
+
         SendGridAPIClient(sg_key).send(msg)
-        logger.info("Agent reply notification sent to %s (userId=%s) for person %s (%s)",
-                    agent_email, assigned_uid, person_id, sentiment)
+        logger.info("Agent notification sent to %s (BCC %s) for person %s — %s",
+                    agent_email, bcc_email, person_id, sentiment)
         try:
             _db.log_automation_event(
                 event_type="agent_notified",
@@ -9325,7 +9367,7 @@ def _notify_agent_of_reply(person_id, person_name, phone, reply_text, sentiment,
                 agent_name=agent_first,
                 channel=channel,
                 payload={"sentiment": sentiment, "agent_email": agent_email,
-                         "agent_fub_uid": assigned_uid},
+                         "recording_type": recording_type, "agent_fub_uid": assigned_uid},
                 triggered_by="_notify_agent_of_reply",
             )
         except Exception:
@@ -9335,6 +9377,37 @@ def _notify_agent_of_reply(person_id, person_name, phone, reply_text, sentiment,
     except Exception as e:
         logger.warning("_notify_agent_of_reply failed for person %s: %s", person_id, e)
         return False
+
+
+def _schedule_agent_notification(person_id, person_name, phone, reply_text,
+                                 sentiment, channel="iMessage", recording_type=None,
+                                 delay_seconds=120):
+    """
+    Schedule agent notification to fire AFTER FUB automation has run.
+
+    Fires at T+120s by default — gives FUB group rules time to reassign
+    the lead before we look up who to email. Runs in a daemon thread.
+    """
+    import threading
+
+    def _fire():
+        try:
+            _notify_agent_of_reply(
+                person_id=person_id,
+                person_name=person_name,
+                phone=phone,
+                reply_text=reply_text,
+                sentiment=sentiment,
+                channel=channel,
+                recording_type=recording_type,
+            )
+        except Exception as _e:
+            logger.error("_schedule_agent_notification failed for person %s: %s", person_id, _e)
+
+    t = threading.Timer(delay_seconds, _fire)
+    t.daemon = True
+    t.start()
+    logger.info("Agent notification scheduled in %ds for person %s", delay_seconds, person_id)
 
 
 def _generate_handoff_sms(lead_first, reply_text, agent_first, agent_phone, lead_type="buyer"):
@@ -10258,26 +10331,26 @@ def webhook_projectblue():
         except Exception:
             pass
 
-        # ── Notify assigned agent instantly ────────────────────────────────────
-        # Fires for ALL sentiments — agent needs to know even on negative/neutral.
-        # Uses pre-fetched _consent_person if available (saves one FUB API call).
-        try:
-            _prefetched_person = None
+        # ── Schedule agent notification at T+120s ──────────────────────────────
+        # Delayed so FUB group-rule automation has time to reassign the lead
+        # before we look up who to email. Fires BEFORE the T+270s handoff SMS
+        # so the agent is ready to call when the lead gets the "you'll be called" text.
+        # Only fire for conversion sentiments — negative leads don't need a call.
+        if sentiment in ("positive", "neutral"):
             try:
-                _prefetched_person = locals().get("_consent_person") or None
-            except Exception:
-                pass
-            _notify_agent_of_reply(
-                person_id=person_id,
-                person_name=person_name,
-                phone=from_phone,
-                reply_text=body_text,
-                sentiment=sentiment,
-                channel="iMessage",
-                fub_person=_prefetched_person,
-            )
-        except Exception as _anr:
-            logger.warning("Agent reply notification failed (non-fatal): %s", _anr)
+                _resolved_recording = _db.get_ab_variant_for_lead(person_id) or "voice"
+                _schedule_agent_notification(
+                    person_id=person_id,
+                    person_name=person_name,
+                    phone=from_phone,
+                    reply_text=body_text,
+                    sentiment=sentiment,
+                    channel="iMessage",
+                    recording_type=_resolved_recording,
+                    delay_seconds=120,
+                )
+            except Exception as _anr:
+                logger.warning("Agent notification scheduling failed (non-fatal): %s", _anr)
 
         # ── Lead audit email — full breakdown so Barry can QA every touch ──────
         try:
