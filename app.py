@@ -12683,6 +12683,14 @@ def start_scheduler():
                        id="onboarding_escalation", name="Onboarding escalation (daily 8am)",
                        max_instances=1, coalesce=True)
 
+    # Agent coaching texts via Mac iMessage: Mon/Wed/Fri at 8:15am ET
+    # Generates personalized KPI-based coaching texts in Barry's voice,
+    # queues them in DB, fires immediately via Mac webhook if configured.
+    _scheduler.add_job(scheduled_agent_coaching_texts,
+                       CronTrigger(day_of_week="mon,wed,fri", hour=8, minute=15, timezone=ET),
+                       id="agent_coaching_texts", name="Agent coaching iMessages (Mon/Wed/Fri 8:15am)",
+                       max_instances=1, coalesce=True)
+
     # Owner daily brief: every morning at 7am ET
     # Builds the JSON brief, warms the Perplexity cache, and emails Barry.
     _scheduler.add_job(scheduled_owner_daily_brief,
@@ -12709,6 +12717,385 @@ def start_scheduler():
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
     for job in _scheduler.get_jobs():
         print(f"  → {job.name} | next: {job.next_run_time}")
+
+
+# ---------------------------------------------------------------------------
+# Agent iMessage coaching texts — sent from Barry's Mac via AppleScript
+# ---------------------------------------------------------------------------
+
+def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
+    """
+    Use Claude Haiku to write a short, personal coaching text in Barry's voice.
+
+    kpi dict keys:
+      calls_actual, calls_goal, calls_pace   (pace = what they should have by now)
+      convos_actual, convos_goal, convos_pace
+      appts_actual, appts_goal, appts_pace
+      deals_closed_ytd
+      calls_last_7d, convos_last_7d          (recent week activity)
+      pct_of_year_elapsed                    (0.0-1.0)
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return _agent_coaching_fallback(agent_first, kpi, week_day)
+
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic(api_key=api_key)
+
+        # Determine situation label based on where they are vs pace
+        calls_gap = (kpi.get("calls_actual", 0) - kpi.get("calls_pace", 0))
+        convos_gap = (kpi.get("convos_actual", 0) - kpi.get("convos_pace", 0))
+        calls_pct_of_pace = (
+            kpi.get("calls_actual", 0) / kpi.get("calls_pace", 1)
+            if kpi.get("calls_pace", 0) > 0 else 1.0
+        )
+
+        if calls_pct_of_pace >= 1.15:
+            situation = "crushing it — significantly ahead of pace on calls"
+        elif calls_pct_of_pace >= 1.0:
+            situation = "on pace or slightly ahead"
+        elif calls_pct_of_pace >= 0.85:
+            situation = "slightly behind pace — nudge needed"
+        elif calls_pct_of_pace >= 0.70:
+            situation = "moderately behind — direct correction needed"
+        else:
+            situation = "significantly behind — candid conversation, real concern"
+
+        week_context = {
+            "monday":    "Start of week. Fresh slate. Set the tone for the next 5 days.",
+            "wednesday": "Midweek check-in. Enough data to see how this week is tracking.",
+            "friday":    "End of week. Close strong or set up next week. No coasting.",
+        }.get(week_day.lower(), "midweek check-in")
+
+        prompt = f"""You are writing a coaching text FROM Barry Jenkins TO {agent_first}, one of his real estate agents at Legacy Home Team (Virginia's #1 team, 850+ homes/year, Hampton Roads VA).
+
+Barry is a team leader who cares deeply but is honest. His texts feel personal. He actually looked at their numbers before writing.
+
+AGENT: {agent_first}
+DAY: {week_day.capitalize()} ({week_context})
+SITUATION: {situation}
+
+Their numbers:
+- Calls YTD: {kpi.get('calls_actual', 0)} actual vs {int(kpi.get('calls_pace', 0))} on-pace (annual goal: {kpi.get('calls_goal', 0)})
+- Conversations YTD: {kpi.get('convos_actual', 0)} actual vs {int(kpi.get('convos_pace', 0))} on-pace
+- Appointments YTD: {kpi.get('appts_actual', 0)} actual vs {int(kpi.get('appts_pace', 0))} on-pace
+- Deals closed YTD: {kpi.get('deals_closed_ytd', 0)}
+- Calls last 7 days: {kpi.get('calls_last_7d', 0)}
+- Conversations last 7 days: {kpi.get('convos_last_7d', 0)}
+
+WRITE a 2-3 sentence iMessage from Barry. Rules:
+1. Start with {agent_first}'s name only (no "Hey" before it)
+2. Reference ONE specific real number. Never generic ("great job", "keep it up")
+3. If behind: reframe as opportunity, give ONE specific action for today or this week
+4. If ahead: genuine celebration then raise the bar ("what would it look like to...")
+5. If midweek behind: create urgency without shame. "There's still time this week."
+6. End with something actionable OR a question that invites response
+7. Sound like a real person texting, not a manager writing a review
+
+Barry's voice (hard rules):
+- Conversational. Teaching beats pushing every time.
+- Never shame. Always reframe. The problem is not them, it's the behavior.
+- Candid when it matters. Don't sugarcoat bad numbers but frame the path forward.
+- No em-dashes. Use periods or commas instead.
+- No corporate words. No "leverage", "synergy", "touch base", "circle back", "reaching out".
+- 2-3 sentences MAX. This is a text, not a coaching session.
+
+Output ONLY the text message. No sign-off (Barry's name auto-appends)."""
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        if len(text) > 15:
+            return text
+        return _agent_coaching_fallback(agent_first, kpi, week_day)
+
+    except Exception as _e:
+        logger.warning("_generate_agent_coaching_text failed for %s: %s", agent_first, _e)
+        return _agent_coaching_fallback(agent_first, kpi, week_day)
+
+
+def _agent_coaching_fallback(agent_first, kpi, week_day):
+    """Fallback text when Claude is unavailable — still specific to their numbers."""
+    calls = kpi.get("calls_actual", 0)
+    pace  = int(kpi.get("calls_pace", 0))
+    gap   = calls - pace
+
+    if gap >= 0:
+        return (
+            f"{agent_first}, you're ahead of pace on calls this {week_day}. "
+            f"{calls} so far against a {pace} target. "
+            f"That kind of consistency is what separates the top producers. Keep it going."
+        )
+    elif gap >= -20:
+        return (
+            f"{agent_first}, you're {abs(gap)} calls behind your pace target right now. "
+            f"There's still time to close that gap this week. "
+            f"What does your afternoon look like for dials?"
+        )
+    else:
+        return (
+            f"{agent_first}, I need to be straight with you. "
+            f"You're {abs(gap)} calls behind where you need to be to hit your goal. "
+            f"Something has to change this week. What's one thing I can help move out of your way?"
+        )
+
+
+def scheduled_agent_coaching_texts():
+    """
+    Generate and queue coaching texts for all active agents.
+    Runs Mon/Wed/Fri at 8am ET via APScheduler.
+    Also attempts immediate delivery via the Mac webhook listener if configured.
+    """
+    from datetime import date as _date
+    import calendar
+
+    week_day = _date.today().strftime("%A").lower()  # monday, wednesday, friday
+    logger.info("[AGENT TEXTS] Generating coaching texts for %s", week_day)
+
+    try:
+        from fub_client import FUBClient
+        fub = FUBClient()
+
+        # Pull all active agents
+        try:
+            profiles = _db.get_agent_profiles(active_only=True)
+        except Exception:
+            profiles = []
+
+        if not profiles:
+            # Fallback: build from FUB users
+            users_resp = fub._request("GET", "users") or {}
+            profiles = [
+                {"agent_name": u.get("name", ""), "fub_user_id": u.get("id"),
+                 "email": u.get("email"), "phone": None}
+                for u in users_resp.get("users", [])
+                if u.get("role") in ("Agent",) and u.get("id") != config.BARRY_FUB_USER_ID
+            ]
+
+        # YTD pacing denominator
+        today       = _date.today()
+        day_of_year = today.timetuple().tm_yday
+        days_in_year = 366 if calendar.isleap(today.year) else 365
+        pct_elapsed = day_of_year / days_in_year
+
+        # Pull all goals
+        try:
+            all_goals = _db.get_all_goals(year=today.year) or {}
+        except Exception:
+            all_goals = {}
+
+        # Pull YTD cache
+        try:
+            ytd_cache = _db.get_ytd_cache(year=today.year) or {}
+        except Exception:
+            ytd_cache = {}
+
+        # Pull recent 7-day activity — use daily_activity directly for last 7 days
+        try:
+            recent = _db.get_recent_activity_by_agent(days=7) or {}
+        except Exception:
+            recent = {}
+
+        queued = 0
+        mac_url = os.environ.get("MAC_IMESSAGE_URL", "").rstrip("/")
+
+        for profile in profiles:
+            agent_name  = profile.get("agent_name") or ""
+            fub_user_id = profile.get("fub_user_id")
+            if not agent_name or not fub_user_id:
+                continue
+            if fub_user_id == config.BARRY_FUB_USER_ID:
+                continue
+
+            # Get phone — try profile first, then FUB user record
+            phone = profile.get("phone") or profile.get("fub_phone")
+            if not phone:
+                try:
+                    u = fub.get_user_by_id(fub_user_id)
+                    phone = (u.get("mobilePhone") or u.get("phone") or
+                             u.get("phoneNumber") or "")
+                except Exception:
+                    pass
+            if not phone:
+                logger.warning("[AGENT TEXTS] No phone for %s — skipping", agent_name)
+                continue
+
+            # Build KPI snapshot
+            goals    = all_goals.get(agent_name, {})
+            ytd      = ytd_cache.get(agent_name, {})
+            rec      = recent.get(agent_name, {})
+
+            calls_goal  = goals.get("calls_goal", 0) or 0
+            convos_goal = goals.get("conversations_goal", 0) or 0
+            appts_goal  = goals.get("appointments_goal", 0) or 0
+
+            calls_actual  = ytd.get("calls_ytd", 0) or 0
+            convos_actual = ytd.get("convos_ytd", 0) or 0
+            appts_actual  = ytd.get("appts_ytd", 0) or 0
+
+            kpi = {
+                "calls_actual":       calls_actual,
+                "calls_goal":         calls_goal,
+                "calls_pace":         round(calls_goal * pct_elapsed),
+                "convos_actual":      convos_actual,
+                "convos_goal":        convos_goal,
+                "convos_pace":        round(convos_goal * pct_elapsed),
+                "appts_actual":       appts_actual,
+                "appts_goal":         appts_goal,
+                "appts_pace":         round(appts_goal * pct_elapsed),
+                "deals_closed_ytd":   goals.get("deals_closed", 0) or 0,
+                "calls_last_7d":      rec.get("calls_ytd", 0) or 0,
+                "convos_last_7d":     rec.get("convos_ytd", 0) or 0,
+                "pct_of_year_elapsed": round(pct_elapsed, 3),
+            }
+
+            agent_first = agent_name.split()[0]
+            message = _generate_agent_coaching_text(agent_first, kpi, week_day)
+
+            # Queue in DB
+            row_id = _db.queue_agent_imessage(
+                agent_name=agent_name,
+                fub_user_id=fub_user_id,
+                phone=phone,
+                message=message,
+                week_day=week_day,
+                kpi_snapshot=kpi,
+            )
+            queued += 1
+            logger.info("[AGENT TEXTS] Queued for %s (%s): %r", agent_name, phone, message[:60])
+
+            # Attempt immediate delivery via Mac webhook if configured
+            if mac_url and row_id:
+                try:
+                    import requests as _req
+                    mac_secret = os.environ.get("MAC_IMESSAGE_SECRET", "lht-mac-2026")
+                    resp = _req.post(
+                        f"{mac_url}/send",
+                        json={"key": mac_secret, "phone": phone, "message": message,
+                              "queue_id": row_id},
+                        timeout=10,
+                    )
+                    if resp.ok and resp.json().get("ok"):
+                        _db.mark_agent_imessages_sent([row_id])
+                        logger.info("[AGENT TEXTS] Mac webhook delivered to %s", agent_name)
+                    else:
+                        logger.warning("[AGENT TEXTS] Mac webhook failed for %s: %s",
+                                       agent_name, resp.text[:200])
+                except Exception as _me:
+                    logger.warning("[AGENT TEXTS] Mac webhook error for %s: %s", agent_name, _me)
+
+        logger.info("[AGENT TEXTS] Done — %d texts queued for %s", queued, week_day)
+        return queued
+
+    except Exception as e:
+        logger.error("[AGENT TEXTS] scheduled_agent_coaching_texts failed: %s", e, exc_info=True)
+        return 0
+
+
+# ── Mac listener API endpoints ─────────────────────────────────────────────
+
+@app.route("/api/admin/agent-texts/pending", methods=["GET"])
+def api_agent_texts_pending():
+    """Mac poller calls this to fetch pending coaching texts."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    pending = _db.get_pending_agent_imessages(limit=50)
+    return jsonify({"ok": True, "pending": pending, "count": len(pending)})
+
+
+@app.route("/api/admin/agent-texts/mark-sent", methods=["POST"])
+def api_agent_texts_mark_sent():
+    """Mac calls this after successfully sending texts via AppleScript."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(force=True, silent=True) or {}
+    ids  = data.get("ids", [])
+    if not ids:
+        return jsonify({"error": "ids required"}), 400
+    _db.mark_agent_imessages_sent(ids)
+    return jsonify({"ok": True, "marked_sent": len(ids)})
+
+
+@app.route("/api/admin/agent-texts/mark-failed", methods=["POST"])
+def api_agent_texts_mark_failed():
+    """Mac calls this if an AppleScript send fails."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(force=True, silent=True) or {}
+    row_id = data.get("id")
+    error  = data.get("error", "unknown error")
+    if not row_id:
+        return jsonify({"error": "id required"}), 400
+    _db.mark_agent_imessage_failed(row_id, error)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/admin/agent-texts/preview", methods=["GET"])
+def api_agent_texts_preview():
+    """
+    Dry-run preview of what coaching texts would be generated today.
+    Returns the generated messages without queuing or sending anything.
+    GET /api/admin/agent-texts/preview?key=lht-perp-2026&day=monday
+    """
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    from datetime import date as _date
+    import calendar
+
+    week_day = request.args.get("day", _date.today().strftime("%A").lower())
+    today    = _date.today()
+    day_of_year  = today.timetuple().tm_yday
+    days_in_year = 366 if calendar.isleap(today.year) else 365
+    pct_elapsed  = day_of_year / days_in_year
+
+    try:
+        from fub_client import FUBClient
+        fub = FUBClient()
+        profiles   = _db.get_agent_profiles(active_only=True) or []
+        all_goals  = _db.get_all_goals(year=today.year) or {}
+        ytd_cache  = _db.get_all_ytd_cache(year=today.year) or {}
+
+        results = []
+        for profile in profiles:
+            agent_name  = profile.get("agent_name") or ""
+            fub_user_id = profile.get("fub_user_id")
+            if not agent_name or fub_user_id == config.BARRY_FUB_USER_ID:
+                continue
+
+            goals  = all_goals.get(agent_name, {})
+            ytd    = ytd_cache.get(agent_name, {})
+            kpi    = {
+                "calls_actual":  ytd.get("calls_ytd", 0) or 0,
+                "calls_goal":    goals.get("calls_goal", 0) or 0,
+                "calls_pace":    round((goals.get("calls_goal", 0) or 0) * pct_elapsed),
+                "convos_actual": ytd.get("convos_ytd", 0) or 0,
+                "convos_goal":   goals.get("conversations_goal", 0) or 0,
+                "convos_pace":   round((goals.get("conversations_goal", 0) or 0) * pct_elapsed),
+                "appts_actual":  ytd.get("appts_ytd", 0) or 0,
+                "appts_goal":    goals.get("appointments_goal", 0) or 0,
+                "appts_pace":    round((goals.get("appointments_goal", 0) or 0) * pct_elapsed),
+                "deals_closed_ytd": goals.get("deals_closed", 0) or 0,
+                "calls_last_7d": 0, "convos_last_7d": 0,
+                "pct_of_year_elapsed": round(pct_elapsed, 3),
+            }
+            agent_first = agent_name.split()[0]
+            message = _generate_agent_coaching_text(agent_first, kpi, week_day)
+            results.append({
+                "agent":   agent_name,
+                "phone":   profile.get("phone") or profile.get("fub_phone") or "NO PHONE",
+                "kpi":     kpi,
+                "message": message,
+            })
+
+        return jsonify({"ok": True, "day": week_day, "count": len(results), "previews": results})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -12908,3 +13295,5 @@ else:
     _db.ensure_serendipity_tables()
     # Ensure audio blob table exists (cross-replica voice note serving)
     _db.ensure_audio_blob_table()
+    # Ensure agent iMessage coaching queue table exists
+    _db.ensure_agent_imessage_queue_table()

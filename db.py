@@ -2165,6 +2165,37 @@ def get_all_ytd_from_daily_activity(year: int = None) -> dict:
         return {}
 
 
+def get_recent_activity_by_agent(days: int = 7) -> dict:
+    """
+    Return calls, convos, appts for ALL agents over the last N days.
+    Used by the coaching text scheduler to show recent week activity.
+    Returns: { agent_name: {calls_ytd, convos_ytd, appts_ytd} }
+    """
+    if not is_available():
+        return {}
+    try:
+        cutoff = date.today() - timedelta(days=days)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COALESCE(SUM(calls_logged),  0),
+                           COALESCE(SUM(convos_logged), 0),
+                           COALESCE(SUM(appts_logged),  0)
+                    FROM daily_activity
+                    WHERE activity_date >= %s
+                    GROUP BY agent_name
+                """, (cutoff,))
+                rows = cur.fetchall()
+        return {
+            r[0]: {"calls_ytd": int(r[1]), "convos_ytd": int(r[2]), "appts_ytd": int(r[3])}
+            for r in rows
+        }
+    except Exception as e:
+        logger.warning("get_recent_activity_by_agent failed: %s", e)
+        return {}
+
+
 def get_ytd_from_daily_activity(agent_name: str, year: int = None) -> dict:
     """
     Compute YTD calls, convos, and appts for one agent by summing daily_activity rows.
@@ -5764,3 +5795,122 @@ def purge_old_audio_blobs(older_than_minutes: int = 30) -> int:
     except Exception as e:
         logger.warning("purge_old_audio_blobs failed: %s", e)
         return 0
+
+
+# ---------------------------------------------------------------------------
+# Agent iMessage queue — coaching texts sent from Barry's Mac via AppleScript
+# ---------------------------------------------------------------------------
+
+def ensure_agent_imessage_queue_table():
+    """Create agent_imessage_queue for Mac-sent coaching texts."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS agent_imessage_queue (
+                        id           SERIAL PRIMARY KEY,
+                        agent_name   TEXT        NOT NULL,
+                        fub_user_id  INTEGER,
+                        phone        TEXT        NOT NULL,
+                        message      TEXT        NOT NULL,
+                        week_day     TEXT,
+                        kpi_snapshot JSONB,
+                        status       TEXT        NOT NULL DEFAULT 'pending',
+                        error        TEXT,
+                        scheduled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        sent_at      TIMESTAMPTZ,
+                        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_aiq_status
+                    ON agent_imessage_queue (status, scheduled_at DESC)
+                """)
+    except Exception as e:
+        logger.warning("ensure_agent_imessage_queue_table failed: %s", e)
+
+
+def queue_agent_imessage(agent_name, fub_user_id, phone, message,
+                         week_day=None, kpi_snapshot=None):
+    """Add a coaching text to the pending queue. Returns new row id or None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO agent_imessage_queue
+                        (agent_name, fub_user_id, phone, message, week_day, kpi_snapshot)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (agent_name, fub_user_id, phone, message,
+                      week_day, json.dumps(kpi_snapshot) if kpi_snapshot else None))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("queue_agent_imessage failed for %s: %s", agent_name, e)
+        return None
+
+
+def get_pending_agent_imessages(limit=50):
+    """Return pending coaching texts for the Mac listener to send."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, agent_name, phone, message, week_day, scheduled_at
+                    FROM agent_imessage_queue
+                    WHERE status = 'pending'
+                    ORDER BY scheduled_at ASC
+                    LIMIT %s
+                """, (limit,))
+                rows = cur.fetchall()
+        return [
+            {
+                "id":           r[0],
+                "agent_name":   r[1],
+                "phone":        r[2],
+                "message":      r[3],
+                "week_day":     r[4],
+                "scheduled_at": r[5].isoformat() if r[5] else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("get_pending_agent_imessages failed: %s", e)
+        return []
+
+
+def mark_agent_imessages_sent(ids):
+    """Mark a list of queue row IDs as sent."""
+    if not is_available() or not ids:
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE agent_imessage_queue
+                    SET status = 'sent', sent_at = NOW()
+                    WHERE id = ANY(%s)
+                """, (list(ids),))
+    except Exception as e:
+        logger.warning("mark_agent_imessages_sent failed: %s", e)
+
+
+def mark_agent_imessage_failed(row_id, error_msg=""):
+    """Mark a single queue row as failed with an error note."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE agent_imessage_queue
+                    SET status = 'failed', error = %s
+                    WHERE id = %s
+                """, (str(error_msg)[:500], row_id))
+    except Exception as e:
+        logger.warning("mark_agent_imessage_failed failed for id %s: %s", row_id, e)
