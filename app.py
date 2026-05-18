@@ -12827,3 +12827,5 @@ else:
     _db.ensure_pond_mailer_jobs_table()
     # Ensure Serendipity Clause tables exist
     _db.ensure_serendipity_tables()
+    # Ensure audio blob table exists (cross-replica voice note serving)
+    _db.ensure_audio_blob_table()

@@ -5682,3 +5682,85 @@ def get_isa_transfer_stats_7d() -> dict:
     except Exception as e:
         logger.warning("get_isa_transfer_stats_7d failed: %s", e)
         return {"data_quality": f"error: {e}"}
+
+
+# ---------------------------------------------------------------------------
+# Audio blob cache — cross-replica audio storage for ElevenLabs voice notes
+# ---------------------------------------------------------------------------
+
+def ensure_audio_blob_table():
+    """Create audio_blobs table for cross-replica voice note serving."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS audio_blobs (
+                        audio_id    TEXT        PRIMARY KEY,
+                        data        BYTEA       NOT NULL,
+                        mime_type   TEXT        NOT NULL DEFAULT 'audio/mpeg',
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_audio_blobs_created
+                    ON audio_blobs (created_at DESC)
+                """)
+    except Exception as e:
+        logger.warning("ensure_audio_blob_table failed: %s", e)
+
+
+def store_audio_blob(audio_id: str, audio_bytes: bytes, mime_type: str = "audio/mpeg") -> bool:
+    """Persist audio bytes in Postgres. Returns True on success."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO audio_blobs (audio_id, data, mime_type)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (audio_id) DO NOTHING
+                """, (audio_id, audio_bytes, mime_type))
+        logger.info("Stored audio blob %s (%d bytes) in Postgres", audio_id, len(audio_bytes))
+        return True
+    except Exception as e:
+        logger.warning("store_audio_blob failed for %s: %s", audio_id, e)
+        return False
+
+
+def get_audio_blob(audio_id: str) -> bytes | None:
+    """Retrieve audio bytes from Postgres. Returns None if not found."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT data FROM audio_blobs WHERE audio_id = %s
+                """, (audio_id,))
+                row = cur.fetchone()
+        if row:
+            return bytes(row[0])
+        return None
+    except Exception as e:
+        logger.warning("get_audio_blob failed for %s: %s", audio_id, e)
+        return None
+
+
+def purge_old_audio_blobs(older_than_minutes: int = 30) -> int:
+    """Delete audio blobs older than N minutes. Returns count deleted."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM audio_blobs
+                    WHERE created_at < NOW() - (%s || ' minutes')::INTERVAL
+                """, (str(older_than_minutes),))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("purge_old_audio_blobs failed: %s", e)
+        return 0

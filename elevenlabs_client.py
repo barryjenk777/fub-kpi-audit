@@ -88,28 +88,52 @@ def generate_audio(script: str, stability: float = 0.5, similarity_boost: float 
 
 def store_audio(audio_bytes: bytes) -> str:
     """
-    Store audio bytes in memory and return a short ID for serving.
+    Store audio bytes in memory AND Postgres, return a short ID for serving.
     The ID is used to build a public URL: /audio/<id>
+
+    Dual-write (memory + DB) prevents 0-second audio when Railway routes
+    Project Blue's audio-fetch request to a different replica than the one
+    that generated the file.
     """
     import time
     audio_id = uuid.uuid4().hex[:12]
+    # Memory cache (fast, same-process hits)
     _audio_store[audio_id] = audio_bytes
     _audio_expiry[audio_id] = time.time() + _AUDIO_TTL_SECONDS
     _cleanup_expired()
     logger.info("Stored audio %s (%d bytes, TTL %ds)", audio_id, len(audio_bytes), _AUDIO_TTL_SECONDS)
+    # DB store (cross-replica fallback)
+    try:
+        import db as _db_mod
+        _db_mod.store_audio_blob(audio_id, audio_bytes)
+    except Exception as _e:
+        logger.warning("audio DB write failed for %s (in-memory only): %s", audio_id, _e)
     return audio_id
 
 
 def get_audio(audio_id: str) -> bytes | None:
-    """Retrieve stored audio bytes by ID. Returns None if expired or not found."""
+    """
+    Retrieve stored audio bytes by ID.
+    Checks in-memory cache first, falls back to Postgres on miss.
+    Returns None if not found anywhere.
+    """
     import time
-    if audio_id not in _audio_store:
-        return None
-    if time.time() > _audio_expiry.get(audio_id, 0):
+    # Fast path: in-memory
+    if audio_id in _audio_store:
+        if time.time() <= _audio_expiry.get(audio_id, 0):
+            return _audio_store[audio_id]
         _audio_store.pop(audio_id, None)
         _audio_expiry.pop(audio_id, None)
-        return None
-    return _audio_store[audio_id]
+    # Fallback: Postgres (handles cross-replica fetches)
+    try:
+        import db as _db_mod
+        data = _db_mod.get_audio_blob(audio_id)
+        if data:
+            logger.info("Audio %s served from DB (memory miss)", audio_id)
+            return data
+    except Exception as _e:
+        logger.warning("audio DB read failed for %s: %s", audio_id, _e)
+    return None
 
 
 def _cleanup_expired():
