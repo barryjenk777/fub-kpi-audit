@@ -12768,38 +12768,41 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
             "friday":    "End of week. Close strong or set up next week. No coasting.",
         }.get(week_day.lower(), "midweek check-in")
 
-        prompt = f"""You are writing a coaching text FROM Barry Jenkins TO {agent_first}, one of his real estate agents at Legacy Home Team (Virginia's #1 team, 850+ homes/year, Hampton Roads VA).
+        prompt = f"""You are writing a warm, personal iMessage FROM Barry Jenkins TO {agent_first}, one of his real estate agents at Legacy Home Team (Virginia's #1 team, Hampton Roads VA).
 
-Barry is a team leader who cares deeply but is honest. His texts feel personal. He actually looked at their numbers before writing.
+The daily email handles metrics and accountability. This TEXT is different. It carries the same mission but with warmth, encouragement, and an Atomic Habits mindset. The goal is to make {agent_first} feel seen, supported, and ready to take one small action.
 
 AGENT: {agent_first}
 DAY: {week_day.capitalize()} ({week_context})
-SITUATION: {situation}
+WHERE THEY STAND: {situation}
 
-Their numbers:
-- Calls YTD: {kpi.get('calls_actual', 0)} actual vs {int(kpi.get('calls_pace', 0))} on-pace (annual goal: {kpi.get('calls_goal', 0)})
-- Conversations YTD: {kpi.get('convos_actual', 0)} actual vs {int(kpi.get('convos_pace', 0))} on-pace
-- Appointments YTD: {kpi.get('appts_actual', 0)} actual vs {int(kpi.get('appts_pace', 0))} on-pace
-- Deals closed YTD: {kpi.get('deals_closed_ytd', 0)}
+Real numbers to draw from (use ONE, make it feel like Barry noticed):
 - Calls last 7 days: {kpi.get('calls_last_7d', 0)}
 - Conversations last 7 days: {kpi.get('convos_last_7d', 0)}
+- Calls YTD: {kpi.get('calls_actual', 0)} (on-pace target: {int(kpi.get('calls_pace', 0))})
+- Conversations YTD: {kpi.get('convos_actual', 0)} (on-pace target: {int(kpi.get('convos_pace', 0))})
+- Appointments YTD: {kpi.get('appts_actual', 0)}
+- Deals closed YTD: {kpi.get('deals_closed_ytd', 0)}
 
-WRITE a 2-3 sentence iMessage from Barry. Rules:
-1. Start with {agent_first}'s name only (no "Hey" before it)
-2. Reference ONE specific real number. Never generic ("great job", "keep it up")
-3. If behind: reframe as opportunity, give ONE specific action for today or this week
-4. If ahead: genuine celebration then raise the bar ("what would it look like to...")
-5. If midweek behind: create urgency without shame. "There's still time this week."
-6. End with something actionable OR a question that invites response
-7. Sound like a real person texting, not a manager writing a review
+WRITE a 2-3 sentence text. Rules:
+1. Warm and personal. Sounds like a mentor who genuinely cares about their growth, not a boss checking numbers.
+2. Reference ONE real number naturally. Not as a grade, as an observation.
+3. Use Atomic Habits thinking when it fits:
+   - Small wins compound ("one more call a day is 200 extra calls a year")
+   - Identity framing ("you're becoming the kind of agent who...")
+   - Systems over goals ("the calls are the system, closings are the outcome")
+   - Progress not perfection ("every rep counts, even the ones that don't convert")
+4. If ahead: celebrate the identity being built, not just the number.
+5. If behind: make the next small step feel totally doable. Not a lecture. One tiny action.
+6. End with something that opens a door: a question, an invitation, or a line that lands.
+7. Casual. Like a text from someone who believes in them.
 
 Barry's voice (hard rules):
-- Conversational. Teaching beats pushing every time.
-- Never shame. Always reframe. The problem is not them, it's the behavior.
-- Candid when it matters. Don't sugarcoat bad numbers but frame the path forward.
 - No em-dashes. Use periods or commas instead.
-- No corporate words. No "leverage", "synergy", "touch base", "circle back", "reaching out".
-- 2-3 sentences MAX. This is a text, not a coaching session.
+- No corporate language. No "circle back", "touch base", "leverage", "synergy".
+- Never shame. Always light the path forward.
+- 2-3 sentences MAX. This is an iMessage, not a coaching session.
+- Start with {agent_first}'s name, nothing before it.
 
 Output ONLY the text message. No sign-off (Barry's name auto-appends)."""
 
@@ -12819,28 +12822,29 @@ Output ONLY the text message. No sign-off (Barry's name auto-appends)."""
 
 
 def _agent_coaching_fallback(agent_first, kpi, week_day):
-    """Fallback text when Claude is unavailable — still specific to their numbers."""
-    calls = kpi.get("calls_actual", 0)
-    pace  = int(kpi.get("calls_pace", 0))
-    gap   = calls - pace
+    """Warm Atomic Habits fallback text when Claude is unavailable."""
+    calls_7d  = kpi.get("calls_last_7d", 0)
+    convos_7d = kpi.get("convos_last_7d", 0)
+    pace      = int(kpi.get("calls_pace", 0))
+    actual    = kpi.get("calls_actual", 0)
+    gap       = actual - pace
 
     if gap >= 0:
         return (
-            f"{agent_first}, you're ahead of pace on calls this {week_day}. "
-            f"{calls} so far against a {pace} target. "
-            f"That kind of consistency is what separates the top producers. Keep it going."
+            f"{agent_first}, {calls_7d} calls this week. "
+            f"That consistency is quietly building something. "
+            f"Keep showing up like this and the results take care of themselves."
         )
-    elif gap >= -20:
+    elif convos_7d > 0:
         return (
-            f"{agent_first}, you're {abs(gap)} calls behind your pace target right now. "
-            f"There's still time to close that gap this week. "
-            f"What does your afternoon look like for dials?"
+            f"{agent_first}, you had {convos_7d} real conversations this week. "
+            f"That's the work that matters. One more tomorrow and you're building a habit."
         )
     else:
         return (
-            f"{agent_first}, I need to be straight with you. "
-            f"You're {abs(gap)} calls behind where you need to be to hit your goal. "
-            f"Something has to change this week. What's one thing I can help move out of your way?"
+            f"{agent_first}, one call today is enough to start. "
+            f"Atomic Habits says 1 percent better every day. "
+            f"What's one person on your list you could reach right now?"
         )
 
 
