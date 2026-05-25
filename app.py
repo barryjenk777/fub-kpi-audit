@@ -13062,7 +13062,7 @@ def api_agent_texts_preview():
         fub = FUBClient()
         profiles   = _db.get_agent_profiles(active_only=True) or []
         all_goals  = _db.get_all_goals(year=today.year) or {}
-        ytd_cache  = _db.get_all_ytd_cache(year=today.year) or {}
+        ytd_cache  = _db.get_ytd_cache(year=today.year) or {}
 
         results = []
         for profile in profiles:
