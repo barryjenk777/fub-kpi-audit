@@ -12993,7 +12993,8 @@ def api_agent_texts_preview():
         return jsonify({"ok": True, "day": week_day, "count": len(results), "previews": results})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 # ---------------------------------------------------------------------------
