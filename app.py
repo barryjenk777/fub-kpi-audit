@@ -12726,18 +12726,15 @@ def start_scheduler():
 def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
     """
     Format a simple, genuine check-in text from Barry to the agent.
-    Shows their last-7-day numbers and invites them toward their goals.
-
-    kpi dict keys used:
-      calls_last_7d, convos_last_7d, appts_last_7d  (last 7 days activity)
+    Uses YTD actuals vs goals so no extra data pull is needed.
     """
-    calls_7d  = kpi.get("calls_last_7d", 0)
-    convos_7d = kpi.get("convos_last_7d", 0)
-    appts_7d  = kpi.get("appts_last_7d", 0)
+    calls  = kpi.get("calls_actual", 0)
+    convos = kpi.get("convos_actual", 0)
+    appts  = kpi.get("appts_actual", 0)
 
     return (
         f"Hey {agent_first}, looking at your numbers: "
-        f"{calls_7d} calls, {convos_7d} conversations, {appts_7d} appointments this week. "
+        f"{calls} calls, {convos} conversations, {appts} appointments. "
         f"Let's see if we can reach those goals. "
         f"If I can help you at all, let me know."
     )
@@ -12781,9 +12778,10 @@ def scheduled_agent_coaching_texts():
         days_in_year = 366 if calendar.isleap(today.year) else 365
         pct_elapsed = day_of_year / days_in_year
 
-        # Pull all goals
+        # Pull all goals — get_all_goals returns a list, key it by agent_name
         try:
-            all_goals = _db.get_all_goals(year=today.year) or {}
+            _goals_list = _db.get_all_goals(year=today.year) or []
+            all_goals = {g["agent_name"]: g for g in _goals_list if g.get("agent_name")}
         except Exception:
             all_goals = {}
 
@@ -12956,10 +12954,10 @@ def api_agent_texts_preview():
     try:
         from fub_client import FUBClient
         fub = FUBClient()
-        profiles   = _db.get_agent_profiles(active_only=True) or []
-        all_goals  = _db.get_all_goals(year=today.year) or {}
-        ytd_cache  = _db.get_ytd_cache(year=today.year) or {}
-        recent     = _db.get_recent_activity_by_agent(days=7) or {}
+        profiles  = _db.get_agent_profiles(active_only=True) or []
+        _gl       = _db.get_all_goals(year=today.year) or []
+        all_goals = {g["agent_name"]: g for g in _gl if g.get("agent_name")}
+        ytd_cache = _db.get_ytd_cache(year=today.year) or {}
 
         results = []
         for profile in profiles:
@@ -12968,10 +12966,9 @@ def api_agent_texts_preview():
             if not agent_name or fub_user_id == config.BARRY_FUB_USER_ID:
                 continue
 
-            goals  = all_goals.get(agent_name, {})
-            ytd    = ytd_cache.get(agent_name, {})
-            rec    = recent.get(agent_name, {})
-            kpi    = {
+            goals = all_goals.get(agent_name, {})
+            ytd   = ytd_cache.get(agent_name, {})
+            kpi   = {
                 "calls_actual":  ytd.get("calls_ytd", 0) or 0,
                 "calls_goal":    goals.get("calls_goal", 0) or 0,
                 "calls_pace":    round((goals.get("calls_goal", 0) or 0) * pct_elapsed),
@@ -12982,9 +12979,6 @@ def api_agent_texts_preview():
                 "appts_goal":    goals.get("appointments_goal", 0) or 0,
                 "appts_pace":    round((goals.get("appointments_goal", 0) or 0) * pct_elapsed),
                 "deals_closed_ytd": goals.get("deals_closed", 0) or 0,
-                "calls_last_7d":  rec.get("calls_ytd", 0) or 0,
-                "convos_last_7d": rec.get("convos_ytd", 0) or 0,
-                "appts_last_7d":  rec.get("appts_ytd", 0) or 0,
                 "pct_of_year_elapsed": round(pct_elapsed, 3),
             }
             agent_first = agent_name.split()[0]
