@@ -8,17 +8,16 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT="$SCRIPT_DIR/mac_imessage_listener.py"
+VENV_DIR="$SCRIPT_DIR/.venv"
 PLIST="$HOME/Library/LaunchAgents/com.legacyhometeam.imessage.plist"
 LOG_DIR="$HOME/Library/Logs/LegacyHomeTeam"
 
 echo "==> Setting up Legacy Home Team iMessage sender..."
 
-# 1. Check dependencies
-echo "Checking Python..."
-python3 -c "import flask, requests" 2>/dev/null || {
-    echo "Installing flask and requests..."
-    pip3 install flask requests --quiet
-}
+# 1. Create venv and install dependencies
+echo "Setting up Python venv..."
+python3 -m venv "$VENV_DIR"
+"$VENV_DIR/bin/pip" install --quiet flask requests
 echo "  flask + requests OK"
 
 # 2. Test AppleScript / Messages access
@@ -34,7 +33,7 @@ echo "  iMessage OK"
 # 3. Create log directory
 mkdir -p "$LOG_DIR"
 
-# 4. Write launchd plist
+# 4. Write launchd plist (uses venv python)
 cat > "$PLIST" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,7 +44,7 @@ cat > "$PLIST" << PLIST
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>$VENV_DIR/bin/python3</string>
         <string>$SCRIPT</string>
         <string>--poll</string>
         <string>--interval</string>
