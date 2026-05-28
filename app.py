@@ -12743,155 +12743,92 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
 def scheduled_agent_coaching_texts():
     """
     Generate and queue coaching texts for all active agents.
-    Runs Mon/Wed/Fri at 8am ET via APScheduler.
-    Also attempts immediate delivery via the Mac webhook listener if configured.
+    Runs Mon/Wed/Fri at 8:15am ET via APScheduler.
+    Mac poller picks up pending rows every 60s and sends via iMessage.
     """
     from datetime import date as _date
     import calendar
 
-    week_day = _date.today().strftime("%A").lower()  # monday, wednesday, friday
+    week_day = _date.today().strftime("%A").lower()
+    today    = _date.today()
+    day_of_year  = today.timetuple().tm_yday
+    days_in_year = 366 if calendar.isleap(today.year) else 365
+    pct_elapsed  = day_of_year / days_in_year
+
     logger.info("[AGENT TEXTS] Generating coaching texts for %s", week_day)
 
+    profiles = _db.get_agent_profiles(active_only=True) or []
+
     try:
-        from fub_client import FUBClient
-        fub = FUBClient()
+        _gl       = _db.get_all_goals(year=today.year) or []
+        all_goals = {g["agent_name"]: g for g in _gl if g.get("agent_name")}
+    except Exception:
+        all_goals = {}
 
-        # Pull all active agents
-        try:
-            profiles = _db.get_agent_profiles(active_only=True)
-        except Exception:
-            profiles = []
+    try:
+        ytd_cache = _db.get_ytd_cache(year=today.year) or {}
+    except Exception:
+        ytd_cache = {}
 
-        if not profiles:
-            # Fallback: build from FUB users
-            users_resp = fub._request("GET", "users") or {}
-            profiles = [
-                {"agent_name": u.get("name", ""), "fub_user_id": u.get("id"),
-                 "email": u.get("email"), "phone": None}
-                for u in users_resp.get("users", [])
-                if u.get("role") in ("Agent",) and u.get("id") != config.BARRY_FUB_USER_ID
-            ]
-
-        # YTD pacing denominator
-        today       = _date.today()
-        day_of_year = today.timetuple().tm_yday
-        days_in_year = 366 if calendar.isleap(today.year) else 365
-        pct_elapsed = day_of_year / days_in_year
-
-        # Pull all goals — get_all_goals returns a list, key it by agent_name
-        try:
-            _goals_list = _db.get_all_goals(year=today.year) or []
-            all_goals = {g["agent_name"]: g for g in _goals_list if g.get("agent_name")}
-        except Exception:
-            all_goals = {}
-
-        # Pull YTD cache
-        try:
-            ytd_cache = _db.get_ytd_cache(year=today.year) or {}
-        except Exception:
-            ytd_cache = {}
-
-        # Pull recent 7-day activity — use daily_activity directly for last 7 days
-        try:
-            recent = _db.get_recent_activity_by_agent(days=7) or {}
-        except Exception:
+    try:
+        recent = _db.get_recent_activity_by_agent(days=7) or {}
+        if not isinstance(recent, dict):
             recent = {}
+    except Exception:
+        recent = {}
 
-        queued = 0
-        mac_url = os.environ.get("MAC_IMESSAGE_URL", "").rstrip("/")
+    queued = 0
+    for profile in profiles:
+        agent_name  = profile.get("agent_name") or ""
+        fub_user_id = profile.get("fub_user_id")
+        if not agent_name or not fub_user_id:
+            continue
+        if fub_user_id == config.BARRY_FUB_USER_ID:
+            continue
 
-        for profile in profiles:
-            agent_name  = profile.get("agent_name") or ""
-            fub_user_id = profile.get("fub_user_id")
-            if not agent_name or not fub_user_id:
-                continue
-            if fub_user_id == config.BARRY_FUB_USER_ID:
-                continue
+        phone = profile.get("phone") or profile.get("fub_phone") or ""
+        if not phone:
+            logger.warning("[AGENT TEXTS] No phone for %s — skipping", agent_name)
+            continue
 
-            # Get phone — try profile first, then FUB user record
-            phone = profile.get("phone") or profile.get("fub_phone")
-            if not phone:
-                try:
-                    u = fub.get_user_by_id(fub_user_id)
-                    phone = (u.get("mobilePhone") or u.get("phone") or
-                             u.get("phoneNumber") or "")
-                except Exception:
-                    pass
-            if not phone:
-                logger.warning("[AGENT TEXTS] No phone for %s — skipping", agent_name)
-                continue
+        goals = all_goals.get(agent_name, {})
+        ytd   = ytd_cache.get(agent_name, {})
+        rec   = recent.get(agent_name, {}) if isinstance(recent, dict) else {}
 
-            # Build KPI snapshot
-            goals    = all_goals.get(agent_name, {})
-            ytd      = ytd_cache.get(agent_name, {})
-            rec      = recent.get(agent_name, {})
+        kpi = {
+            "calls_actual":       ytd.get("calls_ytd", 0) or 0,
+            "calls_goal":         goals.get("calls_goal", 0) or 0,
+            "calls_pace":         round((goals.get("calls_goal", 0) or 0) * pct_elapsed),
+            "convos_actual":      ytd.get("convos_ytd", 0) or 0,
+            "convos_goal":        goals.get("conversations_goal", 0) or 0,
+            "convos_pace":        round((goals.get("conversations_goal", 0) or 0) * pct_elapsed),
+            "appts_actual":       ytd.get("appts_ytd", 0) or 0,
+            "appts_goal":         goals.get("appointments_goal", 0) or 0,
+            "appts_pace":         round((goals.get("appointments_goal", 0) or 0) * pct_elapsed),
+            "deals_closed_ytd":   0,
+            "calls_last_7d":      rec.get("calls_ytd", 0) or 0,
+            "convos_last_7d":     rec.get("convos_ytd", 0) or 0,
+            "appts_last_7d":      rec.get("appts_ytd", 0) or 0,
+            "pct_of_year_elapsed": round(pct_elapsed, 3),
+        }
 
-            calls_goal  = goals.get("calls_goal", 0) or 0
-            convos_goal = goals.get("conversations_goal", 0) or 0
-            appts_goal  = goals.get("appointments_goal", 0) or 0
+        agent_first = agent_name.split()[0]
+        message = _generate_agent_coaching_text(agent_first, kpi, week_day)
 
-            calls_actual  = ytd.get("calls_ytd", 0) or 0
-            convos_actual = ytd.get("convos_ytd", 0) or 0
-            appts_actual  = ytd.get("appts_ytd", 0) or 0
-
-            kpi = {
-                "calls_actual":       calls_actual,
-                "calls_goal":         calls_goal,
-                "calls_pace":         round(calls_goal * pct_elapsed),
-                "convos_actual":      convos_actual,
-                "convos_goal":        convos_goal,
-                "convos_pace":        round(convos_goal * pct_elapsed),
-                "appts_actual":       appts_actual,
-                "appts_goal":         appts_goal,
-                "appts_pace":         round(appts_goal * pct_elapsed),
-                "deals_closed_ytd":   goals.get("deals_closed", 0) or 0,
-                "calls_last_7d":      rec.get("calls_ytd", 0) or 0,
-                "convos_last_7d":     rec.get("convos_ytd", 0) or 0,
-                "appts_last_7d":      rec.get("appts_ytd", 0) or 0,
-                "pct_of_year_elapsed": round(pct_elapsed, 3),
-            }
-
-            agent_first = agent_name.split()[0]
-            message = _generate_agent_coaching_text(agent_first, kpi, week_day)
-
-            # Queue in DB
+        try:
             row_id = _db.queue_agent_imessage(
-                agent_name=agent_name,
-                fub_user_id=fub_user_id,
-                phone=phone,
-                message=message,
-                week_day=week_day,
-                kpi_snapshot=kpi,
+                agent_name=agent_name, fub_user_id=fub_user_id,
+                phone=phone, message=message,
+                week_day=week_day, kpi_snapshot=kpi,
             )
-            queued += 1
-            logger.info("[AGENT TEXTS] Queued for %s (%s): %r", agent_name, phone, message[:60])
+            if row_id:
+                queued += 1
+                logger.info("[AGENT TEXTS] Queued for %s: %r", agent_name, message[:80])
+        except Exception as _qe:
+            logger.error("[AGENT TEXTS] Queue failed for %s: %s", agent_name, _qe)
 
-            # Attempt immediate delivery via Mac webhook if configured
-            if mac_url and row_id:
-                try:
-                    import requests as _req
-                    mac_secret = os.environ.get("MAC_IMESSAGE_SECRET", "lht-mac-2026")
-                    resp = _req.post(
-                        f"{mac_url}/send",
-                        json={"key": mac_secret, "phone": phone, "message": message,
-                              "queue_id": row_id},
-                        timeout=10,
-                    )
-                    if resp.ok and resp.json().get("ok"):
-                        _db.mark_agent_imessages_sent([row_id])
-                        logger.info("[AGENT TEXTS] Mac webhook delivered to %s", agent_name)
-                    else:
-                        logger.warning("[AGENT TEXTS] Mac webhook failed for %s: %s",
-                                       agent_name, resp.text[:200])
-                except Exception as _me:
-                    logger.warning("[AGENT TEXTS] Mac webhook error for %s: %s", agent_name, _me)
-
-        logger.info("[AGENT TEXTS] Done — %d texts queued for %s", queued, week_day)
-        return queued
-
-    except Exception as e:
-        logger.error("[AGENT TEXTS] scheduled_agent_coaching_texts failed: %s", e, exc_info=True)
-        return 0
+    logger.info("[AGENT TEXTS] Done — %d texts queued for %s", queued, week_day)
+    return queued
 
 
 # ── Mac listener API endpoints ─────────────────────────────────────────────
@@ -13010,115 +12947,12 @@ def api_agent_texts_send_now():
     """
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
-
-    import traceback as _tb
-    from datetime import date as _date
-    import calendar
-
-    errors = []
-    queued = 0
-    week_day = _date.today().strftime("%A").lower()
-
     try:
-        from fub_client import FUBClient
-        fub = FUBClient()
-        errors.append("fub_client: OK")
+        queued = scheduled_agent_coaching_texts()
+        return jsonify({"ok": True, "queued": queued})
     except Exception as e:
-        return jsonify({"error": f"FUBClient init failed: {e}", "traceback": _tb.format_exc()}), 500
-
-    try:
-        profiles = _db.get_agent_profiles(active_only=True) or []
-        errors.append(f"profiles: {len(profiles)} agents")
-    except Exception as e:
-        return jsonify({"error": f"get_agent_profiles failed: {e}"}), 500
-
-    try:
-        _gl = _db.get_all_goals(year=_date.today().year) or []
-        all_goals = {g["agent_name"]: g for g in _gl if g.get("agent_name")}
-        errors.append(f"goals: {len(all_goals)} agents have goals")
-    except Exception as e:
-        all_goals = {}
-        errors.append(f"goals failed: {e}")
-
-    try:
-        ytd_cache = _db.get_ytd_cache(year=_date.today().year) or {}
-        errors.append(f"ytd_cache: {len(ytd_cache)} agents")
-    except Exception as e:
-        ytd_cache = {}
-        errors.append(f"ytd_cache failed: {e}")
-
-    try:
-        recent = _db.get_recent_activity_by_agent(days=7) or {}
-        if not isinstance(recent, dict):
-            recent = {}
-        errors.append(f"recent: {len(recent)} agents have 7d data")
-    except Exception as e:
-        recent = {}
-        errors.append(f"recent failed: {e}")
-
-    today = _date.today()
-    day_of_year  = today.timetuple().tm_yday
-    days_in_year = 366 if calendar.isleap(today.year) else 365
-    pct_elapsed  = day_of_year / days_in_year
-
-    agent_results = []
-    for profile in profiles:
-        agent_name  = profile.get("agent_name") or ""
-        fub_user_id = profile.get("fub_user_id")
-        if not agent_name or not fub_user_id:
-            agent_results.append({"agent": agent_name, "status": "skipped: no name/id"})
-            continue
-        if fub_user_id == config.BARRY_FUB_USER_ID:
-            agent_results.append({"agent": agent_name, "status": "skipped: Barry"})
-            continue
-
-        phone = profile.get("phone") or profile.get("fub_phone") or ""
-        if not phone:
-            agent_results.append({"agent": agent_name, "status": "skipped: no phone"})
-            continue
-
-        goals = all_goals.get(agent_name, {})
-        ytd   = ytd_cache.get(agent_name, {})
-        rec   = recent.get(agent_name, {}) if isinstance(recent, dict) else {}
-
-        kpi = {
-            "calls_actual":       ytd.get("calls_ytd", 0) or 0,
-            "calls_goal":         goals.get("calls_goal", 0) or 0,
-            "calls_pace":         round((goals.get("calls_goal", 0) or 0) * pct_elapsed),
-            "convos_actual":      ytd.get("convos_ytd", 0) or 0,
-            "convos_goal":        goals.get("conversations_goal", 0) or 0,
-            "convos_pace":        round((goals.get("conversations_goal", 0) or 0) * pct_elapsed),
-            "appts_actual":       ytd.get("appts_ytd", 0) or 0,
-            "appts_goal":         goals.get("appointments_goal", 0) or 0,
-            "appts_pace":         round((goals.get("appointments_goal", 0) or 0) * pct_elapsed),
-            "deals_closed_ytd":   0,
-            "calls_last_7d":      rec.get("calls_ytd", 0) or 0,
-            "convos_last_7d":     rec.get("convos_ytd", 0) or 0,
-            "appts_last_7d":      rec.get("appts_ytd", 0) or 0,
-            "pct_of_year_elapsed": round(pct_elapsed, 3),
-        }
-        agent_first = agent_name.split()[0]
-        message = _generate_agent_coaching_text(agent_first, kpi, week_day)
-
-        try:
-            row_id = _db.queue_agent_imessage(
-                agent_name=agent_name, fub_user_id=fub_user_id,
-                phone=phone, message=message,
-                week_day=week_day, kpi_snapshot=kpi,
-            )
-            queued += 1
-            agent_results.append({"agent": agent_name, "phone": phone,
-                                   "status": "queued", "row_id": row_id, "message": message})
-        except Exception as e:
-            agent_results.append({"agent": agent_name, "status": f"queue failed: {e}"})
-
-    return jsonify({
-        "ok": True,
-        "queued": queued,
-        "week_day": week_day,
-        "diagnostics": errors,
-        "agents": agent_results,
-    })
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 # ---------------------------------------------------------------------------
