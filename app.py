@@ -12869,6 +12869,37 @@ def api_agent_texts_mark_failed():
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/agent-texts/activity-check", methods=["GET"])
+def api_agent_activity_check():
+    """
+    Show raw 7-day activity data per agent so we can verify the numbers are right.
+    GET /api/admin/agent-texts/activity-check?key=lht-perp-2026
+    """
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        from datetime import date as _date
+        today   = _date.today()
+        recent  = _db.get_recent_activity_by_agent(days=7) or {}
+        ytd     = _db.get_ytd_cache(year=today.year) or {}
+        results = []
+        for name, rec in sorted(recent.items()):
+            ytd_row = ytd.get(name, {})
+            results.append({
+                "agent":          name,
+                "last_7d_calls":  rec.get("calls_ytd", 0),
+                "last_7d_convos": rec.get("convos_ytd", 0),
+                "last_7d_appts":  rec.get("appts_ytd", 0),
+                "ytd_calls":      ytd_row.get("calls_ytd", 0),
+                "ytd_convos":     ytd_row.get("convos_ytd", 0),
+                "ytd_appts":      ytd_row.get("appts_ytd", 0),
+            })
+        return jsonify({"ok": True, "agents": results, "as_of": today.isoformat()})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/admin/agent-texts/preview", methods=["GET"])
 def api_agent_texts_preview():
     """
