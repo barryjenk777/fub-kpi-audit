@@ -12725,8 +12725,8 @@ def start_scheduler():
 
 def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
     """
-    Format a simple, genuine check-in text from Barry to the agent.
-    Uses last-7-day activity so numbers reflect this week, not YTD.
+    Format a check-in text from Barry using verified FUB 7-day data.
+    kpi keys: calls_last_7d, convos_last_7d, appts_last_7d (live from FUB)
     """
     calls  = kpi.get("calls_last_7d", 0)
     convos = kpi.get("convos_last_7d", 0)
@@ -12738,6 +12738,73 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
         f"Let's see if we can reach those goals. "
         f"If I can help you at all, let me know."
     )
+
+
+def _fetch_7d_activity_from_fub(fub, profiles):
+    """
+    Pull last 7 days of calls, conversations, and appointments directly from
+    FUB — same logic as sync_daily_activity_from_fub but returns a dict
+    instead of writing to DB. Source of truth for coaching texts.
+
+    Returns: {agent_name: {calls, convos, appts}}
+    """
+    _et_h   = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+    ET      = timezone(timedelta(hours=_et_h))
+    now_et  = datetime.now(ET)
+    since_et = (now_et - timedelta(days=7)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    since_utc = since_et.astimezone(timezone.utc)
+    until_utc = now_et.astimezone(timezone.utc)
+
+    # uid → agent_name map (active agents only)
+    uid_to_name = {
+        p["fub_user_id"]: p["agent_name"]
+        for p in profiles
+        if p.get("fub_user_id") and p.get("agent_name")
+    }
+
+    calls_by  = {n: 0 for n in uid_to_name.values()}
+    convos_by = {n: 0 for n in uid_to_name.values()}
+    appts_by  = {n: 0 for n in uid_to_name.values()}
+
+    # ── Calls + conversations ──────────────────────────────────────────────
+    try:
+        all_calls = fub.get_calls(since=since_utc, until=until_utc)
+        _excl = getattr(config, "EXCLUDED_CALL_USER_IDS", set())
+        _thresh = getattr(config, "CONVERSATION_THRESHOLD_SECONDS", 60)
+        for c in all_calls:
+            uid = c.get("userId")
+            if not uid or uid in _excl or uid not in uid_to_name:
+                continue
+            name = uid_to_name[uid]
+            if not c.get("isIncoming", False):
+                calls_by[name] = calls_by.get(name, 0) + 1
+            if (c.get("duration") or 0) >= _thresh:
+                convos_by[name] = convos_by.get(name, 0) + 1
+    except Exception as _e:
+        logger.warning("[AGENT TEXTS] FUB calls fetch failed: %s", _e)
+
+    # ── Appointments ───────────────────────────────────────────────────────
+    try:
+        all_appts = fub.get_appointments(since=since_utc, until=until_utc)
+        for a in all_appts:
+            invitees = a.get("invitees") or []
+            if not any(inv.get("personId") for inv in invitees):
+                continue
+            for inv in invitees:
+                uid = inv.get("userId")
+                if uid and uid in uid_to_name:
+                    name = uid_to_name[uid]
+                    appts_by[name] = appts_by.get(name, 0) + 1
+    except Exception as _e:
+        logger.warning("[AGENT TEXTS] FUB appts fetch failed: %s", _e)
+
+    return {
+        name: {"calls": calls_by.get(name, 0),
+               "convos": convos_by.get(name, 0),
+               "appts": appts_by.get(name, 0)}
+        for name in uid_to_name.values()
+    }
 
 
 def scheduled_agent_coaching_texts():
@@ -12770,11 +12837,12 @@ def scheduled_agent_coaching_texts():
     except Exception:
         ytd_cache = {}
 
+    # Pull 7-day activity live from FUB — source of truth
     try:
-        recent = _db.get_recent_activity_by_agent(days=7) or {}
-        if not isinstance(recent, dict):
-            recent = {}
-    except Exception:
+        fub    = FUBClient()
+        recent = _fetch_7d_activity_from_fub(fub, profiles)
+    except Exception as _e:
+        logger.warning("[AGENT TEXTS] FUB 7d fetch failed: %s", _e)
         recent = {}
 
     queued = 0
@@ -12793,22 +12861,22 @@ def scheduled_agent_coaching_texts():
 
         goals = all_goals.get(agent_name, {})
         ytd   = ytd_cache.get(agent_name, {})
-        rec   = recent.get(agent_name, {}) if isinstance(recent, dict) else {}
+        rec   = recent.get(agent_name, {"calls": 0, "convos": 0, "appts": 0})
+
+        targets = _db.compute_targets(goals) if goals else {}
 
         kpi = {
             "calls_actual":       ytd.get("calls_ytd", 0) or 0,
-            "calls_goal":         goals.get("calls_goal", 0) or 0,
-            "calls_pace":         round((goals.get("calls_goal", 0) or 0) * pct_elapsed),
             "convos_actual":      ytd.get("convos_ytd", 0) or 0,
-            "convos_goal":        goals.get("conversations_goal", 0) or 0,
-            "convos_pace":        round((goals.get("conversations_goal", 0) or 0) * pct_elapsed),
             "appts_actual":       ytd.get("appts_ytd", 0) or 0,
-            "appts_goal":         goals.get("appointments_goal", 0) or 0,
-            "appts_pace":         round((goals.get("appointments_goal", 0) or 0) * pct_elapsed),
-            "deals_closed_ytd":   0,
-            "calls_last_7d":      rec.get("calls_ytd", 0) or 0,
-            "convos_last_7d":     rec.get("convos_ytd", 0) or 0,
-            "appts_last_7d":      rec.get("appts_ytd", 0) or 0,
+            "calls_last_7d":      rec.get("calls", 0),
+            "convos_last_7d":     rec.get("convos", 0),
+            "appts_last_7d":      rec.get("appts", 0),
+            "calls_per_week":     targets.get("calls_per_week", 0),
+            "convos_per_week":    targets.get("convos_per_week", 0),
+            "appts_per_week":     targets.get("appts_per_week", 0),
+            "contact_rate_goal":  goals.get("contact_rate", 0.15),
+            "conv_rate_goal":     goals.get("call_to_appt_rate", 0.10),
             "pct_of_year_elapsed": round(pct_elapsed, 3),
         }
 
@@ -12872,29 +12940,34 @@ def api_agent_texts_mark_failed():
 @app.route("/api/admin/agent-texts/activity-check", methods=["GET"])
 def api_agent_activity_check():
     """
-    Show raw 7-day activity data per agent so we can verify the numbers are right.
+    Show verified 7-day activity pulled live from FUB alongside YTD cache.
     GET /api/admin/agent-texts/activity-check?key=lht-perp-2026
     """
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
     try:
         from datetime import date as _date
-        today   = _date.today()
-        recent  = _db.get_recent_activity_by_agent(days=7) or {}
-        ytd     = _db.get_ytd_cache(year=today.year) or {}
-        results = []
-        for name, rec in sorted(recent.items()):
+        profiles = _db.get_agent_profiles(active_only=True) or []
+        fub      = FUBClient()
+        recent   = _fetch_7d_activity_from_fub(fub, profiles)
+        ytd      = _db.get_ytd_cache(year=_date.today().year) or {}
+        results  = []
+        for profile in sorted(profiles, key=lambda p: p.get("agent_name", "")):
+            name    = profile.get("agent_name", "")
+            if not name or profile.get("fub_user_id") == config.BARRY_FUB_USER_ID:
+                continue
+            rec     = recent.get(name, {"calls": 0, "convos": 0, "appts": 0})
             ytd_row = ytd.get(name, {})
             results.append({
                 "agent":          name,
-                "last_7d_calls":  rec.get("calls_ytd", 0),
-                "last_7d_convos": rec.get("convos_ytd", 0),
-                "last_7d_appts":  rec.get("appts_ytd", 0),
+                "last_7d_calls":  rec["calls"],
+                "last_7d_convos": rec["convos"],
+                "last_7d_appts":  rec["appts"],
                 "ytd_calls":      ytd_row.get("calls_ytd", 0),
                 "ytd_convos":     ytd_row.get("convos_ytd", 0),
                 "ytd_appts":      ytd_row.get("appts_ytd", 0),
             })
-        return jsonify({"ok": True, "agents": results, "as_of": today.isoformat()})
+        return jsonify({"ok": True, "agents": results, "as_of": _date.today().isoformat()})
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
