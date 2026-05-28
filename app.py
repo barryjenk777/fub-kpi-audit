@@ -13002,6 +13002,22 @@ def api_agent_texts_preview():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route("/api/admin/agent-texts/send-now", methods=["POST"])
+def api_agent_texts_send_now():
+    """
+    Manual trigger: generate and queue coaching texts immediately.
+    POST /api/admin/agent-texts/send-now?key=lht-perp-2026
+    """
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        scheduled_agent_coaching_texts()
+        return jsonify({"ok": True, "message": "Coaching texts queued and sent to Mac listener."})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 # ---------------------------------------------------------------------------
 # ONE-TIME: Retroactive neutral reply processing
 # POST /api/admin/replay-conversions?key=lht-perp-2026&days=7&dry_run=true
