@@ -12726,14 +12726,14 @@ def start_scheduler():
 def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
     """
     Format a simple, genuine check-in text from Barry to the agent.
-    Uses YTD actuals vs goals so no extra data pull is needed.
+    Uses last-7-day activity so numbers reflect this week, not YTD.
     """
-    calls  = kpi.get("calls_actual", 0)
-    convos = kpi.get("convos_actual", 0)
-    appts  = kpi.get("appts_actual", 0)
+    calls  = kpi.get("calls_last_7d", 0)
+    convos = kpi.get("convos_last_7d", 0)
+    appts  = kpi.get("appts_last_7d", 0)
 
     return (
-        f"Hey {agent_first}, looking at your numbers: "
+        f"Hey {agent_first}, looking at your numbers this week: "
         f"{calls} calls, {convos} conversations, {appts} appointments. "
         f"Let's see if we can reach those goals. "
         f"If I can help you at all, let me know."
@@ -12958,6 +12958,7 @@ def api_agent_texts_preview():
         _gl       = _db.get_all_goals(year=today.year) or []
         all_goals = {g["agent_name"]: g for g in _gl if g.get("agent_name")}
         ytd_cache = _db.get_ytd_cache(year=today.year) or {}
+        recent    = _db.get_recent_activity_by_agent(days=7) or {}
 
         results = []
         for profile in profiles:
@@ -12968,17 +12969,21 @@ def api_agent_texts_preview():
 
             goals = all_goals.get(agent_name, {})
             ytd   = ytd_cache.get(agent_name, {})
+            rec   = recent.get(agent_name, {}) if isinstance(recent, dict) else {}
             kpi   = {
-                "calls_actual":  ytd.get("calls_ytd", 0) or 0,
-                "calls_goal":    goals.get("calls_goal", 0) or 0,
-                "calls_pace":    round((goals.get("calls_goal", 0) or 0) * pct_elapsed),
-                "convos_actual": ytd.get("convos_ytd", 0) or 0,
-                "convos_goal":   goals.get("conversations_goal", 0) or 0,
-                "convos_pace":   round((goals.get("conversations_goal", 0) or 0) * pct_elapsed),
-                "appts_actual":  ytd.get("appts_ytd", 0) or 0,
-                "appts_goal":    goals.get("appointments_goal", 0) or 0,
-                "appts_pace":    round((goals.get("appointments_goal", 0) or 0) * pct_elapsed),
+                "calls_actual":   ytd.get("calls_ytd", 0) or 0,
+                "calls_goal":     goals.get("calls_goal", 0) or 0,
+                "calls_pace":     round((goals.get("calls_goal", 0) or 0) * pct_elapsed),
+                "convos_actual":  ytd.get("convos_ytd", 0) or 0,
+                "convos_goal":    goals.get("conversations_goal", 0) or 0,
+                "convos_pace":    round((goals.get("conversations_goal", 0) or 0) * pct_elapsed),
+                "appts_actual":   ytd.get("appts_ytd", 0) or 0,
+                "appts_goal":     goals.get("appointments_goal", 0) or 0,
+                "appts_pace":     round((goals.get("appointments_goal", 0) or 0) * pct_elapsed),
                 "deals_closed_ytd": goals.get("deals_closed", 0) or 0,
+                "calls_last_7d":  rec.get("calls_ytd", 0) or 0,
+                "convos_last_7d": rec.get("convos_ytd", 0) or 0,
+                "appts_last_7d":  rec.get("appts_ytd", 0) or 0,
                 "pct_of_year_elapsed": round(pct_elapsed, 3),
             }
             agent_first = agent_name.split()[0]
