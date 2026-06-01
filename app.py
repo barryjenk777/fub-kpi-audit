@@ -4548,11 +4548,20 @@ def api_goals_sync_deals():
         if not fub_deal_id:
             continue
 
-        # Agent name — FUB may store as assignedTo string or nested user object
-        agent_raw = deal.get("assignedTo") or ""
-        if isinstance(agent_raw, dict):
-            agent_raw = (f"{agent_raw.get('firstName','')} "
-                         f"{agent_raw.get('lastName','')}").strip()
+        # Agent name — FUB Deals stores agent in users[] array (Dotloop format);
+        # fall back to assignedTo string for older deal formats
+        agent_raw = ""
+        deal_users = deal.get("users") or []
+        if deal_users:
+            u = deal_users[0]
+            agent_raw = u.get("name") or ""
+        if not agent_raw:
+            fallback = deal.get("assignedTo") or ""
+            if isinstance(fallback, dict):
+                agent_raw = (f"{fallback.get('firstName','')} "
+                             f"{fallback.get('lastName','')}").strip()
+            else:
+                agent_raw = fallback
 
         sale_price = deal.get("price") or deal.get("salePrice") or 0
         deal_name  = deal.get("name") or deal.get("address") or f"Deal #{fub_deal_id}"
@@ -12021,9 +12030,16 @@ def scheduled_sync_goals_data():
                 stage_raw = (deal.get("stage") or deal.get("stageName") or
                              deal.get("stageLabel") or "")
 
-                # Prefer user-ID match; fall back to name string
-                agent_uid = deal.get("assignedUserId") or deal.get("userId")
-                agent_name = uid_to_name.get(agent_uid)
+                # FUB Deals (Dotloop format) puts agent in users[] array.
+                # Fall back to assignedUserId lookup, then assignedTo string.
+                agent_name = ""
+                deal_users = deal.get("users") or []
+                if deal_users:
+                    u = deal_users[0]
+                    agent_name = uid_to_name.get(u.get("id")) or u.get("name") or ""
+                if not agent_name:
+                    agent_uid = deal.get("assignedUserId") or deal.get("userId")
+                    agent_name = uid_to_name.get(agent_uid) or ""
                 if not agent_name:
                     raw = deal.get("assignedTo") or ""
                     agent_name = raw if isinstance(raw, str) else (
