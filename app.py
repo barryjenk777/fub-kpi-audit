@@ -12803,13 +12803,37 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
     rank_line = ""
     if week_day in ("wednesday", "friday") and rank > 0 and team_size > 0:
         if rank == 1:
-            rank_line = " You're leading the team in calls this week."
+            rank_lines_top = [
+                " You're leading the team in calls this week. I'm proud of you, keep going.",
+                " You're #1 on the team in calls this week. That's the standard right there.",
+                " Top of the board in calls this week. I see the work you're putting in.",
+                " You're leading the whole team in calls. Don't let up.",
+            ]
+            rank_line = rank_lines_top[seed]
         elif rank == 2:
-            rank_line = f" You're #2 on the team in calls this week."
-        elif rank <= team_size // 2:
-            rank_line = f" You're in the top half of the team for calls this week."
+            rank_lines_top = [
+                " You're #2 on the team in calls this week. That's real effort and I appreciate it.",
+                " You're right behind the leader in calls. That's something to be proud of.",
+                " #2 on the team in calls this week. Keep pressing.",
+                " You're #2 on the board in calls. I'm proud of the work you're doing.",
+            ]
+            rank_line = rank_lines_top[seed]
+        elif rank == 3:
+            rank_lines_top = [
+                " You're top 3 on the team in calls this week. That matters.",
+                " Top 3 in calls this week. I see you working and I'm proud of it.",
+                " You're in the top 3 on calls this week. Keep that energy.",
+                " Top 3 on the team in calls. That's the kind of week that builds a career.",
+            ]
+            rank_line = rank_lines_top[seed]
         else:
-            rank_line = f" You're #{rank} of {team_size} on calls this week. Let's move that up."
+            rank_lines_enc = [
+                f" You're #{rank} on the team in calls this week. There's more in you. Let's see it.",
+                f" You're #{rank} on the board in calls. Let's climb that before the week is out.",
+                f" #{rank} on calls this week. You're capable of more and we both know it.",
+                f" You're #{rank} on the team in calls this week. Let's push that number up.",
+            ]
+            rank_line = rank_lines_enc[seed]
 
     # ── Closings ──────────────────────────────────────────────────────────
     closings = [
