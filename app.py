@@ -13100,9 +13100,9 @@ def api_agent_activity_check():
 @app.route("/api/admin/agent-texts/preview", methods=["GET"])
 def api_agent_texts_preview():
     """
-    Dry-run preview of what coaching texts would be generated today.
-    Returns the generated messages without queuing or sending anything.
-    GET /api/admin/agent-texts/preview?key=lht-perp-2026&day=monday
+    Dry-run preview — identical logic to the scheduler, no queuing.
+    Live FUB data, real goals, real rankings, excluded agents respected.
+    GET /api/admin/agent-texts/preview?key=lht-perp-2026&day=wednesday
     """
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
@@ -13110,45 +13110,62 @@ def api_agent_texts_preview():
     from datetime import date as _date
     import calendar
 
-    week_day = request.args.get("day", _date.today().strftime("%A").lower())
-    today    = _date.today()
+    week_day     = request.args.get("day", _date.today().strftime("%A").lower())
+    today        = _date.today()
     day_of_year  = today.timetuple().tm_yday
     days_in_year = 366 if calendar.isleap(today.year) else 365
     pct_elapsed  = day_of_year / days_in_year
 
     try:
-        from fub_client import FUBClient
-        fub = FUBClient()
         profiles  = _db.get_agent_profiles(active_only=True) or []
         _gl       = _db.get_all_goals(year=today.year) or []
         all_goals = {g["agent_name"]: g for g in _gl if g.get("agent_name")}
         ytd_cache = _db.get_ytd_cache(year=today.year) or {}
-        recent    = _db.get_recent_activity_by_agent(days=7) or {}
+
+        fub    = FUBClient()
+        recent = _fetch_7d_activity_from_fub(fub, profiles)
+
+        _excluded = getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set())
+        active_calls = [
+            (name, data["calls"])
+            for name, data in recent.items()
+            if name not in _excluded
+            and name not in getattr(config, "EXCLUDED_USERS", [])
+        ]
+        active_calls.sort(key=lambda x: x[1], reverse=True)
+        call_ranks       = {name: i + 1 for i, (name, _) in enumerate(active_calls)}
+        active_with_calls = sum(1 for _, c in active_calls if c > 0)
 
         results = []
         for profile in profiles:
             agent_name  = profile.get("agent_name") or ""
             fub_user_id = profile.get("fub_user_id")
-            if not agent_name or fub_user_id == config.BARRY_FUB_USER_ID:
+            if not agent_name or not fub_user_id:
+                continue
+            if fub_user_id == config.BARRY_FUB_USER_ID:
+                continue
+            if agent_name in _excluded:
                 continue
 
-            goals = all_goals.get(agent_name, {})
-            ytd   = ytd_cache.get(agent_name, {})
-            rec   = recent.get(agent_name, {}) if isinstance(recent, dict) else {}
-            kpi   = {
-                "calls_actual":   ytd.get("calls_ytd", 0) or 0,
-                "calls_goal":     goals.get("calls_goal", 0) or 0,
-                "calls_pace":     round((goals.get("calls_goal", 0) or 0) * pct_elapsed),
-                "convos_actual":  ytd.get("convos_ytd", 0) or 0,
-                "convos_goal":    goals.get("conversations_goal", 0) or 0,
-                "convos_pace":    round((goals.get("conversations_goal", 0) or 0) * pct_elapsed),
-                "appts_actual":   ytd.get("appts_ytd", 0) or 0,
-                "appts_goal":     goals.get("appointments_goal", 0) or 0,
-                "appts_pace":     round((goals.get("appointments_goal", 0) or 0) * pct_elapsed),
-                "deals_closed_ytd": goals.get("deals_closed", 0) or 0,
-                "calls_last_7d":  rec.get("calls_ytd", 0) or 0,
-                "convos_last_7d": rec.get("convos_ytd", 0) or 0,
-                "appts_last_7d":  rec.get("appts_ytd", 0) or 0,
+            goals   = all_goals.get(agent_name, {})
+            ytd     = ytd_cache.get(agent_name, {})
+            rec     = recent.get(agent_name, {"calls": 0, "convos": 0, "appts": 0})
+            targets = _db.compute_targets(goals) if goals else {}
+
+            kpi = {
+                "calls_actual":       ytd.get("calls_ytd", 0) or 0,
+                "convos_actual":      ytd.get("convos_ytd", 0) or 0,
+                "appts_actual":       ytd.get("appts_ytd", 0) or 0,
+                "calls_last_7d":      rec["calls"],
+                "convos_last_7d":     rec["convos"],
+                "appts_last_7d":      rec["appts"],
+                "calls_per_week":     targets.get("calls_per_week", 0),
+                "convos_per_week":    targets.get("convos_per_week", 0),
+                "appts_per_week":     targets.get("appts_per_week", 0),
+                "contact_rate_goal":  goals.get("contact_rate", 0.15),
+                "conv_rate_goal":     goals.get("call_to_appt_rate", 0.10),
+                "team_calls_rank":    call_ranks.get(agent_name, 0),
+                "team_size":          active_with_calls,
                 "pct_of_year_elapsed": round(pct_elapsed, 3),
             }
             agent_first = agent_name.split()[0]
