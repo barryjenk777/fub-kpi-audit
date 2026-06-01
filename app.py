@@ -12725,19 +12725,102 @@ def start_scheduler():
 
 def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
     """
-    Format a check-in text from Barry using verified FUB 7-day data.
-    kpi keys: calls_last_7d, convos_last_7d, appts_last_7d (live from FUB)
+    Generate a personalized coaching text using verified FUB 7-day data.
+
+    kpi keys used:
+      calls_last_7d, convos_last_7d, appts_last_7d  — live from FUB
+      calls_per_week, convos_per_week                — from compute_targets()
+      team_calls_rank, team_size                     — ranking among active agents
     """
+    import hashlib
+
     calls  = kpi.get("calls_last_7d", 0)
     convos = kpi.get("convos_last_7d", 0)
     appts  = kpi.get("appts_last_7d", 0)
 
-    return (
-        f"Hey {agent_first}, looking at your numbers this week: "
-        f"{calls} calls, {convos} conversations, {appts} appointments. "
-        f"Let's see if we can reach those goals. "
-        f"If I can help you at all, let me know."
-    )
+    calls_goal  = kpi.get("calls_per_week", 0)
+    convos_goal = kpi.get("convos_per_week", 0)
+    rank        = kpi.get("team_calls_rank", 0)
+    team_size   = kpi.get("team_size", 0)
+
+    # Deterministic variation seed: changes each week, differs per agent
+    from datetime import date as _date
+    seed_str = f"{agent_first}{_date.today().isocalendar()[1]}"
+    seed     = int(hashlib.md5(seed_str.encode()).hexdigest(), 16) % 4
+
+    # ── Openings ──────────────────────────────────────────────────────────
+    monday_opens = [
+        f"Hey {agent_first}, looking at last week's numbers:",
+        f"Hey {agent_first}, pulled up your numbers from last week:",
+        f"{agent_first}, checking in on last week:",
+        f"Hey {agent_first}, here's where last week landed:",
+    ]
+    wednesday_opens = [
+        f"Hey {agent_first}, midweek check on your numbers:",
+        f"{agent_first}, halfway through the week, here's where you are:",
+        f"Hey {agent_first}, checking in midweek:",
+        f"{agent_first}, quick midweek look at your numbers:",
+    ]
+    friday_opens = [
+        f"Hey {agent_first}, wrapping up the week:",
+        f"{agent_first}, end of week check on your numbers:",
+        f"Hey {agent_first}, here's how the week finished:",
+        f"{agent_first}, closing out the week with your numbers:",
+    ]
+
+    opens = {
+        "monday":    monday_opens,
+        "wednesday": wednesday_opens,
+        "friday":    friday_opens,
+    }
+    opening = opens.get(week_day, monday_opens)[seed]
+
+    # ── Data line ─────────────────────────────────────────────────────────
+    data_line = f"{calls} calls, {convos} conversations, {appts} appointments."
+
+    # ── Middle line: KPI met (Monday congrats) or goal nudge ──────────────
+    met_calls  = calls_goal  > 0 and calls  >= calls_goal
+    met_convos = convos_goal > 0 and convos >= convos_goal
+
+    if week_day == "monday" and (met_calls or met_convos):
+        congrats = [
+            "You hit your goals last week. That's how you build a business.",
+            "That's a strong week. Let's see you do it again.",
+            "You did the work last week. Keep that standard.",
+            "Goals met. That's the kind of week that closes deals.",
+        ]
+        middle = congrats[seed]
+    else:
+        nudges = [
+            "Let's see if we can reach those goals.",
+            "Let's push those numbers up.",
+            "Let's see if we can move those in the right direction.",
+            "There's room to push before the week is out.",
+        ]
+        middle = nudges[seed]
+
+    # ── Rank line: Wednesday and Friday only ──────────────────────────────
+    rank_line = ""
+    if week_day in ("wednesday", "friday") and rank > 0 and team_size > 0:
+        if rank == 1:
+            rank_line = " You're leading the team in calls this week."
+        elif rank == 2:
+            rank_line = f" You're #2 on the team in calls this week."
+        elif rank <= team_size // 2:
+            rank_line = f" You're in the top half of the team for calls this week."
+        else:
+            rank_line = f" You're #{rank} of {team_size} on calls this week. Let's move that up."
+
+    # ── Closings ──────────────────────────────────────────────────────────
+    closings = [
+        "If I can help you at all, let me know.",
+        "Let me know if there's anything I can do.",
+        "I'm here if you need me.",
+        "Reach out if you need anything.",
+    ]
+    closing = closings[seed]
+
+    return f"{opening} {data_line} {middle}{rank_line} {closing}"
 
 
 def _fetch_7d_activity_from_fub(fub, profiles):
@@ -12845,6 +12928,18 @@ def scheduled_agent_coaching_texts():
         logger.warning("[AGENT TEXTS] FUB 7d fetch failed: %s", _e)
         recent = {}
 
+    # Compute team call rankings for rank line in Wed/Fri texts
+    _excluded = getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set())
+    active_calls = [
+        (name, data["calls"])
+        for name, data in recent.items()
+        if name not in _excluded
+        and name not in (getattr(config, "EXCLUDED_USERS", []))
+    ]
+    active_calls.sort(key=lambda x: x[1], reverse=True)
+    call_ranks  = {name: i + 1 for i, (name, _) in enumerate(active_calls)}
+    active_with_calls = sum(1 for _, c in active_calls if c > 0)
+
     queued = 0
     for profile in profiles:
         agent_name  = profile.get("agent_name") or ""
@@ -12852,6 +12947,9 @@ def scheduled_agent_coaching_texts():
         if not agent_name or not fub_user_id:
             continue
         if fub_user_id == config.BARRY_FUB_USER_ID:
+            continue
+        if agent_name in _excluded:
+            logger.info("[AGENT TEXTS] Skipping excluded agent %s", agent_name)
             continue
 
         phone = profile.get("phone") or profile.get("fub_phone") or ""
@@ -12877,6 +12975,8 @@ def scheduled_agent_coaching_texts():
             "appts_per_week":     targets.get("appts_per_week", 0),
             "contact_rate_goal":  goals.get("contact_rate", 0.15),
             "conv_rate_goal":     goals.get("call_to_appt_rate", 0.10),
+            "team_calls_rank":    call_ranks.get(agent_name, 0),
+            "team_size":          active_with_calls,
             "pct_of_year_elapsed": round(pct_elapsed, 3),
         }
 

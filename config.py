@@ -44,6 +44,12 @@ EXCLUDED_USERS = [
     "Joseph Fuscaldo",
 ]
 
+# Agents excluded from Mon/Wed/Fri coaching texts (iMessage).
+# Add full agent name exactly as it appears in FUB.
+COACHING_TEXT_EXCLUDED_AGENTS = {
+    "Bobby Strunk",
+}
+
 # FUB user IDs whose calls should NEVER be counted or fetched.
 # userId=1 is a system/automated account that logs thousands of calls/week
 # and serves no purpose in any call metric.
