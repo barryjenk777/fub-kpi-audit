@@ -11781,6 +11781,10 @@ def sync_fub_roster():
                 _db.create_goal_token(name)
             synced += 1
             if is_new:
+                # Set start_date to today so YTD pace is prorated correctly from day one.
+                from datetime import date as _date
+                _db.set_agent_start_date(name, _date.today())
+                print(f"[ROSTER SYNC] start_date set to {_date.today()} for new agent {name}")
                 new_agents.append({"name": name, "email": email})
         except Exception as e:
             print(f"[ROSTER SYNC] Error upserting {name}: {e}")
