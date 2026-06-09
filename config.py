@@ -50,6 +50,17 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
     "Bobby Strunk",
 }
 
+# AI Sales Coach phone number — Buyers line.
+# Shown in coaching texts when an agent is calling but not converting to appointments.
+AI_SALES_COACH_PHONE_BUYERS = "1-337-486-3563"
+
+# Minimum calls in the last 7 days before we check for appointment conversion issues.
+# Below this, the agent isn't calling enough yet — that's the first problem to fix.
+AI_COACH_MIN_CALLS_THRESHOLD = 10
+
+# If appts_last_7d is below this fraction of the weekly appt goal, prompt the AI coach.
+AI_COACH_APPT_CONVERSION_THRESHOLD = 0.5
+
 # FUB user IDs whose calls should NEVER be counted or fetched.
 # userId=1 is a system/automated account that logs thousands of calls/week
 # and serves no purpose in any call metric.

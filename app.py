@@ -12756,6 +12756,7 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
 
     calls_goal  = kpi.get("calls_per_week", 0)
     convos_goal = kpi.get("convos_per_week", 0)
+    appts_goal  = kpi.get("appts_per_week", 0)
     rank        = kpi.get("team_calls_rank", 0)
     team_size   = kpi.get("team_size", 0)
 
@@ -12851,6 +12852,23 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
             ]
             rank_line = rank_lines_enc[seed]
 
+    # ── AI Coach prompt: calling but not converting to appointments ───────────
+    # Fires when: meaningful call volume but appointments are low.
+    # Threshold: 10+ calls AND (0 appts OR below 50% of weekly appt goal).
+    ai_coach_line = ""
+    _min_calls   = getattr(config, "AI_COACH_MIN_CALLS_THRESHOLD", 10)
+    _appt_thresh = getattr(config, "AI_COACH_APPT_CONVERSION_THRESHOLD", 0.5)
+    _coach_phone = getattr(config, "AI_SALES_COACH_PHONE_BUYERS", "1-337-486-3563")
+    _appt_low    = appts == 0 or (appts_goal > 0 and appts < appts_goal * _appt_thresh)
+    if calls >= _min_calls and _appt_low:
+        ai_coach_lines = [
+            f" One thing that can help: call our AI sales coach at {_coach_phone}. Try it 5 times this week and work on converting those conversations to appointments.",
+            f" Here's something worth doing this week: call our AI sales coach at {_coach_phone} five times. Practice the appointment-setting piece until it clicks.",
+            f" If you want to work on the appointment side, call our AI sales coach at {_coach_phone}. Give it 5 calls this week.",
+            f" The AI sales coach at {_coach_phone} is there for exactly this. Call it 5 times this week and focus on getting to the appointment.",
+        ]
+        ai_coach_line = ai_coach_lines[seed]
+
     # ── Closings ──────────────────────────────────────────────────────────
     closings = [
         "If I can help you at all, let me know.",
@@ -12860,7 +12878,7 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
     ]
     closing = closings[seed]
 
-    return f"{opening} {data_line} {middle}{rank_line} {closing}"
+    return f"{opening} {data_line} {middle}{rank_line}{ai_coach_line} {closing}"
 
 
 def _fetch_7d_activity_from_fub(fub, profiles):
