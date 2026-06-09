@@ -1545,6 +1545,7 @@ def send_goal_onboarding_email(agent_name, first_name, email, setup_url, dashboa
             from_email=config.EMAIL_FROM,
             subject=subject,
             html=html_body,
+            cc=config.BARRY_EMAIL,
         )
         print(f"[ONBOARDING EMAIL] ✅ Sent to {agent_name} <{email}>")
         return True
@@ -1764,6 +1765,7 @@ def send_onboarding_sequence_email(agent_name, first_name, email, setup_url, day
             subject=subject,
             html=html,
             text=body,
+            cc=config.BARRY_EMAIL,
         )
         print(f"[ONBOARDING SEQ] Day {day} sent to {agent_name} <{email}>")
         return True
