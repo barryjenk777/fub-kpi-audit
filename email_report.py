@@ -1548,3 +1548,222 @@ def send_goal_onboarding_email(agent_name, first_name, email, setup_url, dashboa
     except Exception as e:
         print(f"[ONBOARDING EMAIL] ❌ Failed for {agent_name}: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Onboarding sequence — Days 2 through 7
+# ---------------------------------------------------------------------------
+
+GAMMA_SITE = "https://legacy-home-team-dwurtn4.gamma.site/"
+
+_ONBOARD_SEQ = {
+    2: {
+        "subject": "You picked a good team. Here's what that actually means.",
+        "body": lambda f, setup_url: f"""Hey {f},
+
+Most agents join a team and spend the first week trying to figure out the vibe. Let me just tell you directly.
+
+This team runs on three things: gratitude for the opportunity in front of you, intentionality about where your time goes, and urgency when it comes to serving people.
+
+That's it. No hype. No fake energy. Just a system that works when you work it.
+
+Here's the one thing I want you to carry with you from day one: consistency beats intensity. Five real conversations a week, every single week, will outperform a burst of 30 calls followed by two weeks of silence. Every time. The whole system is built around that idea.
+
+It's all in one place.
+
+Full onboarding portal: {GAMMA_SITE}
+
+13 sections, 13 videos. It won't take long. And it answers most of the questions you probably already have.
+
+If you haven't set up your goals yet, your personal link is here: {setup_url}
+
+Tomorrow I'll walk you through exactly how you get paid.
+
+Barry
+Legacy Home Team
+
+Full onboarding portal: {GAMMA_SITE}""",
+    },
+
+    3: {
+        "subject": "Here's exactly how you get paid. No fine print.",
+        "body": lambda f, setup_url: f"""Hey {f},
+
+I've seen agents join teams and go months without really understanding their commission structure. That's a problem I don't want you to have.
+
+Here it is, plain and clear.
+
+The $595 Transaction Fee
+Every closing has a $595 client-paid fee. It does not come out of your commission. You make sure it shows up on the settlement statement and that's it.
+
+Your Commission Split
+Almost everyone on the team is on the LPT Brokerage Partner Plan. Here's how it works:
+
+80/20 split with a $15,000 annual cap. Once you hit that cap, you keep 100% for the rest of the year. There's a $500 annual fee withheld from your first deal (covers technology and E&O). No monthly fees, no sign-up fees.
+
+Do the math: if your average commission check is $6,000 per deal, you hit the cap around deal 3 or 4. From that point forward, everything is yours.
+
+There's also a Business Builder option ($500 flat per transaction, $5,000 cap, 100% from day one) that works better for high-volume agents focused on rapid growth. Full comparison is in Section 8 of the onboarding portal.
+
+What the team covers: leads, FUB CRM, AI engagement, ISA support, weekly training, 1:1 coaching with Joe, office access, and all LPT tools.
+
+What you cover: your license, dues, CE, mileage, and personal marketing.
+
+Tomorrow: the daily workflow that organizes your whole day.
+
+Barry
+Legacy Home Team
+
+Full onboarding portal: {GAMMA_SITE}""",
+    },
+
+    4: {
+        "subject": "Every morning starts with one click. Here's what to do with it.",
+        "body": lambda f, setup_url: f"""Hey {f},
+
+When you open Follow Up Boss and click All People, you're going to see a collection called Start Here.
+
+That's your command center. Every single day.
+
+It's broken into four categories. Work them in this order.
+
+1. LeadStream. Your leads, ranked for you.
+These are your assigned leads, sorted from highest LeadStream score to lowest. The score pulls from website activity, recency, stage, and over 40 other signals. The person at the top of that list is the first call you make. You don't have to guess who to call. The system already decided. Trust it.
+
+2. LeadStream Pond. Leads up for grabs.
+Unassigned leads showing activity or meeting criteria worth your attention. Nobody owns them yet. Click View All Ponds to see the full list. When you make contact with one and they engage, claim them and put them in your name. First come, first served.
+
+3. Out of Compliance. Leads you've let fall behind.
+This is the Maverick system doing its job. Someone texted you back and you haven't responded. A lead is in Hot stage and you haven't touched them recently. These are the ones. Clear the list by logging a call or sending a text. If this list keeps growing, we're going to have a conversation. Not a punishing one. A real one about what's getting in the way.
+
+4. Appointments: Missing Outcomes.
+If you set an appointment and didn't log what happened, it shows up here. Did you meet? Did they cancel? No-show? Click the appointment and record it. We track outcomes to coach you effectively.
+
+That's the whole workflow. Open Start Here every morning. Work your LeadStream list top to bottom. Fish the pond. Clear compliance. Update your appointment outcomes.
+
+That single habit, done consistently, will materially change your results. I've seen it happen.
+
+Full walkthrough is in Section 4 of the portal.
+
+Tomorrow: getting your LPT account fully set up.
+
+Barry
+Legacy Home Team
+
+Full onboarding portal: {GAMMA_SITE}""",
+    },
+
+    5: {
+        "subject": "10 things to do this week at LPT. Start with number one.",
+        "body": lambda f, setup_url: f"""Hey {f},
+
+LPT is a great brokerage. Cloud-based, consistently ranked top 10 nationally, and built around the agent. But like anything, it only works if you actually set it up.
+
+Here are the 10 things to complete in your first week. Don't let these sit.
+
+1. Complete Automated Systems Setup
+2. Schedule your Zoom Orientation (calendly.com/lpt-realty-orientation)
+3. Submit a sample support ticket (support@lptrealty.com)
+4. Activate Listing Power Tools
+5. Access the Knowledge Base
+6. Build your Desi Designer marketing profile
+7. Register for the Training Library
+8. Complete a test Dotloop
+9. Register for Motivational Monday (Mondays at 11am ET)
+10. Post an introduction in the Community Forum
+
+The orientation is the most important one. Get it on your calendar today.
+
+Questions about LPT? Call them at 1-877-366-2213 or email info@lptrealty.com.
+
+Everything else is in Section 10 of the portal.
+
+One more email tomorrow. Last step before you're fully official.
+
+Barry
+Legacy Home Team
+
+Full onboarding portal: {GAMMA_SITE}""",
+    },
+
+    6: {
+        "subject": "This is what the rhythm looks like from here.",
+        "body": lambda f, setup_url: f"""Hey {f},
+
+You've been through the handbook. You know how leads work, how you get paid, and what your daily system looks like.
+
+Here's what the rhythm looks like going forward.
+
+Every week Joe is going to sit down with you and go through your numbers. Calls, conversations, pipeline movement. Come ready to be honest about what's working and what isn't. That conversation is not a performance review. It's the whole point of being on this team.
+
+Reach Joe at (757) 286-7819 for your weekly 1:1s.
+
+The Maverick system will flag leads that need attention. When it does, log a call or a text and it clears. No drama. Just stay on top of it.
+
+If you ever get stuck on anything, text Joe. Anything urgent, text me at (757) 816-4037.
+
+One last thing coming tomorrow. It takes two minutes.
+
+Barry
+Legacy Home Team
+
+Full onboarding portal: {GAMMA_SITE}""",
+    },
+
+    7: {
+        "subject": "One signature and you're fully official.",
+        "body": lambda f, setup_url: f"""Hey {f},
+
+You've made it through the handbook. You've seen how we operate, how you get paid, how to work your leads, and how to get set up at LPT.
+
+One thing left.
+
+Go to the onboarding portal, find the handbook, and sign the last page. It's a signature page acknowledging you've read and understood how we work together. Email the signed copy to barry@yourfriendlyagent.net.
+
+That's it. Two minutes.
+
+I don't ask for this to be bureaucratic. I ask for it because this team runs on clarity and mutual commitment. You know what's expected. I know you've seen it. That signature closes the loop.
+
+Once I have it, you're fully in.
+
+Looking forward to building something with you.
+
+Barry
+Legacy Home Team
+
+Full onboarding portal: {GAMMA_SITE}""",
+    },
+}
+
+
+def send_onboarding_sequence_email(agent_name, first_name, email, setup_url, day):
+    """
+    Send one email from the 6-part onboarding content sequence (days 2-7).
+    Day 1 is the goal setup invite (send_goal_onboarding_email).
+    Days 2-7 are content emails covering culture, compensation, smart lists,
+    LPT onboarding, accountability rhythm, and handbook signature.
+
+    day: int 2-7 corresponding to days since onboarding started.
+    """
+    seq = _ONBOARD_SEQ.get(day)
+    if not seq:
+        print(f"[ONBOARDING SEQ] No email defined for day {day}")
+        return False
+
+    subject = seq["subject"]
+    body    = seq["body"](first_name, setup_url)
+    html    = body.replace("\n", "<br>")
+
+    try:
+        _pm.send(
+            to=email,
+            from_email=config.EMAIL_FROM,
+            subject=subject,
+            html=html,
+            text=body,
+        )
+        print(f"[ONBOARDING SEQ] Day {day} sent to {agent_name} <{email}>")
+        return True
+    except Exception as e:
+        print(f"[ONBOARDING SEQ] Day {day} failed for {agent_name}: {e}")
+        return False

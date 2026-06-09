@@ -12144,17 +12144,31 @@ def scheduled_sync_goals_data():
 def scheduled_onboarding_escalation():
     """
     Daily job (8am ET):
-    1. Send initial onboarding email to any active agent whose onboarding_sent_at is NULL
-       (catches pre-existing agents and anyone missed by roster sync).
-    2. Send Day 3 reminder to agents who got the email 3 days ago but haven't set goals.
-    3. Send Day 7 reminder to agents who got the email 7 days ago but haven't set goals.
+
+    Step 1 — Send the goal setup invite to any active agent whose
+              onboarding_sent_at is NULL (new hires missed by roster sync).
+
+    Step 2 — Walk ALL recently onboarded agents through a 6-email content
+              sequence based on how many days have passed since Day 1:
+
+              Day 1  (onboarding_sent_at set) — goal setup invite (Step 1)
+              Day 2  (days_since == 1) — culture + handbook intro
+              Day 3  (days_since == 2) — commission splits
+              Day 4  (days_since == 3) — smart lists + daily workflow
+              Day 5  (days_since == 4) — LPT onboarding checklist
+              Day 6  (days_since == 5) — accountability rhythm
+              Day 7  (days_since == 6) — handbook signature ask
+
+              Emails 2-7 go to ALL active agents in the window regardless of
+              whether they've completed goal setup — the content is relevant
+              either way and every email includes the Gamma onboarding portal.
     """
     if not _db.try_acquire_job_lock("onboarding_escalation"):
         return
     try:
         base_url = os.environ.get("BASE_URL", "").rstrip("/")
 
-        # ── Step 1: send initial email to anyone who never got it ──────────
+        # ── Step 1: send Day 1 goal invite to anyone who never got it ─────
         unsent = _db.get_agents_needing_onboarding()
         for agent in unsent:
             name  = agent["agent_name"]
@@ -12170,49 +12184,48 @@ def scheduled_onboarding_escalation():
                 send_goal_onboarding_email(name, first, email, setup_url,
                                            dashboard_url=dashboard_url)
                 _db.mark_onboarding_sent(name)
-                print(f"[ONBOARDING] Initial email sent to {name}")
+                print(f"[ONBOARDING] Day 1 goal invite sent to {name}")
             except Exception as e:
-                print(f"[ONBOARDING] Initial email failed for {name}: {e}")
+                print(f"[ONBOARDING] Day 1 invite failed for {name}: {e}")
 
-        # ── Step 2 & 3: Day 3 / Day 7 follow-ups ──────────────────────────
-        agents_needed = _db.get_agents_no_goal_setup()
-        today = datetime.now(timezone.utc).date()
+        # ── Step 2: Days 2-7 content sequence ─────────────────────────────
+        from email_report import send_onboarding_sequence_email
+        all_agents = _db.get_agent_profiles(active_only=True)
+        today      = datetime.now(timezone.utc).date()
 
-        for agent in agents_needed:
+        for agent in all_agents:
             sent_at = agent.get("onboarding_sent_at")
             if not sent_at:
                 continue
             try:
-                sent_date = datetime.fromisoformat(sent_at.replace("Z", "+00:00")).date()
+                sent_date = datetime.fromisoformat(
+                    sent_at.replace("Z", "+00:00") if isinstance(sent_at, str)
+                    else sent_at.isoformat()
+                ).date()
             except Exception:
                 continue
+
             days_since = (today - sent_date).days
-            name  = agent["agent_name"]
-            first = name.split()[0]
-            email = agent.get("email")
-            token = _db.get_token_for_agent(name)
-            base_url  = os.environ.get("BASE_URL", "").rstrip("/")
+            # Sequence emails fire on days 1-6 after the initial invite
+            if days_since < 1 or days_since > 6:
+                continue
+
+            seq_day = days_since + 1   # days_since=1 → Email 2, etc.
+            name    = agent["agent_name"]
+            first   = name.split()[0]
+            email   = agent.get("email")
+            token   = _db.get_token_for_agent(name)
             setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
 
-            if days_since == 3 and email and setup_url:
-                # Day 3: reminder email
-                try:
-                    from email_report import send_goal_onboarding_reminder
-                    send_goal_onboarding_reminder(name, first, email, setup_url, day=3)
-                    print(f"[ONBOARDING] Day 3 reminder sent to {name}")
-                except Exception as e:
-                    print(f"[ONBOARDING] Day 3 email failed for {name}: {e}")
+            if not email:
+                print(f"[ONBOARDING SEQ] {name} has no email — skipping Day {seq_day}")
+                continue
 
-            elif days_since == 7:
-                # Day 7: email + text if phone available
-                if email and setup_url:
-                    try:
-                        from email_report import send_goal_onboarding_reminder
-                        send_goal_onboarding_reminder(name, first, email, setup_url, day=7)
-                        print(f"[ONBOARDING] Day 7 reminder sent to {name}")
-                    except Exception as e:
-                        print(f"[ONBOARDING] Day 7 email failed for {name}: {e}")
-                # Day 7 follow-up email already handles this — no SMS fallback needed
+            try:
+                send_onboarding_sequence_email(name, first, email, setup_url, day=seq_day)
+            except Exception as e:
+                print(f"[ONBOARDING SEQ] Day {seq_day} failed for {name}: {e}")
+
     except Exception as e:
         _alert_on_job_failure("onboarding_escalation", str(e))
         raise
