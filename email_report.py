@@ -1409,50 +1409,32 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
         "footer": "background: #f7fafc; padding: 20px 36px; text-align: center; font-size: 12px; color: #a0aec0; border-top: 1px solid #e2e8f0;",
     }
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Set Up Your Goals — Legacy Home Team</title></head>
+<title>Welcome to Legacy Home Team</title></head>
 <body style="{_S['body']}">
 <div style="{_S['container']}">
 
   <div style="{_S['header']};text-align:center">
     <img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">
-    <p style="{_S['header_title']}">Your Personal Goal System Is Ready</p>
+    <p style="{_S['header_title']}">Welcome to Legacy Home Team</p>
   </div>
 
   <div style="{_S['body_pad']}">
     <p style="{_S['greeting']}">Hey {first_name},</p>
 
     <p style="{_S['p']}">
-      Welcome to the team. Before we talk leads, appointments, or numbers —
-      we want to know <strong>why you're here</strong>.
+      Welcome to the team. I mean that.
     </p>
 
     <p style="{_S['p']}">
-      The agents who earn the most on this team aren't necessarily the most talented.
-      They're the ones who know exactly what they're building toward —
-      and they have a system to get there every single day.
+      The agents who earn the most here aren't necessarily the most talented.
+      They're the ones who know exactly what they're building toward and have a system
+      to get there every single day. That's what we're going to build for you, starting now.
     </p>
 
-    <div style="{_S['quote_box']}">
-      <p style="{_S['quote_text']}">"You don't have to be great to start,<br>but you have to start to be great."</p>
-      <p style="{_S['quote_attr']}">— Zig Ziglar</p>
-    </div>
-
     <p style="{_S['p']}">
-      We've built you a personal dashboard that turns your income goal into
-      a daily system — calls, appointments, and closings — calculated around <em>your</em> why.
-      It takes about 5 minutes to set up. Here's what you get:
-    </p>
-
-    <div style="{_S['bullets']}">
-      <p style="{_S['bullet']}">🎯 <strong>Your number, made real</strong> — We calculate exactly how many calls to make each day to hit your income goal</p>
-      <p style="{_S['bullet']}">🔥 <strong>A streak to protect</strong> — Daily habit tracking with a "don't break the chain" calendar that keeps you accountable</p>
-      <p style="{_S['bullet']}">💬 <strong>Personalized nudges</strong> — Morning emails built around your why and your goals (not generic reminders)</p>
-      <p style="{_S['bullet']}">📊 <strong>Your own dashboard</strong> — See your pace toward your annual goal, updated daily</p>
-    </div>
-
-    <p style="{_S['p']}">
-      This only works if it's <em>yours</em>. The income target, the identity, the reason you wake up
-      and make calls — we built the form around that, not around a spreadsheet.
+      First thing: set up your goals. It takes 5 minutes and it's the foundation everything else runs on.
+      Your income target, your why, your prospecting schedule. Once it's done, the system calculates
+      your daily call target and tracks your pace all year long.
     </p>
 
     <div style="{_S['cta_wrap']}">
@@ -1465,15 +1447,36 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
     </p>''' if dashboard_url else ''}
 
     <p style="{_S['p']}">
-      If you have questions, reply here or reach out to Barry directly.
-      We're excited to have you and want to see you win.
+      Over the next 6 days I'll walk you through everything you need to know about
+      working here. Look for these in your inbox:
     </p>
 
-    <p style="{_S['p']}">— Barry &amp; The Legacy Home Team</p>
+    <div style="{_S['bullets']}">
+      <p style="{_S['bullet']}"><strong>Day 2</strong> &nbsp; What this team is about and how we operate</p>
+      <p style="{_S['bullet']}"><strong>Day 3</strong> &nbsp; Exactly how you get paid (commission splits, no surprises)</p>
+      <p style="{_S['bullet']}"><strong>Day 4</strong> &nbsp; Your daily workflow in Follow Up Boss</p>
+      <p style="{_S['bullet']}"><strong>Day 5</strong> &nbsp; Getting set up at LPT Realty (10 things to do this week)</p>
+      <p style="{_S['bullet']}"><strong>Day 6</strong> &nbsp; What accountability looks like week to week</p>
+      <p style="{_S['bullet']}"><strong>Day 7</strong> &nbsp; One last thing to make it official</p>
+    </div>
+
+    <p style="{_S['p']}">
+      Everything you need is also in the full onboarding portal. 13 sections, 13 videos, self-paced.
+    </p>
+
+    <div style="{_S['cta_wrap']}">
+      <a href="{GAMMA_SITE}" style="display:inline-block;background:#1a1a2e;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;padding:13px 32px;border-radius:8px;">View Onboarding Portal →</a>
+    </div>
+
+    <p style="{_S['p']}">
+      If you have questions at any point, reply here or text me directly. I'm glad you're here.
+    </p>
+
+    <p style="{_S['p']}">Barry<br>Legacy Home Team</p>
   </div>
 
   <div style="{_S['footer']}">
-    Legacy Home Team &nbsp;·&nbsp; This link is unique to you — don't share it
+    Legacy Home Team &nbsp;·&nbsp; Your goal setup link is personal — don't share it
   </div>
 
 </div>
@@ -1534,7 +1537,7 @@ def send_goal_onboarding_email(agent_name, first_name, email, setup_url, dashboa
     Triggered automatically by the FUB roster sync when a new agent is detected.
     """
     html_body = build_goal_onboarding_email(first_name, setup_url, dashboard_url=dashboard_url)
-    subject = f"{first_name}, your goals are waiting — 5 minutes to set them up 🎯"
+    subject = f"{first_name}, welcome to Legacy Home Team. Start here."
 
     try:
         _pm.send(
