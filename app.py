@@ -12756,6 +12756,93 @@ def start_scheduler():
 # Agent iMessage coaching texts — sent from Barry's Mac via AppleScript
 # ---------------------------------------------------------------------------
 
+# How many days from start_date before an agent graduates to regular KPI texts.
+_ONBOARDING_TEXT_WINDOW_DAYS = 14
+
+
+def _generate_new_agent_text(agent_first, week_day, goal_set, setup_url):
+    """
+    Coaching text for agents in their first 14 days.
+
+    Phase 1 (goal_set=False): push them to fill out their goal setup. Include link.
+    Phase 2 (goal_set=True):  onboarding/motivational content while emails are going out.
+
+    Returns a text message string.
+    """
+    import hashlib
+    from datetime import date as _date
+    seed = int(hashlib.md5(
+        f"{agent_first}{_date.today().isocalendar()[1]}".encode()
+    ).hexdigest(), 16) % 4
+
+    if not goal_set:
+        # Phase 1 — gentle but clear push to complete goal setup
+        opens = {
+            "monday": [
+                f"Hey {agent_first}, new week. Quick thing before we get rolling:",
+                f"Hey {agent_first}, happy Monday. One thing I need from you:",
+                f"{agent_first}, starting the week with this:",
+                f"Hey {agent_first}, before we get into the week:",
+            ],
+            "wednesday": [
+                f"Hey {agent_first}, midweek check.",
+                f"{agent_first}, checking in.",
+                f"Hey {agent_first}, Wednesday already.",
+                f"{agent_first}, quick midweek thing:",
+            ],
+            "friday": [
+                f"Hey {agent_first}, end of the week.",
+                f"{agent_first}, before the weekend:",
+                f"Hey {agent_first}, wrapping up the week with this:",
+                f"{agent_first}, Friday nudge:",
+            ],
+        }
+        middles = [
+            f"Your goal setup still needs to be filled out. It takes 5 minutes and it's how I calibrate everything for you. Here's your link: {setup_url}",
+            f"I still need your goal setup completed. 5 minutes, and it's how the whole coaching system gets built around you specifically. Link: {setup_url}",
+            f"Your goal setup isn't done yet. Everything we do around coaching and texts runs off what you put in there. Takes 5 minutes: {setup_url}",
+            f"Still waiting on your goal setup. I can't personalize anything for you until it's filled out. It's a quick one: {setup_url}",
+        ]
+        closing = "Let me know if you have any questions."
+        return f"{opens.get(week_day, opens['monday'])[seed]} {middles[seed]} {closing}"
+
+    else:
+        # Phase 2 — goal set, still in onboarding window
+        opens = {
+            "monday": [
+                f"Hey {agent_first}, new week. You've got your goals set.",
+                f"Hey {agent_first}, Monday. You're set up and ready to go.",
+                f"{agent_first}, week two. You know the system.",
+                f"Hey {agent_first}, new week. Let's build the habit.",
+            ],
+            "wednesday": [
+                f"Hey {agent_first}, midweek check.",
+                f"{agent_first}, checking in.",
+                f"Hey {agent_first}, halfway through the week.",
+                f"{agent_first}, Wednesday.",
+            ],
+            "friday": [
+                f"Hey {agent_first}, end of the week.",
+                f"{agent_first}, wrapping up the week.",
+                f"Hey {agent_first}, Friday already.",
+                f"{agent_first}, end of week check:",
+            ],
+        }
+        middles = [
+            "Open Follow Up Boss and work the Start Here collection every morning. LeadStream top to bottom. That one habit will change your results.",
+            "Consistency beats intensity every time. Five real conversations a week, every week, will outperform a burst of calls followed by silence.",
+            "The system works when you work it. Open FUB, work your LeadStream list, fish the pond. That's the whole job.",
+            "You picked a good team. Now pick the habit. Five conversations a week is all it takes to build something real here.",
+        ]
+        closings = [
+            "I'm here if you need anything.",
+            "Reach out if you have questions.",
+            "Let me know if I can help.",
+            "I'm here if anything comes up.",
+        ]
+        return f"{opens.get(week_day, opens['monday'])[seed]} {middles[seed]} {closings[seed]}"
+
+
 def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
     """
     Generate a personalized coaching text using verified FUB 7-day data.
@@ -13036,27 +13123,53 @@ def scheduled_agent_coaching_texts():
         ytd   = ytd_cache.get(agent_name, {})
         rec   = recent.get(agent_name, {"calls": 0, "convos": 0, "appts": 0})
 
-        targets = _db.compute_targets(goals) if goals else {}
-
-        kpi = {
-            "calls_actual":       ytd.get("calls_ytd", 0) or 0,
-            "convos_actual":      ytd.get("convos_ytd", 0) or 0,
-            "appts_actual":       ytd.get("appts_ytd", 0) or 0,
-            "calls_last_7d":      rec.get("calls", 0),
-            "convos_last_7d":     rec.get("convos", 0),
-            "appts_last_7d":      rec.get("appts", 0),
-            "calls_per_week":     targets.get("calls_per_week", 0),
-            "convos_per_week":    targets.get("convos_per_week", 0),
-            "appts_per_week":     targets.get("appts_per_week", 0),
-            "contact_rate_goal":  goals.get("contact_rate", 0.15),
-            "conv_rate_goal":     goals.get("call_to_appt_rate", 0.10),
-            "team_calls_rank":    call_ranks.get(agent_name, 0),
-            "team_size":          active_with_calls,
-            "pct_of_year_elapsed": round(pct_elapsed, 3),
-        }
-
         agent_first = agent_name.split()[0]
-        message = _generate_agent_coaching_text(agent_first, kpi, week_day)
+
+        # ── Onboarding window check ────────────────────────────────────────
+        # Agents in their first 14 days get onboarding-focused texts instead
+        # of KPI texts. Phase 1 = goal not filled out. Phase 2 = goal set.
+        start_date_raw = profile.get("start_date")
+        days_on_team   = None
+        if start_date_raw:
+            try:
+                from datetime import date as _sd_date
+                sd = _sd_date.fromisoformat(str(start_date_raw)[:10])
+                days_on_team = (today - sd).days
+            except Exception:
+                days_on_team = None
+
+        in_onboarding = (
+            days_on_team is not None
+            and days_on_team <= _ONBOARDING_TEXT_WINDOW_DAYS
+        )
+
+        if in_onboarding:
+            goal_set  = bool(goals and goals.get("gci_goal", 0))
+            base_url  = os.environ.get("BASE_URL", "").rstrip("/")
+            token     = _db.get_token_for_agent(agent_name)
+            setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
+            message   = _generate_new_agent_text(
+                agent_first, week_day, goal_set=goal_set, setup_url=setup_url
+            )
+        else:
+            targets = _db.compute_targets(goals) if goals else {}
+            kpi = {
+                "calls_actual":        ytd.get("calls_ytd", 0) or 0,
+                "convos_actual":       ytd.get("convos_ytd", 0) or 0,
+                "appts_actual":        ytd.get("appts_ytd", 0) or 0,
+                "calls_last_7d":       rec.get("calls", 0),
+                "convos_last_7d":      rec.get("convos", 0),
+                "appts_last_7d":       rec.get("appts", 0),
+                "calls_per_week":      targets.get("calls_per_week", 0),
+                "convos_per_week":     targets.get("convos_per_week", 0),
+                "appts_per_week":      targets.get("appts_per_week", 0),
+                "contact_rate_goal":   goals.get("contact_rate", 0.15),
+                "conv_rate_goal":      goals.get("call_to_appt_rate", 0.10),
+                "team_calls_rank":     call_ranks.get(agent_name, 0),
+                "team_size":           active_with_calls,
+                "pct_of_year_elapsed": round(pct_elapsed, 3),
+            }
+            message = _generate_agent_coaching_text(agent_first, kpi, week_day)
 
         try:
             row_id = _db.queue_agent_imessage(
