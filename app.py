@@ -12760,12 +12760,14 @@ def start_scheduler():
 _ONBOARDING_TEXT_WINDOW_DAYS = 14
 
 
-def _generate_new_agent_text(agent_first, week_day, goal_set, setup_url):
+def _generate_new_agent_text(agent_first, week_day, goal_set, setup_url, days_on_team=0):
     """
     Coaching text for agents in their first 14 days.
 
     Phase 1 (goal_set=False): push them to fill out their goal setup. Include link.
-    Phase 2 (goal_set=True):  onboarding/motivational content while emails are going out.
+    Phase 2 (goal_set=True):  follow-up on the onboarding email they're receiving
+                               that week. No KPI talk. Encourage them to read the
+                               emails, explore the systems, and ask questions.
 
     Returns a text message string.
     """
@@ -12807,40 +12809,43 @@ def _generate_new_agent_text(agent_first, week_day, goal_set, setup_url):
         return f"{opens.get(week_day, opens['monday'])[seed]} {middles[seed]} {closing}"
 
     else:
-        # Phase 2 — goal set, still in onboarding window
-        opens = {
-            "monday": [
-                f"Hey {agent_first}, new week. You've got your goals set.",
-                f"Hey {agent_first}, Monday. You're set up and ready to go.",
-                f"{agent_first}, week two. You know the system.",
-                f"Hey {agent_first}, new week. Let's build the habit.",
-            ],
-            "wednesday": [
-                f"Hey {agent_first}, midweek check.",
-                f"{agent_first}, checking in.",
-                f"Hey {agent_first}, halfway through the week.",
-                f"{agent_first}, Wednesday.",
-            ],
-            "friday": [
-                f"Hey {agent_first}, end of the week.",
-                f"{agent_first}, wrapping up the week.",
-                f"Hey {agent_first}, Friday already.",
-                f"{agent_first}, end of week check:",
-            ],
-        }
-        middles = [
-            "Open Follow Up Boss and work the Start Here collection every morning. LeadStream top to bottom. That one habit will change your results.",
-            "Consistency beats intensity every time. Five real conversations a week, every week, will outperform a burst of calls followed by silence.",
-            "The system works when you work it. Open FUB, work your LeadStream list, fish the pond. That's the whole job.",
-            "You picked a good team. Now pick the habit. Five conversations a week is all it takes to build something real here.",
-        ]
-        closings = [
-            "I'm here if you need anything.",
-            "Reach out if you have questions.",
-            "Let me know if I can help.",
-            "I'm here if anything comes up.",
-        ]
-        return f"{opens.get(week_day, opens['monday'])[seed]} {middles[seed]} {closings[seed]}"
+        # Phase 2 — follow up on the onboarding email content for this window.
+        # Tie loosely to where they are in the sequence; no KPI talk.
+        # days_on_team 1-6 mirrors the 6 content emails. 7-14 = settling in.
+        if days_on_team <= 2:
+            # Around Day 2 email: team culture + handbook
+            topics = [
+                f"Hey {agent_first}, I sent you some info about how this team operates. Take a look when you get a chance and let me know if anything doesn't make sense.",
+                f"Hey {agent_first}, keep an eye on your inbox. I'm sending you info this week about how we work and what to expect. Read through it and reply with any questions.",
+                f"{agent_first}, welcome again. You've got an email from me walking through the team. Read it when you have 5 minutes. Questions welcome.",
+                f"Hey {agent_first}, check your inbox. I'm walking you through everything this week one email at a time. Start with what I sent today.",
+            ]
+        elif days_on_team <= 4:
+            # Around Day 3-4 emails: compensation + smart lists
+            topics = [
+                f"Hey {agent_first}, I sent you the breakdown on how you get paid and how to work Follow Up Boss. Both are worth reading carefully. Let me know if you have questions on either.",
+                f"{agent_first}, check your inbox this week. I walked you through your commission structure and your daily FUB workflow. Good stuff to know cold.",
+                f"Hey {agent_first}, you should have emails from me this week on compensation and the Start Here collection in FUB. Read those and reach out if anything's unclear.",
+                f"{agent_first}, two important emails in your inbox from me this week: how you get paid and how to work FUB every day. Take a look.",
+            ]
+        elif days_on_team <= 7:
+            # Around Day 5-7 emails: LPT setup + accountability + handbook signature
+            topics = [
+                f"Hey {agent_first}, check your inbox. I sent you the LPT setup checklist and a few other things to wrap up your first week. Let me know if you need help with any of it.",
+                f"{agent_first}, you've got some action items in your inbox this week. LPT setup and the handbook signature are the two I need you to complete. Let me know when they're done.",
+                f"Hey {agent_first}, almost through the onboarding emails. LPT setup and handbook sign-off are the last pieces. Check your inbox and reach out if you need anything.",
+                f"{agent_first}, wrapping up the onboarding emails this week. Check your inbox for the LPT checklist and the last step to make everything official.",
+            ]
+        else:
+            # Days 8-14: settled in, encourage and stay available
+            topics = [
+                f"Hey {agent_first}, hope the first couple weeks are going well. I'm here if you have questions about anything you've read or seen so far.",
+                f"{agent_first}, checking in. How's onboarding going? Anything from the emails or the portal that you want to talk through?",
+                f"Hey {agent_first}, you're through the onboarding emails. How's everything landing? Reply if anything's unclear.",
+                f"{agent_first}, hope everything's starting to click. The onboarding portal is always there if you need to go back to anything. I'm here if you need me.",
+            ]
+
+        return topics[seed]
 
 
 def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
@@ -13149,7 +13154,8 @@ def scheduled_agent_coaching_texts():
             token     = _db.get_token_for_agent(agent_name)
             setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
             message   = _generate_new_agent_text(
-                agent_first, week_day, goal_set=goal_set, setup_url=setup_url
+                agent_first, week_day, goal_set=goal_set,
+                setup_url=setup_url, days_on_team=days_on_team,
             )
         else:
             targets = _db.compute_targets(goals) if goals else {}
