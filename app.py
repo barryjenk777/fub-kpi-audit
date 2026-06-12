@@ -8599,6 +8599,17 @@ def api_pond_mailer_reply():
 
         if not person_id:
             logger.info("Pond reply: no matching pond lead for %s", clean_from)
+            # Log unmatched replies too — otherwise they vanish without a trace
+            # and we can't tell "no replies arriving" from "replies failing to match".
+            try:
+                _db.log_pond_reply(
+                    person_id=None, person_name=clean_from,
+                    reply_from=clean_from, reply_text=body_text[:2000],
+                    sentiment="unmatched", sentiment_score=0.0,
+                    routed=False, fub_task_id=None,
+                )
+            except Exception as _le:
+                logger.warning("Pond reply: failed to log unmatched reply: %s", _le)
             return jsonify({"status": "ok", "action": "unmatched"}), 200
 
         logger.info("Pond reply matched: %s (ID: %s) — replied to Email %s",
