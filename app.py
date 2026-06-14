@@ -2312,6 +2312,66 @@ def api_sync_appointment_tags():
         return jsonify({"error": str(e)}), 500
 
 
+# Tag taxonomy for classifying ISA_TRANSFER_FRESH leads into AI text vs AI voice.
+# A lead carrying ISA_TRANSFER_FRESH was transferred in the last 7 days (the tag
+# is auto-removed after 7 days), so tag-presence is itself the weekly window.
+_TRANSFER_TEXT_TAGS  = {"AI_ENGAGED", "AI_NEEDS_FOLLOW_UP"}
+_TRANSFER_VOICE_TAGS = {"AI_VOICE_NEEDS_FOLLOW_UP",
+                        "ISA_TRANSFER_SUCCESSFUL",   # defensive — not seen in FUB yet
+                        "ISA_TRANSFER_UNSUCCESSFUL"} # "engaged, agreed, hung up on hold"
+
+
+def _count_weekly_transfers():
+    """
+    Count this week's AI text and AI voice transfers for the hype email.
+
+    Pulls every lead currently carrying ISA_TRANSFER_FRESH (= transferred in the
+    last 7 days, since the tag auto-expires) and classifies each:
+      - voice if it carries any voice tag (AI_VOICE_NEEDS_FOLLOW_UP /
+        ISA_TRANSFER_UNSUCCESSFUL) — voice takes priority when both are present
+      - else text if it carries a text tag (AI_ENGAGED / AI_NEEDS_FOLLOW_UP)
+      - else uncategorized (logged, not counted)
+
+    When customISATransferDate is present and clearly older than 8 days, the lead
+    is excluded as a stale/lingering tag. Missing dates are trusted (tag presence).
+
+    Returns dict: {ai_text, ai_voice, uncategorized, total}
+    """
+    from config import ISA_TRANSFER_FRESH_TAG
+    client = FUBClient()
+    people = client.get_people(tag=ISA_TRANSFER_FRESH_TAG, limit=200) or []
+
+    _et_h  = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+    ET     = timezone(timedelta(hours=_et_h))
+    cutoff = (datetime.now(ET) - timedelta(days=8)).date()
+
+    text = voice = uncat = stale = 0
+    for p in people:
+        # Defensive staleness guard using the custom field when populated
+        xfer = p.get("customISATransferDate")
+        if xfer:
+            try:
+                from datetime import date as _d
+                if _d.fromisoformat(str(xfer)[:10]) < cutoff:
+                    stale += 1
+                    continue
+            except Exception:
+                pass
+        tags = set(p.get("tags") or [])
+        if tags & _TRANSFER_VOICE_TAGS:
+            voice += 1
+        elif tags & _TRANSFER_TEXT_TAGS:
+            text += 1
+        else:
+            uncat += 1
+
+    logger.info("[HYPE] Weekly transfers — text=%d voice=%d uncategorized=%d "
+                "stale_skipped=%d (of %d tagged)",
+                text, voice, uncat, stale, len(people))
+    return {"ai_text": text, "ai_voice": voice,
+            "uncategorized": uncat, "total": text + voice}
+
+
 def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
     """
     Shared data-gathering for the hype email preview and send endpoints.
@@ -2392,6 +2452,16 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
         "thresholds":     audit.get("thresholds", {}),
         "to_emails":      to_emails,
     }
+
+
+@app.route("/api/hype-transfer-counts")
+def api_hype_transfer_counts():
+    """Read-only: the auto-computed weekly AI text + AI voice transfer counts.
+    Lets Barry verify the numbers the Sunday hype job will use before it sends."""
+    try:
+        return jsonify({"success": True, **_count_weekly_transfers()})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/preview-hype-email")
@@ -11349,6 +11419,32 @@ def scheduled_send_manager_email():
         print(f"[SCHEDULER] Manager email error: {e}")
 
 
+def scheduled_send_hype_email():
+    """Sunday 9pm ET — auto-compute weekly transfer counts and send the hype email.
+
+    AI text + AI voice counts come from ISA_TRANSFER_FRESH tag classification.
+    Fhalen's ISA appointments are auto-detected by the send endpoint (human_isa
+    omitted → falls back to FUB appointments over the period).
+    """
+    if _already_fired_recently("hype_email", within_hours=20):
+        print("[SCHEDULER] Hype email: skipped — already sent within 20h")
+        return
+    print(f"[SCHEDULER] Sending hype email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
+    try:
+        counts = _count_weekly_transfers()
+        with app.test_client() as tc:
+            resp = tc.post("/api/send-hype-email", json={
+                "ai_text":  counts["ai_text"],
+                "ai_voice": counts["ai_voice"],
+                # human_isa omitted → endpoint auto-detects Fhalen's appts
+            })
+            print(f"[SCHEDULER] Hype email: text={counts['ai_text']} "
+                  f"voice={counts['ai_voice']} → {resp.data.decode()}")
+        _record_fired("hype_email")
+    except Exception as e:
+        print(f"[SCHEDULER] Hype email error: {e}")
+
+
 def scheduled_new_lead_check():
     """Every 5 minutes — check Shark Tank for new leads and fire immediate email."""
     try:
@@ -12633,6 +12729,12 @@ def start_scheduler():
     # KPI Audit email: Monday 8:30am ET
     _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET),
                        id="audit_email", name="Monday KPI audit email",
+                       max_instances=1, coalesce=True)
+
+    # Weekly Hype email: Sunday 9pm ET — auto-computes AI text + AI voice
+    # transfer counts from ISA_TRANSFER_FRESH tags; Fhalen appts auto-detected.
+    _scheduler.add_job(scheduled_send_hype_email, CronTrigger(day_of_week="sun", hour=21, minute=0, timezone=ET),
+                       id="hype_email", name="Sunday weekly hype email",
                        max_instances=1, coalesce=True)
 
     # ── Pond Mailer schedule ────────────────────────────────────────────────
