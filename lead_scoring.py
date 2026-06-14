@@ -492,11 +492,27 @@ class LeadScorer:
             if ISA_TRANSFER_FRESH_TAG in (person.get("tags") or []):
                 try:
                     import db as _db_module
-                    _db_module.record_isa_transfer(
+                    is_new_transfer = _db_module.record_isa_transfer(
                         person["id"],
                         lead_name=person.get("name"),
                         agent_name=agent_name,
                     )
+                    # On first sighting only, stamp the transfer date into the
+                    # "ISA Transfer Date" FUB custom field so it's visible in FUB.
+                    # record_isa_transfer returns True only on the initial insert,
+                    # so this fires once per lead, not on every scoring run.
+                    if is_new_transfer:
+                        try:
+                            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                            _et = _tz(_td(hours=-4 if 3 <= _dt.now(_tz.utc).month <= 10 else -5))
+                            _today_et = _dt.now(_et).strftime("%Y-%m-%d")
+                            self.client.update_person_fields(
+                                person["id"],
+                                {"customISATransferDate": _today_et},
+                            )
+                        except Exception as _ce:
+                            logger.warning("Could not set ISA Transfer Date for %s: %s",
+                                           person.get("id"), _ce)
                 except Exception:
                     pass  # DB unavailable — scoring continues unaffected
 

@@ -804,6 +804,13 @@ class FUBClient:
             return self._request("PUT", f"people/{person_id}", json_data=extra_fields)
         return None
 
+    def update_person_fields(self, person_id, fields):
+        """Update arbitrary person fields (e.g. custom fields) via PUT.
+        fields: dict like {"customISATransferDate": "2026-06-13"}."""
+        if not fields:
+            return None
+        return self._request("PUT", f"people/{person_id}", json_data=fields)
+
     def get_people_by_tag(self, tag):
         """Fetch leads and client-side filter by tag.
 
