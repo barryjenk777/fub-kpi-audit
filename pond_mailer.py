@@ -2499,7 +2499,7 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
 
     from sendgrid import SendGridAPIClient
     from sendgrid.helpers.mail import (
-        Mail, Email as SgEmail, Bcc,
+        Mail, Email as SgEmail, Category,
         TrackingSettings, ClickTracking, OpenTracking,
     )
 
@@ -2538,17 +2538,18 @@ def send_email(to_email, subject, body_text, body_html, dry_run=False):
     msg.add_header(SgHeader("List-Unsubscribe", f"<{_unsub}>"))
     msg.add_header(SgHeader("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"))
 
-    # BCC Barry on every email so he can see exactly what's going out
-    # Skip BCC if TO is already Barry (e.g. test sends) — SendGrid rejects duplicate addresses
-    _to_normalized = to_email.lower().strip() if isinstance(to_email, str) else ""
-    if _to_normalized != FROM_EMAIL.lower():
-        msg.add_bcc(Bcc(FROM_EMAIL))
+    # Category tag — lets us pull SendGrid stats for THIS campaign only, instead
+    # of the account-wide aggregate that's polluted by internal team emails.
+    # Filter in SendGrid: Stats → Category Stats → "pond_mailer".
+    msg.add_category(Category("pond_mailer"))
 
-    # Disable click + open tracking — tracking URLs rewritten through sendgrid.net
-    # are a major spam signal for Gmail/Outlook filters on lead-facing emails.
+    # Tracking ENABLED for this campaign to gather open/click data.
+    # NOTE: SendGrid rewrites links through sendgrid.net, which is a mild spam
+    # signal on cold lead email. We're accepting that tradeoff to get visibility.
+    # Open tracking = pixel (low risk). Click tracking = link rewrite (higher risk).
     tracking = TrackingSettings()
-    tracking.click_tracking = ClickTracking(enable=False, enable_text=False)
-    tracking.open_tracking = OpenTracking(enable=False)
+    tracking.click_tracking = ClickTracking(enable=True, enable_text=False)
+    tracking.open_tracking = OpenTracking(enable=True)
     msg.tracking_settings = tracking
 
     sg = SendGridAPIClient(api_key)
