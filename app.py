@@ -4799,6 +4799,40 @@ def api_admin_expire_isa_transfers():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/admin/backfill-isa-transfer-date", methods=["POST"])
+def api_admin_backfill_isa_transfer_date():
+    """One-time backfill: write the stored transfer_date into the FUB
+    'ISA Transfer Date' custom field (customISATransferDate) for all currently
+    active ISA transfers. Idempotent — safe to run more than once."""
+    try:
+        active = _db.get_all_isa_transfers()
+        if not active:
+            return jsonify({"success": True, "updated": 0, "message": "No active transfers"})
+        api_key = os.environ.get("FUB_API_KEY", "")
+        from fub_client import FUBClient
+        client = FUBClient(api_key)
+        updated, failed = 0, []
+        for row in active:
+            person_id = row["person_id"]
+            xfer = row.get("transfer_date")
+            if not person_id or not xfer:
+                continue
+            date_only = str(xfer)[:10]  # ISO timestamp → YYYY-MM-DD
+            try:
+                client.update_person_fields(
+                    person_id, {"customISATransferDate": date_only}
+                )
+                updated += 1
+            except Exception as e:
+                failed.append({"person_id": person_id, "error": str(e)})
+        return jsonify({"success": True, "updated": updated,
+                        "total_active": len(active), "failed": failed})
+    except Exception as e:
+        import traceback
+        return jsonify({"success": False, "error": str(e),
+                        "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/admin/update-emails", methods=["POST"])
 def api_admin_update_emails():
     """Batch-update agent email addresses. Body: {emails: {agent_name: email, ...}}"""
