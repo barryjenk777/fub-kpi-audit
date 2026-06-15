@@ -1105,16 +1105,26 @@ TRANSFER_TEXT_TAGS  = {"AI_ENGAGED", "AI_NEEDS_FOLLOW_UP"}
 TRANSFER_VOICE_TAGS = {"AI_VOICE_NEEDS_FOLLOW_UP",
                        "ISA_TRANSFER_SUCCESSFUL",
                        "ISA_TRANSFER_UNSUCCESSFUL"}
+# YLOPO_AI_VOICE_COMPLETED = the AI voice cadence dialed and nobody answered.
+# It is NOT a transfer. Only treat it as a non-event when there's no real
+# channel tag (a lead can legitimately have a text transfer AND a separate
+# failed voice attempt — that lead is still a real text transfer).
+TRANSFER_NO_ANSWER_TAGS = {"YLOPO_AI_VOICE_COMPLETED"}
 
 
 def classify_transfer_type(tags) -> str:
-    """Classify an ISA transfer from its tags. Voice wins ties (the voice tags
-    are the channel-of-record). Returns 'voice' | 'text' | 'unknown'."""
+    """Classify an ISA transfer from its tags.
+    Returns 'voice' | 'text' | 'no_answer' | 'unknown'.
+    Voice wins text ties (voice tags are the channel-of-record). 'no_answer'
+    (cadence completed, nobody picked up) only applies when no real channel
+    tag is present, and is excluded from transfer counts."""
     tagset = set(tags or [])
     if tagset & TRANSFER_VOICE_TAGS:
         return "voice"
     if tagset & TRANSFER_TEXT_TAGS:
         return "text"
+    if tagset & TRANSFER_NO_ANSWER_TAGS:
+        return "no_answer"
     return "unknown"
 
 
@@ -1149,8 +1159,10 @@ def count_weekly_transfers_by_type(days: int = 7) -> dict:
     """Count ISA transfers in the last `days` days, grouped by transfer_type.
     Counts off transfer_date (the ISA Transfer Date), which persists after the
     ISA_TRANSFER_FRESH tag is removed — so successful transfers still count.
-    Returns {'text': int, 'voice': int, 'unknown': int, 'total': int}."""
-    out = {"text": 0, "voice": 0, "unknown": 0, "total": 0}
+    'no_answer' (cadence completed, nobody answered) is reported but NOT a real
+    transfer, so it stays out of 'total'.
+    Returns {'text', 'voice', 'unknown', 'no_answer', 'total'} (total = text+voice)."""
+    out = {"text": 0, "voice": 0, "unknown": 0, "no_answer": 0, "total": 0}
     if not is_available():
         return out
     try:
@@ -1164,9 +1176,9 @@ def count_weekly_transfers_by_type(days: int = 7) -> dict:
                     (days,)
                 )
                 for t, c in cur.fetchall():
-                    key = t if t in ("text", "voice") else "unknown"
+                    key = t if t in ("text", "voice", "no_answer") else "unknown"
                     out[key] = out.get(key, 0) + int(c)
-        out["total"] = out["text"] + out["voice"] + out["unknown"]
+        out["total"] = out["text"] + out["voice"]  # real transfers only
         return out
     except Exception as e:
         logger.warning("count_weekly_transfers_by_type failed: %s", e)
@@ -1174,8 +1186,10 @@ def count_weekly_transfers_by_type(days: int = 7) -> dict:
 
 
 def backfill_transfer_types(type_map: dict) -> int:
-    """One-time: set transfer_type for existing rows. type_map = {person_id: type}.
-    Only updates rows where transfer_type IS NULL. Returns rows updated."""
+    """Set transfer_type for existing rows. type_map = {person_id: type}.
+    Updates rows where transfer_type is unset or in an uncertain bucket
+    (NULL / 'unknown' / 'no_answer') — confirmed 'text'/'voice' are preserved.
+    Returns rows updated."""
     if not is_available() or not type_map:
         return 0
     updated = 0
@@ -1185,7 +1199,9 @@ def backfill_transfer_types(type_map: dict) -> int:
                 for pid, ttype in type_map.items():
                     cur.execute(
                         """UPDATE isa_transfers SET transfer_type = %s
-                           WHERE person_id = %s AND transfer_type IS NULL""",
+                           WHERE person_id = %s
+                             AND (transfer_type IS NULL
+                                  OR transfer_type IN ('unknown', 'no_answer'))""",
                         (ttype, str(pid))
                     )
                     updated += cur.rowcount

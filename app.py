@@ -2325,13 +2325,14 @@ def _count_weekly_transfers(days=7):
     Returns dict: {ai_text, ai_voice, uncategorized, total}
     """
     counts = _db.count_weekly_transfers_by_type(days=days)
-    logger.info("[HYPE] Weekly transfers (last %dd) — text=%d voice=%d unknown=%d",
+    logger.info("[HYPE] Weekly transfers (last %dd) — text=%d voice=%d unknown=%d no_answer=%d",
                 days, counts.get("text", 0), counts.get("voice", 0),
-                counts.get("unknown", 0))
+                counts.get("unknown", 0), counts.get("no_answer", 0))
     return {
         "ai_text":       counts.get("text", 0),
         "ai_voice":      counts.get("voice", 0),
         "uncategorized": counts.get("unknown", 0),
+        "no_answer":     counts.get("no_answer", 0),
         "total":         counts.get("text", 0) + counts.get("voice", 0),
     }
 
