@@ -10292,6 +10292,10 @@ def webhook_projectblue():
             person_id_stop, person_name_stop = _db.get_pond_sms_person_by_phone(from_phone)
             if person_id_stop:
                 try:
+                    _db.stop_zbuyer_drip(person_id_stop, reason="opted_out")
+                except Exception:
+                    pass
+                try:
                     from fub_client import FUBClient
                     fub_stop = FUBClient()
                     fub_stop.add_tag(person_id_stop, "SMS_OptOut")
@@ -10317,6 +10321,13 @@ def webhook_projectblue():
             return jsonify({"ok": True, "skipped": "no_match"}), 200
 
         logger.info("PB SMS reply matched: %s (ID: %s)", person_name, person_id)
+
+        # Any reply stops the zbuyer cash-offer drip — they engaged, the
+        # handoff/agent flow takes over from here.
+        try:
+            _db.stop_zbuyer_drip(person_id, reason="replied")
+        except Exception:
+            pass
 
         # ── Sentiment ──────────────────────────────────────────────────────────
         sentiment, sentiment_score, sentiment_reason = _pond_analyze_sentiment(
@@ -11357,6 +11368,66 @@ def scheduled_cache_warm():
         raise
     finally:
         _db.release_job_lock("cache_warm")
+
+
+# Z-buyer cash-offer drip: which day each touch is due (touch 1 = opener at T+0).
+_ZBUYER_DRIP_TOUCH_DAY = {2: 1, 3: 2, 4: 4, 5: 6}
+
+
+def scheduled_zbuyer_drip():
+    """Send the next due zbuyer cash-offer drip touch to each active enrollee.
+    Runs a few times daily inside business hours. Sends at most one touch per
+    lead per run; gates each touch on days-since-start and a ~1-day gap since the
+    last touch so a backlogged lead doesn't get several at once. Quiet hours and
+    suppression are enforced inside projectblue_client.send_message()."""
+    if not _db.try_acquire_job_lock("zbuyer_drip"):
+        return
+    try:
+        from pond_mailer import generate_zbuyer_drip_sms
+        import projectblue_client as _pb_drip
+        if not _pb_drip.is_available():
+            print("[ZBUYER DRIP] Project Blue not configured — skipping")
+            return
+        active = _db.get_active_zbuyer_drips()
+        sent = 0
+        for d in active:
+            next_touch = d["last_touch_num"] + 1
+            due_day = _ZBUYER_DRIP_TOUCH_DAY.get(next_touch)
+            if due_day is None:
+                continue
+            if d["days_since"] < due_day or d["days_since_touch"] < 0.75:
+                continue
+            phone = d.get("phone")
+            if not phone:
+                continue
+            body = generate_zbuyer_drip_sms(
+                d["lead_name"], next_touch, street=d.get("street"), city=d.get("city"))
+            if not body:
+                continue
+            try:
+                res = _pb_drip.send_message(phone, body, dry_run=False)
+            except Exception as _se:
+                print(f"[ZBUYER DRIP] send failed for {d['person_id']}: {_se}")
+                continue
+            if res.get("success"):
+                _db.advance_zbuyer_drip(d["person_id"], next_touch)
+                sent += 1
+                try:
+                    from config import BARRY_FUB_USER_ID
+                    FUBClient().log_sms_sent(
+                        person_id=d["person_id"], sms_body=body,
+                        lead_type="zbuyer", channel="zbuyer_drip",
+                        user_id=BARRY_FUB_USER_ID)
+                except Exception:
+                    pass
+            elif res.get("status") == "quiet_hours":
+                pass  # try again next run
+        print(f"[ZBUYER DRIP] {sent} touch(es) sent across {len(active)} active drip(s)")
+        _record_fired("zbuyer_drip")
+    except Exception as e:
+        print(f"[ZBUYER DRIP] error: {e}")
+    finally:
+        _db.release_job_lock("zbuyer_drip")
 
 
 def sync_calls_cache():
@@ -12804,6 +12875,12 @@ def start_scheduler():
     _scheduler.add_job(scheduled_send_hype_email, CronTrigger(day_of_week="sun", hour=21, minute=0, timezone=ET),
                        id="hype_email", name="Sunday weekly hype email",
                        max_instances=1, coalesce=True)
+
+    # Z-buyer cash-offer drip: 9am, 1pm, 5pm ET. Sends the next due touch (2-5)
+    # over 7 days to zbuyer leads who haven't replied. Stops on reply/opt-out.
+    _scheduler.add_job(scheduled_zbuyer_drip, CronTrigger(hour="9,13,17", minute=20, timezone=ET),
+                       id="zbuyer_drip", name="Z-buyer cash-offer 7-day drip",
+                       max_instances=1, misfire_grace_time=600)
 
     # ── Pond Mailer schedule ────────────────────────────────────────────────
     # Mon–Fri: 3× at 8am, 1pm, 6pm ET — 45 emails/day cap

@@ -376,6 +376,25 @@ ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS transfer_type TEXT;
 -- counts stay queryable. NULL = tag still active in FUB.
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS tag_removed_at TIMESTAMPTZ;
 
+-- Z-buyer cash-offer SMS drip. One row per zbuyer lead enrolled at opener time.
+-- A scheduled job sends touches 2-5 over 7 days; drip stops the moment the lead
+-- replies (handled in the Project Blue webhook) or opts out / converts.
+CREATE TABLE IF NOT EXISTS zbuyer_drip (
+    person_id      TEXT        PRIMARY KEY,
+    lead_name      TEXT,
+    phone          TEXT,
+    street         TEXT,
+    city           TEXT,
+    started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_touch_num INTEGER     NOT NULL DEFAULT 1,   -- 1 = opener already sent
+    last_touch_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    stopped        BOOLEAN     NOT NULL DEFAULT FALSE,
+    stopped_reason TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_zbuyer_drip_active
+    ON zbuyer_drip (stopped, last_touch_at);
+
 -- Prospecting time block schedule (set during goal wizard step 7)
 -- Stores which days/time the agent has committed to prospect each week.
 -- Drives recurring calendar invite generation via SendGrid.
@@ -1419,6 +1438,104 @@ def mark_isa_first_call(person_id: str) -> bool:
                 return cur.rowcount > 0
     except Exception as e:
         logger.warning("mark_isa_first_call failed for %s: %s", person_id, e)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Z-buyer cash-offer SMS drip
+# ---------------------------------------------------------------------------
+
+def enroll_zbuyer_drip(person_id, lead_name=None, phone=None,
+                       street=None, city=None) -> bool:
+    """Enroll a zbuyer lead in the 7-day cash-offer drip at opener time.
+    last_touch_num starts at 1 (the opener counts as touch 1).
+    ON CONFLICT DO NOTHING so re-sends don't reset the sequence.
+    Returns True if newly enrolled."""
+    if not is_available() or not person_id:
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO zbuyer_drip
+                           (person_id, lead_name, phone, street, city)
+                       VALUES (%s, %s, %s, %s, %s)
+                       ON CONFLICT (person_id) DO NOTHING""",
+                    (str(person_id), lead_name, phone, street, city)
+                )
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("enroll_zbuyer_drip failed for %s: %s", person_id, e)
+        return False
+
+
+def get_active_zbuyer_drips() -> list:
+    """Active (not stopped, not finished) zbuyer drips with days since start.
+    Returns list of dicts the scheduler uses to decide the next touch."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT person_id, lead_name, phone, street, city,
+                              last_touch_num,
+                              EXTRACT(EPOCH FROM (NOW() - started_at)) / 86400 AS days_since,
+                              EXTRACT(EPOCH FROM (NOW() - last_touch_at)) / 86400 AS days_since_touch
+                       FROM zbuyer_drip
+                       WHERE stopped = FALSE
+                         AND last_touch_num < 5
+                         AND started_at >= NOW() - INTERVAL '10 days'
+                       ORDER BY started_at ASC""")
+                rows = cur.fetchall()
+                return [
+                    {"person_id": r[0], "lead_name": r[1] or "there",
+                     "phone": r[2], "street": r[3], "city": r[4],
+                     "last_touch_num": r[5],
+                     "days_since": round(float(r[6]), 2) if r[6] is not None else 0,
+                     "days_since_touch": round(float(r[7]), 2) if r[7] is not None else 0}
+                    for r in rows
+                ]
+    except Exception as e:
+        logger.warning("get_active_zbuyer_drips failed: %s", e)
+        return []
+
+
+def advance_zbuyer_drip(person_id, touch_num) -> bool:
+    """Record that `touch_num` was sent. Sets last_touch_num + last_touch_at."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE zbuyer_drip
+                          SET last_touch_num = %s, last_touch_at = NOW()
+                        WHERE person_id = %s""",
+                    (int(touch_num), str(person_id))
+                )
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("advance_zbuyer_drip failed for %s: %s", person_id, e)
+        return False
+
+
+def stop_zbuyer_drip(person_id, reason="replied") -> bool:
+    """Stop a lead's drip (they replied, opted out, or converted)."""
+    if not is_available() or not person_id:
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE zbuyer_drip
+                          SET stopped = TRUE, stopped_reason = %s
+                        WHERE person_id = %s AND stopped = FALSE""",
+                    (reason, str(person_id))
+                )
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("stop_zbuyer_drip failed for %s: %s", person_id, e)
         return False
 
 

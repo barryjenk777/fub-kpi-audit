@@ -518,45 +518,37 @@ def generate_zbuyer_video_script(first_name: str, street: str, city: str,
         )
         signal_hint = _signal_hint_for_video(tags, "zbuyer")
 
-        prompt = f"""Write a 35-40 second video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty — #1 real estate team in Virginia.
+        prompt = f"""Write a 40-45 second spoken video script for Barry Jenkins, Realtor with Legacy Home Team at LPT Realty. This will be read aloud by a video avatar, so write it to be SPOKEN naturally with contractions.
 
-Barry is recording this for {first_name}, a homeowner at {street_spoken} in {city}.
-They submitted a cash offer request — they want speed, and their inbox is already full of "WE BUY HOUSES" texts.
-Barry's edge: he's a real Realtor who can do BOTH — cash OR listed — whichever nets more.
+Barry is recording this for {first_name}, a homeowner at {street_spoken} in {city}. They submitted a cash offer request, so they want speed and certainty, and their inbox is already full of "we buy houses" texts. The job of this video is to sound like a real, credible neighbor and make them either reply or go to the website.
 
-━━━━ THE FRAME ━━━━
-Barry was already recording client videos. Saw the request come in, put together a quick recording on the spot.
-Calm confidence. Not a cash buyer hustler — the credible professional who can actually solve this.{comp_line}
+CREDIBILITY (weave in naturally, do not list like a resume):
+Barry has been a real Realtor in Hampton Roads for almost 30 years. His sister company Friend in Realty buys homes for cash. Featured on WTKR News 3. His team has sold over 1,100 homes locally.
 
-━━━━ OPEN (3-4 seconds) ━━━━
-Acknowledge the request, name the address and city. Direct, no warm-up.
-Good: "Hey {first_name} — saw your cash offer request come in for {street_spoken} and I was already recording some client videos, so I put together a quick recording for you."
+THE SUBSTANCE a cash-offer seller actually cares about (this is the meat, be specific):
+- A real, written cash offer in about 24 hours.
+- No repairs, no showings, no commissions, no cleaning the place out. They can leave what they don't want.
+- Because Barry is also a real Realtor, he runs BOTH numbers: the cash offer AND what the home would net listed. If listing makes them more, he says so straight. That honesty is the differentiator from the "we buy houses" crowd.
 
-━━━━ CREDENTIALS + DIFFERENTIATOR (18-22 seconds) ━━━━
-Lead with who Barry is BEFORE the pitch — credibility first cuts through the noise.
-"I'm Barry Jenkins — Realtor with Legacy Home Team at LPT Realty, been serving this community for almost 30 years."
-Then the two-option differentiator:
-"Here's what I do differently: I can close cash in as little as 7 days — or I can pull the MLS numbers and show you what listing your home might actually net. That gap is usually smaller than sellers expect, and sometimes it completely flips."
-Do NOT say "you deserve to see both" — weak. Just state the options directly.
+STRUCTURE:
+1. OPEN (4 sec): Acknowledge the request, name {street_spoken}. Organic frame, he was already recording client videos and saw theirs come in.
+2. MIDDLE (25 sec): Who he is (credibility, brief), then the concrete cash-offer substance above, then the cash-or-list honesty.
+3. CLOSE (6 sec): One clear next step with TWO easy paths: reply to this with their address, or go to hamptonroadshome dot cash and drop the address in, and his team follows up fast.{comp_line}
 
-━━━━ CLOSE (5-6 seconds) ━━━━
-Direct. One ask.
-"10 minutes on the phone and I'll run both numbers for your home on {street_spoken}. Just reply here."
+RULES:
+- "Realtor with Legacy Home Team at LPT Realty", not "licensed agent".
+- Say the website as "hamptonroadshome dot cash".
+- Contractions throughout. No Ylopo, no AI, no marketing hype, no exclamation points.
+- Never use the words: "deserve", "I'd love to", "feel free", "don't hesitate".
+- Never use dashes of any kind. Use periods and commas for pauses.
 
-━━━━ RULES ━━━━
-- "Realtor with Legacy Home Team at LPT Realty" — not "licensed agent"
-- Almost 30 years in the community
-- Never: "I'd love to", "feel free to", "don't hesitate", "you deserve to"
-- Contractions throughout. No Ylopo, no AI.
-
-━━━━ LENGTH ━━━━
-120-140 words. 35-40 seconds.
+LENGTH: 130-160 words.
 {signal_hint}
 Return ONLY the script. No labels, no stage directions. Just Barry's words."""
 
         msg = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=350,
+            max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
         )
         script = msg.content[0].text.strip()
@@ -567,16 +559,14 @@ Return ONLY the script. No labels, no stage directions. Just Barry's words."""
         logger.warning("Claude Z-buyer script generation failed, using fallback: %s", e)
         comp_line = f" {comp_snippet}" if comp_snippet else ""
         return (
-            f"Hey {first_name} — saw your cash offer request come in for {street_spoken} "
-            f"and I was already recording some client videos, "
-            f"so I put together a quick recording for you.{comp_line} "
-            f"I'm Barry Jenkins — Realtor with Legacy Home Team at LPT Realty, "
-            f"been serving this community for almost 30 years. "
-            f"Here's what I do differently: I can close cash in as little as 7 days — "
-            f"or I can pull the MLS numbers and show you what listing your home might actually net. "
-            f"That gap is usually smaller than sellers expect, and sometimes it completely flips. "
-            f"10 minutes on the phone and I'll run both numbers for your home on {street_spoken}. "
-            f"Just reply here."
+            f"Hey {first_name}, saw your cash offer request come in for {street_spoken} "
+            f"and I was already recording some client videos, so I put one together for you.{comp_line} "
+            f"I'm Barry Jenkins, I've been a Realtor here in Hampton Roads for almost 30 years and my team buys homes for cash. "
+            f"Here's how it works. I can get you a real written offer in about 24 hours. "
+            f"No repairs, no showings, no commissions, you don't even have to clean the place out. "
+            f"And because I'm also a real Realtor, I'll run both numbers for you, the cash offer and what your home would net if you listed it. "
+            f"If listing makes you more, I'll tell you straight. "
+            f"Just reply here with your address, or put it in at hamptonroadshome dot cash, and my team will follow up fast."
         )
 
 

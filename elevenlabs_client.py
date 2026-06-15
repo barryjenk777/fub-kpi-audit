@@ -196,23 +196,29 @@ def generate_voice_note_script(
             resp = client.messages.create(
                 model="claude-3-5-haiku-20241022",
                 max_tokens=250,
-                messages=[{"role": "user", "content": f"""Write a short voice note script for Barry Jenkins to send to {first}, a homeowner in Hampton Roads Virginia who just requested a cash offer on their home.
+                messages=[{"role": "user", "content": f"""Write a short voice note script for Barry Jenkins to send to {first}, a homeowner in Hampton Roads Virginia who just requested a cash offer on their home. The lead just said yes to receiving a quick voice recording, so this is Barry leaving them a personal voice message.
 
 Property context: {prop_hint if prop_hint else "Hampton Roads area home"}
 
-The lead just said yes to receiving a quick voice recording. Barry is leaving them a voice note.
+WHO BARRY IS (use this to sound credible, do not list it like a resume):
+- Real licensed Realtor in Hampton Roads for almost 30 years, sister company Friend in Realty buys homes for cash. Featured on WTKR News 3. His team has sold over 1,100 homes locally.
 
-Barry's position: he works with the top cash buyers in Hampton Roads and can get them a real number as quickly as they want. He just needs to know when he can stop by briefly to review the offer process with them — no commitment, just so the offer is based on the actual condition of the home.
+WHAT TO ACTUALLY SAY (this is the substance a cash-offer seller cares about):
+- He can get them a real, written cash offer in about 24 hours.
+- No repairs, no showings, no commissions, no cleaning out the house.
+- Because he is also a real Realtor, he will run BOTH numbers: the cash offer AND what the home would net if listed. If listing nets more, he will tell them straight. That honesty is the whole point.
+- All he needs to get the number moving is the property address.
+
+NEXT STEP (give them two easy paths):
+- Either text him back the address, or go to hamptonroadshome dot cash and put the address in. Either way his team follows up fast.
 
 Rules:
-- written to be SPOKEN, not read. natural speech patterns.
-- all lowercase except proper nouns
-- 3-5 sentences only. under 80 words.
+- written to be SPOKEN, not read. natural speech patterns, contractions.
+- all lowercase except proper nouns. say the website as "hamptonroadshome dot cash".
+- 4-6 sentences. 70-95 words (about 40 seconds).
 - start with "hey {first},"
-- establish that we can move as fast as they want on the cash offer
-- end with a soft ask about scheduling a quick stop-by to review the offer process — frame it as a formality so the number is accurate, not a sales call
-- warm and direct, like a friend who does this every week
-- Barry's style: confident without being pushy. the offer is real and fast.
+- warm and direct, like a neighbor who does this every week, never a marketing pitch. no hype, no exclamation points.
+- never use the words "deserve", "I'd love to", "feel free", "don't hesitate". never use dashes.
 
 Output only the script text. Nothing else."""}],
             )
@@ -310,9 +316,11 @@ def _fallback_script(person_name: str, behavior: dict, is_seller: bool, is_zbuye
         mv = b.get("most_viewed") or {}
         area = f" on {mv['street']}" if mv.get("street") else (" in " + mv["city"] if mv.get("city") else "")
         return (
-            f"hey {first}, so i work with the top cash buyers in hampton roads and we can move as fast as you want on this. "
-            f"the only thing i need is to stop by{area} real quick to review the offer process with you so the number we give you is accurate. "
-            f"just text me back and let me know when works."
+            f"hey {first}, thanks for asking about a cash offer. here's how i work. "
+            f"i can get you a real written offer in about 24 hours, no repairs, no showings, no commissions. "
+            f"and because i'm also a real Realtor here, i'll run both numbers for you, the cash offer and what your home would net if you listed it, "
+            f"and if listing makes you more i'll tell you straight. "
+            f"all i need is the address{area}. text it back to me, or put it in at hamptonroadshome dot cash and my team will follow up fast."
         )
     elif is_seller:
         mv = b.get("most_viewed") or {}

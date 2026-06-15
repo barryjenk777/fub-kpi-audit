@@ -2123,17 +2123,49 @@ example: "hey jordan, saw you've been looking around chesapeake. sent you an ema
     else:
         channel_rules = """pure iMessage. 2 sentences max. that's it."""
 
+    if is_z:
+        fixed_format = (
+            "THE FORMAT IS FIXED -- follow it exactly:\n"
+            "sentence 1: \"hey [first name], saw you asked about a cash offer on [their street if known, else 'your place'].\"\n"
+            "sentence 2: \"would it be ok if i sent you a quick recording on how i'd handle it?\"\n"
+        )
+        examples_block = (
+            "EXAMPLES -- these are exactly the right tone and length:\n"
+            "with street:    \"hey karen, saw you asked about a cash offer on maple ave. would it be ok if i sent you a quick recording on how i'd handle it?\"\n"
+            "no street:      \"hey marcus, saw you asked about a cash offer on your place. would it be ok if i sent you a quick recording on how that works?\"\n"
+            "with city only: \"hey lisa, saw you asked about a cash offer over in norfolk. would it be ok if i sent you a quick recording on how i'd handle it?\""
+        )
+        sentence_rules = (
+            "- sentence 1 acknowledges they ASKED FOR a cash offer (they raised their hand, they were not 'looking around'). reference their street or city if known, otherwise 'your place'.\n"
+            "- sentence 2 is always a permission ask for a quick recording. keep the wording close to the examples."
+        )
+    else:
+        fixed_format = (
+            "THE FORMAT IS FIXED -- follow it exactly:\n"
+            "sentence 1: \"hey [first name], saw you were looking around [specific area/detail from their search].\"\n"
+            "sentence 2: \"would it be ok if i sent a quick recording of some info on [that area / what i'm seeing there / that neighborhood]?\"\n"
+        )
+        examples_block = (
+            "EXAMPLES -- these are exactly the right tone and length:\n"
+            "buyer (repeat viewer):   \"hey marcus, saw you were looking around harbour view. would it be ok if i sent a quick recording of some info on that area?\"\n"
+            "buyer (saved property):  \"hey sarah, saw you saved that place on shore drive. would it be ok if i sent a quick recording about that street?\"\n"
+            "buyer (price range):     \"hey jordan, saw you've been looking at places around $380k in chesapeake. would it be ok if i sent a quick recording on what i'm seeing there?\"\n"
+            "buyer (multiple cities): \"hey david, saw you've been looking around chesapeake and virginia beach. would it be ok if i sent a quick recording to help narrow it down?\"\n"
+            "seller:                  \"hey lisa, saw you were looking into your home value on harbour view. would it be ok if i sent a quick recording of what i'm seeing on that street?\"\n"
+            "cross-channel:           \"hey jordan, saw you've been looking around chesapeake. sent you an email too but would it be ok if i sent a quick recording of some info on that area?\""
+        )
+        sentence_rules = (
+            "- sentence 1 must reference ONE specific thing from their actual search (area, property, price range, city)\n"
+            "- sentence 2 is always a permission ask for a voice recording. keep the wording close to the examples."
+        )
+
     prompt = f"""you are writing a casual iMessage opener for barry jenkins, hampton roads' #1 real estate agent.
 
-THE FORMAT IS FIXED -- follow it exactly:
-sentence 1: "hey [first name], saw you were looking around [specific area/detail from their search]."
-sentence 2: "would it be ok if i sent a quick recording of some info on [that area / what i'm seeing there / that neighborhood]?"
-
+{fixed_format}
 THE MOST IMPORTANT RULES:
 - all lowercase. always. "hey marcus" not "Hey Marcus."
 - 2 sentences only. no more.
-- sentence 1 must reference ONE specific thing from their actual search (area, property, price range, city)
-- sentence 2 is always a permission ask for a voice recording. keep the wording close to the examples.
+{sentence_rules}
 - no sign-off, no name at the end, no "barry jenkins", no "legacy home team"
 - no em dashes, no en dashes. commas and periods only.
 - no "just", "reaching out", "following up", "checking in"
@@ -2148,13 +2180,7 @@ WHAT YOU KNOW ABOUT THEM (pick the single most specific detail for sentence 1):
 
 {optout_section}
 
-EXAMPLES -- these are exactly the right tone and length:
-buyer (repeat viewer):   "hey marcus, saw you were looking around harbour view. would it be ok if i sent a quick recording of some info on that area?"
-buyer (saved property):  "hey sarah, saw you saved that place on shore drive. would it be ok if i sent a quick recording about that street?"
-buyer (price range):     "hey jordan, saw you've been looking at places around $380k in chesapeake. would it be ok if i sent a quick recording on what i'm seeing there?"
-buyer (multiple cities): "hey david, saw you've been looking around chesapeake and virginia beach. would it be ok if i sent a quick recording to help narrow it down?"
-seller:                  "hey lisa, saw you were looking into your home value on harbour view. would it be ok if i sent a quick recording of what i'm seeing on that street?"
-cross-channel:           "hey jordan, saw you've been looking around chesapeake. sent you an email too but would it be ok if i sent a quick recording of some info on that area?"
+{examples_block}
 
 output ONLY the raw message. nothing else."""
 
@@ -2188,6 +2214,96 @@ output ONLY the raw message. nothing else."""
             sms_text = sms_text[:idx].strip()
 
     return sms_text
+
+
+# ---------------------------------------------------------------------------
+# Z-buyer cash-offer 7-day SMS drip
+# ---------------------------------------------------------------------------
+
+CASH_SITE = "hamptonroadshome.cash"
+
+# Each drip touch (2-5) has a distinct angle. Touch 1 is the opener.
+_ZBUYER_DRIP_ANGLES = {
+    2: ("speed and certainty: a real written cash offer in about 24 hours, "
+        "no repairs, no showings, no commissions. nudge them to reply with their "
+        "address or go to the site."),
+    3: ("the cash-or-list edge: barry is also a real Realtor, so he'll run BOTH "
+        "numbers, the cash offer and what listing would net, and tell them straight "
+        "which is more. that honesty is the difference from the 'we buy houses' crowd."),
+    4: ("empathy for the common situations (inherited place, tired of renting it out, "
+        "behind on something, moving on a deadline). no pressure, just that he can make "
+        "it simple and fast. point to the site."),
+    5: ("soft breakup: light, no guilt. 'still want me to run your number?' make it "
+        "easy to say yes or to ignore. last touch."),
+}
+
+_ZBUYER_DRIP_FALLBACKS = {
+    2: ("hey {first}, still happy to get you a real written cash offer on {place}, "
+        "usually within about 24 hours. no repairs, no showings, no commissions. "
+        "reply with the address or drop it in at {site} and my team takes it from there."),
+    3: ("hey {first}, one thing that makes me different. i'm also a real Realtor here, "
+        "so i'll run both numbers for you, the cash offer and what {place} would net listed, "
+        "and tell you straight which one is more. want me to put those together?"),
+    4: ("hey {first}, whatever's going on with {place}, inherited, tired of renting it, "
+        "or just ready to move on, i can make it simple. real offer, fast, no cleanup needed. "
+        "reply here or go to {site} whenever you're ready."),
+    5: ("hey {first}, i'll leave it here for now. if you still want me to run your cash number "
+        "on {place}, just reply or put the address in at {site} and i'll get right on it."),
+}
+
+
+def generate_zbuyer_drip_sms(first_name, touch_num, street=None, city=None):
+    """Generate one zbuyer cash-offer drip text (touches 2-5) in Barry's voice.
+    Claude-generated with a hardcoded fallback per touch. Drives to a reply or
+    hamptonroadshome.cash. Never uses dashes or hype."""
+    first = (first_name or "there").split()[0].lower()
+    place = street.lower() if street else (("your place in " + city.lower()) if city else "your place")
+    angle = _ZBUYER_DRIP_ANGLES.get(touch_num)
+    if not angle:
+        return None
+
+    def _fallback():
+        return _ZBUYER_DRIP_FALLBACKS[touch_num].format(
+            first=first, place=place, site=CASH_SITE)
+
+    try:
+        import anthropic as _ant
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return _fallback()
+        prompt = f"""write a single casual iMessage from barry jenkins to {first}, a hampton roads homeowner who asked for a cash offer on their home and hasn't replied yet. this is a follow-up text in a 7-day drip.
+
+their property: {place}
+
+the angle for THIS text: {angle[0]}
+
+who barry is (for your understanding, do not recite it): real Realtor in hampton roads almost 30 years, sister company buys homes for cash, featured on WTKR, 1100+ homes sold.
+
+rules:
+- all lowercase except proper nouns and the website.
+- 2 sentences, 3 max. short. sounds like a neighbor texting, not a marketing system.
+- start with "hey {first},"
+- give them an easy next step: reply, or go to {CASH_SITE}.
+- no hype, no exclamation points, no emoji. never use dashes of any kind. never use the words "deserve", "just reaching out", "circling back", "following up".
+- no sign-off, no name at the end.
+
+output ONLY the message text."""
+        resp = _ant.Anthropic(api_key=api_key).messages.create(
+            model="claude-opus-4-5", max_tokens=120,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        txt = resp.content[0].text.strip()
+        import re as _r
+        txt = _r.sub(r'[‒–—―−]', ',', txt).replace('&mdash;', ',').replace('&ndash;', ',')
+        txt = _r.sub(r',\s*,', ',', txt)
+        for stop in ("Barry Jenkins", "- Barry", "Legacy Home Team"):
+            i = txt.find(stop)
+            if i > 0:
+                txt = txt[:i].strip()
+        return txt or _fallback()
+    except Exception as _e:
+        logger.warning("zbuyer drip SMS gen failed (touch %s): %s", touch_num, _e)
+        return _fallback()
 
 
 # ---------------------------------------------------------------------------
@@ -3179,6 +3295,16 @@ def run_new_lead_mailer(dry_run=True):
                         ab_variant=_nl_ab_variant,
                         video_id=_nl_video_id,
                     )
+                    # Enroll zbuyer leads in the 7-day cash-offer drip (opener = touch 1).
+                    if _nl_is_z and not dry_run:
+                        try:
+                            _db.enroll_zbuyer_drip(
+                                pid, lead_name=name, phone=_nl_phone,
+                                street=(person.get("streetAddress") or person.get("street")),
+                                city=person.get("city"),
+                            )
+                        except Exception as _z_err:
+                            logger.warning("zbuyer drip enroll failed for %s: %s", name, _z_err)
                     # Log to FUB timeline
                     if not dry_run:
                         try:
