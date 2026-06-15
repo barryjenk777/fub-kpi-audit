@@ -139,6 +139,14 @@ CREATE TABLE IF NOT EXISTS kpi_settings (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Generic durable key-value store (survives deploys, unlike the /tmp job file).
+-- Used for things like the last hype-email send timestamp.
+CREATE TABLE IF NOT EXISTS app_state (
+    key         TEXT PRIMARY KEY,
+    value       TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Secure tokens for agent self-service goal setup links
 CREATE TABLE IF NOT EXISTS goal_tokens (
     id          SERIAL PRIMARY KEY,
@@ -360,9 +368,13 @@ CREATE TABLE IF NOT EXISTS isa_transfers (
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS lead_name     TEXT;
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS agent_name    TEXT;
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS first_call_at TIMESTAMPTZ;  -- set when agent logs first outbound call
--- transfer_type: 'text' | 'voice' | 'unknown' — frozen at record time so the
--- weekly hype count survives FUB tag churn (FRESH → SUCCESSFUL swaps tags).
+-- transfer_type: 'text' | 'voice' | 'no_answer' | 'unknown' — frozen at record
+-- time so the weekly hype count survives FUB tag churn (FRESH → SUCCESSFUL).
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS transfer_type TEXT;
+-- tag_removed_at: set when the 7-day expiry removes ISA_TRANSFER_FRESH from FUB.
+-- Rows are NOT deleted (append-only) so historical week-over-week transfer
+-- counts stay queryable. NULL = tag still active in FUB.
+ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS tag_removed_at TIMESTAMPTZ;
 
 -- Prospecting time block schedule (set during goal wizard step 7)
 -- Stores which days/time the agent has committed to prospect each week.
@@ -1185,6 +1197,73 @@ def count_weekly_transfers_by_type(days: int = 7) -> dict:
         return out
 
 
+def set_app_state(key: str, value: str) -> bool:
+    """Upsert a durable key-value pair (survives deploys)."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO app_state (key, value, updated_at)
+                       VALUES (%s, %s, NOW())
+                       ON CONFLICT (key) DO UPDATE
+                       SET value = EXCLUDED.value, updated_at = NOW()""",
+                    (key, value)
+                )
+                return True
+    except Exception as e:
+        logger.warning("set_app_state failed for %s: %s", key, e)
+        return False
+
+
+def get_app_state(key: str):
+    """Return (value, updated_at_iso) for a key, or (None, None)."""
+    if not is_available():
+        return None, None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT value, updated_at FROM app_state WHERE key = %s", (key,)
+                )
+                row = cur.fetchone()
+        if row:
+            return row[0], (row[1].isoformat() if row[1] else None)
+        return None, None
+    except Exception as e:
+        logger.warning("get_app_state failed for %s: %s", key, e)
+        return None, None
+
+
+def count_transfers_in_range(start, end) -> dict:
+    """Count transfers with transfer_date in [start, end), grouped by type.
+    start/end are date or datetime (or ISO strings). Used for this-week vs
+    last-week comparisons. 'no_answer' is reported but excluded from total.
+    Returns {'text','voice','unknown','no_answer','total'} (total = text+voice)."""
+    out = {"text": 0, "voice": 0, "unknown": 0, "no_answer": 0, "total": 0}
+    if not is_available():
+        return out
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT COALESCE(transfer_type, 'unknown') AS t, COUNT(*)
+                       FROM isa_transfers
+                       WHERE transfer_date >= %s AND transfer_date < %s
+                       GROUP BY COALESCE(transfer_type, 'unknown')""",
+                    (str(start), str(end))
+                )
+                for t, c in cur.fetchall():
+                    key = t if t in ("text", "voice", "no_answer") else "unknown"
+                    out[key] = out.get(key, 0) + int(c)
+        out["total"] = out["text"] + out["voice"]
+        return out
+    except Exception as e:
+        logger.warning("count_transfers_in_range failed: %s", e)
+        return out
+
+
 def backfill_transfer_types(type_map: dict) -> int:
     """Set transfer_type for existing rows. type_map = {person_id: type}.
     Updates rows where transfer_type is unset or in an uncertain bucket
@@ -1276,7 +1355,9 @@ def get_all_isa_transfers() -> list:
 
 
 def get_expired_isa_transfers(days: int = 7) -> list:
-    """Return full rows for transfers older than `days` days (for expiry + escalation)."""
+    """Return rows older than `days` days whose FUB tag hasn't been removed yet
+    (tag_removed_at IS NULL) — for the expiry + escalation pass. Excludes
+    already-processed rows so the append-only history isn't re-processed daily."""
     if not is_available():
         return []
     try:
@@ -1284,7 +1365,8 @@ def get_expired_isa_transfers(days: int = 7) -> list:
             with conn.cursor() as cur:
                 cur.execute(
                     """SELECT person_id, lead_name, agent_name FROM isa_transfers
-                       WHERE transfer_date < NOW() - INTERVAL '%s days'""",
+                       WHERE transfer_date < NOW() - INTERVAL '%s days'
+                         AND tag_removed_at IS NULL""",
                     (days,)
                 )
                 return [
@@ -1297,19 +1379,22 @@ def get_expired_isa_transfers(days: int = 7) -> list:
 
 
 def delete_isa_transfer(person_id: str) -> bool:
-    """Remove a person from the isa_transfers table after the tag is expired."""
+    """Mark a transfer's FUB tag as removed (append-only — the row is kept so
+    historical week-over-week counts stay queryable). Named 'delete' for
+    backward compatibility with existing callers; no longer hard-deletes."""
     if not is_available():
         return False
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM isa_transfers WHERE person_id = %s",
+                    """UPDATE isa_transfers SET tag_removed_at = NOW()
+                       WHERE person_id = %s AND tag_removed_at IS NULL""",
                     (str(person_id),)
                 )
                 return cur.rowcount > 0
     except Exception as e:
-        logger.warning("delete_isa_transfer failed for %s: %s", person_id, e)
+        logger.warning("delete_isa_transfer (mark) failed for %s: %s", person_id, e)
         return False
 
 

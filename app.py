@@ -2429,6 +2429,90 @@ def api_hype_transfer_counts():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+def _week_bounds_et():
+    """Return (this_mon_utc, last_mon_utc, now_utc) as datetimes.
+    this_mon = Monday 00:00 ET of the current week; last_mon = the Monday before."""
+    _et_h  = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+    ET     = timezone(timedelta(hours=_et_h))
+    now_et = datetime.now(ET)
+    this_mon_et = (now_et - timedelta(days=now_et.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    last_mon_et = this_mon_et - timedelta(days=7)
+    return (this_mon_et.astimezone(timezone.utc),
+            last_mon_et.astimezone(timezone.utc),
+            now_et.astimezone(timezone.utc))
+
+
+def _fhalen_appts_in_range(client, fhalen_id, since_utc, until_utc):
+    """Count Fhalen's appts (invitee + a lead attached) created in [since, until)."""
+    from kpi_audit import count_appointments_for_user
+    try:
+        appts = client.get_appointments(since=since_utc, until=until_utc)
+    except Exception:
+        return 0
+    in_range = []
+    for a in appts:
+        created = a.get("created") or a.get("createdAt") or ""
+        if created and since_utc.strftime("%Y-%m-%dT%H:%M:%S") <= created < until_utc.strftime("%Y-%m-%dT%H:%M:%S"):
+            in_range.append(a)
+    n, _ = count_appointments_for_user(in_range, fhalen_id)
+    return n
+
+
+@app.route("/api/kpi-summary")
+def api_kpi_summary():
+    """Dashboard summary: transfers this week vs last week (by category),
+    Fhalen ISA appts both weeks, and the hype email's last-sent status."""
+    try:
+        this_mon, last_mon, now = _week_bounds_et()
+
+        tw = _db.count_transfers_in_range(this_mon, now)
+        lw = _db.count_transfers_in_range(last_mon, this_mon)
+
+        # Fhalen appts both weeks
+        fhalen_name = getattr(config, "LIVE_CALLS_ADMIN", "Fhalen Tendencia")
+        fh_this = fh_last = 0
+        try:
+            client = FUBClient()
+            fhalen = client.get_user_by_name(fhalen_name)
+            if fhalen:
+                fid = fhalen["id"]
+                fh_this = _fhalen_appts_in_range(client, fid, this_mon, now)
+                fh_last = _fhalen_appts_in_range(client, fid, last_mon, this_mon)
+        except Exception as _fe:
+            logger.warning("kpi-summary: fhalen appts failed: %s", _fe)
+
+        # Hype email status — durable DB value, fall back to /tmp job file
+        last_sent, _ = _db.get_app_state("hype_email_last_sent")
+        if not last_sent:
+            last_sent = _job_last_fired.get("hype_email")
+        sent_this_week = False
+        if last_sent:
+            try:
+                sent_dt = datetime.fromisoformat(last_sent.replace("Z", "+00:00"))
+                sent_this_week = sent_dt >= this_mon
+            except Exception:
+                pass
+
+        return jsonify({
+            "success": True,
+            "transfers": {
+                "this_week": {"text": tw["text"], "voice": tw["voice"],
+                              "total": tw["total"], "fhalen": fh_this},
+                "last_week": {"text": lw["text"], "voice": lw["voice"],
+                              "total": lw["total"], "fhalen": fh_last},
+            },
+            "hype_email": {
+                "last_sent": last_sent,
+                "sent_this_week": sent_this_week,
+            },
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"success": False, "error": str(e),
+                        "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/preview-hype-email")
 def api_preview_hype_email():
     """
@@ -2500,6 +2584,11 @@ def api_send_hype_email():
         )
         if success:
             logger.info("hype-email sent: %s", msg)
+            try:
+                _db.set_app_state("hype_email_last_sent",
+                                  datetime.now(timezone.utc).isoformat())
+            except Exception as _se:
+                logger.warning("could not record hype send time: %s", _se)
             agents = data["agents"]
             return jsonify({
                 "success": True,
