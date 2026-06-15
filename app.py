@@ -12736,9 +12736,11 @@ def start_scheduler():
     # Independent safety net — checks last 24hrs of Shark Tank leads for anyone
     # who never got an email, re-triggers the mailer, and alerts Barry.
     # Runs offset from new_lead_check (at :15 and :45) so it doesn't pile on.
-    _scheduler.add_job(scheduled_new_lead_watchdog, CronTrigger(minute="15,45", timezone=ET),
-                       id="new_lead_watchdog", name="New lead outreach watchdog (every 30 min)",
-                       max_instances=1, misfire_grace_time=120)
+    # Disabled 2026-06-14 per Barry: alerts were noisy and inaccurate — all leads
+    # are already called and texted as they come in. Function kept for reference.
+    # _scheduler.add_job(scheduled_new_lead_watchdog, CronTrigger(minute="15,45", timezone=ET),
+    #                    id="new_lead_watchdog", name="New lead outreach watchdog (every 30 min)",
+    #                    max_instances=1, misfire_grace_time=120)
 
     # Morning quiet-hours SMS catch-up: daily at 8:02am ET
     # Fires run_new_lead_mailer() exactly 2 minutes after the iMessage send window
