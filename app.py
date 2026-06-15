@@ -10397,9 +10397,17 @@ def webhook_projectblue():
                         _is_seller_consent = False
 
                     if _ab_variant == "video":
-                        # Video variant: HeyGen thumbnail + link as MMS
+                        # Video variant: HeyGen thumbnail + link as MMS.
+                        # Confirm the render actually finished — if the lead replied
+                        # within ~60s of the opener the video may still be rendering,
+                        # in which case the links would 404, so fall back to voice.
                         _stored_vid_id = _db.get_video_id_for_lead(person_id)
-                        if _stored_vid_id and _pb_reply.is_available():
+                        try:
+                            import heygen_client as _hg_ready
+                            _vid_ready = bool(_stored_vid_id) and _hg_ready.is_video_ready(_stored_vid_id)
+                        except Exception:
+                            _vid_ready = False
+                        if _stored_vid_id and _vid_ready and _pb_reply.is_available():
                             _thumb_url = f"{_base_url}/mthumb/{_stored_vid_id}"
                             _vid_link  = f"{_base_url}/v/{_stored_vid_id}"
                             _vid_body  = (
@@ -10416,8 +10424,8 @@ def webhook_projectblue():
                             logger.info("Video variant sent to %s (video_id=%s)",
                                         person_name, _stored_vid_id)
                         else:
-                            logger.warning("Video variant: no video_id for %s — falling back to voice",
-                                           person_name)
+                            logger.warning("Video variant for %s — video_id=%s ready=%s; falling back to voice",
+                                           person_name, _stored_vid_id, _vid_ready)
                             _ab_variant = "voice"   # fall through to voice path
 
                     if _ab_variant != "video":

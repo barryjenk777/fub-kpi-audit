@@ -3210,7 +3210,8 @@ def run_new_lead_mailer(dry_run=True):
                                 is_available as _hg_avail,
                                 generate_buyer_video_script as _hg_buyer_script,
                                 generate_seller_video_script as _hg_seller_script,
-                                generate_and_wait as _hg_generate,
+                                generate_zbuyer_video_script as _hg_zbuyer_script,
+                                submit_video as _hg_submit,
                                 get_background_url as _hg_bg,
                                 DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                             )
@@ -3222,20 +3223,26 @@ def run_new_lead_mailer(dry_run=True):
                                 _nl_mv     = behavior.get("most_viewed") or {}
                                 _nl_street = _nl_mv.get("street") or ""
 
-                                if _nl_is_z or _nl_is_seller:
-                                    # Seller/Zbuyer: property address map, seller script
-                                    _nl_bg = _hg_bg(
-                                        "seller" if _nl_is_seller else "zbuyer",
-                                        address=_nl_street,
+                                if _nl_is_z:
+                                    # Zbuyer: cash-offer script (NOT the seller home-value script)
+                                    _nl_bg = _hg_bg("zbuyer", address=_nl_street, city=_nl_city)
+                                    _nl_script = _hg_zbuyer_script(
+                                        first_name=first,
+                                        street=_nl_street or "your home",
                                         city=_nl_city,
+                                        tags=tags,
                                     )
+                                    _nl_map_type = "zbuyer (cash offer, property zoom)"
+                                elif _nl_is_seller:
+                                    # Seller: home-value script, property address map
+                                    _nl_bg = _hg_bg("seller", address=_nl_street, city=_nl_city)
                                     _nl_script = _hg_seller_script(
                                         first_name=first,
                                         street=_nl_street or "your home",
                                         city=_nl_city,
                                         tags=tags,
                                     )
-                                    _nl_map_type = "seller/zbuyer (property zoom)"
+                                    _nl_map_type = "seller (property zoom)"
                                 else:
                                     # Buyer: most-viewed street map or city map, buyer script
                                     _nl_bg = _hg_bg(
@@ -3257,22 +3264,26 @@ def run_new_lead_mailer(dry_run=True):
                                     )
                                     _nl_map_type = "buyer (street/city zoom)"
 
-                                print(f"    Generating HeyGen video for {name} — {_nl_map_type}...")
-                                _nl_vid_result = _hg_generate(
+                                # Submit only — do NOT block waiting for the render.
+                                # HeyGen renders in ~60-90s on their side; we store the
+                                # video_id now and the consent-reply path resolves the
+                                # finished video on demand via /mthumb and /v (which call
+                                # HeyGen's status API at click time). Blocking here used
+                                # to time out the whole run and silently drop to voice.
+                                print(f"    Submitting HeyGen video for {name} — {_nl_map_type}...")
+                                _nl_video_id = _hg_submit(
                                     _nl_script,
                                     background_url=_nl_bg,
                                     avatar_id=DEFAULT_AVATAR,
                                     voice_id=DEFAULT_VOICE,
                                     character_type=DEFAULT_AVATAR_TYPE,
-                                    timeout_seconds=240,
                                 )
-                                if _nl_vid_result and _nl_vid_result.get("video_id"):
-                                    _nl_video_id = _nl_vid_result["video_id"]
-                                    print(f"    HeyGen video ready: {_nl_video_id}")
-                                    logger.info("HeyGen video generated for new lead %s (%s): %s",
+                                if _nl_video_id:
+                                    print(f"    HeyGen video submitted: {_nl_video_id} (rendering in background)")
+                                    logger.info("HeyGen video submitted for new lead %s (%s): %s",
                                                 name, _nl_map_type, _nl_video_id)
                                 else:
-                                    logger.warning("HeyGen video not ready for new lead %s — "
+                                    logger.warning("HeyGen submit failed for new lead %s — "
                                                    "falling back to voice on consent", name)
                                     _nl_ab_variant = "voice"
                             else:

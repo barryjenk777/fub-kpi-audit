@@ -957,6 +957,25 @@ def submit_video(script: str, background_url: str = None,
         return None
 
 
+def is_video_ready(video_id: str) -> bool:
+    """Single non-blocking status check — True if HeyGen has finished rendering.
+    Used by the consent-reply path to decide whether the video link is live yet
+    or whether to fall back to a voice note."""
+    if not _API_KEY or not video_id:
+        return False
+    try:
+        r = requests.get(
+            f"{_BASE}/v1/video_status.get",
+            headers=_headers(), params={"video_id": video_id}, timeout=8,
+        )
+        if r.status_code != 200:
+            return False
+        return r.json().get("data", {}).get("status") == "completed"
+    except Exception as e:
+        logger.warning("is_video_ready check failed for %s: %s", video_id, e)
+        return False
+
+
 def poll_video(video_id: str, timeout_seconds: int = 360,
                poll_interval: int = 8) -> dict | None:
     """
