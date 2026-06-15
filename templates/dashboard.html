@@ -1435,7 +1435,88 @@ async function submitClosing(){
 /* ════════════════════════════════════════════════
    KPI TAB — Agent cards (replaces dense table)
 ════════════════════════════════════════════════ */
-function buildAgents(d){
+function transferTile(label,val,prev){
+  let delta='';
+  if(typeof prev==='number'){
+    if(val>prev)delta=`<div style="font-size:.62rem;color:var(--green);font-weight:600">▲ up from ${prev}</div>`;
+    else if(val<prev)delta=`<div style="font-size:.62rem;color:var(--red);font-weight:600">▼ down from ${prev}</div>`;
+    else delta=`<div style="font-size:.62rem;color:var(--muted)">— same as ${prev}</div>`;
+  }
+  return `<div style="background:var(--surface2);border-radius:var(--r-sm);padding:.6rem .7rem">
+    <div style="font-size:.66rem;color:var(--muted);margin-bottom:2px">${label}</div>
+    <div style="font-size:1.5rem;font-weight:700;line-height:1.1">${val}</div>${delta}</div>`;
+}
+
+function buildSummaryTop(d, summary, passed, failed, cwAgents){
+  const tw=(summary&&summary.transfers&&summary.transfers.this_week)||{text:0,voice:0,total:0,fhalen:0};
+  const lw=(summary&&summary.transfers&&summary.transfers.last_week)||{text:0,voice:0,total:0,fhalen:0};
+  const hype=(summary&&summary.hype_email)||{};
+  let h='';
+
+  // Header + hype email status chip
+  let chip;
+  if(hype.sent_this_week){
+    let when='';
+    if(hype.last_sent){const dt=new Date(hype.last_sent);when=' · '+dt.toLocaleString('en-US',{weekday:'short',hour:'numeric',minute:'2-digit'});}
+    chip=`<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(34,197,94,.12);color:var(--green);padding:6px 11px;border-radius:var(--r-sm);font-size:.72rem;font-weight:600;white-space:nowrap">✅ Hype email sent${when}</span>`;
+  }else{
+    chip=`<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(245,158,11,.12);color:var(--yellow);padding:6px 11px;border-radius:var(--r-sm);font-size:.72rem;font-weight:600;white-space:nowrap">⏳ Hype email not sent yet · auto-sends Sun 9pm</span>`;
+  }
+  h+=`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:.9rem">
+    <div style="font-size:.95rem;font-weight:700">This week at a glance</div>${chip}</div>`;
+
+  // Transfers this week vs last week
+  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md,10px);padding:.9rem 1rem;margin-bottom:1rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
+      <div style="font-size:.85rem;font-weight:700">🔁 Lead transfers to agents</div>
+      <div style="font-size:.68rem;color:var(--muted)">this week vs last week</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem">
+      ${transferTile('AI text',tw.text,lw.text)}
+      ${transferTile('AI voice',tw.voice,lw.voice)}
+      ${transferTile('Human ISA',tw.fhalen,lw.fhalen)}
+      <div style="background:rgba(59,130,246,.12);border-radius:var(--r-sm);padding:.6rem .7rem">
+        <div style="font-size:.66rem;color:var(--blue);margin-bottom:2px">Total</div>
+        <div style="font-size:1.5rem;font-weight:700;line-height:1.1;color:var(--blue)">${(tw.total||0)+(tw.fhalen||0)}</div>
+        <div style="font-size:.62rem;color:var(--muted)">vs ${(lw.total||0)+(lw.fhalen||0)} last wk</div>
+      </div>
+    </div>
+  </div>`;
+
+  // Winning / Needs attention (based on last week's official KPI result)
+  const row=(a)=>{
+    const m=a.metrics, e=a.evaluation;
+    const cwa=cwAgents[a.name]||{};
+    const thisWk=(cwa.calls!=null)?`${cwa.calls}c · ${cwa.convos||0}conv${(cwa.appts_set||0)>0?' · '+cwa.appts_set+'appt':''}`:'—';
+    let reason='';
+    if(!e.overall_pass){
+      const r=[];
+      if(!e.calls_pass)r.push('calls');
+      if(!e.convos_pass)r.push('convos');
+      if(!e.compliance_pass)r.push('OOC');
+      reason=`<div style="font-size:.62rem;color:var(--red)">${r.length?r.join(' + ')+' short':'below KPI'}</div>`;
+    }
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:.5rem 0;border-top:1px solid var(--border)">
+      <div><div style="font-size:.8rem;font-weight:600">${a.name}</div>${reason}</div>
+      <div style="text-align:right">
+        <div style="font-size:.7rem;color:var(--muted)">last wk: ${m.outbound_calls}c · ${m.conversations}conv${m.appts_set>0?' · '+m.appts_set+'appt':''}</div>
+        <div style="font-size:.66rem;color:var(--muted)">this wk: ${thisWk}</div>
+      </div></div>`;
+  };
+  h+=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:1.2rem">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md,10px);padding:.8rem .9rem">
+      <div style="font-size:.82rem;font-weight:700;color:var(--green);margin-bottom:.3rem">🏆 Winning · ${passed.length}</div>
+      ${passed.length?passed.map(row).join(''):'<div style="font-size:.72rem;color:var(--muted);padding:.5rem 0">No agents passed last week</div>'}
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md,10px);padding:.8rem .9rem">
+      <div style="font-size:.82rem;font-weight:700;color:var(--red);margin-bottom:.3rem">⚠️ Needs attention · ${failed.length}</div>
+      ${failed.length?failed.map(row).join(''):'<div style="font-size:.72rem;color:var(--muted);padding:.5rem 0">Everyone passed 🎉</div>'}
+    </div>
+  </div>`;
+  return h;
+}
+
+function buildAgents(d, summary){
   const t=d.totals, agents=d.agents;
   const passed=agents.filter(a=>a.evaluation.overall_pass);
   const failed=agents.filter(a=>!a.evaluation.overall_pass);
@@ -1446,6 +1527,12 @@ function buildAgents(d){
   const minC=(d.thresholds?.min_calls)||30;
   const minV=(d.thresholds?.min_convos)||5;
   let h='';
+
+  // ── Focused summary (winning/losing, transfers, email status) ──
+  h+=buildSummaryTop(d, summary, passed, failed, cwAgents);
+
+  // ── Everything below is the full detail, collapsed by default ──
+  h+=`<div class="panel"><div class="panel-hdr" onclick="this.parentElement.classList.toggle('open')"><span class="panel-title">📋 Full KPI detail (routing, per-agent cards, tables)</span><span class="panel-chevron">▼</span></div><div class="panel-body">`;
 
   // ── Routing Split: Last Week (locked) vs This Week (in progress) ──
   const passedNames=passed.map(a=>`<span class="badge badge-green" style="font-size:.65rem">${a.name.split(' ')[0]}</span>`).join('');
@@ -1598,6 +1685,7 @@ function buildAgents(d){
     ooc.forEach(a=>{const m=a.metrics;h+=`<tr><td style="font-weight:600">${a.name}</td><td class="c-red" style="font-weight:700">${m.compliance_violations}</td><td>${m.ooc_leads}</td><td>${m.ooc_sphere}</td></tr>`;});
     h+='</tbody></table></div></div></div>';
   }
+  h+=`</div></div>`;  // close Full KPI detail panel-body + panel
   return h;
 }
 
@@ -1615,7 +1703,9 @@ async function loadAgents(force){
       document.getElementById('minCalls').value=d.thresholds.min_calls;
       document.getElementById('minConvos').value=d.thresholds.min_convos;
       document.getElementById('maxOoc').value=d.thresholds.max_ooc;
-      db.innerHTML=buildAgents(d);
+      let summary=null;
+      try{const sr=await fetch('/api/kpi-summary',{signal:AbortSignal.timeout(60000)});summary=await sr.json();}catch(e){}
+      db.innerHTML=buildAgents(d, summary);
       document.getElementById('btnUpdateGroup').style.display='';
       document.getElementById('btnSendEmail').style.display='';
       document.getElementById('hypeControls').style.display='flex';
