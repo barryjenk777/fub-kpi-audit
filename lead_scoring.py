@@ -492,10 +492,15 @@ class LeadScorer:
             if ISA_TRANSFER_FRESH_TAG in (person.get("tags") or []):
                 try:
                     import db as _db_module
+                    # Freeze the channel (text/voice) now — FUB swaps tags once
+                    # the transfer succeeds (FRESH → SUCCESSFUL), so classifying
+                    # later would lose it.
+                    _ttype = _db_module.classify_transfer_type(person.get("tags"))
                     is_new_transfer = _db_module.record_isa_transfer(
                         person["id"],
                         lead_name=person.get("name"),
                         agent_name=agent_name,
+                        transfer_type=_ttype,
                     )
                     # On first sighting only, stamp the transfer date into the
                     # "ISA Transfer Date" FUB custom field so it's visible in FUB.

@@ -2312,64 +2312,28 @@ def api_sync_appointment_tags():
         return jsonify({"error": str(e)}), 500
 
 
-# Tag taxonomy for classifying ISA_TRANSFER_FRESH leads into AI text vs AI voice.
-# A lead carrying ISA_TRANSFER_FRESH was transferred in the last 7 days (the tag
-# is auto-removed after 7 days), so tag-presence is itself the weekly window.
-_TRANSFER_TEXT_TAGS  = {"AI_ENGAGED", "AI_NEEDS_FOLLOW_UP"}
-_TRANSFER_VOICE_TAGS = {"AI_VOICE_NEEDS_FOLLOW_UP",
-                        "ISA_TRANSFER_SUCCESSFUL",   # defensive — not seen in FUB yet
-                        "ISA_TRANSFER_UNSUCCESSFUL"} # "engaged, agreed, hung up on hold"
-
-
-def _count_weekly_transfers():
+def _count_weekly_transfers(days=7):
     """
     Count this week's AI text and AI voice transfers for the hype email.
 
-    Pulls every lead currently carrying ISA_TRANSFER_FRESH (= transferred in the
-    last 7 days, since the tag auto-expires) and classifies each:
-      - voice if it carries any voice tag (AI_VOICE_NEEDS_FOLLOW_UP /
-        ISA_TRANSFER_UNSUCCESSFUL) — voice takes priority when both are present
-      - else text if it carries a text tag (AI_ENGAGED / AI_NEEDS_FOLLOW_UP)
-      - else uncategorized (logged, not counted)
-
-    When customISATransferDate is present and clearly older than 8 days, the lead
-    is excluded as a stale/lingering tag. Missing dates are trusted (tag presence).
+    Counts off the isa_transfers table, keyed on transfer_date (the ISA Transfer
+    Date stamped when we first saw ISA_TRANSFER_FRESH). This is the reliable
+    signal: the date persists after FUB swaps ISA_TRANSFER_FRESH → SUCCESSFUL on
+    a successful transfer, so successful transfers are NOT lost. The text/voice
+    split is frozen at record time in transfer_type for the same reason.
 
     Returns dict: {ai_text, ai_voice, uncategorized, total}
     """
-    from config import ISA_TRANSFER_FRESH_TAG
-    client = FUBClient()
-    people = client.get_people(tag=ISA_TRANSFER_FRESH_TAG, limit=200) or []
-
-    _et_h  = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
-    ET     = timezone(timedelta(hours=_et_h))
-    cutoff = (datetime.now(ET) - timedelta(days=8)).date()
-
-    text = voice = uncat = stale = 0
-    for p in people:
-        # Defensive staleness guard using the custom field when populated
-        xfer = p.get("customISATransferDate")
-        if xfer:
-            try:
-                from datetime import date as _d
-                if _d.fromisoformat(str(xfer)[:10]) < cutoff:
-                    stale += 1
-                    continue
-            except Exception:
-                pass
-        tags = set(p.get("tags") or [])
-        if tags & _TRANSFER_VOICE_TAGS:
-            voice += 1
-        elif tags & _TRANSFER_TEXT_TAGS:
-            text += 1
-        else:
-            uncat += 1
-
-    logger.info("[HYPE] Weekly transfers — text=%d voice=%d uncategorized=%d "
-                "stale_skipped=%d (of %d tagged)",
-                text, voice, uncat, stale, len(people))
-    return {"ai_text": text, "ai_voice": voice,
-            "uncategorized": uncat, "total": text + voice}
+    counts = _db.count_weekly_transfers_by_type(days=days)
+    logger.info("[HYPE] Weekly transfers (last %dd) — text=%d voice=%d unknown=%d",
+                days, counts.get("text", 0), counts.get("voice", 0),
+                counts.get("unknown", 0))
+    return {
+        "ai_text":       counts.get("text", 0),
+        "ai_voice":      counts.get("voice", 0),
+        "uncategorized": counts.get("unknown", 0),
+        "total":         counts.get("text", 0) + counts.get("voice", 0),
+    }
 
 
 def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
@@ -4871,9 +4835,10 @@ def api_admin_expire_isa_transfers():
 
 @app.route("/api/admin/backfill-isa-transfer-date", methods=["POST"])
 def api_admin_backfill_isa_transfer_date():
-    """One-time backfill: write the stored transfer_date into the FUB
-    'ISA Transfer Date' custom field (customISATransferDate) for all currently
-    active ISA transfers. Idempotent — safe to run more than once."""
+    """One-time backfill for currently active ISA transfers:
+      1. Write stored transfer_date → FUB customISATransferDate field
+      2. Classify each lead's current tags → transfer_type in our DB
+    Idempotent — safe to run more than once. transfer_type only fills NULLs."""
     try:
         active = _db.get_all_isa_transfers()
         if not active:
@@ -4882,6 +4847,7 @@ def api_admin_backfill_isa_transfer_date():
         from fub_client import FUBClient
         client = FUBClient(api_key)
         updated, failed = 0, []
+        type_map = {}
         for row in active:
             person_id = row["person_id"]
             xfer = row.get("transfer_date")
@@ -4895,7 +4861,17 @@ def api_admin_backfill_isa_transfer_date():
                 updated += 1
             except Exception as e:
                 failed.append({"person_id": person_id, "error": str(e)})
+            # Classify transfer_type from current tags (best-effort; SUCCESSFUL/
+            # voice tags persist, so voice is reliable; text may have churned).
+            try:
+                person = client.get_person(person_id)
+                if person:
+                    type_map[person_id] = _db.classify_transfer_type(person.get("tags"))
+            except Exception:
+                pass
+        types_set = _db.backfill_transfer_types(type_map)
         return jsonify({"success": True, "updated": updated,
+                        "transfer_types_set": types_set,
                         "total_active": len(active), "failed": failed})
     except Exception as e:
         import traceback

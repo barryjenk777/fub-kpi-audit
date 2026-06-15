@@ -360,6 +360,9 @@ CREATE TABLE IF NOT EXISTS isa_transfers (
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS lead_name     TEXT;
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS agent_name    TEXT;
 ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS first_call_at TIMESTAMPTZ;  -- set when agent logs first outbound call
+-- transfer_type: 'text' | 'voice' | 'unknown' — frozen at record time so the
+-- weekly hype count survives FUB tag churn (FRESH → SUCCESSFUL swaps tags).
+ALTER TABLE isa_transfers ADD COLUMN IF NOT EXISTS transfer_type TEXT;
 
 -- Prospecting time block schedule (set during goal wizard step 7)
 -- Stores which days/time the agent has committed to prospect each week.
@@ -1096,13 +1099,34 @@ def classify_stage(stage_raw: str) -> "str | None":
 # ISA Transfer Fresh Tag
 # ---------------------------------------------------------------------------
 
+# Tag taxonomy for classifying an ISA transfer as text vs voice. Frozen at the
+# moment we first see ISA_TRANSFER_FRESH, before FUB swaps tags on success.
+TRANSFER_TEXT_TAGS  = {"AI_ENGAGED", "AI_NEEDS_FOLLOW_UP"}
+TRANSFER_VOICE_TAGS = {"AI_VOICE_NEEDS_FOLLOW_UP",
+                       "ISA_TRANSFER_SUCCESSFUL",
+                       "ISA_TRANSFER_UNSUCCESSFUL"}
+
+
+def classify_transfer_type(tags) -> str:
+    """Classify an ISA transfer from its tags. Voice wins ties (the voice tags
+    are the channel-of-record). Returns 'voice' | 'text' | 'unknown'."""
+    tagset = set(tags or [])
+    if tagset & TRANSFER_VOICE_TAGS:
+        return "voice"
+    if tagset & TRANSFER_TEXT_TAGS:
+        return "text"
+    return "unknown"
+
+
 def record_isa_transfer(person_id: str, lead_name: str = None,
-                        agent_name: str = None) -> bool:
+                        agent_name: str = None, transfer_type: str = None) -> bool:
     """Record the first time ISA_TRANSFER_FRESH is seen on a lead.
     Uses ON CONFLICT DO NOTHING so repeated calls are safe — the original
     transfer_date is preserved and won't be overwritten by later scoring runs.
     lead_name / agent_name are stored so the morning nudge can query by agent
     without additional FUB API calls.
+    transfer_type ('text'|'voice'|'unknown') is frozen here so the weekly hype
+    count survives FUB tag churn after the transfer succeeds.
     Returns True if a new row was inserted, False if already recorded."""
     if not is_available():
         return False
@@ -1110,15 +1134,65 @@ def record_isa_transfer(person_id: str, lead_name: str = None,
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO isa_transfers (person_id, lead_name, agent_name)
-                       VALUES (%s, %s, %s)
+                    """INSERT INTO isa_transfers (person_id, lead_name, agent_name, transfer_type)
+                       VALUES (%s, %s, %s, %s)
                        ON CONFLICT (person_id) DO NOTHING""",
-                    (str(person_id), lead_name, agent_name)
+                    (str(person_id), lead_name, agent_name, transfer_type)
                 )
                 return cur.rowcount > 0
     except Exception as e:
         logger.warning("record_isa_transfer failed for %s: %s", person_id, e)
         return False
+
+
+def count_weekly_transfers_by_type(days: int = 7) -> dict:
+    """Count ISA transfers in the last `days` days, grouped by transfer_type.
+    Counts off transfer_date (the ISA Transfer Date), which persists after the
+    ISA_TRANSFER_FRESH tag is removed — so successful transfers still count.
+    Returns {'text': int, 'voice': int, 'unknown': int, 'total': int}."""
+    out = {"text": 0, "voice": 0, "unknown": 0, "total": 0}
+    if not is_available():
+        return out
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT COALESCE(transfer_type, 'unknown') AS t, COUNT(*)
+                       FROM isa_transfers
+                       WHERE transfer_date >= NOW() - (%s || ' days')::interval
+                       GROUP BY COALESCE(transfer_type, 'unknown')""",
+                    (days,)
+                )
+                for t, c in cur.fetchall():
+                    key = t if t in ("text", "voice") else "unknown"
+                    out[key] = out.get(key, 0) + int(c)
+        out["total"] = out["text"] + out["voice"] + out["unknown"]
+        return out
+    except Exception as e:
+        logger.warning("count_weekly_transfers_by_type failed: %s", e)
+        return out
+
+
+def backfill_transfer_types(type_map: dict) -> int:
+    """One-time: set transfer_type for existing rows. type_map = {person_id: type}.
+    Only updates rows where transfer_type IS NULL. Returns rows updated."""
+    if not is_available() or not type_map:
+        return 0
+    updated = 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for pid, ttype in type_map.items():
+                    cur.execute(
+                        """UPDATE isa_transfers SET transfer_type = %s
+                           WHERE person_id = %s AND transfer_type IS NULL""",
+                        (ttype, str(pid))
+                    )
+                    updated += cur.rowcount
+        return updated
+    except Exception as e:
+        logger.warning("backfill_transfer_types failed: %s", e)
+        return updated
 
 
 def get_agent_isa_transfers(agent_name: str) -> list:
