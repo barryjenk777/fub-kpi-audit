@@ -2924,6 +2924,10 @@ def run_new_lead_mailer(dry_run=True):
     intentionally excluded from the sequence count in db.py — so pond_mailer
     still sees sequence_num=1 and fires the HeyGen video on schedule.
     """
+    import config as _cfg
+    if getattr(_cfg, "PROJECT_BLUE_PAUSED", False):
+        logger.warning("[PAUSED] run_new_lead_mailer suppressed — PROJECT_BLUE_PAUSED")
+        return {"skipped": True, "reason": "project_blue_paused"}
     _load_env()
 
     import db as _db
@@ -3420,6 +3424,10 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
     7. Send via SendGrid
     8. Log to DB
     """
+    import config as _cfg
+    if getattr(_cfg, "PROJECT_BLUE_PAUSED", False):
+        logger.warning("[PAUSED] run_pond_mailer suppressed — PROJECT_BLUE_PAUSED")
+        return {"skipped": True, "reason": "project_blue_paused"}
     # Load .env for local dev
     _load_env()
 

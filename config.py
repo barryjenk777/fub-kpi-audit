@@ -27,6 +27,12 @@ MAX_SPEED_TO_LEAD_MINUTES = 5
 # Set to False to disable speed-to-lead as a pass/fail requirement
 ENABLE_SPEED_TO_LEAD = False
 
+# KILL SWITCH for the Project Blue / pond SMS campaign (openers, recordings,
+# 7-day drip, handoff SMS). Set True to pause ALL outbound blue texts while
+# fixing bugs. Inbound replies are still received and logged; only OUTBOUND
+# sends are suppressed. Flip back to False once verified.
+PROJECT_BLUE_PAUSED = True
+
 # Maximum number of leads with MAV_NUDGE_OUTSTANDING tag
 # Set high initially while team clears backlog, then tighten over time
 MAX_OUT_OF_COMPLIANCE = 40

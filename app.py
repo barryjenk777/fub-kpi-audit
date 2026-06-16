@@ -9584,6 +9584,9 @@ def _schedule_agent_notification(person_id, person_name, phone, reply_text,
     Fires at T+120s by default — gives FUB group rules time to reassign
     the lead before we look up who to email. Runs in a daemon thread.
     """
+    if getattr(config, "PROJECT_BLUE_PAUSED", False):
+        logger.warning("[PAUSED] agent notification suppressed for person %s — PROJECT_BLUE_PAUSED", person_id)
+        return
     import threading
 
     def _fire():
@@ -9746,6 +9749,9 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
 
     Runs in a daemon thread — Flask response returns immediately.
     """
+    if getattr(config, "PROJECT_BLUE_PAUSED", False):
+        logger.warning("[PAUSED] handoff SMS suppressed for person %s — PROJECT_BLUE_PAUSED", person_id)
+        return
     import threading
 
     def _send():
@@ -10355,7 +10361,7 @@ def webhook_projectblue():
             fub = FUBClient()
             # Send the recording to anyone who isn't negative/opted-out —
             # explicit consent, positive, AND neutral all get the video/voice.
-            _send_recording = (sentiment != "negative")
+            _send_recording = (sentiment != "negative") and not getattr(config, "PROJECT_BLUE_PAUSED", False)
             if _send_recording:
                 logger.info("Recording send triggered for %s (%s): sentiment=%s consent=%s body=%r",
                             person_name, from_phone, sentiment, _consent, body_text[:60])
@@ -11388,6 +11394,9 @@ def scheduled_zbuyer_drip():
     lead per run; gates each touch on days-since-start and a ~1-day gap since the
     last touch so a backlogged lead doesn't get several at once. Quiet hours and
     suppression are enforced inside projectblue_client.send_message()."""
+    if getattr(config, "PROJECT_BLUE_PAUSED", False):
+        print("[PAUSED] scheduled_zbuyer_drip suppressed — PROJECT_BLUE_PAUSED")
+        return
     if not _db.try_acquire_job_lock("zbuyer_drip"):
         return
     try:
