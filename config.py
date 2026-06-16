@@ -31,7 +31,7 @@ ENABLE_SPEED_TO_LEAD = False
 # 7-day drip, handoff SMS). Set True to pause ALL outbound blue texts while
 # fixing bugs. Inbound replies are still received and logged; only OUTBOUND
 # sends are suppressed. Flip back to False once verified.
-PROJECT_BLUE_PAUSED = True
+PROJECT_BLUE_PAUSED = False
 
 # Maximum number of leads with MAV_NUDGE_OUTSTANDING tag
 # Set high initially while team clears backlog, then tighten over time
