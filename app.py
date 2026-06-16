@@ -9591,6 +9591,10 @@ def _schedule_agent_notification(person_id, person_name, phone, reply_text,
 
     def _fire():
         try:
+            # Dedup: one agent notification per lead. Claimed at fire time.
+            if not _db.claim_once(f"agentnotif:{person_id}"):
+                logger.info("Agent already notified for person %s — skipping duplicate", person_id)
+                return
             _notify_agent_of_reply(
                 person_id=person_id,
                 person_name=person_name,
@@ -9627,19 +9631,19 @@ def _generate_handoff_sms(lead_first, reply_text, agent_first, agent_phone, lead
     import random
     if agent_first and agent_phone:
         fallbacks = [
-            (f"{lead_first}, really glad you reached out. I'm handing you to {agent_first} — "
+            (f"{lead_first}, really glad you reached out. I'm handing you to {agent_first}, "
              f"they're one of the best on our team and already have your full context. "
              f"Expect a call from {agent_phone} very soon."),
-            (f"{lead_first}, love the response. Connecting you with {agent_first} now — "
-             f"they specialize in exactly this and will reach out from {agent_phone} "
+            (f"{lead_first}, love the response. Connecting you with {agent_first} now. "
+             f"They specialize in exactly this and will reach out from {agent_phone} "
              f"shortly. You're in good hands."),
             (f"{lead_first}, this is exactly why I do this. Sending {agent_first} your "
-             f"way — they'll call from {agent_phone} and already know your situation. "
+             f"way. They'll call from {agent_phone} and already know your situation. "
              f"This conversation is going to be worth it."),
         ]
     elif agent_first:
         fallbacks = [
-            (f"{lead_first}, really glad you replied. Handing you to {agent_first} — "
+            (f"{lead_first}, really glad you replied. Handing you to {agent_first}, "
              f"they're one of the best we have and already know your situation. "
              f"Expect their direct call shortly."),
             (f"{lead_first}, connecting you with {agent_first} now. They have full context "
@@ -9649,7 +9653,7 @@ def _generate_handoff_sms(lead_first, reply_text, agent_first, agent_phone, lead
     else:
         fallbacks = [
             (f"{lead_first}, glad you replied. One of our top agents is being connected "
-             f"to your file right now — they'll reach out from their direct line shortly "
+             f"to your file right now. They'll reach out from their direct line shortly "
              f"with full context on your situation."),
         ]
 
@@ -9681,7 +9685,7 @@ def _generate_handoff_sms(lead_first, reply_text, agent_first, agent_phone, lead
             ),
         }.get(lead_type, "")
 
-        prompt = f"""You are Barry Jenkins' AI assistant at Legacy Home Team — Virginia's #1 real estate team (850+ homes/year, Hampton Roads VA).
+        prompt = f"""You are Barry Jenkins' AI assistant at Legacy Home Team, Virginia's #1 real estate team (850+ homes/year, Hampton Roads VA).
 
 A lead just replied positively to one of Barry's AI outreach texts. You're sending a final handoff SMS before a human agent takes over the conversation.
 
@@ -9694,18 +9698,19 @@ Assigned agent's first name: {agent_first or "our agent"}
 {phone_line}
 
 WRITE a 35-45 word handoff SMS that:
-1. Opens with the lead's first name + a single warm sentence that acknowledges their reply authentically (NOT generic — it should feel like you actually read what they said)
-2. Introduces the agent by first name as the specific expert being sent their way — frame them as the right person for THIS lead's situation (buyer/seller/cash-offer as appropriate)
-3. If you have the agent's phone: mention it naturally as "they'll reach out from [number]"
-4. Closes with one line that creates genuine anticipation — something that makes them want to pick up when the agent calls
+1. Opens with the lead's first name and a single warm sentence that acknowledges their reply authentically (not generic, it should feel like you actually read what they said)
+2. Introduces the agent by first name as the specific expert being sent their way. Frame them as the right person for THIS lead's situation (buyer, seller, or cash-offer as appropriate)
+3. If you have the agent's phone, mention it naturally as "they'll reach out from [number]"
+4. Closes with one line that creates genuine anticipation, something that makes them want to pick up when the agent calls
 
 RULES:
-— 35-45 words. No more.
-— NO "just", "reaching out", "checking in", "feel free", "happy to help", "don't hesitate"
-— NO corporate-speak. This should read like Barry typed it himself.
-— Start with the lead's first name followed by a comma
-— No sign-off (automatically added). No links.
-— The agent should sound like the best person in the world for their specific situation, not a random handoff
+- 35-45 words. No more.
+- NEVER use em-dashes or en-dashes. Use periods and commas only.
+- NO "just", "reaching out", "checking in", "feel free", "happy to help", "don't hesitate"
+- NO corporate-speak. This should read like Barry typed it himself.
+- Start with the lead's first name followed by a comma
+- No sign-off (automatically added). No links.
+- The agent should sound like the best person in the world for their specific situation, not a random handoff
 
 Output ONLY the SMS text. Nothing else."""
 
@@ -9716,10 +9721,14 @@ Output ONLY the SMS text. Nothing else."""
         )
         text = response.content[0].text.strip()
         # Strip any accidental sign-off
-        for stop in ("Barry Jenkins", "— Barry", "Legacy Home Team"):
+        for stop in ("Barry Jenkins", "Barry", "Legacy Home Team"):
             idx = text.find(stop)
             if idx > 0:
                 text = text[:idx].strip()
+        # Hard rule: no dashes. Strip any em/en/figure dashes Claude slipped in.
+        import re as _re_ho
+        text = _re_ho.sub(r'\s*[‒–—―−]\s*', ', ', text)
+        text = text.replace('&mdash;', ', ').replace('&ndash;', ', ').strip()
         if len(text) > 20:
             return text
         # Claude returned something too short — use fallback
@@ -9756,6 +9765,11 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
 
     def _send():
         try:
+            # Dedup: only ONE handoff per lead, ever. Claimed at send time so a
+            # timer lost to a redeploy doesn't permanently block a real handoff.
+            if not _db.claim_once(f"handoff:{person_id}"):
+                logger.info("Handoff already sent for person %s — skipping duplicate", person_id)
+                return
             from fub_client import FUBClient
             import projectblue_client as _pb_handoff
             fub = FUBClient()
@@ -9886,6 +9900,12 @@ def webhook_sendblue():
         logger.warning("Sendblue: no lead matched for phone %s", from_number)
         return jsonify({"ok": True, "skipped": "no_lead_match"}), 200
 
+    # Any reply stops the zbuyer cash-offer drip — they engaged.
+    try:
+        _db.stop_zbuyer_drip(person_id, reason="replied")
+    except Exception:
+        pass
+
     # ── Sentiment analysis ────────────────────────────────────────────────────
     try:
         sentiment, sentiment_score, sentiment_reason = _pond_analyze_sentiment(
@@ -9907,12 +9927,11 @@ def webhook_sendblue():
             _pond_add_fub_note(fub, person_id, person_name, body_text,
                                "iMessage Reply", sentiment_reason)
             try:
-                _sb_person = fub.get_person(person_id)
-                _sb_tags   = _sb_person.get("tags") or []
-                _sb_src    = (_sb_person.get("source") or "").lower().replace("-","").replace(" ","").replace("_","")
-                _sb_is_z   = (any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER") for t in _sb_tags) or "zbuyer" in _sb_src)
-                _sb_is_s   = not _sb_is_z and any(t in _sb_tags for t in ("Ylopo Prospecting", "Ylopo Seller"))
-                _sb_ltype  = "zbuyer" if _sb_is_z else ("seller" if _sb_is_s else "buyer")
+                _sb_ltype = _db.get_lead_type_for_lead(person_id)
+                if not _sb_ltype:
+                    _sb_person = fub.get_person(person_id)
+                    _sb_ltype = _db.classify_lead_type(
+                        _sb_person.get("tags") or [], _sb_person.get("source"))
             except Exception:
                 _sb_ltype = "buyer"
             _schedule_sms_handoff(
@@ -10027,6 +10046,11 @@ def webhook_twilio_sms():
             logger.warning("Twilio SMS webhook: missing From field")
             return _twiml()
 
+        # Idempotency: skip duplicate carrier deliveries of the same message.
+        if msg_sid and not _db.claim_once(f"reply:tw:{msg_sid}"):
+            logger.info("Twilio duplicate delivery (sid=%s) — skipping", msg_sid)
+            return _twiml()
+
         # ── STOP keyword hard-gate (before Claude — no API dependency) ────────
         # CTIA standard stop words: STOP, STOPALL, UNSUBSCRIBE, CANCEL, END, QUIT
         # Check before any sentiment analysis so a STOP always applies opt-out
@@ -10075,6 +10099,12 @@ def webhook_twilio_sms():
 
         logger.info("SMS reply matched: %s (ID: %s)", person_name, person_id)
 
+        # Any reply stops the zbuyer cash-offer drip — they engaged.
+        try:
+            _db.stop_zbuyer_drip(person_id, reason="replied")
+        except Exception:
+            pass
+
         # Analyze sentiment with Claude Haiku (keyword fallback if API unavailable)
         sentiment, sentiment_score, sentiment_reason = _pond_analyze_sentiment(
             body_text, person_name
@@ -10105,12 +10135,11 @@ def webhook_twilio_sms():
                 # Pass the lead's actual reply so Claude can write something specific to them.
                 _lead_first = (person_name or "").split()[0] if person_name else ""
                 try:
-                    _tw_person = fub.get_person(person_id)
-                    _tw_tags   = _tw_person.get("tags") or []
-                    _tw_src    = (_tw_person.get("source") or "").lower().replace("-","").replace(" ","").replace("_","")
-                    _tw_is_z   = (any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER") for t in _tw_tags) or "zbuyer" in _tw_src)
-                    _tw_is_s   = not _tw_is_z and any(t in _tw_tags for t in ("Ylopo Prospecting", "Ylopo Seller"))
-                    _tw_ltype  = "zbuyer" if _tw_is_z else ("seller" if _tw_is_s else "buyer")
+                    _tw_ltype = _db.get_lead_type_for_lead(person_id)
+                    if not _tw_ltype:
+                        _tw_person = fub.get_person(person_id)
+                        _tw_ltype = _db.classify_lead_type(
+                            _tw_person.get("tags") or [], _tw_person.get("source"))
                 except Exception:
                     _tw_ltype = "buyer"
                 _schedule_sms_handoff(
@@ -10286,6 +10315,12 @@ def webhook_projectblue():
             logger.warning("Project Blue webhook: empty body from %s", from_phone)
             return jsonify({"ok": True}), 200
 
+        # Idempotency: a duplicate carrier/platform delivery of the same message
+        # must not re-run sentiment + handoff + notification. Claim the guid once.
+        if guid and not _db.claim_once(f"reply:pb:{guid}"):
+            logger.info("Project Blue duplicate delivery (guid=%s) — skipping", guid)
+            return jsonify({"ok": True, "skipped": "duplicate"}), 200
+
         # ── STOP keyword hard-gate ─────────────────────────────────────────────
         body_lower = body_text.lower().strip()
         is_hard_stop = (
@@ -10376,27 +10411,19 @@ def webhook_projectblue():
                     _base_url = os.environ.get("BASE_URL",
                                                "https://web-production-3363cc.up.railway.app")
 
-                    # Detect lead type upfront — needed for audit email AND handoff SMS
-                    # framing regardless of which A/B variant (voice or video) fires.
+                    # Lead type: prefer the value frozen at opener time so the
+                    # handoff framing always matches the opener. Only re-detect
+                    # (via the shared classifier) if nothing was stored.
                     try:
-                        _consent_person = fub.get_person(person_id) if person_id else {}
-                        _consent_tags   = _consent_person.get("tags") or []
-                        _consent_source = (_consent_person.get("source") or "").strip().lower()
-                        _consent_src_norm = _consent_source.replace("-","").replace(" ","").replace("_","")
-                        _is_zbuyer_consent = (
-                            any(t.upper().replace("-","_") in ("ZLEAD","Z_BUYER","YLOPO_Z_BUYER")
-                                for t in _consent_tags)
-                            or "zbuyer" in _consent_src_norm
-                        )
-                        _is_seller_consent = (
-                            not _is_zbuyer_consent
-                            and any(t in _consent_tags
-                                    for t in ("Ylopo Prospecting", "Ylopo Seller"))
-                        )
-                        _audit_lead_type = (
-                            "zbuyer" if _is_zbuyer_consent else
-                            ("seller" if _is_seller_consent else "buyer")
-                        )
+                        _audit_lead_type = _db.get_lead_type_for_lead(person_id)
+                        if not _audit_lead_type:
+                            _consent_person = fub.get_person(person_id) if person_id else {}
+                            _audit_lead_type = _db.classify_lead_type(
+                                _consent_person.get("tags") or [],
+                                _consent_person.get("source"),
+                            )
+                        _is_zbuyer_consent = (_audit_lead_type == "zbuyer")
+                        _is_seller_consent = (_audit_lead_type == "seller")
                     except Exception as _lte:
                         logger.warning("Consent lead-type detection failed: %s", _lte)
                         _is_zbuyer_consent = False

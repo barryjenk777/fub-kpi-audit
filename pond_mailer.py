@@ -3017,6 +3017,16 @@ def run_new_lead_mailer(dry_run=True):
             logger.info("Skipping new lead %s — already claimed by agent (user %s)", name, _assigned_uid)
             continue
 
+        # Re-contact guard — never re-open a lead we've already texted or who has
+        # already converted. Prevents re-sending the opener to a lead who got the
+        # full sequence weeks ago (the "opener re-fired days later" bug).
+        if any(t in tags for t in ("SMS_Conversion", "Claude_Text_Converted", "SMS_OptOut")):
+            logger.info("Skipping new lead %s — already converted/opted-out (tags)", name)
+            continue
+        if _db.has_received_pond_sms(pid):
+            logger.info("Skipping new lead %s — already received a pond SMS", name)
+            continue
+
         # Compliance block — respect opt-outs before sending the immediate email.
         _blocking = _email_suppression_tags(tags)
         if _blocking:
@@ -3309,6 +3319,7 @@ def run_new_lead_mailer(dry_run=True):
                         channel="new_lead",
                         ab_variant=_nl_ab_variant,
                         video_id=_nl_video_id,
+                        lead_type=_nl_lead_type,
                     )
                     # Enroll zbuyer leads in the 7-day cash-offer drip (opener = touch 1).
                     if _nl_is_z and not dry_run:

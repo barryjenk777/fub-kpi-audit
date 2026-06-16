@@ -887,6 +887,14 @@ def submit_video(script: str, background_url: str = None,
         character_type: "talking_photo" or "avatar". Defaults to DEFAULT_AVATAR_TYPE.
         title:          Video title (for HeyGen dashboard)
     """
+    # Hard rule: no dashes in Barry's copy. Strip any em/en/figure dashes from
+    # the script (covers both Claude-generated and hardcoded fallback scripts)
+    # before it becomes spoken audio. One chokepoint for every script path.
+    if script:
+        import re as _re_hg
+        script = _re_hg.sub(r'\s*[‒–—―−]\s*', ', ', script)
+        script = script.replace('&mdash;', ', ').replace('&ndash;', ', ').strip()
+
     _avatar = avatar_id or DEFAULT_AVATAR
     _voice  = voice_id  or DEFAULT_VOICE
     _char_type = character_type or DEFAULT_AVATAR_TYPE

@@ -3791,15 +3791,106 @@ def ensure_pond_sms_log_table():
                     ALTER TABLE pond_sms_log
                     ADD COLUMN IF NOT EXISTS video_id VARCHAR(100)
                 """)
+                # lead_type frozen at opener time ("buyer"|"seller"|"zbuyer") so
+                # the reply handler and handoff reuse it instead of re-detecting
+                # (re-detection across 4 webhooks was inconsistent → wrong framing).
+                cur.execute("""
+                    ALTER TABLE pond_sms_log
+                    ADD COLUMN IF NOT EXISTS lead_type VARCHAR(20)
+                """)
+                # Generic idempotency / dedup guard. One row per unique key:
+                #   reply:<guid>      — webhook already processed this message
+                #   handoff:<pid>     — handoff already scheduled for this lead
+                #   agentnotif:<pid>  — agent already notified for this lead
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS idempotency_guard (
+                        guard_key  TEXT PRIMARY KEY,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
     except Exception as e:
         logger.warning("ensure_pond_sms_log_table failed: %s", e)
+
+
+def claim_once(guard_key: str) -> bool:
+    """Atomically claim a one-time action. Returns True the FIRST time a key is
+    seen (caller should proceed), False if it was already claimed (caller should
+    skip). Used for handoff dedup, agent-notification dedup, and webhook
+    idempotency. Fails OPEN (returns True) only if the DB is unavailable, so a
+    DB outage never silently swallows a real handoff.
+    Pass a clearing prefix in clear_guard() to reset (e.g. on re-engagement)."""
+    if not is_available():
+        return True
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO idempotency_guard (guard_key) VALUES (%s) "
+                    "ON CONFLICT (guard_key) DO NOTHING",
+                    (str(guard_key),)
+                )
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("claim_once(%s) failed: %s — failing open", guard_key, e)
+        return True
+
+
+def clear_guard(guard_key: str) -> None:
+    """Remove an idempotency guard key so the action can fire again."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM idempotency_guard WHERE guard_key = %s",
+                            (str(guard_key),))
+    except Exception as e:
+        logger.warning("clear_guard(%s) failed: %s", guard_key, e)
+
+
+def classify_lead_type(tags, source=None) -> str:
+    """Single source of truth for buyer/seller/zbuyer classification. Used by
+    the opener-send path AND all reply webhooks so framing never disagrees.
+    Returns 'zbuyer' | 'seller' | 'buyer'."""
+    tagset = tags or []
+    src_norm = (source or "").lower().replace("-", "").replace(" ", "").replace("_", "")
+    is_z = (
+        any(str(t).upper().replace("-", "_") in ("ZLEAD", "Z_BUYER", "YLOPO_Z_BUYER")
+            for t in tagset)
+        or "zbuyer" in src_norm
+    )
+    if is_z:
+        return "zbuyer"
+    is_seller = any(t in tagset for t in ("Ylopo Prospecting", "Ylopo Seller"))
+    return "seller" if is_seller else "buyer"
+
+
+def get_lead_type_for_lead(person_id):
+    """Return the lead_type frozen at opener time, or None. Reused on reply so
+    the handoff framing matches what the opener was sent as."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT lead_type FROM pond_sms_log "
+                    "WHERE person_id = %s AND lead_type IS NOT NULL "
+                    "ORDER BY sent_at DESC LIMIT 1",
+                    (int(person_id),)
+                )
+                row = cur.fetchone()
+                return row[0] if row and row[0] else None
+    except Exception as e:
+        logger.warning("get_lead_type_for_lead(%s) failed: %s", person_id, e)
+        return None
 
 
 def log_pond_sms(person_id, person_name, phone_number, body,
                  strategy, leadstream_tier="POND",
                  dry_run=False, twilio_sid=None,
                  status="queued", channel="sms_only",
-                 ab_variant=None, video_id=None):
+                 ab_variant=None, video_id=None, lead_type=None):
     """
     Record a sent pond SMS. Returns the inserted row id or None.
 
@@ -3812,6 +3903,9 @@ def log_pond_sms(person_id, person_name, phone_number, body,
     ab_variant:
         "voice"  — ElevenLabs audio bubble will be sent on consent reply
         "video"  — HeyGen map thumbnail will be sent on consent reply
+
+    lead_type: "buyer" | "seller" | "zbuyer" — frozen here at opener time,
+               reused on reply so handoff framing stays consistent.
     """
     if not is_available():
         return None
@@ -3822,12 +3916,12 @@ def log_pond_sms(person_id, person_name, phone_number, body,
                     INSERT INTO pond_sms_log
                         (person_id, person_name, phone_number, body,
                          strategy, leadstream_tier, dry_run, twilio_sid,
-                         status, channel, ab_variant, video_id)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         status, channel, ab_variant, video_id, lead_type)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (person_id, person_name, phone_number, body,
                       strategy, leadstream_tier, dry_run, twilio_sid,
-                      status, channel, ab_variant, video_id))
+                      status, channel, ab_variant, video_id, lead_type))
                 row = cur.fetchone()
                 return row[0] if row else None
     except Exception as e:
