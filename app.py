@@ -13107,6 +13107,34 @@ def _generate_new_agent_text(agent_first, week_day, goal_set, setup_url, days_on
 
     Returns a text message string.
     """
+    # Claude-generated first, in Barry's coach voice. Phase logic preserved:
+    # goal not set → push setup w/ link; days 1-14 → onboarding follow-up tied
+    # to the email sequence topic for that day. Falls back to template below.
+    try:
+        import coach_voice
+        if not goal_set:
+            _focus = ""
+        elif days_on_team <= 2:
+            _focus = "Reference that you've been sending them info on how the team operates. Nudge them to read it and ask questions."
+        elif days_on_team <= 4:
+            _focus = "You've sent them the breakdown on how they get paid and how to work Follow Up Boss daily. Encourage them to read both."
+        elif days_on_team <= 7:
+            _focus = "Wrapping the first week: LPT setup checklist and signing the handbook are the last steps. Encourage them to finish."
+        else:
+            _focus = "They are about two weeks in. Warm check-in, make sure onboarding is landing, remind them you're here for questions."
+        _sms = coach_voice.generate_coaching_sms({
+            "first":            agent_first,
+            "day":              week_day,
+            "onboarding":       True,
+            "onboarding_focus": _focus,
+            "goal_set":         goal_set,
+            "setup_url":        setup_url if not goal_set else None,
+        })
+        if _sms:
+            return _sms
+    except Exception as _cv_e:
+        logger.warning("coach_voice new-agent SMS failed, using template: %s", _cv_e)
+
     import hashlib
     from datetime import date as _date
     seed = int(hashlib.md5(
@@ -13204,6 +13232,40 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
     appts_goal  = kpi.get("appts_per_week", 0)
     rank        = kpi.get("team_calls_rank", 0)
     team_size   = kpi.get("team_size", 0)
+
+    met_calls  = calls_goal  > 0 and calls  >= calls_goal
+    met_convos = convos_goal > 0 and convos >= convos_goal
+
+    # AI-coach trigger: calling but not converting to appointments.
+    _min_calls   = getattr(config, "AI_COACH_MIN_CALLS_THRESHOLD", 10)
+    _appt_thresh = getattr(config, "AI_COACH_APPT_CONVERSION_THRESHOLD", 0.5)
+    _coach_phone = getattr(config, "AI_SALES_COACH_PHONE_BUYERS", "1-337-486-3563")
+    _appt_low    = appts == 0 or (appts_goal > 0 and appts < appts_goal * _appt_thresh)
+    _ai_coach    = calls >= _min_calls and _appt_low
+
+    # Claude-generated copy first (fresh + in Barry's coach voice). Falls back to
+    # the deterministic template below if the API is down or output is weak.
+    try:
+        import coach_voice
+        _sms = coach_voice.generate_coaching_sms({
+            "first":       agent_first,
+            "day":         week_day,
+            "calls":       calls,
+            "convos":      convos,
+            "appts":       appts,
+            "calls_goal":  calls_goal,
+            "convos_goal": convos_goal,
+            "appts_goal":  appts_goal,
+            "met_goal":    bool(met_calls or met_convos),
+            "rank":        rank if week_day in ("wednesday", "friday") else None,
+            "team_size":   team_size if week_day in ("wednesday", "friday") else None,
+            "ai_coach":    _ai_coach,
+            "ai_coach_phone": _coach_phone if _ai_coach else None,
+        })
+        if _sms:
+            return _sms
+    except Exception as _cv_e:
+        logger.warning("coach_voice SMS failed, using template: %s", _cv_e)
 
     # Deterministic variation seed: changes each week, differs per agent
     from datetime import date as _date

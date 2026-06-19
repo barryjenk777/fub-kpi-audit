@@ -266,6 +266,38 @@ def build_arc_email(arc, ctx, situation, goal_ctx, deal_summary, tone,
     team_avg   : int, team average calls yesterday
     day_name   : str, e.g. 'Monday'
     """
+    # Try Claude-generated copy first (fresh + personal, never stale). Falls
+    # back to the hand-written templates below if the API is down or output is
+    # weak — so the flow never breaks.
+    try:
+        import coach_voice
+        facts = {
+            "first":        ctx.get("first"),
+            "identity":     ctx.get("identity"),
+            "who":          ctx.get("who"),
+            "why":          (ctx.get("why") or "")[:300],
+            "gci_fmt":      ctx.get("gci_fmt"),
+            "streak":       ctx.get("streak"),
+            "rank":         situation.get("rank"),
+            "team_size":    situation.get("team_size"),
+            "closings_ytd": situation.get("closings_ytd"),
+            "top_agent_name":  (top_agent or {}).get("name"),
+            "top_agent_calls": (top_agent or {}).get("calls"),
+            "team_avg":     team_avg,
+        }
+        if goal_ctx:
+            facts.update({
+                "daily_target":     goal_ctx.get("daily_target"),
+                "calls_pace_pct":   goal_ctx.get("calls_pace_pct"),
+                "calls_ytd":        goal_ctx.get("calls_ytd"),
+                "calls_target_ytd": goal_ctx.get("calls_target_ytd"),
+            })
+        _subj, _body = coach_voice.generate_nudge_email(arc, facts, day_name, tone=tone)
+        if _subj and _body:
+            return _subj, _body
+    except Exception as _cv_e:
+        logger.warning("coach_voice nudge failed, using template: %s", _cv_e)
+
     arc_fn = {
         "identity":   _arc_identity,
         "purpose":    _arc_purpose,
