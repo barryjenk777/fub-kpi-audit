@@ -13457,6 +13457,68 @@ def _fetch_7d_activity_from_fub(fub, profiles):
     }
 
 
+def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
+                            call_ranks, active_with_calls, pct_elapsed, today):
+    """Decide and generate the coaching text for one agent. Single source of
+    truth shared by the scheduler and the preview endpoint so they never drift.
+
+    Routing:
+      no goal set            -> goal-setup push (any day, until they set it)
+      goal set, first 7 days -> onboarding follow-up
+      goal set, past day 7   -> regular KPI / accountability text
+
+    Returns (message, kpi_snapshot) — kpi_snapshot is None for onboarding/setup.
+    """
+    agent_first = agent_name.split()[0]
+    goal_set = bool(goals and goals.get("gci_goal", 0))
+
+    start_date_raw = profile.get("start_date")
+    days_on_team   = None
+    if start_date_raw:
+        try:
+            from datetime import date as _sd_date
+            sd = _sd_date.fromisoformat(str(start_date_raw)[:10])
+            days_on_team = (today - sd).days
+        except Exception:
+            days_on_team = None
+
+    within_onboarding = (
+        days_on_team is not None and days_on_team <= _ONBOARDING_TEXT_WINDOW_DAYS
+    )
+
+    base_url  = os.environ.get("BASE_URL", "").rstrip("/")
+    token     = _db.get_token_for_agent(agent_name)
+    setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
+
+    if not goal_set:
+        return _generate_new_agent_text(
+            agent_first, week_day, goal_set=False,
+            setup_url=setup_url, days_on_team=days_on_team or 0), None
+    if within_onboarding:
+        return _generate_new_agent_text(
+            agent_first, week_day, goal_set=True,
+            setup_url=setup_url, days_on_team=days_on_team), None
+
+    targets = _db.compute_targets(goals) if goals else {}
+    kpi = {
+        "calls_actual":        ytd.get("calls_ytd", 0) or 0,
+        "convos_actual":       ytd.get("convos_ytd", 0) or 0,
+        "appts_actual":        ytd.get("appts_ytd", 0) or 0,
+        "calls_last_7d":       rec.get("calls", 0),
+        "convos_last_7d":      rec.get("convos", 0),
+        "appts_last_7d":       rec.get("appts", 0),
+        "calls_per_week":      targets.get("calls_per_week", 0),
+        "convos_per_week":     targets.get("convos_per_week", 0),
+        "appts_per_week":      targets.get("appts_per_week", 0),
+        "contact_rate_goal":   goals.get("contact_rate", 0.15),
+        "conv_rate_goal":      goals.get("call_to_appt_rate", 0.10),
+        "team_calls_rank":     call_ranks.get(agent_name, 0),
+        "team_size":           active_with_calls,
+        "pct_of_year_elapsed": round(pct_elapsed, 3),
+    }
+    return _generate_agent_coaching_text(agent_first, kpi, week_day), kpi
+
+
 def scheduled_agent_coaching_texts():
     """
     Generate and queue coaching texts for all active agents.
@@ -13528,54 +13590,10 @@ def scheduled_agent_coaching_texts():
         ytd   = ytd_cache.get(agent_name, {})
         rec   = recent.get(agent_name, {"calls": 0, "convos": 0, "appts": 0})
 
-        agent_first = agent_name.split()[0]
-
-        # ── Onboarding window check ────────────────────────────────────────
-        # Agents in their first 14 days get onboarding-focused texts instead
-        # of KPI texts. Phase 1 = goal not filled out. Phase 2 = goal set.
-        start_date_raw = profile.get("start_date")
-        days_on_team   = None
-        if start_date_raw:
-            try:
-                from datetime import date as _sd_date
-                sd = _sd_date.fromisoformat(str(start_date_raw)[:10])
-                days_on_team = (today - sd).days
-            except Exception:
-                days_on_team = None
-
-        in_onboarding = (
-            days_on_team is not None
-            and days_on_team <= _ONBOARDING_TEXT_WINDOW_DAYS
+        message, kpi = _build_coaching_message(
+            agent_name, profile, goals, ytd, rec, week_day,
+            call_ranks, active_with_calls, pct_elapsed, today,
         )
-
-        if in_onboarding:
-            goal_set  = bool(goals and goals.get("gci_goal", 0))
-            base_url  = os.environ.get("BASE_URL", "").rstrip("/")
-            token     = _db.get_token_for_agent(agent_name)
-            setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
-            message   = _generate_new_agent_text(
-                agent_first, week_day, goal_set=goal_set,
-                setup_url=setup_url, days_on_team=days_on_team,
-            )
-        else:
-            targets = _db.compute_targets(goals) if goals else {}
-            kpi = {
-                "calls_actual":        ytd.get("calls_ytd", 0) or 0,
-                "convos_actual":       ytd.get("convos_ytd", 0) or 0,
-                "appts_actual":        ytd.get("appts_ytd", 0) or 0,
-                "calls_last_7d":       rec.get("calls", 0),
-                "convos_last_7d":      rec.get("convos", 0),
-                "appts_last_7d":       rec.get("appts", 0),
-                "calls_per_week":      targets.get("calls_per_week", 0),
-                "convos_per_week":     targets.get("convos_per_week", 0),
-                "appts_per_week":      targets.get("appts_per_week", 0),
-                "contact_rate_goal":   goals.get("contact_rate", 0.15),
-                "conv_rate_goal":      goals.get("call_to_appt_rate", 0.10),
-                "team_calls_rank":     call_ranks.get(agent_name, 0),
-                "team_size":           active_with_calls,
-                "pct_of_year_elapsed": round(pct_elapsed, 3),
-            }
-            message = _generate_agent_coaching_text(agent_first, kpi, week_day)
 
         try:
             row_id = _db.queue_agent_imessage(
@@ -13720,29 +13738,16 @@ def api_agent_texts_preview():
             goals   = all_goals.get(agent_name, {})
             ytd     = ytd_cache.get(agent_name, {})
             rec     = recent.get(agent_name, {"calls": 0, "convos": 0, "appts": 0})
-            targets = _db.compute_targets(goals) if goals else {}
 
-            kpi = {
-                "calls_actual":       ytd.get("calls_ytd", 0) or 0,
-                "convos_actual":      ytd.get("convos_ytd", 0) or 0,
-                "appts_actual":       ytd.get("appts_ytd", 0) or 0,
-                "calls_last_7d":      rec["calls"],
-                "convos_last_7d":     rec["convos"],
-                "appts_last_7d":      rec["appts"],
-                "calls_per_week":     targets.get("calls_per_week", 0),
-                "convos_per_week":    targets.get("convos_per_week", 0),
-                "appts_per_week":     targets.get("appts_per_week", 0),
-                "contact_rate_goal":  goals.get("contact_rate", 0.15),
-                "conv_rate_goal":     goals.get("call_to_appt_rate", 0.10),
-                "team_calls_rank":    call_ranks.get(agent_name, 0),
-                "team_size":          active_with_calls,
-                "pct_of_year_elapsed": round(pct_elapsed, 3),
-            }
-            agent_first = agent_name.split()[0]
-            message = _generate_agent_coaching_text(agent_first, kpi, week_day)
+            # Same routing the scheduler uses (goal-setup / onboarding / KPI).
+            message, kpi = _build_coaching_message(
+                agent_name, profile, goals, ytd, rec, week_day,
+                call_ranks, active_with_calls, pct_elapsed, today,
+            )
             results.append({
                 "agent":   agent_name,
                 "phone":   profile.get("phone") or profile.get("fub_phone") or "NO PHONE",
+                "mode":    "kpi" if kpi else "onboarding/goal-setup",
                 "kpi":     kpi,
                 "message": message,
             })
