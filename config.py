@@ -54,6 +54,7 @@ EXCLUDED_USERS = [
 # Add full agent name exactly as it appears in FUB.
 COACHING_TEXT_EXCLUDED_AGENTS = {
     "Bobby Strunk",
+    "Barry Jenkin$",   # Ylopo test account (barry@ylopo.com), not a real agent
 }
 
 # AI Sales Coach phone number — Buyers line.
