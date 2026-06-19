@@ -13092,8 +13092,10 @@ def start_scheduler():
 # Agent iMessage coaching texts — sent from Barry's Mac via AppleScript
 # ---------------------------------------------------------------------------
 
-# How many days from start_date before an agent graduates to regular KPI texts.
-_ONBOARDING_TEXT_WINDOW_DAYS = 14
+# How many days from start_date before an agent graduates to regular KPI /
+# accountability texts. Set to 7 so it lines up with the 6-email onboarding
+# sequence finishing on day 7 — after that, texts shift to goal accountability.
+_ONBOARDING_TEXT_WINDOW_DAYS = 7
 
 
 def _generate_new_agent_text(agent_first, week_day, goal_set, setup_url, days_on_team=0):
