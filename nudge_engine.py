@@ -43,9 +43,22 @@ AGENT_EMAIL_OVERRIDES = {
 # Email send
 # ---------------------------------------------------------------------------
 
+def _strip_dashes(text: str) -> str:
+    """Hard rule: no em/en/figure dashes in Barry's copy. Replace with a comma
+    (or nothing where a comma would read wrong). Single place all nudge copy
+    passes through, so it covers hardcoded templates and any future source."""
+    if not text:
+        return text
+    import re as _re_nd
+    text = _re_nd.sub(r'\s*[‒–—―−]\s*', ', ', text)
+    return text.replace('&mdash;', ', ').replace('&ndash;', ', ')
+
+
 def _send_email(to_email: str, subject: str, text_body: str,
                 dashboard_url: str = "", dry_run: bool = False) -> dict:
     """Send a nudge email via Postmark. Returns {status} or raises."""
+    subject   = _strip_dashes(subject)
+    text_body = _strip_dashes(text_body)
     if dry_run:
         logger.info("[DRY RUN] Email to %s | %s", to_email, subject)
         return {"status": "dry_run"}
@@ -529,6 +542,7 @@ def run_morning_nudges(dry_run: bool = False):
                                        isa_transfers=isa_transfers, goal_ctx=goal_ctx,
                                        prospecting_block=pb, agent_name=name)
 
+            subject = _strip_dashes(subject)
             if not dry_run:
                 import postmark_client as _pm
                 _pm.send(
@@ -616,6 +630,7 @@ def run_closing_milestones(dry_run=False):
             pb   = _db.get_prospecting_block(name)
             html = _build_morning_html(body_text, [], ctx.get("dashboard_url", ""),
                                        goal_ctx=goal_ctx, prospecting_block=pb, agent_name=name)
+            subject = _strip_dashes(subject)
             log_content = "milestone_deal:" + deal_marker + "|" + subject
 
             try:
@@ -1344,6 +1359,7 @@ def _build_morning_html(body_text: str, leads: list, dashboard_url: str,
     Build the full branded HTML email for the morning nudge.
     Redesigned: first-name opener, call block card, dials pace bar, lead cards.
     """
+    body_text = _strip_dashes(body_text)
     FUB_PERSON_URL = "https://yourfriendlyagent.followupboss.com/2/people/view/{person_id}"
     FUB_LIST_URL   = "https://yourfriendlyagent.followupboss.com/2/people?smart-list=leadstream"
 
