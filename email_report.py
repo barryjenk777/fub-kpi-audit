@@ -1531,6 +1531,41 @@ If you've got questions or want to talk through your goal, reply to this email o
         return False
 
 
+def send_goal_setup_nudge_email(agent_name, first_name, email, setup_url):
+    """Goal-setup outreach for an ESTABLISHED agent who hasn't set a goal yet.
+    Different tone than the new-hire onboarding emails: respects that they're
+    already producing, frames the goal as the thing that makes the work add up.
+    Sent on a cadence by scheduled_goal_setup_outreach until the goal is set.
+    CCs Barry + Joe so leadership sees the nudge went out."""
+    subject = f"{first_name}, you're putting in the work. Let's aim it."
+    body = f"""Hey {first_name},
+
+You're making calls and doing the work, I see it. But right now you're doing it without a number to aim at, and that's the one thing holding you back from your best year.
+
+When you set a real income goal, the system turns it into a daily target and tracks your pace all year. It's the difference between working hard and working toward something. The agents who set the number outperform the ones who don't, every time.
+
+Takes 2 minutes. Here's your link:
+{setup_url}
+
+Set it and I'll make sure the whole system is working for you. Any questions, reply here or text me.
+
+Barry"""
+    try:
+        _pm.send(
+            to=email,
+            from_email=config.EMAIL_FROM,
+            subject=subject,
+            html=body.replace("\n", "<br>"),
+            text=body,
+            cc=[config.BARRY_EMAIL, config.MANAGER_EMAIL],
+        )
+        print(f"[GOAL OUTREACH] Nudge sent to {agent_name} <{email}>")
+        return True
+    except Exception as e:
+        print(f"[GOAL OUTREACH] Failed for {agent_name}: {e}")
+        return False
+
+
 def send_goal_onboarding_email(agent_name, first_name, email, setup_url, dashboard_url=None):
     """
     Send the goal setup onboarding email to a new agent.

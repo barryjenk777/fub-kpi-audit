@@ -12555,6 +12555,85 @@ def scheduled_onboarding_escalation():
         _db.release_job_lock("onboarding_escalation")
 
 
+def run_goal_setup_outreach():
+    """Email every active agent who still has no goal on file (any tenure),
+    nudging them to set it. Pairs with the SMS push (no-goal agents already get
+    the goal-setup text every Mon/Wed/Fri). Skips:
+      - excluded agents (test/Barry account)
+      - agents still inside the 7-day new-hire window (the onboarding email
+        sequence already pushes goal setup for them)
+      - agents with no email on file
+    Returns count emailed. Safe to call manually or on a schedule.
+    """
+    from datetime import date as _d
+    from email_report import send_goal_setup_nudge_email
+    today = _d.today()
+
+    profiles  = _db.get_agent_profiles(active_only=True) or []
+    _gl       = _db.get_all_goals(year=today.year) or []
+    all_goals = {g["agent_name"]: g for g in _gl if g.get("agent_name")}
+    _excluded = getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set())
+    base_url  = os.environ.get("BASE_URL", "").rstrip("/")
+
+    sent = 0
+    for p in profiles:
+        name = p.get("agent_name") or ""
+        if not name or name in _excluded:
+            continue
+        if p.get("fub_user_id") == config.BARRY_FUB_USER_ID:
+            continue
+        goals = all_goals.get(name, {})
+        if goals and goals.get("gci_goal", 0):
+            continue  # already has a goal
+        email = p.get("email")
+        if not email:
+            continue
+        # Skip new hires still inside the onboarding email window (no double-send)
+        sd_raw = p.get("start_date")
+        if sd_raw:
+            try:
+                sd = _d.fromisoformat(str(sd_raw)[:10])
+                if (today - sd).days <= _ONBOARDING_TEXT_WINDOW_DAYS:
+                    continue
+            except Exception:
+                pass
+        token = _db.get_token_for_agent(name)
+        setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
+        if not setup_url:
+            continue
+        first = name.split()[0]
+        if send_goal_setup_nudge_email(name, first, email, setup_url):
+            sent += 1
+    print(f"[GOAL OUTREACH] Emailed {sent} agent(s) with no goal on file")
+    return sent
+
+
+def scheduled_goal_setup_outreach():
+    """Weekly: email no-goal agents to set their goals. Tuesday 9:30am ET."""
+    if not _db.try_acquire_job_lock("goal_setup_outreach"):
+        return
+    try:
+        run_goal_setup_outreach()
+        _record_fired("goal_setup_outreach")
+    except Exception as e:
+        print(f"[GOAL OUTREACH] error: {e}")
+    finally:
+        _db.release_job_lock("goal_setup_outreach")
+
+
+@app.route("/api/admin/goal-outreach", methods=["POST"])
+def api_goal_setup_outreach():
+    """Manually fire the goal-setup email outreach to all no-goal agents."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        sent = run_goal_setup_outreach()
+        return jsonify({"ok": True, "emailed": sent})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 def scheduled_owner_daily_brief():
     """
     Daily job (7am ET): build the owner brief and email it to Barry.
@@ -13050,6 +13129,13 @@ def start_scheduler():
     _scheduler.add_job(scheduled_onboarding_escalation,
                        CronTrigger(hour=8, minute=0, timezone=ET),
                        id="onboarding_escalation", name="Onboarding escalation (daily 8am)",
+                       max_instances=1, coalesce=True)
+
+    # Goal-setup outreach: weekly Tuesday 9:30am ET — emails any active agent
+    # with no goal on file until they set one (pairs with the M/W/F SMS push).
+    _scheduler.add_job(scheduled_goal_setup_outreach,
+                       CronTrigger(day_of_week="tue", hour=9, minute=30, timezone=ET),
+                       id="goal_setup_outreach", name="Goal-setup email outreach (weekly Tue)",
                        max_instances=1, coalesce=True)
 
     # Agent coaching texts via Mac iMessage: Mon/Wed/Fri at 8:15am ET
