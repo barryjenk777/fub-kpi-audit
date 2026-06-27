@@ -12621,6 +12621,24 @@ def scheduled_goal_setup_outreach():
         _db.release_job_lock("goal_setup_outreach")
 
 
+@app.route("/api/admin/leadership-data")
+def api_leadership_data():
+    """Read-only: full weekly KPI snapshot history + per-agent closings, for the
+    leadership/effort analysis. ?weeks=52 for the full year."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        weeks = int(request.args.get("weeks", 52))
+        history = _db.get_weekly_kpi_history(weeks=weeks)
+        from datetime import datetime as _dt
+        deals = _db.get_deal_summary(year=_dt.now().year) or {}
+        return jsonify({"ok": True, "weeks_returned": len(history),
+                        "history": history, "deals_by_agent": deals})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/admin/goal-outreach", methods=["POST"])
 def api_goal_setup_outreach():
     """Manually fire the goal-setup email outreach to all no-goal agents."""
