@@ -222,6 +222,10 @@ APT_EMAIL_CC = [
 # Sales Manager email (Joe's Monday morning coaching email)
 MANAGER_EMAIL = "thejoefu@gmail.com"
 
+# Token baked into Joe's weekly manager-update link (texted to him each week).
+# Light gate so the form isn't fully open on a guessable URL.
+MANAGER_UPDATE_KEY = "joe-weekly-2026"
+
 
 # =============================================================================
 # LEADSTREAM — Daily Lead Priority Scoring

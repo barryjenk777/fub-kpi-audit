@@ -12621,6 +12621,168 @@ def scheduled_goal_setup_outreach():
         _db.release_job_lock("goal_setup_outreach")
 
 
+def _manager_update_agents():
+    """Coachable agent first/full names for Joe's weekly update page."""
+    profiles = _db.get_agent_profiles(active_only=True) or []
+    excl = set(getattr(config, "EXCLUDED_USERS", [])) | {"Barry Jenkin$"}
+    out = []
+    for p in profiles:
+        nm = p.get("agent_name") or ""
+        if not nm or nm in excl:
+            continue
+        if p.get("fub_user_id") == config.BARRY_FUB_USER_ID:
+            continue
+        out.append(nm)
+    return sorted(out)
+
+
+@app.route("/manager-update")
+def manager_update_page():
+    """Joe's dead-simple, mobile-first weekly agent update form (last 7 days)."""
+    if request.args.get("k") != getattr(config, "MANAGER_UPDATE_KEY", ""):
+        return "Not authorized", 403
+
+    from datetime import date as _d, timedelta as _td
+    today = _d.today()
+    start = today - _td(days=6)
+    window = f"{start.strftime('%b %-d')} to {today.strftime('%b %-d')}"
+
+    agents = _manager_update_agents()
+    import json as _json
+    agents_js = _json.dumps(agents)
+
+    # Day chips = the 7 days in the window, most recent first.
+    days = [(today - _td(days=i)) for i in range(7)]
+    day_chips = _json.dumps([{"label": d.strftime('%a'), "date": d.isoformat(),
+                              "md": d.strftime('%-m/%-d')} for d in days])
+
+    topics_js = _json.dumps([
+        "Pipeline / follow-up", "Prospecting consistency",
+        "Converting calls to appts", "Active buyers", "Listings / sellers",
+        "Under contract / closings", "Scripts / objections",
+        "Database / sphere", "Time blocking / accountability",
+        "Mindset / motivation", "Personal check-in", "FUB / CRM",
+    ])
+
+    return f"""<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Weekly Agent Updates</title>
+<style>
+*{{box-sizing:border-box;-webkit-tap-highlight-color:transparent}}
+body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#0f1420;color:#e8ecf3;padding:0 0 110px}}
+.hdr{{background:#16213e;padding:18px 18px 16px;position:sticky;top:0;z-index:5;box-shadow:0 2px 10px rgba(0,0,0,.3)}}
+.hdr h1{{margin:0;font-size:20px;font-weight:700}}
+.win{{margin:6px 0 0;font-size:14px;color:#f5a623;font-weight:600}}
+.sub{{margin:8px 0 0;font-size:13px;color:#9fb0c8}}
+.wrap{{padding:14px}}
+.card{{background:#1a2236;border-radius:14px;margin:0 0 12px;overflow:hidden;border:1px solid #243049}}
+.crow{{display:flex;align-items:center;justify-content:space-between;padding:16px 16px}}
+.nm{{font-size:18px;font-weight:700}}
+.metbtns{{display:flex;gap:8px}}
+.met,.no{{border:none;border-radius:10px;padding:11px 16px;font-size:15px;font-weight:700;color:#cbd5e6;background:#243049}}
+.met.on{{background:#1d9e75;color:#fff}}
+.no.on{{background:#5f5e5a;color:#fff}}
+.body{{display:none;padding:0 16px 16px;border-top:1px solid #243049}}
+.body.show{{display:block}}
+.lbl{{font-size:13px;color:#9fb0c8;margin:14px 0 8px;font-weight:600}}
+.chips{{display:flex;flex-wrap:wrap;gap:8px}}
+.chip{{border:none;border-radius:20px;padding:10px 14px;font-size:14px;font-weight:600;background:#243049;color:#cbd5e6}}
+.chip.on{{background:#378add;color:#fff}}
+.ampm .chip.on{{background:#7f77dd}}
+textarea{{width:100%;margin-top:10px;background:#0f1420;border:1px solid #243049;border-radius:10px;color:#e8ecf3;padding:12px;font-size:16px;font-family:inherit;min-height:64px;resize:vertical}}
+.foot{{position:fixed;bottom:0;left:0;right:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));background:#16213e;box-shadow:0 -2px 12px rgba(0,0,0,.4)}}
+.send{{width:100%;border:none;border-radius:12px;padding:17px;font-size:18px;font-weight:800;background:#f5a623;color:#0d1117}}
+.send:disabled{{opacity:.5}}
+.cnt{{text-align:center;font-size:13px;color:#9fb0c8;margin:0 0 10px}}
+.done{{text-align:center;padding:60px 24px}}
+.done h2{{font-size:24px}}
+</style></head><body>
+<div class="hdr">
+  <h1>Weekly Agent Updates</h1>
+  <div class="win">Last 7 days: {window}</div>
+  <div class="sub">Tap every agent you met with this week. You can do as many as you want, then hit Send.</div>
+</div>
+<div class="wrap" id="list"></div>
+<div class="foot">
+  <p class="cnt" id="cnt">No agents marked yet</p>
+  <button class="send" id="send" disabled>Send to Barry</button>
+</div>
+<script>
+const AGENTS={agents_js}, DAYS={day_chips}, TOPICS={topics_js};
+const state={{}};
+const list=document.getElementById('list');
+AGENTS.forEach(function(name){{
+  const first=name.split(' ')[0];
+  state[name]={{met:null,day:null,ampm:null,topics:[],note:''}};
+  const c=document.createElement('div');c.className='card';
+  c.innerHTML=
+    '<div class="crow"><div class="nm">'+name+'</div><div class="metbtns">'+
+    '<button class="met" data-a="'+name+'" data-v="yes">Met</button>'+
+    '<button class="no" data-a="'+name+'" data-v="no">No</button></div></div>'+
+    '<div class="body" id="b-'+name+'">'+
+    '<div class="lbl">What day?</div><div class="chips d">'+
+      DAYS.map(function(d){{return '<button class="chip day" data-a="'+name+'" data-d="'+d.date+'">'+d.label+' '+d.md+'</button>'}}).join('')+'</div>'+
+    '<div class="lbl">Morning or afternoon?</div><div class="chips ampm">'+
+      '<button class="chip t" data-a="'+name+'" data-t="AM">Morning</button>'+
+      '<button class="chip t" data-a="'+name+'" data-t="PM">Afternoon</button></div>'+
+    '<div class="lbl">What did you cover? (tap any)</div><div class="chips top">'+
+      TOPICS.map(function(t){{return '<button class="chip topic" data-a="'+name+'" data-top="'+t+'">'+t+'</button>'}}).join('')+'</div>'+
+    '<div class="lbl">Anything specific for Barry? (optional)</div>'+
+    '<textarea data-a="'+name+'" placeholder="A sentence or two if you want..."></textarea>'+
+    '</div>';
+  list.appendChild(c);
+}});
+function refresh(){{
+  const met=Object.keys(state).filter(function(a){{return state[a].met==='yes'}}).length;
+  document.getElementById('cnt').textContent = met? (met+' agent'+(met>1?'s':'')+' ready to send') : 'No agents marked yet';
+  const any=Object.keys(state).some(function(a){{return state[a].met!==null}});
+  document.getElementById('send').disabled=!any;
+}}
+list.addEventListener('click',function(e){{
+  const b=e.target.closest('button'); if(!b)return; const a=b.dataset.a; if(!a)return;
+  if(b.classList.contains('met')||b.classList.contains('no')){{
+    const v=b.dataset.v; state[a].met=v;
+    const card=b.closest('.card');
+    card.querySelector('.met').classList.toggle('on',v==='yes');
+    card.querySelector('.no').classList.toggle('on',v==='no');
+    document.getElementById('b-'+a).classList.toggle('show',v==='yes');
+  }} else if(b.classList.contains('day')){{
+    state[a].day=b.dataset.d;
+    b.parentNode.querySelectorAll('.day').forEach(function(x){{x.classList.remove('on')}});b.classList.add('on');
+  }} else if(b.classList.contains('t')){{
+    state[a].ampm=b.dataset.t;
+    b.parentNode.querySelectorAll('.t').forEach(function(x){{x.classList.remove('on')}});b.classList.add('on');
+  }} else if(b.classList.contains('topic')){{
+    const t=b.dataset.top, i=state[a].topics.indexOf(t);
+    if(i>=0){{state[a].topics.splice(i,1);b.classList.remove('on')}}else{{state[a].topics.push(t);b.classList.add('on')}}
+  }}
+  refresh();
+}});
+list.addEventListener('input',function(e){{ if(e.target.tagName==='TEXTAREA'){{state[e.target.dataset.a].note=e.target.value}} }});
+document.getElementById('send').addEventListener('click',function(){{
+  const btn=this;btn.disabled=true;btn.textContent='Sending...';
+  const entries=Object.keys(state).filter(function(a){{return state[a].met!==null}}).map(function(a){{return Object.assign({{agent:a}},state[a])}});
+  fetch('/api/manager-update/submit?k={getattr(config,"MANAGER_UPDATE_KEY","")}',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{entries:entries}})}})
+   .then(function(r){{return r.json()}}).then(function(){{document.body.innerHTML='<div class="done"><h2>Sent. Thank you, Joe.</h2><p class="sub">Barry has your update for the week.</p></div>'}})
+   .catch(function(){{btn.disabled=false;btn.textContent='Send to Barry';alert('Hmm, that did not go through. Try again.')}});
+}});
+</script></body></html>"""
+
+
+@app.route("/api/manager-update/submit", methods=["POST"])
+def api_manager_update_submit():
+    """Save Joe's weekly update."""
+    if request.args.get("k") != getattr(config, "MANAGER_UPDATE_KEY", ""):
+        return jsonify({"error": "unauthorized"}), 403
+    from datetime import date as _d, timedelta as _td
+    body = request.get_json(silent=True) or {}
+    entries = body.get("entries", [])
+    today = _d.today()
+    row_id = _db.save_manager_update(today - _td(days=6), today, entries)
+    return jsonify({"ok": True, "id": row_id, "count": len(entries)})
+
+
 @app.route("/api/admin/leadership-data")
 def api_leadership_data():
     """Read-only: full weekly KPI snapshot history + per-agent closings, for the

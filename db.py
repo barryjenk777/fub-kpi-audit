@@ -6300,3 +6300,77 @@ def mark_agent_imessage_failed(row_id, error_msg=""):
                 """, (str(error_msg)[:500], row_id))
     except Exception as e:
         logger.warning("mark_agent_imessage_failed failed for id %s: %s", row_id, e)
+
+
+# ---------------------------------------------------------------------------
+# Manager weekly agent updates (Joe's Thursday 1:1 report)
+# ---------------------------------------------------------------------------
+
+def ensure_manager_updates_table():
+    """Create manager_updates table if it doesn't exist."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS manager_updates (
+                        id            SERIAL PRIMARY KEY,
+                        submitted_at  TIMESTAMPTZ DEFAULT NOW(),
+                        week_start    DATE,
+                        week_end      DATE,
+                        submitted_by  TEXT DEFAULT 'Joe',
+                        entries       JSONB NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_manager_updates_at
+                    ON manager_updates(submitted_at DESC)
+                """)
+    except Exception as e:
+        logger.warning("ensure_manager_updates_table failed: %s", e)
+
+
+def save_manager_update(week_start, week_end, entries, submitted_by="Joe"):
+    """Persist a weekly manager update. entries is a list of per-agent dicts.
+    Returns the new row id or None."""
+    if not is_available():
+        return None
+    try:
+        import json as _json
+        ensure_manager_updates_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO manager_updates (week_start, week_end, submitted_by, entries)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                """, (week_start, week_end, submitted_by, _json.dumps(entries)))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("save_manager_update failed: %s", e)
+        return None
+
+
+def get_latest_manager_update():
+    """Return the most recent manager update row as a dict, or None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, submitted_at, week_start, week_end, submitted_by, entries
+                    FROM manager_updates ORDER BY submitted_at DESC LIMIT 1
+                """)
+                r = cur.fetchone()
+                if not r:
+                    return None
+                return {"id": r[0], "submitted_at": r[1].isoformat() if r[1] else None,
+                        "week_start": r[2].isoformat() if r[2] else None,
+                        "week_end": r[3].isoformat() if r[3] else None,
+                        "submitted_by": r[4], "entries": r[5]}
+    except Exception as e:
+        logger.warning("get_latest_manager_update failed: %s", e)
+        return None
