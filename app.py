@@ -12905,6 +12905,81 @@ def api_manager_update_submit():
     return jsonify({"ok": True, "id": row_id, "count": len(entries)})
 
 
+def _manager_update_link():
+    base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+    return f"{base}/manager-update?k={getattr(config, 'MANAGER_UPDATE_KEY', '')}"
+
+
+def _manager_submitted_today():
+    """True if Joe already submitted an Impact Tracker today (ET)."""
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td2
+    latest = _db.get_latest_manager_update()
+    if not latest or not latest.get("submitted_at"):
+        return False
+    try:
+        sub = _dt.fromisoformat(latest["submitted_at"].replace("Z", "+00:00"))
+        et = _tz(_td2(hours=-4 if 3 <= _dt.now(_tz.utc).month <= 10 else -5))
+        return sub.astimezone(et).date() == _dt.now(et).date()
+    except Exception:
+        return False
+
+
+def _text_joe(message):
+    phone = getattr(config, "MANAGER_PHONE", "")
+    if not phone:
+        print("[IMPACT TRACKER] No MANAGER_PHONE set — cannot text Joe")
+        return None
+    return _db.queue_agent_imessage(
+        agent_name="Joe (Sales Manager)", fub_user_id=0,
+        phone=phone, message=message, week_day="thursday",
+    )
+
+
+def scheduled_impact_tracker_send():
+    """Thursday 9am ET — send Joe the Impact Tracker link, casual + encouraging."""
+    if _already_fired_recently("impact_tracker_send", within_hours=20):
+        return
+    first = getattr(config, "MANAGER_FIRST", "Joe")
+    link = _manager_update_link()
+    msg = (f"Morning {first}. Time for this week's Impact Tracker. "
+           f"Two minutes, just tap through the agents you sat down with this week: {link} "
+           f"This is the stuff that actually moves the team. Appreciate you, brother.")
+    if _text_joe(msg):
+        _record_fired("impact_tracker_send")
+        print("[IMPACT TRACKER] Sent Thursday AM link to Joe")
+
+
+def scheduled_impact_tracker_reminder():
+    """Thursday 3pm ET — gentle nudge only if Joe hasn't submitted yet today."""
+    if _already_fired_recently("impact_tracker_reminder", within_hours=20):
+        return
+    if _manager_submitted_today():
+        print("[IMPACT TRACKER] Already submitted today — no reminder needed")
+        _record_fired("impact_tracker_reminder")
+        return
+    first = getattr(config, "MANAGER_FIRST", "Joe")
+    link = _manager_update_link()
+    msg = (f"Hey {first}, no pressure, I know today's a juggle. Still need this week's "
+           f"Impact Tracker before we meet tomorrow. Even a couple agents helps a ton: {link}")
+    if _text_joe(msg):
+        _record_fired("impact_tracker_reminder")
+        print("[IMPACT TRACKER] Sent Thursday 3pm reminder to Joe")
+
+
+@app.route("/api/admin/impact-tracker/send-now", methods=["POST"])
+def api_impact_tracker_send_now():
+    """Manually fire the Impact Tracker text to Joe (for testing)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    first = getattr(config, "MANAGER_FIRST", "Joe")
+    link = _manager_update_link()
+    msg = (f"Morning {first}. Time for this week's Impact Tracker. "
+           f"Two minutes, just tap through the agents you sat down with this week: {link} "
+           f"This is the stuff that actually moves the team. Appreciate you, brother.")
+    rid = _text_joe(msg)
+    return jsonify({"ok": bool(rid), "queued_id": rid})
+
+
 @app.route("/api/admin/leadership-data")
 def api_leadership_data():
     """Read-only: full weekly KPI snapshot history + per-agent closings, for the
@@ -13438,6 +13513,17 @@ def start_scheduler():
     _scheduler.add_job(scheduled_goal_setup_outreach,
                        CronTrigger(day_of_week="tue", hour=9, minute=30, timezone=ET),
                        id="goal_setup_outreach", name="Goal-setup email outreach (weekly Tue)",
+                       max_instances=1, coalesce=True)
+
+    # Impact Tracker (Joe's weekly agent-update text): Thursday 9am send,
+    # Thursday 3pm reminder only if he hasn't submitted yet.
+    _scheduler.add_job(scheduled_impact_tracker_send,
+                       CronTrigger(day_of_week="thu", hour=9, minute=0, timezone=ET),
+                       id="impact_tracker_send", name="Impact Tracker text to Joe (Thu 9am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_impact_tracker_reminder,
+                       CronTrigger(day_of_week="thu", hour=15, minute=0, timezone=ET),
+                       id="impact_tracker_reminder", name="Impact Tracker reminder to Joe (Thu 3pm)",
                        max_instances=1, coalesce=True)
 
     # Agent coaching texts via Mac iMessage: Mon/Wed/Fri at 8:15am ET

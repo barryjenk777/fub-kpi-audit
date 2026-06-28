@@ -226,6 +226,10 @@ MANAGER_EMAIL = "thejoefu@gmail.com"
 # Light gate so the form isn't fully open on a guessable URL.
 MANAGER_UPDATE_KEY = "joe-weekly-2026"
 
+# Sales manager (Joe) cell for the weekly Impact Tracker text + reminder.
+MANAGER_PHONE = "+17572867819"
+MANAGER_FIRST = "Joe"
+
 
 # =============================================================================
 # LEADSTREAM — Daily Lead Priority Scoring
