@@ -12657,11 +12657,9 @@ def manager_update_page():
                               "md": d.strftime('%-m/%-d')} for d in days])
 
     topics_js = _json.dumps([
-        "Pipeline / follow-up", "Prospecting consistency",
-        "Converting calls to appts", "Active buyers", "Listings / sellers",
-        "Under contract / closings", "Scripts / objections",
-        "Database / sphere", "Time blocking / accountability",
-        "Mindset / motivation", "Personal check-in", "FUB / CRM",
+        "Pipeline", "Prospecting", "Calls to appts", "Buyers", "Listings",
+        "Under contract", "Scripts", "Database", "Time blocking",
+        "Mindset", "Personal", "FUB / CRM",
     ])
 
     return f"""<!DOCTYPE html><html lang="en"><head>
@@ -12670,103 +12668,143 @@ def manager_update_page():
 <title>Weekly Agent Updates</title>
 <style>
 *{{box-sizing:border-box;-webkit-tap-highlight-color:transparent}}
-body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#0f1420;color:#e8ecf3;padding:0 0 110px}}
-.hdr{{background:#16213e;padding:18px 18px 16px;position:sticky;top:0;z-index:5;box-shadow:0 2px 10px rgba(0,0,0,.3)}}
-.hdr h1{{margin:0;font-size:20px;font-weight:700}}
-.win{{margin:6px 0 0;font-size:14px;color:#f5a623;font-weight:600}}
-.sub{{margin:8px 0 0;font-size:13px;color:#9fb0c8}}
-.wrap{{padding:14px}}
-.card{{background:#1a2236;border-radius:14px;margin:0 0 12px;overflow:hidden;border:1px solid #243049}}
-.crow{{display:flex;align-items:center;justify-content:space-between;padding:16px 16px}}
-.nm{{font-size:18px;font-weight:700}}
-.metbtns{{display:flex;gap:8px}}
-.met,.no{{border:none;border-radius:10px;padding:11px 16px;font-size:15px;font-weight:700;color:#cbd5e6;background:#243049}}
-.met.on{{background:#1d9e75;color:#fff}}
-.no.on{{background:#5f5e5a;color:#fff}}
-.body{{display:none;padding:0 16px 16px;border-top:1px solid #243049}}
-.body.show{{display:block}}
-.lbl{{font-size:13px;color:#9fb0c8;margin:14px 0 8px;font-weight:600}}
-.chips{{display:flex;flex-wrap:wrap;gap:8px}}
-.chip{{border:none;border-radius:20px;padding:10px 14px;font-size:14px;font-weight:600;background:#243049;color:#cbd5e6}}
+body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#0f1420;color:#e8ecf3;padding:0 0 96px}}
+.hdr{{background:#16213e;padding:16px 16px 14px;position:sticky;top:0;z-index:5;box-shadow:0 2px 10px rgba(0,0,0,.3)}}
+.hdr h1{{margin:0;font-size:19px;font-weight:700}}
+.win{{margin:5px 0 0;font-size:13px;color:#f5a623;font-weight:600}}
+.bar{{height:8px;background:#243049;border-radius:6px;margin:12px 0 6px;overflow:hidden}}
+.bar > i{{display:block;height:100%;width:0;background:#1d9e75;transition:width .25s}}
+.barlbl{{font-size:12px;color:#9fb0c8}}
+.wrap{{padding:10px 12px}}
+.ag{{background:#1a2236;border-radius:12px;margin:0 0 8px;border:1px solid #243049;overflow:hidden}}
+.aghead{{width:100%;border:none;background:none;color:#e8ecf3;display:flex;align-items:center;justify-content:space-between;padding:16px 16px;font-size:17px;font-weight:700;text-align:left}}
+.dot{{width:22px;height:22px;border-radius:50%;border:2px solid #3a4866;display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;flex:0 0 auto}}
+.dot.met{{background:#1d9e75;border-color:#1d9e75;color:#fff}}
+.dot.no{{background:#444441;border-color:#444441;color:#cbd5e6}}
+.agbody{{display:none;padding:0 16px 16px;border-top:1px solid #243049}}
+.agbody.show{{display:block}}
+.metrow{{display:flex;gap:8px;margin-top:14px}}
+.metrow button{{flex:1;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:700;background:#243049;color:#cbd5e6}}
+.metrow .met.on{{background:#1d9e75;color:#fff}}
+.metrow .no.on{{background:#5f5e5a;color:#fff}}
+.extra{{display:none}}
+.extra.show{{display:block}}
+.lbl{{font-size:12px;color:#9fb0c8;margin:14px 0 7px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}}
+.days{{display:flex;gap:6px;flex-wrap:wrap}}
+.days .chip{{flex:1;min-width:0;text-align:center;padding:11px 4px;font-size:13px}}
+.grid{{display:grid;grid-template-columns:1fr 1fr;gap:7px}}
+.chip{{border:none;border-radius:10px;padding:12px 10px;font-size:14px;font-weight:600;background:#243049;color:#cbd5e6}}
 .chip.on{{background:#378add;color:#fff}}
-.ampm .chip.on{{background:#7f77dd}}
-textarea{{width:100%;margin-top:10px;background:#0f1420;border:1px solid #243049;border-radius:10px;color:#e8ecf3;padding:12px;font-size:16px;font-family:inherit;min-height:64px;resize:vertical}}
-.foot{{position:fixed;bottom:0;left:0;right:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));background:#16213e;box-shadow:0 -2px 12px rgba(0,0,0,.4)}}
-.send{{width:100%;border:none;border-radius:12px;padding:17px;font-size:18px;font-weight:800;background:#f5a623;color:#0d1117}}
-.send:disabled{{opacity:.5}}
-.cnt{{text-align:center;font-size:13px;color:#9fb0c8;margin:0 0 10px}}
-.done{{text-align:center;padding:60px 24px}}
+.days .chip.on{{background:#7f77dd}}
+textarea{{width:100%;margin-top:12px;background:#0f1420;border:1px solid #243049;border-radius:10px;color:#e8ecf3;padding:12px;font-size:16px;font-family:inherit;min-height:60px;resize:vertical}}
+.foot{{position:fixed;bottom:0;left:0;right:0;padding:12px 16px calc(12px + env(safe-area-inset-bottom));background:#16213e;box-shadow:0 -2px 12px rgba(0,0,0,.4)}}
+.send{{width:100%;border:none;border-radius:12px;padding:16px;font-size:17px;font-weight:800;background:#f5a623;color:#0d1117}}
+.send:disabled{{opacity:.45}}
+.ov{{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:20;padding:24px}}
+.ov.show{{display:flex}}
+.modal{{background:#1a2236;border-radius:16px;padding:22px;max-width:340px;width:100%}}
+.modal h3{{margin:0 0 6px;font-size:18px}}
+.modal p{{font-size:14px;color:#9fb0c8;margin:0 0 16px;line-height:1.5}}
+.modal .names{{font-size:15px;color:#e8ecf3;font-weight:600;margin:0 0 18px;line-height:1.6}}
+.modal .row{{display:flex;gap:10px}}
+.modal .cancel{{flex:1;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;background:#243049;color:#cbd5e6}}
+.modal .go{{flex:1;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:800;background:#f5a623;color:#0d1117}}
+.done{{text-align:center;padding:70px 24px}}
 .done h2{{font-size:24px}}
+.done p{{color:#9fb0c8}}
 </style></head><body>
 <div class="hdr">
   <h1>Weekly Agent Updates</h1>
   <div class="win">Last 7 days: {window}</div>
-  <div class="sub">Tap every agent you met with this week. You can do as many as you want, then hit Send.</div>
+  <div class="bar"><i id="barfill"></i></div>
+  <div class="barlbl" id="barlbl">Tap an agent to start. Add as many as you met, then send once at the bottom.</div>
 </div>
 <div class="wrap" id="list"></div>
 <div class="foot">
-  <p class="cnt" id="cnt">No agents marked yet</p>
-  <button class="send" id="send" disabled>Send to Barry</button>
+  <button class="send" id="send" disabled>Review &amp; send</button>
 </div>
+<div class="ov" id="ov"><div class="modal">
+  <h3 id="ovtitle">Send this week's updates?</h3>
+  <p>This sends everything at once. After you send, you're done for the week.</p>
+  <div class="names" id="ovnames"></div>
+  <div class="row"><button class="cancel" id="ovcancel">Not yet</button><button class="go" id="ovgo">Send to Barry</button></div>
+</div></div>
 <script>
 const AGENTS={agents_js}, DAYS={day_chips}, TOPICS={topics_js};
 const state={{}};
 const list=document.getElementById('list');
 AGENTS.forEach(function(name){{
-  const first=name.split(' ')[0];
-  state[name]={{met:null,day:null,ampm:null,topics:[],note:''}};
-  const c=document.createElement('div');c.className='card';
+  state[name]={{met:null,day:null,topics:[],note:''}};
+  const c=document.createElement('div');c.className='ag';c.id='ag-'+name;
   c.innerHTML=
-    '<div class="crow"><div class="nm">'+name+'</div><div class="metbtns">'+
-    '<button class="met" data-a="'+name+'" data-v="yes">Met</button>'+
-    '<button class="no" data-a="'+name+'" data-v="no">No</button></div></div>'+
-    '<div class="body" id="b-'+name+'">'+
-    '<div class="lbl">What day?</div><div class="chips d">'+
-      DAYS.map(function(d){{return '<button class="chip day" data-a="'+name+'" data-d="'+d.date+'">'+d.label+' '+d.md+'</button>'}}).join('')+'</div>'+
-    '<div class="lbl">Morning or afternoon?</div><div class="chips ampm">'+
-      '<button class="chip t" data-a="'+name+'" data-t="AM">Morning</button>'+
-      '<button class="chip t" data-a="'+name+'" data-t="PM">Afternoon</button></div>'+
-    '<div class="lbl">What did you cover? (tap any)</div><div class="chips top">'+
-      TOPICS.map(function(t){{return '<button class="chip topic" data-a="'+name+'" data-top="'+t+'">'+t+'</button>'}}).join('')+'</div>'+
-    '<div class="lbl">Anything specific for Barry? (optional)</div>'+
-    '<textarea data-a="'+name+'" placeholder="A sentence or two if you want..."></textarea>'+
+    '<button class="aghead" data-a="'+name+'" data-act="toggle"><span>'+name+'</span><span class="dot" id="dot-'+name+'"></span></button>'+
+    '<div class="agbody" id="body-'+name+'">'+
+      '<div class="metrow"><button class="met" data-a="'+name+'" data-act="met" data-v="yes">Met with '+name.split(' ')[0]+'</button>'+
+      '<button class="no" data-a="'+name+'" data-act="met" data-v="no">Didn\'t meet</button></div>'+
+      '<div class="extra" id="extra-'+name+'">'+
+        '<div class="lbl">What day?</div><div class="days">'+
+          DAYS.map(function(d){{return '<button class="chip" data-a="'+name+'" data-act="day" data-d="'+d.date+'">'+d.label+'<br>'+d.md+'</button>'}}).join('')+'</div>'+
+        '<div class="lbl">What did you cover?</div><div class="grid">'+
+          TOPICS.map(function(t){{return '<button class="chip topic" data-a="'+name+'" data-act="topic" data-top="'+t+'">'+t+'</button>'}}).join('')+'</div>'+
+        '<div class="lbl">Anything specific for Barry? (optional)</div>'+
+        '<textarea data-a="'+name+'" placeholder="A sentence or two if you want..."></textarea>'+
+      '</div>'+
     '</div>';
   list.appendChild(c);
 }});
+function reviewed(){{return Object.keys(state).filter(function(a){{return state[a].met!==null}})}}
+function metList(){{return Object.keys(state).filter(function(a){{return state[a].met==='yes'}})}}
 function refresh(){{
-  const met=Object.keys(state).filter(function(a){{return state[a].met==='yes'}}).length;
-  document.getElementById('cnt').textContent = met? (met+' agent'+(met>1?'s':'')+' ready to send') : 'No agents marked yet';
-  const any=Object.keys(state).some(function(a){{return state[a].met!==null}});
-  document.getElementById('send').disabled=!any;
+  const r=reviewed().length, total=AGENTS.length;
+  document.getElementById('barfill').style.width=(total?Math.round(r/total*100):0)+'%';
+  const m=metList().length;
+  document.getElementById('barlbl').textContent = r? (m+' met, '+(r-m)+' marked not met') : 'Tap an agent to start. Add as many as you met, then send once at the bottom.';
+  const s=document.getElementById('send');
+  s.disabled = r===0;
+  s.textContent = r? ('Review & send ('+r+')') : 'Review & send';
+}}
+function setDot(name){{
+  const d=document.getElementById('dot-'+name), v=state[name].met;
+  d.className='dot'+(v==='yes'?' met':v==='no'?' no':'');
+  d.textContent = v==='yes'?'\u2713':v==='no'?'\u2013':'';
 }}
 list.addEventListener('click',function(e){{
-  const b=e.target.closest('button'); if(!b)return; const a=b.dataset.a; if(!a)return;
-  if(b.classList.contains('met')||b.classList.contains('no')){{
+  const b=e.target.closest('button'); if(!b)return; const a=b.dataset.a, act=b.dataset.act;
+  if(act==='toggle'){{
+    const body=document.getElementById('body-'+a), open=body.classList.contains('show');
+    document.querySelectorAll('.agbody').forEach(function(x){{x.classList.remove('show')}});
+    if(!open) body.classList.add('show');
+  }} else if(act==='met'){{
     const v=b.dataset.v; state[a].met=v;
-    const card=b.closest('.card');
+    const card=document.getElementById('ag-'+a);
     card.querySelector('.met').classList.toggle('on',v==='yes');
     card.querySelector('.no').classList.toggle('on',v==='no');
-    document.getElementById('b-'+a).classList.toggle('show',v==='yes');
-  }} else if(b.classList.contains('day')){{
+    document.getElementById('extra-'+a).classList.toggle('show',v==='yes');
+    setDot(a); refresh();
+  }} else if(act==='day'){{
     state[a].day=b.dataset.d;
-    b.parentNode.querySelectorAll('.day').forEach(function(x){{x.classList.remove('on')}});b.classList.add('on');
-  }} else if(b.classList.contains('t')){{
-    state[a].ampm=b.dataset.t;
-    b.parentNode.querySelectorAll('.t').forEach(function(x){{x.classList.remove('on')}});b.classList.add('on');
-  }} else if(b.classList.contains('topic')){{
+    b.parentNode.querySelectorAll('.chip').forEach(function(x){{x.classList.remove('on')}});b.classList.add('on');
+  }} else if(act==='topic'){{
     const t=b.dataset.top, i=state[a].topics.indexOf(t);
     if(i>=0){{state[a].topics.splice(i,1);b.classList.remove('on')}}else{{state[a].topics.push(t);b.classList.add('on')}}
   }}
-  refresh();
 }});
 list.addEventListener('input',function(e){{ if(e.target.tagName==='TEXTAREA'){{state[e.target.dataset.a].note=e.target.value}} }});
+const ov=document.getElementById('ov');
 document.getElementById('send').addEventListener('click',function(){{
-  const btn=this;btn.disabled=true;btn.textContent='Sending...';
-  const entries=Object.keys(state).filter(function(a){{return state[a].met!==null}}).map(function(a){{return Object.assign({{agent:a}},state[a])}});
-  fetch('/api/manager-update/submit?k={getattr(config,"MANAGER_UPDATE_KEY","")}',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{entries:entries}})}})
-   .then(function(r){{return r.json()}}).then(function(){{document.body.innerHTML='<div class="done"><h2>Sent. Thank you, Joe.</h2><p class="sub">Barry has your update for the week.</p></div>'}})
-   .catch(function(){{btn.disabled=false;btn.textContent='Send to Barry';alert('Hmm, that did not go through. Try again.')}});
+  const m=metList(), r=reviewed();
+  document.getElementById('ovnames').innerHTML = (m.length? ('Met: '+m.join(', ')) : 'No meetings logged') + (r.length>m.length? ('<br>Not met: '+r.filter(function(x){{return state[x].met==='no'}}).join(', ')) : '');
+  ov.classList.add('show');
 }});
+document.getElementById('ovcancel').addEventListener('click',function(){{ov.classList.remove('show')}});
+document.getElementById('ovgo').addEventListener('click',function(){{
+  const btn=this;btn.disabled=true;btn.textContent='Sending...';
+  const entries=reviewed().map(function(a){{return Object.assign({{agent:a}},state[a])}});
+  fetch('/api/manager-update/submit?k={getattr(config,"MANAGER_UPDATE_KEY","")}',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{entries:entries}})}})
+   .then(function(r){{return r.json()}}).then(function(){{document.body.innerHTML='<div class="done"><h2>Sent. Thank you, Joe.</h2><p>Barry has your update for the week.</p></div>'}})
+   .catch(function(){{btn.disabled=false;btn.textContent='Send to Barry';alert('That did not go through. Try again.')}});
+}});
+refresh();
 </script></body></html>"""
 
 
