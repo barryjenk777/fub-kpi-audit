@@ -12791,7 +12791,7 @@ const state={{}};
 const list=document.getElementById('list');
 function statLine(name){{
   const s=STATS[name];
-  if(!s) return "No activity logged yet this week";
+  if(!s) return "No activity logged last week";
   return s.calls+" calls \u00b7 "+s.convos+" conv \u00b7 "+s.appts+" appts";
 }}
 function gradeBadge(name){{ const s=STATS[name]; return (s&&s.grade)? ('<span class="gr gr-'+s.grade+'">'+s.grade+'</span>'):''; }}
@@ -12808,7 +12808,7 @@ AGENTS.forEach(function(name){{
       '<div class="metrow"><button class="met" data-a="'+name+'" data-act="met" data-v="yes">Met with '+first+'</button>'+
       '<button class="no" data-a="'+name+'" data-act="met" data-v="no">Not met</button></div>'+
       '<div class="extra" id="extra-'+name+'">'+
-        '<div class="statbox">'+gradeBadge(name)+'This week: <b>'+statLine(name)+'</b></div>'+
+        '<div class="statbox">'+gradeBadge(name)+'Last week: <b>'+statLine(name)+'</b></div>'+
         '<div class="lbl">How are they doing?</div><div class="stwrap">'+
           STAT_OPTS.map(function(o){{return '<button class="st '+o[0]+'" data-a="'+name+'" data-act="status" data-s="'+o[0]+'">'+o[1]+'</button>'}}).join('')+'</div>'+
         '<div class="lbl">What day?</div><div class="days">'+
