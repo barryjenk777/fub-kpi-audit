@@ -12721,6 +12721,11 @@ body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Ar
 .dot.met{{background:#1d9e75;border-color:#1d9e75;color:#fff}}
 .dot.no{{background:#444441;border-color:#444441;color:#cbd5e6}}
 .dot.flag{{background:#e24b4a;border-color:#e24b4a;color:#fff}}
+.rt{{display:flex;align-items:center;gap:10px;flex:0 0 auto}}
+.chev{{font-size:22px;color:#6b7a93;transition:transform .2s;line-height:1}}
+.ag.open .chev{{transform:rotate(90deg);color:#378add}}
+.ag.open{{border-color:#378add;box-shadow:0 0 0 1px #378add}}
+.ag.open .aghead{{background:#202a42}}
 .agbody{{display:none;padding:0 16px 16px;border-top:1px solid #243049}}
 .agbody.show{{display:block}}
 .statbox{{background:#0f1420;border:1px solid #243049;border-radius:10px;padding:11px 13px;margin-top:14px;font-size:14px;color:#cbd5e6;font-weight:600;text-align:center}}
@@ -12803,7 +12808,7 @@ AGENTS.forEach(function(name){{
   c.innerHTML=
     '<button class="aghead" data-a="'+name+'" data-act="toggle">'+
       '<span class="nmwrap"><span class="nm">'+name+'</span><span class="statline">'+gradeSm(name)+statLine(name)+'</span></span>'+
-      '<span class="dot" id="dot-'+name+'"></span></button>'+
+      '<span class="rt"><span class="dot" id="dot-'+name+'"></span><span class="chev">\\u203a</span></span></button>'+
     '<div class="agbody" id="body-'+name+'">'+
       '<div class="metrow"><button class="met" data-a="'+name+'" data-act="met" data-v="yes">Met with '+first+'</button>'+
       '<button class="no" data-a="'+name+'" data-act="met" data-v="no">Not met</button></div>'+
@@ -12846,7 +12851,8 @@ list.addEventListener('click',function(e){{
   if(act==='toggle'){{
     const body=document.getElementById('body-'+a), open=body.classList.contains('show');
     document.querySelectorAll('.agbody').forEach(function(x){{x.classList.remove('show')}});
-    if(!open) body.classList.add('show');
+    document.querySelectorAll('.ag').forEach(function(x){{x.classList.remove('open')}});
+    if(!open){{ body.classList.add('show'); document.getElementById('ag-'+a).classList.add('open'); }}
   }} else if(act==='met'){{
     const v=b.dataset.v; state[a].met=v;
     const card=document.getElementById('ag-'+a);
