@@ -13133,6 +13133,118 @@ def api_sales_manager_data():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route("/sales-manager")
+def sales_manager_view():
+    """Barry's Sales Manager analytics view (impact / coverage / accountability)."""
+    if not _perplexity_auth():
+        return "Not authorized", 403
+    key = request.args.get("key", "")
+    return f"""<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sales Manager</title>
+<style>
+*{{box-sizing:border-box}}
+body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#0f1420;color:#e8ecf3;padding:0 0 40px}}
+.hdr{{background:#16213e;padding:18px 18px}}
+.hdr h1{{margin:0;font-size:20px}}
+.hdr .sub{{margin:5px 0 0;font-size:13px;color:#9fb0c8}}
+.wrap{{max-width:880px;margin:0 auto;padding:14px}}
+.card{{background:#1a2236;border:1px solid #243049;border-radius:14px;padding:18px;margin:0 0 14px}}
+.card h2{{margin:0 0 4px;font-size:16px}}
+.card .lead{{font-size:12px;color:#9fb0c8;margin:0 0 14px}}
+.big{{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end}}
+.metric{{}}
+.metric .n{{font-size:34px;font-weight:800;line-height:1}}
+.metric .l{{font-size:12px;color:#9fb0c8;margin-top:4px}}
+.pos{{color:#3ddc97}} .neg{{color:#ff8a87}} .neutral{{color:#cbd5e6}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+th,td{{padding:7px 6px;text-align:center;border-bottom:1px solid #243049}}
+th{{color:#9fb0c8;font-weight:600;font-size:11px;text-transform:uppercase}}
+td.name{{text-align:left;font-weight:600}}
+.cell{{display:inline-flex;flex-direction:column;align-items:center;gap:2px}}
+.gr{{display:inline-block;min-width:20px;border-radius:5px;padding:1px 5px;font-weight:800;font-size:12px}}
+.gr-A,.gr-B{{background:#1d9e75;color:#fff}} .gr-C{{background:#ba7517;color:#fff}} .gr-D,.gr-F{{background:#e24b4a;color:#fff}}
+.met{{color:#3ddc97;font-size:14px}} .unmet{{color:#3a4866;font-size:14px}}
+.gap{{background:rgba(226,75,74,.16)}}
+.barrow{{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:13px}}
+.barrow .nm{{width:140px;flex:0 0 auto}}
+.barrow .track{{flex:1;background:#243049;border-radius:6px;height:18px;position:relative;overflow:hidden}}
+.barrow .fill{{position:absolute;top:0;bottom:0;background:#3ddc97;border-radius:6px}}
+.empty{{color:#9fb0c8;font-size:14px;padding:10px 0}}
+.note{{font-size:12px;color:#9fb0c8;margin-top:10px;line-height:1.5}}
+</style></head><body>
+<div class="hdr"><h1>Sales Manager</h1><div class="sub" id="sub">Loading...</div></div>
+<div class="wrap" id="wrap"></div>
+<script>
+const KEY={key!r};
+fetch('/api/admin/sales-manager-data?key='+encodeURIComponent(KEY)).then(function(r){{return r.json()}}).then(render).catch(function(e){{
+  document.getElementById('wrap').innerHTML='<div class="card"><div class="empty">Could not load data.</div></div>';
+}});
+function gradeCell(g){{ return g? ('<span class="gr gr-'+g+'">'+g+'</span>') : '<span class="unmet">-</span>'; }}
+function render(d){{
+  document.getElementById('sub').textContent = d.data_status || '';
+  const w=document.getElementById('wrap');
+  const imp=d.impact||{{}}, cov=d.coverage||{{}}, acc=d.accountability||{{}};
+  let html='';
+  // IMPACT
+  const lift=imp.team_avg_lift, base=imp.baseline_lift;
+  html+='<div class="card"><h2>Coaching impact</h2><div class="lead">Change in an agent\u2019s weekly calls the week AFTER a 1:1 with Joe, vs weeks with no meeting.</div>';
+  if(imp.sample_size){{
+    const cls=lift>0?'pos':(lift<0?'neg':'neutral');
+    html+='<div class="big"><div class="metric"><div class="n '+cls+'">'+(lift>0?'+':'')+lift+'</div><div class="l">avg calls after a 1:1</div></div>'+
+      '<div class="metric"><div class="n neutral">'+(base==null?'-':((base>0?'+':'')+base))+'</div><div class="l">baseline (no meeting)</div></div>'+
+      '<div class="metric"><div class="n neutral">'+imp.sample_size+'</div><div class="l">1:1s measured</div></div></div>';
+    const pa=imp.per_agent||{{}};
+    const names=Object.keys(pa);
+    if(names.length){{
+      const max=Math.max.apply(null,names.map(function(n){{return Math.abs(pa[n].avg_lift)}}).concat([1]));
+      html+='<div style="margin-top:14px">';
+      names.sort(function(a,b){{return pa[b].avg_lift-pa[a].avg_lift}}).forEach(function(n){{
+        const v=pa[n].avg_lift, wd=Math.round(Math.abs(v)/max*100);
+        html+='<div class="barrow"><div class="nm">'+n+'</div><div class="track"><div class="fill" style="width:'+wd+'%;background:'+(v>=0?'#3ddc97':'#e24b4a')+'"></div></div><div style="width:60px;text-align:right" class="'+(v>=0?'pos':'neg')+'">'+(v>0?'+':'')+v+'</div></div>';
+      }});
+      html+='</div>';
+    }}
+  }} else {{ html+='<div class="empty">No 1:1 data yet. This fills in once Joe has submitted across two weeks.</div>'; }}
+  html+='</div>';
+  // COVERAGE
+  html+='<div class="card"><h2>Coverage</h2><div class="lead">Who Joe met each week (check), with each agent\u2019s grade. Red = struggling and NOT met (coaching gap).</div>';
+  const agents=cov.agents||[], weeks=cov.weeks||[];
+  if(weeks.length){{
+    html+='<div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>Met</th>';
+    weeks.forEach(function(wk){{html+='<th>'+wk.slice(5)+'</th>'}});
+    html+='</tr></thead><tbody>';
+    agents.forEach(function(ag){{
+      html+='<tr><td class="name">'+ag+'</td><td>'+((cov.meet_counts||{{}})[ag]||0)+'</td>';
+      weeks.forEach(function(wk){{
+        const c=((cov.matrix||{{}})[ag]||{{}})[wk]||{{}};
+        const isGap = (c.grade==='D'||c.grade==='F') && !c.met;
+        html+='<td class="'+(isGap?'gap':'')+'"><div class="cell">'+gradeCell(c.grade)+'<span class="'+(c.met?'met':'unmet')+'">'+(c.met?'\u2713':'\u00b7')+'</span></div></td>';
+      }});
+      html+='</tr>';
+    }});
+    html+='</tbody></table></div>';
+    const gaps=cov.gaps||[];
+    if(gaps.length){{ html+='<div class="note">Coaching gaps (struggling, not met): '+gaps.map(function(g){{return g.agent+' ('+g.grade+', wk '+g.week.slice(5)+')'}}).join(' \u00b7 ')+'</div>'; }}
+  }} else {{ html+='<div class="empty">No weekly data yet.</div>'; }}
+  html+='</div>';
+  // ACCOUNTABILITY
+  html+='<div class="card"><h2>Accountability</h2><div class="lead">Is Joe submitting, on time (by Thursday), and hitting 3-4 agents.</div>';
+  html+='<div class="big"><div class="metric"><div class="n neutral">'+(acc.on_time_rate==null?'-':acc.on_time_rate+'%')+'</div><div class="l">on-time rate</div></div>'+
+    '<div class="metric"><div class="n neutral">'+(acc.avg_agents_per_week==null?'-':acc.avg_agents_per_week)+'</div><div class="l">avg agents / week</div></div>'+
+    '<div class="metric"><div class="n neutral">'+(acc.total_submissions||0)+'</div><div class="l">total submissions</div></div></div>';
+  const subs=acc.submissions||[];
+  if(subs.length){{
+    html+='<table style="margin-top:12px"><thead><tr><th>Submitted</th><th>Agents met</th><th>On time</th></tr></thead><tbody>';
+    subs.forEach(function(s){{html+='<tr><td>'+(s.submitted_at? s.submitted_at.slice(0,10):'-')+'</td><td>'+s.agents_met+'</td><td>'+(s.on_time?'\u2713':'late')+'</td></tr>'}});
+    html+='</tbody></table>';
+  }} else {{ html+='<div class="empty">No submissions yet. First Impact Tracker goes out Thursday.</div>'; }}
+  html+='</div>';
+  w.innerHTML=html;
+}}
+</script></body></html>"""
+
+
 @app.route("/api/admin/goal-outreach", methods=["POST"])
 def api_goal_setup_outreach():
     """Manually fire the goal-setup email outreach to all no-goal agents."""
