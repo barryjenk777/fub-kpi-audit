@@ -6374,3 +6374,31 @@ def get_latest_manager_update():
     except Exception as e:
         logger.warning("get_latest_manager_update failed: %s", e)
         return None
+
+
+def get_manager_updates(limit=16):
+    """Return recent manager update submissions, newest first, as dicts with
+    submitted_at, week_start, week_end, entries."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT submitted_at, week_start, week_end, submitted_by, entries
+                    FROM manager_updates ORDER BY submitted_at DESC LIMIT %s
+                """, (limit,))
+                rows = cur.fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "submitted_at": r[0].isoformat() if r[0] else None,
+                "week_start":   r[1].isoformat() if r[1] else None,
+                "week_end":     r[2].isoformat() if r[2] else None,
+                "submitted_by": r[3],
+                "entries":      r[4] or [],
+            })
+        return out
+    except Exception as e:
+        logger.warning("get_manager_updates failed: %s", e)
+        return []

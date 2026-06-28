@@ -13003,6 +13003,136 @@ def api_leadership_data():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+def _sales_manager_analytics(weeks=8):
+    """Join Joe's manager updates with weekly KPI snapshots to produce the
+    three management lenses: impact, coverage equity, accountability."""
+    from datetime import date as _d, datetime as _dt, timedelta as _td
+
+    def _monday(iso):
+        try:
+            dt = _d.fromisoformat(str(iso)[:10])
+            return (dt - _td(days=dt.weekday())).isoformat()
+        except Exception:
+            return None
+
+    # --- KPI snapshots: {agent: {monday: {calls, grade}}} + week list ---
+    hist = _db.get_weekly_kpi_history(weeks=weeks + 2) or []
+    snap = {}
+    snap_weeks = []
+    for w in hist:
+        wk = _monday(w.get("week_start"))
+        if wk and wk not in snap_weeks:
+            snap_weeks.append(wk)
+        for a in w.get("agents", []):
+            c = a.get("outbound_calls", 0)
+            g, _ = _weekly_grade(c, a.get("conversations", 0), a.get("appts_set", 0))
+            snap.setdefault(a["name"], {})[wk] = {"calls": c, "grade": g}
+    snap_weeks = sorted(snap_weeks)[-weeks:]
+
+    updates = _db.get_manager_updates(limit=weeks + 4)
+
+    # --- Accountability ---
+    subs = []
+    for u in updates:
+        try:
+            sub_dt = _dt.fromisoformat(u["submitted_at"].replace("Z", "+00:00")) if u.get("submitted_at") else None
+        except Exception:
+            sub_dt = None
+        ents = u.get("entries", []) or []
+        met_ct = sum(1 for e in ents if e.get("met") == "yes")
+        # On time = submitted on or before Thursday of its reporting week
+        on_time = bool(sub_dt and sub_dt.weekday() <= 3)
+        subs.append({"submitted_at": u.get("submitted_at"), "week_end": u.get("week_end"),
+                     "agents_met": met_ct, "agents_reviewed": len(ents), "on_time": on_time})
+    on_time_rate = round(100 * sum(1 for s in subs if s["on_time"]) / len(subs)) if subs else None
+    avg_agents = round(sum(s["agents_met"] for s in subs) / len(subs), 1) if subs else None
+
+    # --- Met map: {agent: {monday: {met,status,commit}}} ---
+    met = {}
+    for u in updates:
+        for e in (u.get("entries", []) or []):
+            ag = e.get("agent")
+            if not ag:
+                continue
+            mon = _monday(e.get("day") or u.get("week_end") or u.get("submitted_at"))
+            if not mon:
+                continue
+            met.setdefault(ag, {})[mon] = {
+                "met": e.get("met") == "yes", "status": e.get("status"),
+                "commit": e.get("commit", "")}
+
+    agents = _manager_update_agents()
+
+    # --- Coverage matrix + gaps ---
+    matrix, gaps, meet_counts = {}, [], {}
+    for ag in agents:
+        meet_counts[ag] = 0
+        matrix[ag] = {}
+        for wk in snap_weeks:
+            grade = (snap.get(ag, {}).get(wk) or {}).get("grade")
+            m = met.get(ag, {}).get(wk)
+            was_met = bool(m and m["met"])
+            if was_met:
+                meet_counts[ag] += 1
+            matrix[ag][wk] = {"grade": grade, "met": was_met,
+                              "status": (m or {}).get("status")}
+            # Coaching gap: struggling grade, not met that week
+            if grade in ("D", "F") and not was_met:
+                gaps.append({"agent": ag, "week": wk, "grade": grade})
+
+    # --- Impact: calls the week after a 1:1 vs the week of ---
+    lifts, per_agent = [], {}
+    for ag, weeks_met in met.items():
+        a_lifts = []
+        for mon, info in weeks_met.items():
+            if not info["met"]:
+                continue
+            cw = snap.get(ag, {}).get(mon)
+            nxt = (_d.fromisoformat(mon) + _td(days=7)).isoformat()
+            cn = snap.get(ag, {}).get(nxt)
+            if cw and cn:
+                a_lifts.append(cn["calls"] - cw["calls"])
+        if a_lifts:
+            per_agent[ag] = {"meetings": len(a_lifts),
+                             "avg_lift": round(sum(a_lifts) / len(a_lifts), 1)}
+            lifts.extend(a_lifts)
+    # Baseline: week-over-week call change in weeks with NO meeting
+    base = []
+    for ag in agents:
+        wks = sorted(snap.get(ag, {}).keys())
+        for i in range(len(wks) - 1):
+            wk, nxt = wks[i], wks[i + 1]
+            if (_d.fromisoformat(nxt) - _d.fromisoformat(wk)).days != 7:
+                continue
+            if met.get(ag, {}).get(wk, {}).get("met"):
+                continue
+            base.append(snap[ag][nxt]["calls"] - snap[ag][wk]["calls"])
+    team_lift = round(sum(lifts) / len(lifts), 1) if lifts else None
+    baseline_lift = round(sum(base) / len(base), 1) if base else None
+
+    return {
+        "accountability": {"submissions": subs, "on_time_rate": on_time_rate,
+                           "avg_agents_per_week": avg_agents, "total_submissions": len(subs)},
+        "coverage": {"agents": agents, "weeks": snap_weeks, "matrix": matrix,
+                     "meet_counts": meet_counts, "gaps": gaps},
+        "impact": {"team_avg_lift": team_lift, "baseline_lift": baseline_lift,
+                   "sample_size": len(lifts), "per_agent": per_agent},
+        "data_status": "live" if updates else "no submissions yet (first one Thursday)",
+    }
+
+
+@app.route("/api/admin/sales-manager-data")
+def api_sales_manager_data():
+    """JSON for the Sales Manager analytics view."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        return jsonify({"ok": True, **_sales_manager_analytics(weeks=int(request.args.get("weeks", 8)))})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/admin/goal-outreach", methods=["POST"])
 def api_goal_setup_outreach():
     """Manually fire the goal-setup email outreach to all no-goal agents."""
