@@ -12662,9 +12662,10 @@ def manager_update_page():
 
     from datetime import date as _d, timedelta as _td
     today = _d.today()
-    this_mon  = today - _td(days=today.weekday())
-    last_mon  = this_mon - _td(days=7)          # last week's Monday
-    last_sat  = last_mon + _td(days=5)          # last week's Saturday
+    # Most recently completed Mon-Sat week (correct whether viewed Sun or Mon).
+    _dss = (today.weekday() - 5) % 7            # days since the last Saturday
+    last_sat = today - _td(days=_dss)
+    last_mon = last_sat - _td(days=5)
     window = f"{last_mon.strftime('%b %-d')} to {last_sat.strftime('%b %-d')}"
 
     agents = _manager_update_agents()
@@ -12916,8 +12917,9 @@ def api_manager_update_submit():
     body = request.get_json(silent=True) or {}
     entries = body.get("entries", [])
     today = _d.today()
-    last_mon = today - _td(days=today.weekday()) - _td(days=7)
-    last_sat = last_mon + _td(days=5)
+    _dss = (today.weekday() - 5) % 7            # days since the last Saturday
+    last_sat = today - _td(days=_dss)
+    last_mon = last_sat - _td(days=5)
     row_id = _db.save_manager_update(last_mon, last_sat, entries)
 
     # Fire the brief email to Barry instantly, in the background so Joe's
