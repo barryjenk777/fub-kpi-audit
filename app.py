@@ -12740,7 +12740,7 @@ AGENTS.forEach(function(name){{
     '<button class="aghead" data-a="'+name+'" data-act="toggle"><span>'+name+'</span><span class="dot" id="dot-'+name+'"></span></button>'+
     '<div class="agbody" id="body-'+name+'">'+
       '<div class="metrow"><button class="met" data-a="'+name+'" data-act="met" data-v="yes">Met with '+name.split(' ')[0]+'</button>'+
-      '<button class="no" data-a="'+name+'" data-act="met" data-v="no">Didn\'t meet</button></div>'+
+      '<button class="no" data-a="'+name+'" data-act="met" data-v="no">Not met</button></div>'+
       '<div class="extra" id="extra-'+name+'">'+
         '<div class="lbl">What day?</div><div class="days">'+
           DAYS.map(function(d){{return '<button class="chip" data-a="'+name+'" data-act="day" data-d="'+d.date+'">'+d.label+'<br>'+d.md+'</button>'}}).join('')+'</div>'+
