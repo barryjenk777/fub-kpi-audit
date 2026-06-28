@@ -12968,16 +12968,21 @@ def scheduled_impact_tracker_reminder():
 
 @app.route("/api/admin/impact-tracker/send-now", methods=["POST"])
 def api_impact_tracker_send_now():
-    """Manually fire the Impact Tracker text to Joe (for testing)."""
+    """Manually fire the Impact Tracker text. Body {to:"+1..."} overrides the
+    recipient (e.g. send to Barry's phone to preview before it goes to Joe)."""
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    to   = body.get("to") or getattr(config, "MANAGER_PHONE", "")
     first = getattr(config, "MANAGER_FIRST", "Joe")
     link = _manager_update_link()
     msg = (f"Morning {first}. Time for this week's Impact Tracker. "
            f"Two minutes, just tap through the agents you sat down with this week: {link} "
            f"This is the stuff that actually moves the team. Appreciate you, brother.")
-    rid = _text_joe(msg)
-    return jsonify({"ok": bool(rid), "queued_id": rid})
+    rid = _db.queue_agent_imessage(
+        agent_name="Impact Tracker test", fub_user_id=0,
+        phone=to, message=msg, week_day="thursday")
+    return jsonify({"ok": bool(rid), "queued_id": rid, "to": to, "message": msg})
 
 
 @app.route("/api/admin/leadership-data")
