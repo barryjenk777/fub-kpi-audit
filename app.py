@@ -12636,6 +12636,24 @@ def _manager_update_agents():
     return sorted(out)
 
 
+def _weekly_grade(calls, convos, appts):
+    """Letter grade A-F for a week, same weighted formula as the manager tab
+    (minus the OOC penalty, which the snapshot doesn't store). Thresholds from
+    config. Returns (letter, score)."""
+    min_calls  = max(getattr(config, "MIN_OUTBOUND_CALLS", 30), 1)
+    min_convos = max(getattr(config, "MIN_CONVERSATIONS", 5), 1)
+    call_score  = min((calls or 0) / min_calls, 1.5) * 35
+    convo_score = min((convos or 0) / min_convos, 2.0) * 30
+    appt_score  = min((appts or 0) * 10, 20)
+    score = max(0, min(100, call_score + convo_score + appt_score))
+    if   score >= 85: g = "A"
+    elif score >= 70: g = "B"
+    elif score >= 55: g = "C"
+    elif score >= 35: g = "D"
+    else:             g = "F"
+    return g, round(score)
+
+
 @app.route("/manager-update")
 def manager_update_page():
     """Joe's dead-simple, mobile-first weekly agent update form (last 7 days)."""
@@ -12669,10 +12687,12 @@ def manager_update_page():
         _hist = _db.get_weekly_kpi_history(weeks=1) or []
         if _hist:
             for a in _hist[0].get("agents", []):
+                _c = a.get("outbound_calls", 0)
+                _v = a.get("conversations", 0)
+                _ap = a.get("appts_set", 0)
+                _g, _ = _weekly_grade(_c, _v, _ap)
                 stats[a["name"]] = {
-                    "calls":  a.get("outbound_calls", 0),
-                    "convos": a.get("conversations", 0),
-                    "appts":  a.get("appts_set", 0),
+                    "calls": _c, "convos": _v, "appts": _ap, "grade": _g,
                 }
     except Exception:
         stats = {}
@@ -12705,6 +12725,11 @@ body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Ar
 .agbody.show{{display:block}}
 .statbox{{background:#0f1420;border:1px solid #243049;border-radius:10px;padding:11px 13px;margin-top:14px;font-size:14px;color:#cbd5e6;font-weight:600;text-align:center}}
 .statbox b{{color:#fff}}
+.gr{{display:inline-block;min-width:26px;text-align:center;border-radius:7px;padding:3px 8px;font-weight:800;font-size:15px;margin-right:8px}}
+.grsm{{display:inline-block;border-radius:5px;padding:1px 6px;font-weight:800;font-size:11px;margin-right:6px}}
+.gr-A,.gr-B{{background:#1d9e75;color:#fff}}
+.gr-C{{background:#ba7517;color:#fff}}
+.gr-D,.gr-F{{background:#e24b4a;color:#fff}}
 .metrow{{display:flex;gap:8px;margin-top:12px}}
 .metrow button{{flex:1;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:700;background:#243049;color:#cbd5e6}}
 .metrow .met.on{{background:#1d9e75;color:#fff}}
@@ -12769,19 +12794,21 @@ function statLine(name){{
   if(!s) return "No activity logged yet this week";
   return s.calls+" calls \u00b7 "+s.convos+" conv \u00b7 "+s.appts+" appts";
 }}
+function gradeBadge(name){{ const s=STATS[name]; return (s&&s.grade)? ('<span class="gr gr-'+s.grade+'">'+s.grade+'</span>'):''; }}
+function gradeSm(name){{ const s=STATS[name]; return (s&&s.grade)? ('<span class="grsm gr-'+s.grade+'">'+s.grade+'</span>'):''; }}
 AGENTS.forEach(function(name){{
   state[name]={{met:null,day:null,topics:[],status:null,commit:'',note:''}};
   const first=name.split(' ')[0];
   const c=document.createElement('div');c.className='ag';c.id='ag-'+name;
   c.innerHTML=
     '<button class="aghead" data-a="'+name+'" data-act="toggle">'+
-      '<span class="nmwrap"><span class="nm">'+name+'</span><span class="statline">'+statLine(name)+'</span></span>'+
+      '<span class="nmwrap"><span class="nm">'+name+'</span><span class="statline">'+gradeSm(name)+statLine(name)+'</span></span>'+
       '<span class="dot" id="dot-'+name+'"></span></button>'+
     '<div class="agbody" id="body-'+name+'">'+
       '<div class="metrow"><button class="met" data-a="'+name+'" data-act="met" data-v="yes">Met with '+first+'</button>'+
       '<button class="no" data-a="'+name+'" data-act="met" data-v="no">Not met</button></div>'+
       '<div class="extra" id="extra-'+name+'">'+
-        '<div class="statbox">This week: <b>'+statLine(name)+'</b></div>'+
+        '<div class="statbox">'+gradeBadge(name)+'This week: <b>'+statLine(name)+'</b></div>'+
         '<div class="lbl">How are they doing?</div><div class="stwrap">'+
           STAT_OPTS.map(function(o){{return '<button class="st '+o[0]+'" data-a="'+name+'" data-act="status" data-s="'+o[0]+'">'+o[1]+'</button>'}}).join('')+'</div>'+
         '<div class="lbl">What day?</div><div class="days">'+
