@@ -12656,21 +12656,23 @@ def _weekly_grade(calls, convos, appts):
 
 @app.route("/manager-update")
 def manager_update_page():
-    """Joe's dead-simple, mobile-first weekly agent update form (last 7 days)."""
+    """Joe's Monday weekly agent update form, reporting on LAST week (Mon-Sat)."""
     if request.args.get("k") != getattr(config, "MANAGER_UPDATE_KEY", ""):
         return "Not authorized", 403
 
     from datetime import date as _d, timedelta as _td
     today = _d.today()
-    start = today - _td(days=6)
-    window = f"{start.strftime('%b %-d')} to {today.strftime('%b %-d')}"
+    this_mon  = today - _td(days=today.weekday())
+    last_mon  = this_mon - _td(days=7)          # last week's Monday
+    last_sat  = last_mon + _td(days=5)          # last week's Saturday
+    window = f"{last_mon.strftime('%b %-d')} to {last_sat.strftime('%b %-d')}"
 
     agents = _manager_update_agents()
     import json as _json
     agents_js = _json.dumps(agents)
 
-    # Day chips = the 7 days in the window, most recent first.
-    days = [(today - _td(days=i)) for i in range(7)]
+    # Day chips = last week Mon through Sat (the days he could have met agents).
+    days = [last_mon + _td(days=i) for i in range(6)]
     day_chips = _json.dumps([{"label": d.strftime('%a'), "date": d.isoformat(),
                               "md": d.strftime('%-m/%-d')} for d in days])
 
@@ -12691,8 +12693,11 @@ def manager_update_page():
                 _v = a.get("conversations", 0)
                 _ap = a.get("appts_set", 0)
                 _g, _ = _weekly_grade(_c, _v, _ap)
+                # Earned live transfers this week = met KPI last week.
+                _earned = bool(a.get("kpi_pass"))
                 stats[a["name"]] = {
-                    "calls": _c, "convos": _v, "appts": _ap, "grade": _g,
+                    "calls": _c, "convos": _v, "appts": _ap,
+                    "grade": _g, "earned": _earned,
                 }
     except Exception:
         stats = {}
@@ -12730,6 +12735,9 @@ body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Ar
 .agbody.show{{display:block}}
 .statbox{{background:#0f1420;border:1px solid #243049;border-radius:10px;padding:11px 13px;margin-top:14px;font-size:14px;color:#cbd5e6;font-weight:600;text-align:center}}
 .statbox b{{color:#fff}}
+.xfer{{display:block;text-align:center;border-radius:9px;padding:9px;margin-top:7px;font-size:13px;font-weight:700}}
+.xfer-on{{background:rgba(29,158,117,.18);color:#3ddc97}}
+.xfer-off{{background:rgba(95,94,90,.25);color:#b9c2d0}}
 .gr{{display:inline-block;min-width:26px;text-align:center;border-radius:7px;padding:3px 8px;font-weight:800;font-size:15px;margin-right:8px}}
 .grsm{{display:inline-block;border-radius:5px;padding:1px 6px;font-weight:800;font-size:11px;margin-right:6px}}
 .gr-A,.gr-B{{background:#1d9e75;color:#fff}}
@@ -12775,7 +12783,7 @@ textarea{{width:100%;margin-top:4px;background:#0f1420;border:1px solid #243049;
 </style></head><body>
 <div class="hdr">
   <h1>Weekly Agent Updates</h1>
-  <div class="win">Last 7 days: {window}</div>
+  <div class="win">Last week (Mon to Sat): {window}</div>
   <div class="bar"><i id="barfill"></i></div>
   <div class="barlbl" id="barlbl">Tap an agent to start. Log as many as you met, then send once at the bottom.</div>
 </div>
@@ -12801,6 +12809,7 @@ function statLine(name){{
 }}
 function gradeBadge(name){{ const s=STATS[name]; return (s&&s.grade)? ('<span class="gr gr-'+s.grade+'">'+s.grade+'</span>'):''; }}
 function gradeSm(name){{ const s=STATS[name]; return (s&&s.grade)? ('<span class="grsm gr-'+s.grade+'">'+s.grade+'</span>'):''; }}
+function transferPill(name){{ const s=STATS[name]; if(!s) return ''; return s.earned? '<div class="xfer xfer-on">\\u2713 Earning live transfers this week</div>' : '<div class="xfer xfer-off">Not on the transfer list this week</div>'; }}
 AGENTS.forEach(function(name){{
   state[name]={{met:null,day:null,topics:[],status:null,commit:'',note:''}};
   const first=name.split(' ')[0];
@@ -12813,7 +12822,7 @@ AGENTS.forEach(function(name){{
       '<div class="metrow"><button class="met" data-a="'+name+'" data-act="met" data-v="yes">Met with '+first+'</button>'+
       '<button class="no" data-a="'+name+'" data-act="met" data-v="no">Not met</button></div>'+
       '<div class="extra" id="extra-'+name+'">'+
-        '<div class="statbox">'+gradeBadge(name)+'Last week: <b>'+statLine(name)+'</b></div>'+
+        '<div class="statbox">'+gradeBadge(name)+'Last week: <b>'+statLine(name)+'</b></div>'+transferPill(name)+
         '<div class="lbl">How are they doing?</div><div class="stwrap">'+
           STAT_OPTS.map(function(o){{return '<button class="st '+o[0]+'" data-a="'+name+'" data-act="status" data-s="'+o[0]+'">'+o[1]+'</button>'}}).join('')+'</div>'+
         '<div class="lbl">What day?</div><div class="days">'+
@@ -12907,7 +12916,9 @@ def api_manager_update_submit():
     body = request.get_json(silent=True) or {}
     entries = body.get("entries", [])
     today = _d.today()
-    row_id = _db.save_manager_update(today - _td(days=6), today, entries)
+    last_mon = today - _td(days=today.weekday()) - _td(days=7)
+    last_sat = last_mon + _td(days=5)
+    row_id = _db.save_manager_update(last_mon, last_sat, entries)
     return jsonify({"ok": True, "id": row_id, "count": len(entries)})
 
 
@@ -12937,26 +12948,26 @@ def _text_joe(message):
         return None
     return _db.queue_agent_imessage(
         agent_name="Joe (Sales Manager)", fub_user_id=0,
-        phone=phone, message=message, week_day="thursday",
+        phone=phone, message=message, week_day="monday",
     )
 
 
 def scheduled_impact_tracker_send():
-    """Thursday 9am ET — send Joe the Impact Tracker link, casual + encouraging."""
+    """Monday 9am ET — send Joe the Impact Tracker link, casual + encouraging."""
     if _already_fired_recently("impact_tracker_send", within_hours=20):
         return
     first = getattr(config, "MANAGER_FIRST", "Joe")
     link = _manager_update_link()
-    msg = (f"Morning {first}. Time for this week's Impact Tracker. "
-           f"Two minutes, just tap through the agents you sat down with this week: {link} "
+    msg = (f"Morning {first}. Time for the weekly Impact Tracker, looking back at last week. "
+           f"Two minutes, just tap through the agents you sat down with: {link} "
            f"This is the stuff that actually moves the team. Appreciate you, brother.")
     if _text_joe(msg):
         _record_fired("impact_tracker_send")
-        print("[IMPACT TRACKER] Sent Thursday AM link to Joe")
+        print("[IMPACT TRACKER] Sent Monday AM link to Joe")
 
 
 def scheduled_impact_tracker_reminder():
-    """Thursday 3pm ET — gentle nudge only if Joe hasn't submitted yet today."""
+    """Monday 3pm ET — gentle nudge only if Joe hasn't submitted yet today."""
     if _already_fired_recently("impact_tracker_reminder", within_hours=20):
         return
     if _manager_submitted_today():
@@ -12965,11 +12976,11 @@ def scheduled_impact_tracker_reminder():
         return
     first = getattr(config, "MANAGER_FIRST", "Joe")
     link = _manager_update_link()
-    msg = (f"Hey {first}, no pressure, I know today's a juggle. Still need this week's "
-           f"Impact Tracker before we meet tomorrow. Even a couple agents helps a ton: {link}")
+    msg = (f"Hey {first}, no pressure, I know Mondays are a juggle. Still need last week's "
+           f"Impact Tracker when you get a sec. Even a couple agents helps a ton: {link}")
     if _text_joe(msg):
         _record_fired("impact_tracker_reminder")
-        print("[IMPACT TRACKER] Sent Thursday 3pm reminder to Joe")
+        print("[IMPACT TRACKER] Sent Monday 3pm reminder to Joe")
 
 
 @app.route("/api/admin/impact-tracker/send-now", methods=["POST"])
@@ -12982,12 +12993,12 @@ def api_impact_tracker_send_now():
     to   = body.get("to") or getattr(config, "MANAGER_PHONE", "")
     first = getattr(config, "MANAGER_FIRST", "Joe")
     link = _manager_update_link()
-    msg = (f"Morning {first}. Time for this week's Impact Tracker. "
-           f"Two minutes, just tap through the agents you sat down with this week: {link} "
+    msg = (f"Morning {first}. Time for the weekly Impact Tracker, looking back at last week. "
+           f"Two minutes, just tap through the agents you sat down with: {link} "
            f"This is the stuff that actually moves the team. Appreciate you, brother.")
     rid = _db.queue_agent_imessage(
         agent_name="Impact Tracker test", fub_user_id=0,
-        phone=to, message=msg, week_day="thursday")
+        phone=to, message=msg, week_day="monday")
     return jsonify({"ok": bool(rid), "queued_id": rid, "to": to, "message": msg})
 
 
@@ -13768,15 +13779,15 @@ def start_scheduler():
                        id="goal_setup_outreach", name="Goal-setup email outreach (weekly Tue)",
                        max_instances=1, coalesce=True)
 
-    # Impact Tracker (Joe's weekly agent-update text): Thursday 9am send,
-    # Thursday 3pm reminder only if he hasn't submitted yet.
+    # Impact Tracker (Joe's weekly agent-update text): Monday 9am send (about
+    # last week), Monday 3pm reminder only if he hasn't submitted yet.
     _scheduler.add_job(scheduled_impact_tracker_send,
-                       CronTrigger(day_of_week="thu", hour=9, minute=0, timezone=ET),
-                       id="impact_tracker_send", name="Impact Tracker text to Joe (Thu 9am)",
+                       CronTrigger(day_of_week="mon", hour=9, minute=0, timezone=ET),
+                       id="impact_tracker_send", name="Impact Tracker text to Joe (Mon 9am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_impact_tracker_reminder,
-                       CronTrigger(day_of_week="thu", hour=15, minute=0, timezone=ET),
-                       id="impact_tracker_reminder", name="Impact Tracker reminder to Joe (Thu 3pm)",
+                       CronTrigger(day_of_week="mon", hour=15, minute=0, timezone=ET),
+                       id="impact_tracker_reminder", name="Impact Tracker reminder to Joe (Mon 3pm)",
                        max_instances=1, coalesce=True)
 
     # Agent coaching texts via Mac iMessage: Mon/Wed/Fri at 8:15am ET
