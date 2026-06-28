@@ -13027,6 +13027,33 @@ def api_impact_tracker_send_now():
     return jsonify({"ok": bool(rid), "queued_id": rid, "to": to, "message": msg})
 
 
+@app.route("/api/admin/impact-tracker/email-preview", methods=["POST"])
+def api_impact_tracker_email_preview():
+    """Email Barry the brief built from the latest real submission (no new data
+    row). Lets him preview the email format before relying on the live trigger."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    latest = _db.get_latest_manager_update()
+    if not latest:
+        return jsonify({"ok": False, "error": "no submissions yet to preview"}), 200
+    entries = latest.get("entries", []) or []
+    stats = {}
+    _hist = _db.get_weekly_kpi_history(weeks=1) or []
+    if _hist:
+        for a in _hist[0].get("agents", []):
+            g, _ = _weekly_grade(a.get("outbound_calls", 0),
+                                 a.get("conversations", 0), a.get("appts_set", 0))
+            stats[a["name"]] = {"calls": a.get("outbound_calls", 0),
+                                "convos": a.get("conversations", 0),
+                                "appts": a.get("appts_set", 0),
+                                "grade": g, "earned": bool(a.get("kpi_pass"))}
+    analytics = _sales_manager_analytics(weeks=8)
+    label = f"{latest.get('week_start','')} to {latest.get('week_end','')}"
+    from email_report import send_impact_tracker_brief
+    ok = send_impact_tracker_brief(label, entries, stats, analytics)
+    return jsonify({"ok": ok, "entries": len(entries)})
+
+
 @app.route("/api/admin/leadership-data")
 def api_leadership_data():
     """Read-only: full weekly KPI snapshot history + per-agent closings, for the
