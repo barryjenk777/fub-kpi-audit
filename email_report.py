@@ -1807,3 +1807,170 @@ def send_onboarding_sequence_email(agent_name, first_name, email, setup_url, day
     except Exception as e:
         print(f"[ONBOARDING SEQ] Day {day} failed for {agent_name}: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Impact Tracker brief — emailed to Barry the moment Joe submits
+# ---------------------------------------------------------------------------
+
+_STATUS_LABEL = {"thriving": "Thriving", "steady": "Steady",
+                 "struggling": "Struggling", "needs": "Needs you"}
+_STATUS_COLOR = {"thriving": "#1d9e75", "steady": "#185fa5",
+                 "struggling": "#854f0b", "needs": "#a32d2d"}
+_GRADE_COLOR = {"A": "#1d9e75", "B": "#1d9e75", "C": "#854f0b",
+                "D": "#a32d2d", "F": "#a32d2d"}
+
+
+def build_impact_tracker_email(date_label, entries, stats, analytics, insight):
+    """Rich HTML brief for Barry. entries = submission list; stats = per-agent
+    {grade, earned, calls...}; analytics = _sales_manager_analytics output;
+    insight = Claude brief text (or None)."""
+    stats = stats or {}
+    met = [e for e in entries if e.get("met") == "yes"]
+    not_met = [e for e in entries if e.get("met") == "no"]
+    flagged = [e for e in met if e.get("status") == "needs"]
+
+    def _chip(txt, color):
+        return (f'<span style="display:inline-block;background:{color};color:#fff;'
+                f'border-radius:5px;padding:1px 7px;font-size:12px;font-weight:700">{txt}</span>')
+
+    # AI insight box
+    insight_html = ""
+    if insight:
+        body = insight
+        for lbl in ("THIS WEEK:", "PATTERN:", "HOW TO HELP:"):
+            body = body.replace(lbl, f"</p><p style='margin:10px 0 0'><strong>{lbl}</strong>")
+        body = body.replace("\n", " ").strip()
+        if body.startswith("</p>"):
+            body = body[4:]
+        insight_html = (
+            '<div style="background:#f0f4fb;border-left:4px solid #185fa5;border-radius:0 8px 8px 0;'
+            'padding:14px 18px;margin:0 0 22px">'
+            '<div style="font-size:12px;font-weight:700;color:#185fa5;text-transform:uppercase;'
+            'letter-spacing:.05em;margin-bottom:4px">What I am seeing &amp; how to help</div>'
+            f'<p style="margin:0;font-size:14px;line-height:1.6;color:#2d3748">{body}</p></div>')
+
+    # Needs-you
+    needs_html = ""
+    if flagged:
+        rows = "".join(
+            f'<li style="margin:4px 0;font-size:14px;color:#2d3748"><strong>{e["agent"]}</strong>'
+            + (f' &middot; {e.get("commit")}' if e.get("commit") else "") + '</li>'
+            for e in flagged)
+        needs_html = (
+            '<div style="background:#fcebeb;border-radius:8px;padding:12px 18px;margin:0 0 22px">'
+            '<div style="font-size:13px;font-weight:700;color:#a32d2d;margin-bottom:4px">Needs your attention</div>'
+            f'<ul style="margin:0;padding-left:18px">{rows}</ul></div>')
+
+    # Meetings table
+    rows = ""
+    for e in met:
+        ag = e.get("agent", "")
+        st = stats.get(ag, {})
+        grade = st.get("grade")
+        gchip = _chip(grade, _GRADE_COLOR.get(grade, "#5f5e5a")) if grade else "&ndash;"
+        xfer = (_chip("Transfers", "#1d9e75") if st.get("earned")
+                else _chip("No transfers", "#5f5e5a"))
+        status = e.get("status")
+        schip = _chip(_STATUS_LABEL.get(status, ""), _STATUS_COLOR.get(status, "#5f5e5a")) if status else ""
+        commit = e.get("commit") or "<span style='color:#a0aec0'>no commitment logged</span>"
+        topics = ", ".join(e.get("topics", []) or [])
+        note = e.get("note") or ""
+        extra = ""
+        if topics:
+            extra += f'<div style="font-size:12px;color:#718096;margin-top:3px">Covered: {topics}</div>'
+        if note:
+            extra += f'<div style="font-size:12px;color:#718096;margin-top:3px">Note: {note}</div>'
+        rows += (
+            f'<tr><td style="padding:10px 8px;border-bottom:1px solid #edf0f4;vertical-align:top">'
+            f'<strong style="font-size:14px">{ag}</strong> {gchip} {xfer}<br>{schip}'
+            f'<div style="font-size:13px;color:#2d3748;margin-top:5px"><strong>Commit:</strong> {commit}</div>'
+            f'{extra}</td></tr>')
+    meetings_html = (
+        f'<table style="width:100%;border-collapse:collapse">{rows}</table>'
+        if rows else '<p style="color:#a0aec0;font-size:14px">No meetings logged this week.</p>')
+
+    # Coaching gaps (struggling, not met)
+    gaps = (analytics or {}).get("coverage", {}).get("gaps", [])
+    recent_gaps = {}
+    for g in gaps:
+        recent_gaps[g["agent"]] = g["grade"]  # latest grade per struggling agent
+    gap_html = ""
+    if recent_gaps:
+        items = ", ".join(f"{a} ({g})" for a, g in recent_gaps.items())
+        gap_html = (
+            '<div style="background:#fff7e6;border-radius:8px;padding:12px 18px;margin:18px 0">'
+            '<div style="font-size:13px;font-weight:700;color:#854f0b;margin-bottom:3px">Coaching gaps</div>'
+            f'<div style="font-size:13px;color:#5f5e5a">Struggling and not met recently: {items}</div></div>')
+
+    # Joe's patterns
+    acc = (analytics or {}).get("accountability", {})
+    imp = (analytics or {}).get("impact", {})
+    def _m(v, suffix=""):
+        return f"{v}{suffix}" if v is not None else "&ndash;"
+    lift = imp.get("team_avg_lift")
+    lift_txt = (f"{'+' if (lift or 0) > 0 else ''}{lift} calls/agent after a 1:1"
+                if lift is not None else "not enough data yet")
+    patterns_html = (
+        '<div style="margin:18px 0">'
+        '<div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:8px">Joe&rsquo;s patterns</div>'
+        '<table style="width:100%;border-collapse:collapse;font-size:13px;color:#2d3748">'
+        f'<tr><td style="padding:5px 0">On-time rate</td><td style="text-align:right">{_m(acc.get("on_time_rate"), "%")}</td></tr>'
+        f'<tr><td style="padding:5px 0">Avg agents / week</td><td style="text-align:right">{_m(acc.get("avg_agents_per_week"))}</td></tr>'
+        f'<tr><td style="padding:5px 0">Coaching impact</td><td style="text-align:right">{lift_txt}</td></tr>'
+        '</table></div>')
+
+    base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+    full_link = f"{base}/sales-manager?key=lht-perp-2026"
+
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<div style="max-width:600px;margin:24px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.08)">
+  <div style="background:#16213e;padding:22px 28px">
+    <div style="color:#fff;font-size:19px;font-weight:700">Impact Tracker</div>
+    <div style="color:#9fb0c8;font-size:13px;margin-top:3px">Joe &middot; {date_label}</div>
+  </div>
+  <div style="padding:24px 28px">
+    <p style="font-size:15px;color:#2d3748;margin:0 0 20px">
+      Joe met <strong>{len(met)}</strong> agent{'s' if len(met)!=1 else ''} last week{', flagged <strong>'+str(len(flagged))+'</strong> for you' if flagged else ''}.
+      {'Marked '+str(len(not_met))+' not met.' if not_met else ''}
+    </p>
+    {insight_html}
+    {needs_html}
+    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin:0 0 8px">This week&rsquo;s 1:1s</div>
+    {meetings_html}
+    {gap_html}
+    {patterns_html}
+    <div style="text-align:center;margin:24px 0 6px">
+      <a href="{full_link}" style="display:inline-block;background:#185fa5;color:#fff;text-decoration:none;
+         padding:13px 28px;border-radius:8px;font-weight:700;font-size:14px">Open full Sales Manager view</a>
+    </div>
+  </div>
+</div></body></html>"""
+
+
+def send_impact_tracker_brief(date_label, entries, stats, analytics):
+    """Build + send the Impact Tracker brief to Barry. Generates the AI insight."""
+    try:
+        import coach_voice
+        insight = coach_voice.generate_manager_brief({
+            "this_week": entries,
+            "accountability": (analytics or {}).get("accountability"),
+            "impact": (analytics or {}).get("impact"),
+            "coaching_gaps": (analytics or {}).get("coverage", {}).get("gaps"),
+        })
+    except Exception:
+        insight = None
+    html = build_impact_tracker_email(date_label, entries, stats, analytics, insight)
+    met = sum(1 for e in entries if e.get("met") == "yes")
+    flagged = sum(1 for e in entries if e.get("met") == "yes" and e.get("status") == "needs")
+    subject = f"Impact Tracker: Joe met {met}" + (f", {flagged} need you" if flagged else "")
+    try:
+        _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+                 subject=subject, html=html)
+        print(f"[IMPACT TRACKER] Brief emailed to Barry ({met} met)")
+        return True
+    except Exception as e:
+        print(f"[IMPACT TRACKER] Brief email failed: {e}")
+        return False

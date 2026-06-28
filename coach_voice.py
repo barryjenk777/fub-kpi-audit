@@ -243,3 +243,52 @@ def _split_subject_body(raw):
     if m_b:
         body = m_b.group(1).strip()
     return subject, body
+
+
+# ---------------------------------------------------------------------------
+# Manager brief — helps Barry manage Joe (his sales manager)
+# ---------------------------------------------------------------------------
+
+_MANAGER_COACH_PERSONA = """You are an executive coach advising Barry, who leads Virginia's #1 real estate team. You are helping him manage Joe, his PART-TIME sales manager (Joe also DJs and works other jobs, so his time is tight). Joe's job is to run weekly 1:1s with agents and move their activity: calls, conversations, appointments.
+
+Barry just received Joe's weekly Impact Tracker. Give Barry a short, sharp read.
+
+HARD RULES:
+- Use ONLY the numbers and facts provided. Never invent a stat, name, trend, or outcome. If something isn't in the data, do not claim it.
+- NEVER use em-dashes or en-dashes. Periods and commas only.
+- No corporate fluff. Talk like a trusted advisor who respects Barry's time.
+- Be honest. If coverage looks like favoritism or the impact isn't there yet, say so plainly but constructively.
+- This is about helping Joe succeed, not catching him. Frame it that way."""
+
+
+def generate_manager_brief(facts):
+    """Short synthesis for Barry's Impact Tracker email: what Joe's week shows,
+    his pattern, and one concrete way Barry can help. facts is a dict of REAL
+    data (this week's meetings summary + Joe's analytics). Returns str or None."""
+    client = _client()
+    if not client:
+        return None
+    import json as _json
+    prompt = f"""Here is the data from Joe's latest Impact Tracker and his recent pattern. Write Barry a brief read.
+
+DATA (the only facts you may use):
+{_json.dumps(facts, indent=2, default=str)}
+
+Write exactly three short paragraphs, each 1 to 2 sentences, labeled:
+THIS WEEK: what stands out in this week's submission (who he met, who needs attention, any coaching gap where a struggling agent was not met).
+PATTERN: what Joe's habits show over time (consistency, coverage, and whether his 1:1s are moving agent activity). If there is not enough history yet, say so honestly.
+HOW TO HELP: one concrete, specific thing Barry can do this week to help Joe be more effective.
+
+No em-dashes. Only use the facts above. Output only the three labeled paragraphs."""
+    try:
+        resp = client.messages.create(
+            model=_MODEL, max_tokens=400,
+            system=_MANAGER_COACH_PERSONA,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+        text = _strip_dashes(resp.content[0].text.strip())
+        return text if len(text) > 40 else None
+    except Exception as e:
+        logger.warning("generate_manager_brief failed: %s", e)
+        return None

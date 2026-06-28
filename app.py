@@ -12919,6 +12919,31 @@ def api_manager_update_submit():
     last_mon = today - _td(days=today.weekday()) - _td(days=7)
     last_sat = last_mon + _td(days=5)
     row_id = _db.save_manager_update(last_mon, last_sat, entries)
+
+    # Fire the brief email to Barry instantly, in the background so Joe's
+    # submit returns immediately.
+    date_label = f"{last_mon.strftime('%b %-d')} to {last_sat.strftime('%b %-d')}"
+    def _brief():
+        try:
+            stats = {}
+            _hist = _db.get_weekly_kpi_history(weeks=1) or []
+            if _hist:
+                for a in _hist[0].get("agents", []):
+                    g, _ = _weekly_grade(a.get("outbound_calls", 0),
+                                         a.get("conversations", 0), a.get("appts_set", 0))
+                    stats[a["name"]] = {"calls": a.get("outbound_calls", 0),
+                                        "convos": a.get("conversations", 0),
+                                        "appts": a.get("appts_set", 0),
+                                        "grade": g, "earned": bool(a.get("kpi_pass"))}
+            analytics = _sales_manager_analytics(weeks=8)
+            from email_report import send_impact_tracker_brief
+            send_impact_tracker_brief(date_label, entries, stats, analytics)
+        except Exception as _be:
+            logger.warning("Impact Tracker brief failed: %s", _be)
+    import threading as _th
+    _t = _th.Thread(target=_brief, daemon=True, name="impact_brief")
+    _t.start()
+
     return jsonify({"ok": True, "id": row_id, "count": len(entries)})
 
 
