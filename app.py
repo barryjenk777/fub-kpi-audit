@@ -12662,6 +12662,22 @@ def manager_update_page():
         "Mindset", "Personal", "FUB / CRM",
     ])
 
+    # Per-agent numbers from the latest weekly snapshot (fast DB read, no live
+    # FUB call) so Joe sees each agent's effort while he writes the update.
+    stats = {}
+    try:
+        _hist = _db.get_weekly_kpi_history(weeks=1) or []
+        if _hist:
+            for a in _hist[0].get("agents", []):
+                stats[a["name"]] = {
+                    "calls":  a.get("outbound_calls", 0),
+                    "convos": a.get("conversations", 0),
+                    "appts":  a.get("appts_set", 0),
+                }
+    except Exception:
+        stats = {}
+    stats_js = _json.dumps(stats)
+
     return f"""<!DOCTYPE html><html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
@@ -12677,35 +12693,49 @@ body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Ar
 .barlbl{{font-size:12px;color:#9fb0c8}}
 .wrap{{padding:10px 12px}}
 .ag{{background:#1a2236;border-radius:12px;margin:0 0 8px;border:1px solid #243049;overflow:hidden}}
-.aghead{{width:100%;border:none;background:none;color:#e8ecf3;display:flex;align-items:center;justify-content:space-between;padding:16px 16px;font-size:17px;font-weight:700;text-align:left}}
+.aghead{{width:100%;border:none;background:none;color:#e8ecf3;display:flex;align-items:center;justify-content:space-between;padding:14px 16px;text-align:left;gap:10px}}
+.nmwrap{{display:flex;flex-direction:column;gap:3px;min-width:0}}
+.nm{{font-size:17px;font-weight:700}}
+.statline{{font-size:12px;color:#9fb0c8;font-weight:600}}
 .dot{{width:22px;height:22px;border-radius:50%;border:2px solid #3a4866;display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;flex:0 0 auto}}
 .dot.met{{background:#1d9e75;border-color:#1d9e75;color:#fff}}
 .dot.no{{background:#444441;border-color:#444441;color:#cbd5e6}}
+.dot.flag{{background:#e24b4a;border-color:#e24b4a;color:#fff}}
 .agbody{{display:none;padding:0 16px 16px;border-top:1px solid #243049}}
 .agbody.show{{display:block}}
-.metrow{{display:flex;gap:8px;margin-top:14px}}
+.statbox{{background:#0f1420;border:1px solid #243049;border-radius:10px;padding:11px 13px;margin-top:14px;font-size:14px;color:#cbd5e6;font-weight:600;text-align:center}}
+.statbox b{{color:#fff}}
+.metrow{{display:flex;gap:8px;margin-top:12px}}
 .metrow button{{flex:1;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:700;background:#243049;color:#cbd5e6}}
 .metrow .met.on{{background:#1d9e75;color:#fff}}
 .metrow .no.on{{background:#5f5e5a;color:#fff}}
 .extra{{display:none}}
 .extra.show{{display:block}}
-.lbl{{font-size:12px;color:#9fb0c8;margin:14px 0 7px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}}
+.lbl{{font-size:12px;color:#9fb0c8;margin:16px 0 7px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}}
 .days{{display:flex;gap:6px;flex-wrap:wrap}}
 .days .chip{{flex:1;min-width:0;text-align:center;padding:11px 4px;font-size:13px}}
 .grid{{display:grid;grid-template-columns:1fr 1fr;gap:7px}}
 .chip{{border:none;border-radius:10px;padding:12px 10px;font-size:14px;font-weight:600;background:#243049;color:#cbd5e6}}
 .chip.on{{background:#378add;color:#fff}}
 .days .chip.on{{background:#7f77dd}}
-textarea{{width:100%;margin-top:12px;background:#0f1420;border:1px solid #243049;border-radius:10px;color:#e8ecf3;padding:12px;font-size:16px;font-family:inherit;min-height:60px;resize:vertical}}
+.stwrap{{display:grid;grid-template-columns:1fr 1fr;gap:7px}}
+.st{{border:none;border-radius:10px;padding:13px 10px;font-size:14px;font-weight:700;background:#243049;color:#cbd5e6}}
+.st.on.thriving{{background:#1d9e75;color:#fff}}
+.st.on.steady{{background:#378add;color:#fff}}
+.st.on.struggling{{background:#ba7517;color:#fff}}
+.st.on.needs{{background:#e24b4a;color:#fff}}
+textarea{{width:100%;margin-top:4px;background:#0f1420;border:1px solid #243049;border-radius:10px;color:#e8ecf3;padding:12px;font-size:16px;font-family:inherit;min-height:58px;resize:vertical}}
+.hint{{font-size:11px;color:#6b7a93;margin:5px 0 0}}
 .foot{{position:fixed;bottom:0;left:0;right:0;padding:12px 16px calc(12px + env(safe-area-inset-bottom));background:#16213e;box-shadow:0 -2px 12px rgba(0,0,0,.4)}}
 .send{{width:100%;border:none;border-radius:12px;padding:16px;font-size:17px;font-weight:800;background:#f5a623;color:#0d1117}}
 .send:disabled{{opacity:.45}}
 .ov{{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:20;padding:24px}}
 .ov.show{{display:flex}}
-.modal{{background:#1a2236;border-radius:16px;padding:22px;max-width:340px;width:100%}}
+.modal{{background:#1a2236;border-radius:16px;padding:22px;max-width:360px;width:100%}}
 .modal h3{{margin:0 0 6px;font-size:18px}}
-.modal p{{font-size:14px;color:#9fb0c8;margin:0 0 16px;line-height:1.5}}
-.modal .names{{font-size:15px;color:#e8ecf3;font-weight:600;margin:0 0 18px;line-height:1.6}}
+.modal p{{font-size:14px;color:#9fb0c8;margin:0 0 14px;line-height:1.5}}
+.modal .names{{font-size:14px;color:#e8ecf3;margin:0 0 18px;line-height:1.7}}
+.modal .names .flag{{color:#ff8a87;font-weight:700}}
 .modal .row{{display:flex;gap:10px}}
 .modal .cancel{{flex:1;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;background:#243049;color:#cbd5e6}}
 .modal .go{{flex:1;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:800;background:#f5a623;color:#0d1117}}
@@ -12717,37 +12747,52 @@ textarea{{width:100%;margin-top:12px;background:#0f1420;border:1px solid #243049
   <h1>Weekly Agent Updates</h1>
   <div class="win">Last 7 days: {window}</div>
   <div class="bar"><i id="barfill"></i></div>
-  <div class="barlbl" id="barlbl">Tap an agent to start. Add as many as you met, then send once at the bottom.</div>
+  <div class="barlbl" id="barlbl">Tap an agent to start. Log as many as you met, then send once at the bottom.</div>
 </div>
 <div class="wrap" id="list"></div>
 <div class="foot">
-  <button class="send" id="send" disabled>Review &amp; send</button>
+  <button class="send" id="send" disabled>Review and send</button>
 </div>
 <div class="ov" id="ov"><div class="modal">
-  <h3 id="ovtitle">Send this week's updates?</h3>
-  <p>This sends everything at once. After you send, you're done for the week.</p>
+  <h3>Send this week to Barry?</h3>
+  <p>This sends everything at once. After you send, you are done for the week.</p>
   <div class="names" id="ovnames"></div>
   <div class="row"><button class="cancel" id="ovcancel">Not yet</button><button class="go" id="ovgo">Send to Barry</button></div>
 </div></div>
 <script>
-const AGENTS={agents_js}, DAYS={day_chips}, TOPICS={topics_js};
+const AGENTS={agents_js}, DAYS={day_chips}, TOPICS={topics_js}, STATS={stats_js};
+const STAT_OPTS=[["thriving","Thriving"],["steady","Steady"],["struggling","Struggling"],["needs","Needs you"]];
 const state={{}};
 const list=document.getElementById('list');
+function statLine(name){{
+  const s=STATS[name];
+  if(!s) return "No activity logged yet this week";
+  return s.calls+" calls \u00b7 "+s.convos+" conv \u00b7 "+s.appts+" appts";
+}}
 AGENTS.forEach(function(name){{
-  state[name]={{met:null,day:null,topics:[],note:''}};
+  state[name]={{met:null,day:null,topics:[],status:null,commit:'',note:''}};
+  const first=name.split(' ')[0];
   const c=document.createElement('div');c.className='ag';c.id='ag-'+name;
   c.innerHTML=
-    '<button class="aghead" data-a="'+name+'" data-act="toggle"><span>'+name+'</span><span class="dot" id="dot-'+name+'"></span></button>'+
+    '<button class="aghead" data-a="'+name+'" data-act="toggle">'+
+      '<span class="nmwrap"><span class="nm">'+name+'</span><span class="statline">'+statLine(name)+'</span></span>'+
+      '<span class="dot" id="dot-'+name+'"></span></button>'+
     '<div class="agbody" id="body-'+name+'">'+
-      '<div class="metrow"><button class="met" data-a="'+name+'" data-act="met" data-v="yes">Met with '+name.split(' ')[0]+'</button>'+
+      '<div class="metrow"><button class="met" data-a="'+name+'" data-act="met" data-v="yes">Met with '+first+'</button>'+
       '<button class="no" data-a="'+name+'" data-act="met" data-v="no">Not met</button></div>'+
       '<div class="extra" id="extra-'+name+'">'+
+        '<div class="statbox">This week: <b>'+statLine(name)+'</b></div>'+
+        '<div class="lbl">How are they doing?</div><div class="stwrap">'+
+          STAT_OPTS.map(function(o){{return '<button class="st '+o[0]+'" data-a="'+name+'" data-act="status" data-s="'+o[0]+'">'+o[1]+'</button>'}}).join('')+'</div>'+
         '<div class="lbl">What day?</div><div class="days">'+
           DAYS.map(function(d){{return '<button class="chip" data-a="'+name+'" data-act="day" data-d="'+d.date+'">'+d.label+'<br>'+d.md+'</button>'}}).join('')+'</div>'+
         '<div class="lbl">What did you cover?</div><div class="grid">'+
           TOPICS.map(function(t){{return '<button class="chip topic" data-a="'+name+'" data-act="topic" data-top="'+t+'">'+t+'</button>'}}).join('')+'</div>'+
-        '<div class="lbl">Anything specific for Barry? (optional)</div>'+
-        '<textarea data-a="'+name+'" placeholder="A sentence or two if you want..."></textarea>'+
+        '<div class="lbl">What did they commit to?</div>'+
+        '<textarea data-f="commit" data-a="'+name+'" placeholder="One thing they will do this week..."></textarea>'+
+        '<p class="hint">Tip: tap the mic on your keyboard and just say it.</p>'+
+        '<div class="lbl">Anything else for Barry? (optional)</div>'+
+        '<textarea data-f="note" data-a="'+name+'" placeholder="Optional"></textarea>'+
       '</div>'+
     '</div>';
   list.appendChild(c);
@@ -12755,18 +12800,19 @@ AGENTS.forEach(function(name){{
 function reviewed(){{return Object.keys(state).filter(function(a){{return state[a].met!==null}})}}
 function metList(){{return Object.keys(state).filter(function(a){{return state[a].met==='yes'}})}}
 function refresh(){{
-  const r=reviewed().length, total=AGENTS.length;
+  const r=reviewed().length, total=AGENTS.length, m=metList().length;
   document.getElementById('barfill').style.width=(total?Math.round(r/total*100):0)+'%';
-  const m=metList().length;
-  document.getElementById('barlbl').textContent = r? (m+' met, '+(r-m)+' marked not met') : 'Tap an agent to start. Add as many as you met, then send once at the bottom.';
+  document.getElementById('barlbl').textContent = r? (m+' met, '+(r-m)+' not met') : 'Tap an agent to start. Log as many as you met, then send once at the bottom.';
   const s=document.getElementById('send');
   s.disabled = r===0;
-  s.textContent = r? ('Review & send ('+r+')') : 'Review & send';
+  s.textContent = r? ('Review and send ('+r+')') : 'Review and send';
 }}
 function setDot(name){{
-  const d=document.getElementById('dot-'+name), v=state[name].met;
-  d.className='dot'+(v==='yes'?' met':v==='no'?' no':'');
-  d.textContent = v==='yes'?'\u2713':v==='no'?'\u2013':'';
+  const d=document.getElementById('dot-'+name), v=state[name].met, st=state[name].status;
+  if(v==='yes' && st==='needs'){{d.className='dot flag';d.textContent='!';}}
+  else if(v==='yes'){{d.className='dot met';d.textContent='\u2713';}}
+  else if(v==='no'){{d.className='dot no';d.textContent='\u2013';}}
+  else {{d.className='dot';d.textContent='';}}
 }}
 list.addEventListener('click',function(e){{
   const b=e.target.closest('button'); if(!b)return; const a=b.dataset.a, act=b.dataset.act;
@@ -12781,6 +12827,10 @@ list.addEventListener('click',function(e){{
     card.querySelector('.no').classList.toggle('on',v==='no');
     document.getElementById('extra-'+a).classList.toggle('show',v==='yes');
     setDot(a); refresh();
+  }} else if(act==='status'){{
+    state[a].status=b.dataset.s;
+    b.parentNode.querySelectorAll('.st').forEach(function(x){{x.classList.remove('on')}});b.classList.add('on');
+    setDot(a);
   }} else if(act==='day'){{
     state[a].day=b.dataset.d;
     b.parentNode.querySelectorAll('.chip').forEach(function(x){{x.classList.remove('on')}});b.classList.add('on');
@@ -12789,11 +12839,18 @@ list.addEventListener('click',function(e){{
     if(i>=0){{state[a].topics.splice(i,1);b.classList.remove('on')}}else{{state[a].topics.push(t);b.classList.add('on')}}
   }}
 }});
-list.addEventListener('input',function(e){{ if(e.target.tagName==='TEXTAREA'){{state[e.target.dataset.a].note=e.target.value}} }});
+list.addEventListener('input',function(e){{ const f=e.target.dataset.f; if(f){{state[e.target.dataset.a][f]=e.target.value}} }});
 const ov=document.getElementById('ov');
+const STAT_LABEL={{thriving:'Thriving',steady:'Steady',struggling:'Struggling',needs:'NEEDS YOU'}};
 document.getElementById('send').addEventListener('click',function(){{
-  const m=metList(), r=reviewed();
-  document.getElementById('ovnames').innerHTML = (m.length? ('Met: '+m.join(', ')) : 'No meetings logged') + (r.length>m.length? ('<br>Not met: '+r.filter(function(x){{return state[x].met==='no'}}).join(', ')) : '');
+  const lines=metList().map(function(a){{
+    const st=state[a].status; const lab=st?(' \u2013 '+STAT_LABEL[st]):'';
+    return st==='needs'? ('<span class="flag">'+a+lab+'</span>') : (a+lab);
+  }});
+  const no=reviewed().filter(function(a){{return state[a].met==='no'}});
+  let html = lines.length? ('Met: '+lines.join('<br>')) : 'No meetings logged';
+  if(no.length) html += '<br><br>Not met: '+no.join(', ');
+  document.getElementById('ovnames').innerHTML=html;
   ov.classList.add('show');
 }});
 document.getElementById('ovcancel').addEventListener('click',function(){{ov.classList.remove('show')}});
