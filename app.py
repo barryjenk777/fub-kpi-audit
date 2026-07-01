@@ -12662,18 +12662,17 @@ def manager_update_page():
 
     from datetime import date as _d, timedelta as _td
     today = _d.today()
-    # This week's 1:1s: Monday through today (Joe reports Thursday, ahead of the
-    # Friday sales meeting). At least Mon-Thu of the current week.
-    this_mon = today - _td(days=today.weekday())
-    window = f"{this_mon.strftime('%b %-d')} to {today.strftime('%b %-d')}"
+    # Rolling 7 days back to the previous Thursday, so Joe can log any 1:1 from
+    # the full week ending on his Thursday report day (ahead of Friday's meeting).
+    start = today - _td(days=7)
+    window = f"{start.strftime('%b %-d')} to {today.strftime('%b %-d')}"
 
     agents = _manager_update_agents()
     import json as _json
     agents_js = _json.dumps(agents)
 
-    # Day chips = this week Monday through today.
-    n_days = (today - this_mon).days + 1
-    days = [this_mon + _td(days=i) for i in range(n_days)]
+    # Day chips = previous Thursday through today.
+    days = [start + _td(days=i) for i in range(8)]
     day_chips = _json.dumps([{"label": d.strftime('%a'), "date": d.isoformat(),
                               "md": d.strftime('%-m/%-d')} for d in days])
 
@@ -12784,7 +12783,7 @@ textarea{{width:100%;margin-top:4px;background:#0f1420;border:1px solid #243049;
 </style></head><body>
 <div class="hdr">
   <h1>Weekly Agent Updates</h1>
-  <div class="win">This week: {window}</div>
+  <div class="win">Last 7 days: {window}</div>
   <div class="bar"><i id="barfill"></i></div>
   <div class="barlbl" id="barlbl">Tap an agent to start. Log as many as you met, then send once at the bottom.</div>
 </div>
@@ -12917,8 +12916,8 @@ def api_manager_update_submit():
     body = request.get_json(silent=True) or {}
     entries = body.get("entries", [])
     today = _d.today()
-    this_mon = today - _td(days=today.weekday())   # this week's Monday
-    row_id = _db.save_manager_update(this_mon, today, entries)
+    start = today - _td(days=7)   # previous Thursday
+    row_id = _db.save_manager_update(start, today, entries)
 
     # Fire the brief email to Barry instantly, in the background so Joe's
     # submit returns immediately.
