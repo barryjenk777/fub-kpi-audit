@@ -12662,18 +12662,18 @@ def manager_update_page():
 
     from datetime import date as _d, timedelta as _td
     today = _d.today()
-    # Most recently completed Mon-Sat week (correct whether viewed Sun or Mon).
-    _dss = (today.weekday() - 5) % 7            # days since the last Saturday
-    last_sat = today - _td(days=_dss)
-    last_mon = last_sat - _td(days=5)
-    window = f"{last_mon.strftime('%b %-d')} to {last_sat.strftime('%b %-d')}"
+    # This week's 1:1s: Monday through today (Joe reports Thursday, ahead of the
+    # Friday sales meeting). At least Mon-Thu of the current week.
+    this_mon = today - _td(days=today.weekday())
+    window = f"{this_mon.strftime('%b %-d')} to {today.strftime('%b %-d')}"
 
     agents = _manager_update_agents()
     import json as _json
     agents_js = _json.dumps(agents)
 
-    # Day chips = last week Mon through Sat (the days he could have met agents).
-    days = [last_mon + _td(days=i) for i in range(6)]
+    # Day chips = this week Monday through today.
+    n_days = (today - this_mon).days + 1
+    days = [this_mon + _td(days=i) for i in range(n_days)]
     day_chips = _json.dumps([{"label": d.strftime('%a'), "date": d.isoformat(),
                               "md": d.strftime('%-m/%-d')} for d in days])
 
@@ -12784,7 +12784,7 @@ textarea{{width:100%;margin-top:4px;background:#0f1420;border:1px solid #243049;
 </style></head><body>
 <div class="hdr">
   <h1>Weekly Agent Updates</h1>
-  <div class="win">Last week (Mon to Sat): {window}</div>
+  <div class="win">This week: {window}</div>
   <div class="bar"><i id="barfill"></i></div>
   <div class="barlbl" id="barlbl">Tap an agent to start. Log as many as you met, then send once at the bottom.</div>
 </div>
@@ -12917,10 +12917,8 @@ def api_manager_update_submit():
     body = request.get_json(silent=True) or {}
     entries = body.get("entries", [])
     today = _d.today()
-    _dss = (today.weekday() - 5) % 7            # days since the last Saturday
-    last_sat = today - _td(days=_dss)
-    last_mon = last_sat - _td(days=5)
-    row_id = _db.save_manager_update(last_mon, last_sat, entries)
+    this_mon = today - _td(days=today.weekday())   # this week's Monday
+    row_id = _db.save_manager_update(this_mon, today, entries)
 
     # Fire the brief email to Barry instantly, in the background so Joe's
     # submit returns immediately.
@@ -13833,15 +13831,16 @@ def start_scheduler():
                        id="goal_setup_outreach", name="Goal-setup email outreach (weekly Tue)",
                        max_instances=1, coalesce=True)
 
-    # Impact Tracker (Joe's weekly agent-update text): Monday 9am send (about
-    # last week), Monday 3pm reminder only if he hasn't submitted yet.
+    # Impact Tracker (Joe's weekly agent-update text): Thursday 9am send (this
+    # week's 1:1s, ahead of Friday's sales meeting), Thursday 3pm reminder only
+    # if he hasn't submitted yet.
     _scheduler.add_job(scheduled_impact_tracker_send,
-                       CronTrigger(day_of_week="mon", hour=9, minute=0, timezone=ET),
-                       id="impact_tracker_send", name="Impact Tracker text to Joe (Mon 9am)",
+                       CronTrigger(day_of_week="thu", hour=9, minute=0, timezone=ET),
+                       id="impact_tracker_send", name="Impact Tracker text to Joe (Thu 9am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_impact_tracker_reminder,
-                       CronTrigger(day_of_week="mon", hour=15, minute=0, timezone=ET),
-                       id="impact_tracker_reminder", name="Impact Tracker reminder to Joe (Mon 3pm)",
+                       CronTrigger(day_of_week="thu", hour=15, minute=0, timezone=ET),
+                       id="impact_tracker_reminder", name="Impact Tracker reminder to Joe (Thu 3pm)",
                        max_instances=1, coalesce=True)
 
     # Agent coaching texts via Mac iMessage: Mon/Wed/Fri at 8:15am ET
