@@ -13189,6 +13189,54 @@ def _sales_manager_analytics(weeks=8):
     }
 
 
+@app.route("/api/admin/blue-sms-audit")
+def api_blue_sms_audit():
+    """Read-only: Project Blue SMS effectiveness numbers (sends, variants,
+    replies, sentiment, conversion) for the effectiveness audit."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    out = {}
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                # Sends (exclude dry runs)
+                cur.execute("SELECT COUNT(*) FROM pond_sms_log WHERE dry_run = FALSE")
+                out["total_sends"] = cur.fetchone()[0]
+                cur.execute("""SELECT channel, COUNT(*) FROM pond_sms_log
+                               WHERE dry_run = FALSE GROUP BY channel ORDER BY 2 DESC""")
+                out["by_channel"] = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("""SELECT COALESCE(ab_variant,'none'), COUNT(*) FROM pond_sms_log
+                               WHERE dry_run = FALSE GROUP BY 1""")
+                out["by_variant"] = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("""SELECT COALESCE(lead_type,'unknown'), COUNT(*) FROM pond_sms_log
+                               WHERE dry_run = FALSE GROUP BY 1""")
+                out["by_lead_type"] = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("SELECT COUNT(*) FROM pond_sms_log WHERE dry_run=FALSE AND video_id IS NOT NULL")
+                out["videos_generated"] = cur.fetchone()[0]
+                cur.execute("SELECT MIN(sent_at), MAX(sent_at) FROM pond_sms_log WHERE dry_run=FALSE")
+                _r = cur.fetchone()
+                out["send_window"] = {"first": str(_r[0]) if _r[0] else None,
+                                      "last": str(_r[1]) if _r[1] else None}
+                cur.execute("SELECT COUNT(*) FROM pond_sms_log WHERE dry_run=FALSE AND sent_at >= NOW() - INTERVAL '30 days'")
+                out["sends_last_30d"] = cur.fetchone()[0]
+                # Replies
+                cur.execute("SELECT COUNT(*) FROM pond_sms_reply_log")
+                out["total_replies"] = cur.fetchone()[0]
+                cur.execute("SELECT COALESCE(sentiment,'?'), COUNT(*) FROM pond_sms_reply_log GROUP BY 1")
+                out["replies_by_sentiment"] = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("SELECT COUNT(*) FROM pond_sms_reply_log WHERE routed = TRUE")
+                out["replies_routed"] = cur.fetchone()[0]
+        s = out.get("total_sends", 0)
+        r = out.get("total_replies", 0)
+        out["reply_rate_pct"] = round(100 * r / s, 1) if s else None
+        pos = out.get("replies_by_sentiment", {}).get("positive", 0)
+        out["positive_rate_pct"] = round(100 * pos / s, 2) if s else None
+        return jsonify({"ok": True, **out})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/admin/sales-manager-data")
 def api_sales_manager_data():
     """JSON for the Sales Manager analytics view."""
