@@ -772,8 +772,11 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 
     <!-- ══════════════════════════════════════ MANAGER TAB -->
     <div class="tab-pane" id="tab-manager">
-      <div id="loading-manager" class="loading-pane"><span class="spinner"></span> Building coaching report…</div>
-      <div id="dashboard-manager" style="display:none"></div>
+      <div id="impact-tracker-embed" style="margin-bottom:1.25rem"></div>
+      <details style="margin-bottom:1rem" ontoggle="if(this.open)loadManager()"><summary style="cursor:pointer;color:#9fb0c8;font-size:13px">Full coaching report (slower to load)</summary>
+        <div id="loading-manager" class="loading-pane" style="display:none"><span class="spinner"></span> Building coaching report…</div>
+        <div id="dashboard-manager" style="display:none"></div>
+      </details>
     </div>
 
     <!-- ══════════════════════════════════════ APPOINTMENTS TAB -->
@@ -915,7 +918,7 @@ function switchTab(name){
     if(name==='cc')          loadCommandCenter();
     else if(name==='goals')  loadGoals();
     else if(name==='kpi')    loadAgents();
-    else if(name==='manager')     loadManager();
+    else if(name==='manager')     loadImpactTracker();
     else if(name==='appointments') loadAppointments();
     else if(name==='meeting')     loadMeetingAgents();
     else if(name==='isa'){loadIsaTransfers();loadIsa();}
@@ -1865,6 +1868,64 @@ function buildManager(d){
     h+='</tbody></table></div>';
   }
 
+  return h;
+}
+async function loadImpactTracker(){
+  const el=document.getElementById('impact-tracker-embed'); if(!el) return;
+  el.innerHTML='<div style="color:#9fb0c8;padding:12px 0">Loading Impact Tracker…</div>';
+  try{
+    const r=await fetch('/api/admin/sales-manager-data?key=lht-perp-2026',{signal:AbortSignal.timeout(30000)});
+    const d=await r.json();
+    el.innerHTML=renderImpactTracker(d);
+  }catch(e){ el.innerHTML='<div style="color:#e24b4a;padding:12px 0">Could not load Impact Tracker. <a href="/sales-manager?key=lht-perp-2026" style="color:#7fb2ff">Open full page</a></div>'; }
+}
+function renderImpactTracker(d){
+  const joe=d.joe||{}, tf=(d.team_funnel||{}).agents||[], ru=d.recent_updates||[];
+  const card='background:#1a2236;border:1px solid #243049;border-radius:14px;padding:16px 18px;margin:0 0 14px';
+  const eyebrow='font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#9fb0c8;font-weight:700;margin-bottom:6px';
+  let h='';
+  // Q1
+  const met=joe.met_this_week||0, hit=joe.hitting;
+  const bg=hit?'#16271f':'#2c1a18', col=hit?'#5cbd97':'#e07a71';
+  h+='<div style="'+card+'"><div style="'+eyebrow+'">1 &middot; Is Joe doing his job?</div>'+
+     '<div style="background:'+bg+';border-radius:10px;padding:15px 18px">'+
+     '<div style="font-size:30px;font-weight:800;color:'+col+';line-height:1">'+met+' of 3 to 4</div>'+
+     '<div style="font-size:14px;color:#e8ecf3;margin-top:5px;font-weight:600">'+
+     (joe.submitted?(hit?'Joe hit his number this week.':'You asked for 3 to 4. Joe met '+met+'. He is short.'):'No update from Joe yet this week.')+'</div></div></div>';
+  // Q2
+  const tc=tf.reduce((s,a)=>s+(a.calls||0),0), ta=tf.reduce((s,a)=>s+(a.appts||0),0);
+  const leakers=tf.filter(a=>(a.calls||0)>=40&&(a.appts||0)<=1).length;
+  h+='<div style="'+card+'"><div style="'+eyebrow+'">2 &middot; Where is the money leaking?</div>'+
+     '<div style="font-size:17px;font-weight:700;color:#e8ecf3;margin-bottom:5px">Calls are fine. Appointments are the leak.</div>'+
+     '<div style="font-size:13.5px;color:#aab3ac;margin-bottom:12px">Last full week: <b style="color:#e8ecf3">'+tc+' calls</b>, <b style="color:#e8ecf3">'+ta+' appointments</b>.'+
+     (leakers?' <b style="color:#e07a71">'+leakers+' agents dialed hard and barely booked.</b>':'')+'</div>'+
+     '<table style="width:100%;border-collapse:collapse;font-size:13px;color:#e8ecf3">'+
+     '<tr><td style="padding:5px 4px;color:#79817b;font-size:11px;text-transform:uppercase">Agent</td><td style="padding:5px 4px;text-align:right;color:#79817b;font-size:11px">Calls</td><td style="padding:5px 4px;text-align:right;color:#79817b;font-size:11px">Appts</td><td style="padding:5px 4px;text-align:right;color:#79817b;font-size:11px">Read</td></tr>';
+  tf.forEach(function(a){
+    let t='On track',c='#5cbd97';
+    if(a.leak==='idle'){t='Not working';c='#e07a71';}
+    else if(a.leak==='no_appts'){t='Calling, zero booked';c='#e07a71';}
+    else if(a.leak==='low_appts'){t='Lots of calls, few booked';c='#d9a441';}
+    h+='<tr><td style="padding:7px 4px;border-top:1px solid #243049"><b>'+a.agent+'</b></td>'+
+       '<td style="padding:7px 4px;border-top:1px solid #243049;text-align:right">'+(a.calls||0)+'</td>'+
+       '<td style="padding:7px 4px;border-top:1px solid #243049;text-align:right">'+(a.appts||0)+'</td>'+
+       '<td style="padding:7px 4px;border-top:1px solid #243049;text-align:right;font-weight:700;color:'+c+'">'+t+'</td></tr>';
+  });
+  h+='</table><div style="font-size:11.5px;color:#79817b;margin-top:9px">Under-contract tracking is not reliable yet (Dotloop sync pending), so this is calls and appointments only.</div></div>';
+  // Q3
+  if(ru.length&&(ru[0].agents||[]).length){
+    const u=ru[0];
+    h+='<div style="'+card+'"><div style="'+eyebrow+'">3 &middot; What Joe reported</div>';
+    (u.agents||[]).forEach(function(a){
+      const st=(a.status||'').replace('needs','NEEDS YOU').replace('thriving','Thriving').replace('steady','Steady').replace('struggling','Struggling');
+      const flag=a.status==='needs';
+      h+='<div style="padding:10px 0;border-top:1px solid #243049"><div style="display:flex;justify-content:space-between;gap:8px"><b>'+a.agent+'</b>'+
+         (st?'<span style="font-size:12px;font-weight:700;color:'+(flag?'#e07a71':'#5cbd97')+'">'+st+'</span>':'')+'</div>'+
+         (a.commit?'<div style="font-size:13px;margin-top:4px;color:#e8ecf3"><span style="color:#9fb0c8">Committed to:</span> '+a.commit+'</div>':'')+'</div>';
+    });
+    h+='</div>';
+  }
+  h+='<div style="text-align:right"><a href="/sales-manager?key=lht-perp-2026" style="color:#7fb2ff;font-size:13px">Open full Sales Manager page &rarr;</a></div>';
   return h;
 }
 async function loadManager(){const ld=document.getElementById('loading-manager'),db=document.getElementById('dashboard-manager');ld.style.display='flex';db.style.display='none';try{const r=await fetch('/api/manager',{signal:AbortSignal.timeout(240000)});const txt=await r.text();try{const d=JSON.parse(txt);if(d.error)db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Error</div><div class="alert-body">${d.error}</div></div></div>`;else{managerData=d;db.innerHTML=buildManager(d);}}catch(pe){db.innerHTML=`<div class="alert yellow"><span class="alert-icon">⏱️</span><div><div class="alert-title">Still warming up</div><div class="alert-body">Please wait 30 seconds and retry.<br><button class="btn btn-ghost btn-sm" onclick="loadManager()" style="margin-top:.5rem">↻ Retry</button></div></div></div>`;}}catch(e){db.innerHTML=`<div class="alert red"><span class="alert-icon">⏱️</span><div><div class="alert-title">Timeout</div><div class="alert-body"><button class="btn btn-ghost btn-sm" onclick="loadManager()">↻ Retry</button></div></div></div>`;}ld.style.display='none';db.style.display='block';}
