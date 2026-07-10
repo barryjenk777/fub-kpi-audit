@@ -13167,7 +13167,8 @@ def _sales_manager_analytics(weeks=8):
         for a in w.get("agents", []):
             c = a.get("outbound_calls", 0)
             g, _ = _weekly_grade(c, a.get("conversations", 0), a.get("appts_set", 0))
-            snap.setdefault(a["name"], {})[wk] = {"calls": c, "grade": g}
+            snap.setdefault(a["name"], {})[wk] = {"calls": c, "grade": g,
+                "convos": a.get("conversations", 0), "appts": a.get("appts_set", 0)}
     snap_weeks = sorted(snap_weeks)[-weeks:]
 
     updates = _db.get_manager_updates(limit=weeks + 4)
@@ -13266,10 +13267,36 @@ def _sales_manager_analytics(weeks=8):
             } for e in met_entries],
         })
 
+    # --- Owner view: is Joe doing his job? ---
+    latest_met = subs[0]["agents_met"] if subs else 0
+    joe = {"met_this_week": latest_met, "target_min": 3, "target_max": 4,
+           "hitting": latest_met >= 3, "submitted": bool(subs),
+           "last_submitted": subs[0]["submitted_at"] if subs else None,
+           "history": [{"when": s["submitted_at"], "met": s["agents_met"]} for s in subs[:6]]}
+
+    # --- Owner view: where is the business leaking? (calls -> appointments) ---
+    latest_wk = snap_weeks[-1] if snap_weeks else None
+    team_funnel = []
+    for ag in agents:
+        cell = (snap.get(ag, {}) or {}).get(latest_wk, {}) if latest_wk else {}
+        calls = cell.get("calls", 0); appts = cell.get("appts", 0)
+        if calls < 10:
+            leak = "idle"
+        elif appts == 0:
+            leak = "no_appts"
+        elif calls >= 40 and appts <= 1:
+            leak = "low_appts"
+        else:
+            leak = "ok"
+        team_funnel.append({"agent": ag, "calls": calls, "appts": appts, "leak": leak})
+    team_funnel.sort(key=lambda x: (x["appts"], -x["calls"]))
+
     return {
+        "joe": joe,
+        "team_funnel": {"week": latest_wk, "agents": team_funnel},
+        "recent_updates": recent_updates,
         "accountability": {"submissions": subs, "on_time_rate": on_time_rate,
                            "avg_agents_per_week": avg_agents, "total_submissions": len(subs)},
-        "recent_updates": recent_updates,
         "coverage": {"agents": agents, "weeks": snap_weeks, "matrix": matrix,
                      "meet_counts": meet_counts, "gaps": gaps},
         "impact": {"team_avg_lift": team_lift, "baseline_lift": baseline_lift,
@@ -13387,85 +13414,73 @@ fetch('/api/admin/sales-manager-data?key='+encodeURIComponent(KEY)).then(functio
 }});
 function gradeCell(g){{ return g? ('<span class="gr gr-'+g+'">'+g+'</span>') : '<span class="unmet">-</span>'; }}
 function render(d){{
-  document.getElementById('sub').textContent = d.data_status || '';
+  document.getElementById('sub').textContent = 'The three things you actually care about';
   const w=document.getElementById('wrap');
-  const imp=d.impact||{{}}, cov=d.coverage||{{}}, acc=d.accountability||{{}};
+  const joe=d.joe||{{}}, tf=(d.team_funnel||{{}}).agents||[], ru=d.recent_updates||[];
   let html='';
-  // LATEST UPDATES (the actual content Joe submitted)
-  const ru=d.recent_updates||[];
-  if(ru.length){{
+
+  // Q1: IS JOE DOING HIS JOB?
+  const met=joe.met_this_week||0, hit=joe.hitting;
+  const col=hit?'#1c6b52':'#a3352e', bg=hit?'var(--good-bg,#e4efe9)':'var(--bad-bg,#f6e2df)';
+  html+='<div class="card"><div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9fb0c8;font-weight:700;margin-bottom:8px">1 &middot; Is Joe doing his job?</div>';
+  html+='<div style="background:'+bg+';border-radius:12px;padding:18px 20px">'+
+        '<div style="font-size:34px;font-weight:800;color:'+col+';line-height:1">'+met+' of 3 to 4</div>'+
+        '<div style="font-size:15px;color:var(--ink);margin-top:6px;font-weight:600">'+
+        (joe.submitted? (hit? 'Joe hit his number of 1:1s this week.' : 'Joe met '+met+' agent'+(met===1?'':'s')+' this week. You asked for 3 to 4. He is short.') : 'No update from Joe yet this week.')+'</div></div>';
+  if((joe.history||[]).length>1){{
+    html+='<div style="margin-top:12px;font-size:13px;color:#9fb0c8">Recent weeks: '+joe.history.map(function(h){{return (h.met||0)+' met'}}).join(' &middot; ')+'</div>';
+  }}
+  html+='</div>';
+
+  // Q2: WHERE IS THE MONEY LEAKING? (calls -> appointments)
+  html+='<div class="card"><div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9fb0c8;font-weight:700;margin-bottom:4px">2 &middot; Where is the money leaking?</div>';
+  html+='<h2 style="margin:0 0 4px">Calls are fine. Appointments are the leak.</h2>';
+  const dialingNoBook = tf.filter(function(a){{return a.calls>=40 && a.appts<=1}}).length;
+  const totalC=tf.reduce(function(s,a){{return s+a.calls}},0), totalA=tf.reduce(function(s,a){{return s+a.appts}},0);
+  html+='<div class="lead">Last full week: the team made <b style="color:var(--ink)">'+totalC+' calls</b> and set <b style="color:var(--ink)">'+totalA+' appointments</b>. '+
+        (dialingNoBook? ('<b style="color:#a3352e">'+dialingNoBook+' agents dialed hard and barely booked.</b> That is your money leak.') : '')+'</div>';
+  html+='<div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>Calls</th><th>Appts set</th><th>Read</th></tr></thead><tbody>';
+  tf.forEach(function(a){{
+    let tag='On track', tc='#1c6b52';
+    if(a.leak==='idle'){{tag='Not working';tc='#a3352e'}}
+    else if(a.leak==='no_appts'){{tag='Calling, zero booked';tc='#a3352e'}}
+    else if(a.leak==='low_appts'){{tag='Lots of calls, few booked';tc='#9a6412'}}
+    html+='<tr><td class="name">'+a.agent+'</td><td>'+a.calls+'</td><td>'+a.appts+'</td>'+
+      '<td style="text-align:right;font-weight:700;color:'+tc+'">'+tag+'</td></tr>';
+  }});
+  html+='</tbody></table></div>';
+  html+='<div class="note">Under-contract tracking is not reliable yet (the Dotloop sync is still filling in), so this shows calls and appointments only, which are exact. The fix for the leak is coaching the appointment ask, which is exactly what Joe should be doing in his 1:1s.</div>';
+  html+='</div>';
+
+  // WHAT JOE REPORTED
+  if(ru.length && (ru[0].agents||[]).length){{
     const u=ru[0];
     const when=u.submitted_at? new Date(u.submitted_at).toLocaleDateString(undefined,{{weekday:'short',month:'short',day:'numeric'}}):'';
-    html+='<div class="card"><h2>Latest 1:1 updates</h2><div class="lead">What Joe reported '+when+' &middot; '+(u.agents||[]).length+' met</div>';
-    if((u.agents||[]).length){{
-      (u.agents||[]).forEach(function(a){{
-        const st=(a.status||'').replace('needs','NEEDS YOU').replace('thriving','Thriving').replace('steady','Steady').replace('struggling','Struggling');
-        const flag = a.status==='needs';
-        html+='<div style="padding:12px 0;border-top:1px solid var(--line)">'+
-          '<div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:15px">'+a.agent+'</b>'+
-          (st? '<span style="font-size:12px;font-weight:700;color:'+(flag?'#e24b4a':'var(--accent,#378add)')+'">'+st+'</span>':'')+'</div>'+
-          ((a.topics||[]).length? '<div style="font-size:12px;color:#9fb0c8;margin-top:3px">'+a.topics.join(' &middot; ')+'</div>':'')+
-          (a.commit? '<div style="font-size:13.5px;margin-top:5px"><span style="color:#9fb0c8">Committed to:</span> '+a.commit+'</div>':'')+
-          (a.note? '<div style="font-size:13px;margin-top:4px;color:#cbd5e6">'+a.note+'</div>':'')+
-          '</div>';
-      }});
-    }} else {{ html+='<div class="empty">No agents marked as met in the latest submission.</div>'; }}
+    html+='<div class="card"><div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9fb0c8;font-weight:700;margin-bottom:4px">3 &middot; What Joe reported</div>';
+    html+='<h2 style="margin:0 0 12px">His 1:1 notes '+when+'</h2>';
+    (u.agents||[]).forEach(function(a){{
+      const st=(a.status||'').replace('needs','NEEDS YOU').replace('thriving','Thriving').replace('steady','Steady').replace('struggling','Struggling');
+      const flag=a.status==='needs';
+      html+='<div style="padding:12px 0;border-top:1px solid var(--line)">'+
+        '<div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:15px">'+a.agent+'</b>'+
+        (st?'<span style="font-size:12px;font-weight:700;color:'+(flag?'#a3352e':'#1c6b52')+'">'+st+'</span>':'')+'</div>'+
+        (a.commit?'<div style="font-size:13.5px;margin-top:5px"><span style="color:#9fb0c8">Committed to:</span> '+a.commit+'</div>':'')+
+        (a.note?'<div style="font-size:13px;margin-top:4px;color:var(--ink-soft)">'+a.note+'</div>':'')+
+        '</div>';
+    }});
     html+='</div>';
   }}
-  // IMPACT
-  const lift=imp.team_avg_lift, base=imp.baseline_lift;
-  html+='<div class="card"><h2>Coaching impact</h2><div class="lead">Change in an agent\u2019s weekly calls the week AFTER a 1:1 with Joe, vs weeks with no meeting.</div>';
-  if(imp.sample_size){{
-    const cls=lift>0?'pos':(lift<0?'neg':'neutral');
-    html+='<div class="big"><div class="metric"><div class="n '+cls+'">'+(lift>0?'+':'')+lift+'</div><div class="l">avg calls after a 1:1</div></div>'+
-      '<div class="metric"><div class="n neutral">'+(base==null?'-':((base>0?'+':'')+base))+'</div><div class="l">baseline (no meeting)</div></div>'+
-      '<div class="metric"><div class="n neutral">'+imp.sample_size+'</div><div class="l">1:1s measured</div></div></div>';
-    const pa=imp.per_agent||{{}};
-    const names=Object.keys(pa);
-    if(names.length){{
-      const max=Math.max.apply(null,names.map(function(n){{return Math.abs(pa[n].avg_lift)}}).concat([1]));
-      html+='<div style="margin-top:14px">';
-      names.sort(function(a,b){{return pa[b].avg_lift-pa[a].avg_lift}}).forEach(function(n){{
-        const v=pa[n].avg_lift, wd=Math.round(Math.abs(v)/max*100);
-        html+='<div class="barrow"><div class="nm">'+n+'</div><div class="track"><div class="fill" style="width:'+wd+'%;background:'+(v>=0?'#3ddc97':'#e24b4a')+'"></div></div><div style="width:60px;text-align:right" class="'+(v>=0?'pos':'neg')+'">'+(v>0?'+':'')+v+'</div></div>';
-      }});
-      html+='</div>';
-    }}
-  }} else {{ html+='<div class="empty">No 1:1 data yet. This fills in once Joe has submitted across two weeks.</div>'; }}
+
+  // IS JOE MAKING AN IMPACT? (honest)
+  html+='<div class="card"><div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9fb0c8;font-weight:700;margin-bottom:4px">Is Joe making an impact yet?</div>';
+  const avgMet=(d.accountability||{{}}).avg_agents_per_week;
+  if(avgMet && avgMet>=3){{
+    html+='<p class="lead">Joe is meeting enough agents to matter. Watch the leak table above over the next few weeks: if the agents he coaches start booking more appointments, that is his impact showing up.</p>';
+  }} else {{
+    html+='<p class="lead" style="max-width:66ch">Not yet, and here is the honest reason: Joe is averaging about '+(avgMet||1)+' agent a week, not the 3 to 4 you asked for. There is not enough coaching happening to move the team. The single highest-value thing you can do is get Joe consistently meeting 3 to 4, focused on the appointment ask. Then this page will show whether it works.</p>';
+  }}
   html+='</div>';
-  // COVERAGE
-  html+='<div class="card"><h2>Coverage</h2><div class="lead">Who Joe met each week (check), with each agent\u2019s grade. Red = struggling and NOT met (coaching gap).</div>';
-  const agents=cov.agents||[], weeks=cov.weeks||[];
-  if(weeks.length){{
-    html+='<div style="overflow-x:auto"><table><thead><tr><th>Agent</th><th>Met</th>';
-    weeks.forEach(function(wk){{html+='<th>'+wk.slice(5)+'</th>'}});
-    html+='</tr></thead><tbody>';
-    agents.forEach(function(ag){{
-      html+='<tr><td class="name">'+ag+'</td><td>'+((cov.meet_counts||{{}})[ag]||0)+'</td>';
-      weeks.forEach(function(wk){{
-        const c=((cov.matrix||{{}})[ag]||{{}})[wk]||{{}};
-        const isGap = (c.grade==='D'||c.grade==='F') && !c.met;
-        html+='<td class="'+(isGap?'gap':'')+'"><div class="cell">'+gradeCell(c.grade)+'<span class="'+(c.met?'met':'unmet')+'">'+(c.met?'\u2713':'\u00b7')+'</span></div></td>';
-      }});
-      html+='</tr>';
-    }});
-    html+='</tbody></table></div>';
-    const gaps=cov.gaps||[];
-    if(gaps.length){{ html+='<div class="note">Coaching gaps (struggling, not met): '+gaps.map(function(g){{return g.agent+' ('+g.grade+', wk '+g.week.slice(5)+')'}}).join(' \u00b7 ')+'</div>'; }}
-  }} else {{ html+='<div class="empty">No weekly data yet.</div>'; }}
-  html+='</div>';
-  // ACCOUNTABILITY
-  html+='<div class="card"><h2>Accountability</h2><div class="lead">Is Joe submitting, on time (by Thursday), and hitting 3-4 agents.</div>';
-  html+='<div class="big"><div class="metric"><div class="n neutral">'+(acc.on_time_rate==null?'-':acc.on_time_rate+'%')+'</div><div class="l">on-time rate</div></div>'+
-    '<div class="metric"><div class="n neutral">'+(acc.avg_agents_per_week==null?'-':acc.avg_agents_per_week)+'</div><div class="l">avg agents / week</div></div>'+
-    '<div class="metric"><div class="n neutral">'+(acc.total_submissions||0)+'</div><div class="l">total submissions</div></div></div>';
-  const subs=acc.submissions||[];
-  if(subs.length){{
-    html+='<table style="margin-top:12px"><thead><tr><th>Submitted</th><th>Agents met</th><th>On time</th></tr></thead><tbody>';
-    subs.forEach(function(s){{html+='<tr><td>'+(s.submitted_at? s.submitted_at.slice(0,10):'-')+'</td><td>'+s.agents_met+'</td><td>'+(s.on_time?'\u2713':'late')+'</td></tr>'}});
-    html+='</tbody></table>';
-  }} else {{ html+='<div class="empty">No submissions yet. First Impact Tracker goes out Thursday.</div>'; }}
-  html+='</div>';
+
   w.innerHTML=html;
 }}
 </script></body></html>"""
