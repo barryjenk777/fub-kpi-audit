@@ -1950,8 +1950,10 @@ def build_impact_tracker_email(date_label, entries, stats, analytics, insight):
 </div></body></html>"""
 
 
-def send_impact_tracker_brief(date_label, entries, stats, analytics):
-    """Build + send the Impact Tracker brief to Barry. Generates the AI insight."""
+def send_impact_tracker_brief(date_label, entries, stats, analytics, dry_run=False):
+    """Build + send the Impact Tracker brief to Barry. Generates the AI insight.
+    dry_run=True builds the full email (exercising render) but does not send,
+    so the whole pipeline can be self-tested without emailing anyone."""
     try:
         import coach_voice
         insight = coach_voice.generate_manager_brief({
@@ -1966,11 +1968,9 @@ def send_impact_tracker_brief(date_label, entries, stats, analytics):
     met = sum(1 for e in entries if e.get("met") == "yes")
     flagged = sum(1 for e in entries if e.get("met") == "yes" and e.get("status") == "needs")
     subject = f"Impact Tracker: Joe met {met}" + (f", {flagged} need you" if flagged else "")
-    try:
-        _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
-                 subject=subject, html=html)
-        print(f"[IMPACT TRACKER] Brief emailed to Barry ({met} met)")
-        return True
-    except Exception as e:
-        print(f"[IMPACT TRACKER] Brief email failed: {e}")
-        return False
+    if dry_run:
+        return True   # built successfully; caller is self-testing
+    _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+             subject=subject, html=html)
+    print(f"[IMPACT TRACKER] Brief emailed to Barry ({met} met)")
+    return True

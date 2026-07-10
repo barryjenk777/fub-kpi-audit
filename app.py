@@ -12919,44 +12919,22 @@ def api_manager_update_submit():
     start = today - _td(days=7)   # previous Thursday
     row_id = _db.save_manager_update(start, today, entries)
 
-    # Fire the brief email to Barry instantly, in the background so Joe's
-    # submit returns immediately.
-    date_label = f"{start.strftime('%b %-d')} to {today.strftime('%b %-d')}"
-    def _brief():
-        try:
-            stats = {}
-            _hist = _db.get_weekly_kpi_history(weeks=1) or []
-            if _hist:
-                for a in _hist[0].get("agents", []):
-                    g, _ = _weekly_grade(a.get("outbound_calls", 0),
-                                         a.get("conversations", 0), a.get("appts_set", 0))
-                    stats[a["name"]] = {"calls": a.get("outbound_calls", 0),
-                                        "convos": a.get("conversations", 0),
-                                        "appts": a.get("appts_set", 0),
-                                        "grade": g, "earned": bool(a.get("kpi_pass"))}
-            analytics = _sales_manager_analytics(weeks=8)
-            from email_report import send_impact_tracker_brief
-            send_impact_tracker_brief(date_label, entries, stats, analytics)
-        except Exception as _be:
-            logger.warning("Impact Tracker brief failed: %s", _be)
+    # Fire the brief email in the background so Joe's submit returns instantly.
     import threading as _th
-    _t = _th.Thread(target=_brief, daemon=True, name="impact_brief")
-    _t.start()
+    _th.Thread(target=_fire_impact_brief, args=(entries, start, today),
+               daemon=True, name="impact_brief").start()
 
     return jsonify({"ok": True, "id": row_id, "count": len(entries)})
 
 
-@app.route("/api/admin/impact-tracker/resend-brief", methods=["POST"])
-def api_impact_tracker_resend_brief():
-    """Re-send the brief email for the most recent saved submission (used to
-    recover a brief that failed to send)."""
-    if not _perplexity_auth():
-        return jsonify({"error": "Unauthorized"}), 401
-    latest = _db.get_latest_manager_update()
-    if not latest:
-        return jsonify({"ok": False, "error": "no submissions on record"}), 404
-    entries = latest.get("entries", []) or []
-    date_label = f"{str(latest.get('week_start'))[:10]} to {str(latest.get('week_end'))[:10]}"
+def _fire_impact_brief(entries, start, today, dry_run=False):
+    """Build and send the Impact Tracker brief. Self-contained and fail-safe:
+    if the rich brief fails at ANY step, falls back to a minimal plain-text
+    notification so Barry is never left uninformed. Returns True if an email
+    went out (or, in dry_run, if the pipeline built cleanly)."""
+    from datetime import date as _d2
+    date_label = f"{start.strftime('%b %-d')} to {today.strftime('%b %-d')}"
+    # --- Rich brief path ---
     try:
         stats = {}
         _hist = _db.get_weekly_kpi_history(weeks=1) or []
@@ -12970,12 +12948,75 @@ def api_impact_tracker_resend_brief():
                                     "grade": g, "earned": bool(a.get("kpi_pass"))}
         analytics = _sales_manager_analytics(weeks=8)
         from email_report import send_impact_tracker_brief
-        send_impact_tracker_brief(date_label, entries, stats, analytics)
-        return jsonify({"ok": True, "resent_for": latest.get("submitted_at"),
-                        "entries": len(entries)})
+        send_impact_tracker_brief(date_label, entries, stats, analytics, dry_run=dry_run)
+        return True
+    except Exception as _be:
+        logger.error("[IMPACT BRIEF] Rich brief failed, sending fallback: %s", _be)
+        if dry_run:
+            raise   # self-test wants to see the real error, not a swallowed one
+    # --- Fallback: minimal plain-text notice so Barry always gets something ---
+    try:
+        met = [e for e in (entries or []) if e.get("met") == "yes"]
+        lines = [f"Joe submitted his Impact Tracker ({date_label}).",
+                 f"{len(met)} agent(s) met this week.", ""]
+        for e in met:
+            st = (e.get("status") or "").replace("needs", "NEEDS YOU")
+            lines.append(f"- {e.get('agent')}: {st}. Commit: {e.get('commit') or '(none)'}")
+        lines += ["", "The full brief could not render this time. Full detail is on the Sales Manager page."]
+        body = "\n".join(lines)
+        import postmark_client as _pm2
+        _pm2.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+                  subject=f"Impact Tracker: Joe submitted ({len(met)} met)",
+                  html=body.replace("\n", "<br>"), text=body)
+        logger.info("[IMPACT BRIEF] Fallback notice sent to Barry")
+        return True
+    except Exception as _fb:
+        logger.error("[IMPACT BRIEF] FALLBACK ALSO FAILED: %s", _fb)
+        try:
+            _alert_on_job_failure("impact_brief", str(_fb))
+        except Exception:
+            pass
+        return False
+
+
+@app.route("/api/admin/impact-tracker/resend-brief", methods=["POST"])
+def api_impact_tracker_resend_brief():
+    """Re-send the brief email for the most recent saved submission (used to
+    recover a brief that failed to send)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    latest = _db.get_latest_manager_update()
+    if not latest:
+        return jsonify({"ok": False, "error": "no submissions on record"}), 404
+    from datetime import date as _d3
+    entries = latest.get("entries", []) or []
+    try:
+        start = _d3.fromisoformat(str(latest.get("week_start"))[:10])
+        end   = _d3.fromisoformat(str(latest.get("week_end"))[:10])
+    except Exception:
+        end = _d3.today(); start = end - timedelta(days=7)
+    ok = _fire_impact_brief(entries, start, end)
+    return jsonify({"ok": ok, "resent_for": latest.get("submitted_at"),
+                    "entries": len(entries)})
+
+
+@app.route("/api/admin/impact-tracker/selftest")
+def api_impact_tracker_selftest():
+    """Exercise the entire submit-to-brief pipeline with a dummy entry WITHOUT
+    sending or saving anything. Catches render/reference regressions before a
+    real submission does. Returns ok:true if the brief builds cleanly."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    from datetime import date as _d4
+    dummy = [{"agent": "Test Agent", "met": "yes", "day": _d4.today().isoformat(),
+              "status": "needs", "topics": ["Pipeline"], "commit": "self-test", "note": ""}]
+    today = _d4.today(); start = today - timedelta(days=7)
+    try:
+        _fire_impact_brief(dummy, start, today, dry_run=True)
+        return jsonify({"ok": True, "message": "brief pipeline builds cleanly, no email sent"})
     except Exception as e:
         import traceback
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"ok": False, "error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 def _manager_update_link():
