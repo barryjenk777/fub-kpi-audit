@@ -12921,7 +12921,7 @@ def api_manager_update_submit():
 
     # Fire the brief email to Barry instantly, in the background so Joe's
     # submit returns immediately.
-    date_label = f"{last_mon.strftime('%b %-d')} to {last_sat.strftime('%b %-d')}"
+    date_label = f"{start.strftime('%b %-d')} to {today.strftime('%b %-d')}"
     def _brief():
         try:
             stats = {}
@@ -12944,6 +12944,38 @@ def api_manager_update_submit():
     _t.start()
 
     return jsonify({"ok": True, "id": row_id, "count": len(entries)})
+
+
+@app.route("/api/admin/impact-tracker/resend-brief", methods=["POST"])
+def api_impact_tracker_resend_brief():
+    """Re-send the brief email for the most recent saved submission (used to
+    recover a brief that failed to send)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    latest = _db.get_latest_manager_update()
+    if not latest:
+        return jsonify({"ok": False, "error": "no submissions on record"}), 404
+    entries = latest.get("entries", []) or []
+    date_label = f"{str(latest.get('week_start'))[:10]} to {str(latest.get('week_end'))[:10]}"
+    try:
+        stats = {}
+        _hist = _db.get_weekly_kpi_history(weeks=1) or []
+        if _hist:
+            for a in _hist[0].get("agents", []):
+                g, _ = _weekly_grade(a.get("outbound_calls", 0),
+                                     a.get("conversations", 0), a.get("appts_set", 0))
+                stats[a["name"]] = {"calls": a.get("outbound_calls", 0),
+                                    "convos": a.get("conversations", 0),
+                                    "appts": a.get("appts_set", 0),
+                                    "grade": g, "earned": bool(a.get("kpi_pass"))}
+        analytics = _sales_manager_analytics(weeks=8)
+        from email_report import send_impact_tracker_brief
+        send_impact_tracker_brief(date_label, entries, stats, analytics)
+        return jsonify({"ok": True, "resent_for": latest.get("submitted_at"),
+                        "entries": len(entries)})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 def _manager_update_link():
