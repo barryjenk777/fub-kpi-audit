@@ -13251,9 +13251,25 @@ def _sales_manager_analytics(weeks=8):
     team_lift = round(sum(lifts) / len(lifts), 1) if lifts else None
     baseline_lift = round(sum(base) / len(base), 1) if base else None
 
+    # Recent submissions with their actual content (who Joe met, status,
+    # commitments) so the Sales Manager page shows the update, not just counts.
+    recent_updates = []
+    for u in updates[:3]:
+        met_entries = [e for e in (u.get("entries") or []) if e.get("met") == "yes"]
+        recent_updates.append({
+            "submitted_at": u.get("submitted_at"),
+            "week_start": u.get("week_start"), "week_end": u.get("week_end"),
+            "agents": [{
+                "agent": e.get("agent"), "status": e.get("status"),
+                "day": e.get("day"), "topics": e.get("topics") or [],
+                "commit": e.get("commit") or "", "note": e.get("note") or "",
+            } for e in met_entries],
+        })
+
     return {
         "accountability": {"submissions": subs, "on_time_rate": on_time_rate,
                            "avg_agents_per_week": avg_agents, "total_submissions": len(subs)},
+        "recent_updates": recent_updates,
         "coverage": {"agents": agents, "weeks": snap_weeks, "matrix": matrix,
                      "meet_counts": meet_counts, "gaps": gaps},
         "impact": {"team_avg_lift": team_lift, "baseline_lift": baseline_lift,
@@ -13375,6 +13391,27 @@ function render(d){{
   const w=document.getElementById('wrap');
   const imp=d.impact||{{}}, cov=d.coverage||{{}}, acc=d.accountability||{{}};
   let html='';
+  // LATEST UPDATES (the actual content Joe submitted)
+  const ru=d.recent_updates||[];
+  if(ru.length){{
+    const u=ru[0];
+    const when=u.submitted_at? new Date(u.submitted_at).toLocaleDateString(undefined,{{weekday:'short',month:'short',day:'numeric'}}):'';
+    html+='<div class="card"><h2>Latest 1:1 updates</h2><div class="lead">What Joe reported '+when+' &middot; '+(u.agents||[]).length+' met</div>';
+    if((u.agents||[]).length){{
+      (u.agents||[]).forEach(function(a){{
+        const st=(a.status||'').replace('needs','NEEDS YOU').replace('thriving','Thriving').replace('steady','Steady').replace('struggling','Struggling');
+        const flag = a.status==='needs';
+        html+='<div style="padding:12px 0;border-top:1px solid var(--line)">'+
+          '<div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:15px">'+a.agent+'</b>'+
+          (st? '<span style="font-size:12px;font-weight:700;color:'+(flag?'#e24b4a':'var(--accent,#378add)')+'">'+st+'</span>':'')+'</div>'+
+          ((a.topics||[]).length? '<div style="font-size:12px;color:#9fb0c8;margin-top:3px">'+a.topics.join(' &middot; ')+'</div>':'')+
+          (a.commit? '<div style="font-size:13.5px;margin-top:5px"><span style="color:#9fb0c8">Committed to:</span> '+a.commit+'</div>':'')+
+          (a.note? '<div style="font-size:13px;margin-top:4px;color:#cbd5e6">'+a.note+'</div>':'')+
+          '</div>';
+      }});
+    }} else {{ html+='<div class="empty">No agents marked as met in the latest submission.</div>'; }}
+    html+='</div>';
+  }}
   // IMPACT
   const lift=imp.team_avg_lift, base=imp.baseline_lift;
   html+='<div class="card"><h2>Coaching impact</h2><div class="lead">Change in an agent\u2019s weekly calls the week AFTER a 1:1 with Joe, vs weeks with no meeting.</div>';
