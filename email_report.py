@@ -1822,103 +1822,75 @@ _GRADE_COLOR = {"A": "#1d9e75", "B": "#1d9e75", "C": "#854f0b",
 
 
 def build_impact_tracker_email(date_label, entries, stats, analytics, insight):
-    """Rich HTML brief for Barry. entries = submission list; stats = per-agent
-    {grade, earned, calls...}; analytics = _sales_manager_analytics output;
-    insight = Claude brief text (or None)."""
+    """Owner-first HTML brief for Barry, built around three questions:
+    is Joe doing his job, where is the business leaking, what did Joe report."""
     stats = stats or {}
+    analytics = analytics or {}
     met = [e for e in entries if e.get("met") == "yes"]
-    not_met = [e for e in entries if e.get("met") == "no"]
-    flagged = [e for e in met if e.get("status") == "needs"]
+    joe = analytics.get("joe", {}) or {}
+    tf = (analytics.get("team_funnel", {}) or {}).get("agents", []) or []
 
-    def _chip(txt, color):
-        return (f'<span style="display:inline-block;background:{color};color:#fff;'
-                f'border-radius:5px;padding:1px 7px;font-size:12px;font-weight:700">{txt}</span>')
+    # --- Q1: is Joe doing his job? ---
+    n_met = joe.get("met_this_week", len(met))
+    hitting = joe.get("hitting", n_met >= 3)
+    j_col = "#0f6e56" if hitting else "#a32d2d"
+    j_bg = "#e1f5ee" if hitting else "#fcebeb"
+    j_line = ("Joe hit his number of 1:1s this week." if hitting
+              else f"You asked for 3 to 4. Joe met {n_met}. He is short.")
+    q1 = (f'<div style="background:{j_bg};border-radius:10px;padding:16px 20px;margin:0 0 22px">'
+          f'<div style="font-size:12px;font-weight:700;color:#5f5e5a;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">1. Is Joe doing his job?</div>'
+          f'<div style="font-size:28px;font-weight:800;color:{j_col};line-height:1">{n_met} of 3 to 4</div>'
+          f'<div style="font-size:14px;color:#2d3748;margin-top:5px;font-weight:600">{j_line}</div></div>')
 
-    # AI insight box
-    insight_html = ""
-    if insight:
-        body = insight
-        for lbl in ("THIS WEEK:", "PATTERN:", "HOW TO HELP:"):
-            body = body.replace(lbl, f"</p><p style='margin:10px 0 0'><strong>{lbl}</strong>")
-        body = body.replace("\n", " ").strip()
-        if body.startswith("</p>"):
-            body = body[4:]
-        insight_html = (
-            '<div style="background:#f0f4fb;border-left:4px solid #185fa5;border-radius:0 8px 8px 0;'
-            'padding:14px 18px;margin:0 0 22px">'
-            '<div style="font-size:12px;font-weight:700;color:#185fa5;text-transform:uppercase;'
-            'letter-spacing:.05em;margin-bottom:4px">What I am seeing &amp; how to help</div>'
-            f'<p style="margin:0;font-size:14px;line-height:1.6;color:#2d3748">{body}</p></div>')
-
-    # Needs-you
-    needs_html = ""
-    if flagged:
-        rows = "".join(
-            f'<li style="margin:4px 0;font-size:14px;color:#2d3748"><strong>{e["agent"]}</strong>'
-            + (f' &middot; {e.get("commit")}' if e.get("commit") else "") + '</li>'
-            for e in flagged)
-        needs_html = (
-            '<div style="background:#fcebeb;border-radius:8px;padding:12px 18px;margin:0 0 22px">'
-            '<div style="font-size:13px;font-weight:700;color:#a32d2d;margin-bottom:4px">Needs your attention</div>'
-            f'<ul style="margin:0;padding-left:18px">{rows}</ul></div>')
-
-    # Meetings table
+    # --- Q2: where is the business leaking? ---
+    total_c = sum(a.get("calls", 0) for a in tf)
+    total_a = sum(a.get("appts", 0) for a in tf)
+    leakers = [a for a in tf if a.get("calls", 0) >= 40 and a.get("appts", 0) <= 1]
+    def _read(a):
+        lk = a.get("leak")
+        if lk == "idle":     return ("Not working", "#a32d2d")
+        if lk == "no_appts": return ("Calling, zero booked", "#a32d2d")
+        if lk == "low_appts":return ("Lots of calls, few booked", "#854f0b")
+        return ("On track", "#0f6e56")
     rows = ""
+    for a in tf:
+        txt, c = _read(a)
+        rows += (f'<tr><td style="padding:8px 6px;border-bottom:1px solid #edf0f4"><strong>{a.get("agent","")}</strong></td>'
+                 f'<td style="padding:8px 6px;border-bottom:1px solid #edf0f4;text-align:right">{a.get("calls",0)}</td>'
+                 f'<td style="padding:8px 6px;border-bottom:1px solid #edf0f4;text-align:right">{a.get("appts",0)}</td>'
+                 f'<td style="padding:8px 6px;border-bottom:1px solid #edf0f4;text-align:right;font-weight:700;color:{c}">{txt}</td></tr>')
+    leak_line = (f'<strong style="color:#a32d2d">{len(leakers)} agents dialed hard and barely booked.</strong> That is the leak.'
+                 if leakers else "")
+    q2 = (f'<div style="margin:0 0 22px">'
+          f'<div style="font-size:12px;font-weight:700;color:#5f5e5a;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">2. Where is the money leaking?</div>'
+          f'<div style="font-size:17px;font-weight:700;color:#1a1a2e;margin-bottom:6px">Calls are fine. Appointments are the leak.</div>'
+          f'<p style="font-size:14px;color:#2d3748;margin:0 0 12px">Last full week the team made <strong>{total_c} calls</strong> and set <strong>{total_a} appointments</strong>. {leak_line}</p>'
+          f'<table style="width:100%;border-collapse:collapse;font-size:13px;color:#2d3748">'
+          f'<tr><td style="padding:5px 6px;font-size:11px;color:#a0aec0;text-transform:uppercase;letter-spacing:.05em">Agent</td>'
+          f'<td style="padding:5px 6px;font-size:11px;color:#a0aec0;text-align:right;text-transform:uppercase">Calls</td>'
+          f'<td style="padding:5px 6px;font-size:11px;color:#a0aec0;text-align:right;text-transform:uppercase">Appts</td>'
+          f'<td style="padding:5px 6px;font-size:11px;color:#a0aec0;text-align:right;text-transform:uppercase">Read</td></tr>'
+          f'{rows}</table>'
+          f'<p style="font-size:12px;color:#718096;margin:10px 0 0">Under-contract tracking is not reliable yet (Dotloop sync pending), so this is calls and appointments only, which are exact.</p></div>')
+
+    # --- Q3: what Joe reported ---
+    def _chip(txt, color):
+        return (f'<span style="display:inline-block;background:{color};color:#fff;border-radius:5px;'
+                f'padding:1px 7px;font-size:12px;font-weight:700">{txt}</span>')
+    mrows = ""
     for e in met:
         ag = e.get("agent", "")
-        st = stats.get(ag, {})
-        grade = st.get("grade")
-        gchip = _chip(grade, _GRADE_COLOR.get(grade, "#5f5e5a")) if grade else "&ndash;"
-        xfer = (_chip("Transfers", "#1d9e75") if st.get("earned")
-                else _chip("No transfers", "#5f5e5a"))
         status = e.get("status")
         schip = _chip(_STATUS_LABEL.get(status, ""), _STATUS_COLOR.get(status, "#5f5e5a")) if status else ""
         commit = e.get("commit") or "<span style='color:#a0aec0'>no commitment logged</span>"
-        topics = ", ".join(e.get("topics", []) or [])
-        note = e.get("note") or ""
-        extra = ""
-        if topics:
-            extra += f'<div style="font-size:12px;color:#718096;margin-top:3px">Covered: {topics}</div>'
-        if note:
-            extra += f'<div style="font-size:12px;color:#718096;margin-top:3px">Note: {note}</div>'
-        rows += (
-            f'<tr><td style="padding:10px 8px;border-bottom:1px solid #edf0f4;vertical-align:top">'
-            f'<strong style="font-size:14px">{ag}</strong> {gchip} {xfer}<br>{schip}'
-            f'<div style="font-size:13px;color:#2d3748;margin-top:5px"><strong>Commit:</strong> {commit}</div>'
-            f'{extra}</td></tr>')
-    meetings_html = (
-        f'<table style="width:100%;border-collapse:collapse">{rows}</table>'
-        if rows else '<p style="color:#a0aec0;font-size:14px">No meetings logged this week.</p>')
-
-    # Coaching gaps (struggling, not met)
-    gaps = (analytics or {}).get("coverage", {}).get("gaps", [])
-    recent_gaps = {}
-    for g in gaps:
-        recent_gaps[g["agent"]] = g["grade"]  # latest grade per struggling agent
-    gap_html = ""
-    if recent_gaps:
-        items = ", ".join(f"{a} ({g})" for a, g in recent_gaps.items())
-        gap_html = (
-            '<div style="background:#fff7e6;border-radius:8px;padding:12px 18px;margin:18px 0">'
-            '<div style="font-size:13px;font-weight:700;color:#854f0b;margin-bottom:3px">Coaching gaps</div>'
-            f'<div style="font-size:13px;color:#5f5e5a">Struggling and not met recently: {items}</div></div>')
-
-    # Joe's patterns
-    acc = (analytics or {}).get("accountability", {})
-    imp = (analytics or {}).get("impact", {})
-    def _m(v, suffix=""):
-        return f"{v}{suffix}" if v is not None else "&ndash;"
-    lift = imp.get("team_avg_lift")
-    lift_txt = (f"{'+' if (lift or 0) > 0 else ''}{lift} calls/agent after a 1:1"
-                if lift is not None else "not enough data yet")
-    patterns_html = (
-        '<div style="margin:18px 0">'
-        '<div style="font-size:13px;font-weight:700;color:#1a1a2e;margin-bottom:8px">Joe&rsquo;s patterns</div>'
-        '<table style="width:100%;border-collapse:collapse;font-size:13px;color:#2d3748">'
-        f'<tr><td style="padding:5px 0">On-time rate</td><td style="text-align:right">{_m(acc.get("on_time_rate"), "%")}</td></tr>'
-        f'<tr><td style="padding:5px 0">Avg agents / week</td><td style="text-align:right">{_m(acc.get("avg_agents_per_week"))}</td></tr>'
-        f'<tr><td style="padding:5px 0">Coaching impact</td><td style="text-align:right">{lift_txt}</td></tr>'
-        '</table></div>')
+        mrows += (f'<tr><td style="padding:10px 8px;border-bottom:1px solid #edf0f4">'
+                  f'<strong style="font-size:14px">{ag}</strong> {schip}'
+                  f'<div style="font-size:13px;color:#2d3748;margin-top:4px"><strong>Committed to:</strong> {commit}</div></td></tr>')
+    q3 = (f'<div style="margin:0 0 8px">'
+          f'<div style="font-size:12px;font-weight:700;color:#5f5e5a;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">3. What Joe reported</div>'
+          + (f'<table style="width:100%;border-collapse:collapse">{mrows}</table>'
+             if mrows else '<p style="color:#a0aec0;font-size:14px">No meetings logged this week.</p>')
+          + '</div>')
 
     base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
     full_link = f"{base}/sales-manager?key=lht-perp-2026"
@@ -1932,18 +1904,11 @@ def build_impact_tracker_email(date_label, entries, stats, analytics, insight):
     <div style="color:#9fb0c8;font-size:13px;margin-top:3px">Joe &middot; {date_label}</div>
   </div>
   <div style="padding:24px 28px">
-    <p style="font-size:15px;color:#2d3748;margin:0 0 20px">
-      Joe met <strong>{len(met)}</strong> agent{'s' if len(met)!=1 else ''} last week{', flagged <strong>'+str(len(flagged))+'</strong> for you' if flagged else ''}.
-      {'Marked '+str(len(not_met))+' not met.' if not_met else ''}
-    </p>
-    {insight_html}
-    {needs_html}
-    <div style="font-size:13px;font-weight:700;color:#1a1a2e;margin:0 0 8px">This week&rsquo;s 1:1s</div>
-    {meetings_html}
-    {gap_html}
-    {patterns_html}
+    {q1}
+    {q2}
+    {q3}
     <div style="text-align:center;margin:24px 0 6px">
-      <a href="{full_link}" style="display:inline-block;background:#185fa5;color:#fff;text-decoration:none;
+      <a href="{full_link}" style="display:inline-block;background:#0f6e56;color:#fff;text-decoration:none;
          padding:13px 28px;border-radius:8px;font-weight:700;font-size:14px">Open full Sales Manager view</a>
     </div>
   </div>
