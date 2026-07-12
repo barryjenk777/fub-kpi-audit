@@ -5231,6 +5231,33 @@ def api_goals_scorecard():
     })
 
 
+@app.route("/api/goals/setup-link")
+def api_goals_setup_link():
+    """For the Fast Track course (Vercel): given an agent's email, return their
+    personal goal-setup link. Creates a token if the agent doesn't have one yet,
+    so the link always works. Call server-side with ?key=<COURSE_API_KEY>&email=.
+      Returns: {found, agent_name, setup_url, dashboard_url}
+    """
+    if request.args.get("key") != getattr(config, "COURSE_API_KEY", ""):
+        return jsonify({"error": "unauthorized"}), 403
+    email = (request.args.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "email required"}), 400
+    profiles = _db.get_agent_profiles(active_only=True) or []
+    match = next((p for p in profiles
+                  if (p.get("email") or "").strip().lower() == email), None)
+    if not match:
+        return jsonify({"found": False, "reason": "no active agent with that email"}), 404
+    name = match["agent_name"]
+    token = _db.get_token_for_agent(name) or _db.create_goal_token(name)
+    base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+    return jsonify({
+        "found": True, "agent_name": name,
+        "setup_url":     f"{base}/goals/setup/{token}" if token else None,
+        "dashboard_url": f"{base}/my-goals/{token}" if token else None,
+    })
+
+
 @app.route("/api/goals/agents-list")
 def api_goals_agents_list():
     """Lightweight list of active agent names + emails + start dates for dropdowns."""

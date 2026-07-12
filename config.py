@@ -57,6 +57,10 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
     "Barry Jenkin$",   # Ylopo test account (barry@ylopo.com), not a real agent
 }
 
+# Key the Fast Track onboarding course (Vercel) uses to look up an agent's
+# personal goal-setup link by email. Call it server-side, not from the browser.
+COURSE_API_KEY = "fasttrack-2026"
+
 # AI Sales Coach phone number — Buyers line.
 # Shown in coaching texts when an agent is calling but not converting to appointments.
 AI_SALES_COACH_PHONE_BUYERS = "1-337-486-3563"
