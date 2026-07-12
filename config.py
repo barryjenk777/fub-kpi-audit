@@ -59,7 +59,10 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
 
 # Key the Fast Track onboarding course (Vercel) uses to look up an agent's
 # personal goal-setup link by email. Call it server-side, not from the browser.
-COURSE_API_KEY = "fasttrack-2026"
+# Reads from the COURSE_API_KEY Railway env var so it can be rotated without a
+# code deploy (set the same value on Vercel), falling back to the default.
+import os as _os
+COURSE_API_KEY = _os.environ.get("COURSE_API_KEY", "fasttrack-2026")
 
 # AI Sales Coach phone number — Buyers line.
 # Shown in coaching texts when an agent is calling but not converting to appointments.
