@@ -1190,6 +1190,21 @@ def get_course_progress(agent_name):
         return None
 
 
+def delete_course_progress(agent_name):
+    """Clear an agent's course_progress row (redo / test cleanup). Returns rowcount."""
+    if not is_available():
+        return 0
+    try:
+        ensure_course_progress_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM course_progress WHERE agent_name = %s", (agent_name,))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("delete_course_progress failed: %s", e)
+        return 0
+
+
 def get_all_course_progress():
     """All course_progress rows, for Barry's command-center view. Newest first."""
     if not is_available():

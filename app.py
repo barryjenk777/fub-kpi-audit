@@ -5482,6 +5482,21 @@ def api_course_graduate():
     })
 
 
+@app.route("/api/course/reset", methods=["POST"])
+def api_course_reset():
+    """Clear an agent's course_progress (redo Module 7 / clean up test data).
+      POST body: {key, email}  -> {ok, cleared}
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    body = request.get_json(silent=True) or {}
+    match = _course_agent_by_email(body.get("email"))
+    if not match:
+        return jsonify({"ok": False, "reason": "no active agent with that email"}), 404
+    n = _db.delete_course_progress(match["agent_name"])
+    return jsonify({"ok": True, "cleared": n, "agent_name": match["agent_name"]})
+
+
 @app.route("/credential/<token>")
 def course_credential_page(token):
     """Public, verifiable graduation credential for an agent who finished Fast
