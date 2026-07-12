@@ -1095,6 +1095,128 @@ def compute_targets(goal: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Fast Track course progress  (90-day plan capture + graduation credential)
+# ---------------------------------------------------------------------------
+
+def ensure_course_progress_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS course_progress (
+                        agent_name       TEXT PRIMARY KEY,
+                        email            TEXT,
+                        ninety_day_plan  TEXT,
+                        plan_updated_at  TIMESTAMPTZ,
+                        graduated_at     TIMESTAMPTZ,
+                        updated_at       TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+    except Exception as e:
+        logger.warning("ensure_course_progress_table failed: %s", e)
+
+
+def save_ninety_day_plan(agent_name, email, plan_text):
+    """Store (or update) an agent's Module 7 90-day plan. Returns True on success."""
+    if not is_available():
+        return False
+    try:
+        ensure_course_progress_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO course_progress (agent_name, email, ninety_day_plan,
+                                                 plan_updated_at, updated_at)
+                    VALUES (%s, %s, %s, NOW(), NOW())
+                    ON CONFLICT (agent_name) DO UPDATE SET
+                        email           = EXCLUDED.email,
+                        ninety_day_plan = EXCLUDED.ninety_day_plan,
+                        plan_updated_at = NOW(),
+                        updated_at      = NOW()
+                """, (agent_name, email, plan_text))
+        return True
+    except Exception as e:
+        logger.warning("save_ninety_day_plan failed: %s", e)
+        return False
+
+
+def mark_graduated(agent_name, email):
+    """Record that an agent completed Fast Track. Idempotent (keeps first date)."""
+    if not is_available():
+        return False
+    try:
+        ensure_course_progress_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO course_progress (agent_name, email, graduated_at, updated_at)
+                    VALUES (%s, %s, NOW(), NOW())
+                    ON CONFLICT (agent_name) DO UPDATE SET
+                        email        = EXCLUDED.email,
+                        graduated_at = COALESCE(course_progress.graduated_at, NOW()),
+                        updated_at   = NOW()
+                """, (agent_name, email))
+        return True
+    except Exception as e:
+        logger.warning("mark_graduated failed: %s", e)
+        return False
+
+
+def get_course_progress(agent_name):
+    """Return {ninety_day_plan, plan_updated_at, graduated_at} or None."""
+    if not is_available():
+        return None
+    try:
+        ensure_course_progress_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT email, ninety_day_plan, plan_updated_at, graduated_at
+                    FROM course_progress WHERE agent_name = %s
+                """, (agent_name,))
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "email":           row[0],
+            "ninety_day_plan": row[1],
+            "plan_updated_at": row[2].isoformat() if row[2] else None,
+            "graduated_at":    row[3].isoformat() if row[3] else None,
+        }
+    except Exception as e:
+        logger.warning("get_course_progress failed: %s", e)
+        return None
+
+
+def get_all_course_progress():
+    """All course_progress rows, for Barry's command-center view. Newest first."""
+    if not is_available():
+        return []
+    try:
+        ensure_course_progress_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, email, ninety_day_plan, plan_updated_at, graduated_at
+                    FROM course_progress
+                    ORDER BY COALESCE(plan_updated_at, graduated_at) DESC NULLS LAST
+                """)
+                rows = cur.fetchall()
+        return [{
+            "agent_name":      r[0],
+            "email":           r[1],
+            "ninety_day_plan": r[2],
+            "plan_updated_at": r[3].isoformat() if r[3] else None,
+            "graduated_at":    r[4].isoformat() if r[4] else None,
+        } for r in rows]
+    except Exception as e:
+        logger.warning("get_all_course_progress failed: %s", e)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Deal log  (FUB Deals synced from Dotloop)
 # ---------------------------------------------------------------------------
 

@@ -27,7 +27,7 @@ if os.path.exists(_env_path):
             if _line and not _line.startswith("#") and "=" in _line:
                 _k, _v = _line.split("=", 1)
                 os.environ.setdefault(_k.strip(), _v.strip())
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, render_template_string, jsonify, request
 
 from fub_client import FUBClient
 import config
@@ -5256,6 +5256,264 @@ def api_goals_setup_link():
         "setup_url":     f"{base}/goals/setup/{token}" if token else None,
         "dashboard_url": f"{base}/my-goals/{token}" if token else None,
     })
+
+
+def _course_auth_ok():
+    return request.args.get("key") == getattr(config, "COURSE_API_KEY", "") or \
+        (request.get_json(silent=True) or {}).get("key") == getattr(config, "COURSE_API_KEY", "")
+
+
+def _course_agent_by_email(email):
+    """Resolve a course-supplied email to an active agent profile, or None."""
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    profiles = _db.get_agent_profiles(active_only=True) or []
+    return next((p for p in profiles
+                 if (p.get("email") or "").strip().lower() == email), None)
+
+
+def _course_base_url():
+    return os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+
+
+@app.route("/api/course/agent-snapshot")
+def api_course_agent_snapshot():
+    """Fast Track (Vercel): full per-agent monitoring snapshot for personalizing
+    lessons. Server-side call: ?key=<COURSE_API_KEY>&email=<agent email>.
+
+    Everything the course needs to make a lesson show the agent's REAL numbers:
+    their goal + daily/weekly targets, streak, last completed week's funnel
+    (dials, conversations, appts set/met) with their two conversion rates and a
+    letter grade, whether they're on track to earn AI transfers, and the KPI
+    standard they're being held to. DB-only, so it's fast.
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    match = _course_agent_by_email(request.args.get("email"))
+    if not match:
+        return jsonify({"found": False, "reason": "no active agent with that email"}), 404
+
+    name  = match["agent_name"]
+    base  = _course_base_url()
+    token = _db.get_token_for_agent(name) or _db.create_goal_token(name)
+    year  = datetime.now().year
+
+    # ── Goal + targets ────────────────────────────────────────────────
+    goal = _db.get_goal(name, year=year)
+    goal_set = bool(goal and float(goal.get("gci_goal") or 0) > 0)
+    targets = None
+    if goal_set:
+        t = _db.compute_targets(goal)
+        targets = {
+            "gci_goal":       float(goal.get("gci_goal") or 0),
+            "avg_sale_price": float(goal.get("avg_sale_price") or 0),
+            "closings_needed": t["closings_needed"],
+            "weekly_dials":   t["dials_per_week"],
+            "weekly_convos":  t["convos_per_week"],
+            "weekly_appts":   t["appts_per_week"],
+            "daily_dials":    round((t["dials_per_week"]  or 0) / 5, 1),
+            "daily_convos":   round((t["convos_per_week"] or 0) / 5, 1),
+        }
+
+    # ── Streak ────────────────────────────────────────────────────────
+    streak = _db.get_streak(name) or {}
+
+    # ── Last completed week's funnel (from weekly snapshots) ──────────
+    last_week = None
+    conversion = None
+    earning = False
+    earn_reason = "No completed week on record yet."
+    hist = _db.get_weekly_kpi_history(weeks=1) or []
+    if hist:
+        wk = hist[0]
+        agent_row = next((a for a in wk.get("agents", []) if a.get("name") == name), None)
+        if agent_row:
+            calls  = agent_row.get("outbound_calls") or 0
+            convos = agent_row.get("conversations") or 0
+            aset   = agent_row.get("appts_set") or 0
+            amet   = agent_row.get("appts_met") or 0
+            grade, gscore = _weekly_grade(calls, convos, aset)
+            last_week = {
+                "week_start":    wk.get("week_start"),
+                "week_end":      wk.get("week_end"),
+                "dials":         calls,
+                "conversations": convos,
+                "appts_set":     aset,
+                "appts_met":     amet,
+                "grade":         grade,
+                "grade_score":   gscore,
+            }
+            conversion = {
+                "contact_rate_pct": round(convos / calls * 100, 1) if calls else 0.0,
+                "ask_pct":          round(aset / convos * 100, 1) if convos else 0.0,
+            }
+            earning = bool(agent_row.get("kpi_pass"))
+            earn_reason = ("Hit the KPI standard last week, so you're on the transfer list."
+                           if earning else
+                           "Did not hit the KPI standard last week. Hit it this week to earn transfers.")
+
+    return jsonify({
+        "found": True,
+        "agent_name": name,
+        "email": (match.get("email") or "").strip().lower(),
+        "goal_set": goal_set,
+        "links": {
+            "setup_url":     f"{base}/goals/setup/{token}" if token else None,
+            "dashboard_url": f"{base}/my-goals/{token}" if token else None,
+        },
+        "targets": targets,
+        "streak": {
+            "current": streak.get("current_streak", 0),
+            "longest": streak.get("longest_streak", 0),
+            "last_activity_date": streak.get("last_activity_date"),
+        },
+        "last_week": last_week,
+        "conversion": conversion,
+        "transfers": {"earning_next_week": earning, "reason": earn_reason},
+        "standard": {
+            "min_dials_per_day":  getattr(config, "MIN_OUTBOUND_CALLS", 30),
+            "min_convos_per_day": getattr(config, "MIN_CONVERSATIONS", 5),
+        },
+    })
+
+
+@app.route("/api/course/pond-leads")
+def api_course_pond_leads():
+    """Fast Track (Module 2): the current top unclaimed POND leads, so the lesson
+    can hand a new agent a live call list. The pond is shared (first come, first
+    served), so this is the same hot list for every new agent. Server-side call:
+    ?key=<COURSE_API_KEY>&limit=5 (default 5, max 25).
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    try:
+        limit = max(1, min(int(request.args.get("limit", 5)), 25))
+    except (TypeError, ValueError):
+        limit = 5
+
+    import json as _json
+    _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+    _cache_base = (os.environ.get("LEADSTREAM_CACHE_DIR")
+                   or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache")))
+    manifest = None
+    try:
+        with open(os.path.join(_cache_base, "leadstream_manifest.json")) as f:
+            manifest = _json.load(f)
+    except Exception:
+        pass
+    if not manifest and _db.is_available():
+        try:
+            manifest = _db.read_manifest()
+        except Exception:
+            pass
+    pond = (manifest or {}).get("pond", []) or []
+    pond = [p for p in pond if isinstance(p, dict)]
+    pond.sort(key=lambda p: p.get("score", 0), reverse=True)
+
+    leads = [{
+        "name":  p.get("name") or f"Lead {p.get('id')}",
+        "score": p.get("score", 0),
+        "tier":  p.get("tier", ""),
+        "stage": p.get("stage", ""),
+    } for p in pond[:limit]]
+
+    return jsonify({
+        "pond_available": len(pond),
+        "showing": len(leads),
+        "leads": leads,
+        "how_it_works": ("These are unclaimed leads showing activity right now. "
+                         "Claim one by making contact and putting it in your name. "
+                         "First come, first served."),
+    })
+
+
+@app.route("/api/course/ninety-day-plan", methods=["GET", "POST"])
+def api_course_ninety_day_plan():
+    """Fast Track (Module 7 / graduation): capture the agent's 90-day plan into
+    the command center so Barry walks into the Day-10 review with it in hand.
+      POST body: {key, email, plan}   -> {ok, saved}
+      GET  ?key=&email=               -> {found, plan, updated_at}
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        match = _course_agent_by_email(body.get("email"))
+        if not match:
+            return jsonify({"ok": False, "reason": "no active agent with that email"}), 404
+        plan = (body.get("plan") or "").strip()
+        if not plan:
+            return jsonify({"ok": False, "reason": "plan text required"}), 400
+        ok = _db.save_ninety_day_plan(match["agent_name"],
+                                      (match.get("email") or "").strip().lower(), plan)
+        return jsonify({"ok": ok, "saved": ok, "agent_name": match["agent_name"]})
+    # GET
+    match = _course_agent_by_email(request.args.get("email"))
+    if not match:
+        return jsonify({"found": False, "reason": "no active agent with that email"}), 404
+    prog = _db.get_course_progress(match["agent_name"]) or {}
+    return jsonify({
+        "found": True,
+        "agent_name": match["agent_name"],
+        "plan": prog.get("ninety_day_plan"),
+        "updated_at": prog.get("plan_updated_at"),
+    })
+
+
+@app.route("/api/course/graduate", methods=["POST"])
+def api_course_graduate():
+    """Fast Track: mark an agent graduated and return their credential URL.
+      POST body: {key, email}  -> {ok, credential_url}
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    body = request.get_json(silent=True) or {}
+    match = _course_agent_by_email(body.get("email"))
+    if not match:
+        return jsonify({"ok": False, "reason": "no active agent with that email"}), 404
+    name  = match["agent_name"]
+    ok = _db.mark_graduated(name, (match.get("email") or "").strip().lower())
+    token = _db.get_token_for_agent(name) or _db.create_goal_token(name)
+    return jsonify({
+        "ok": ok,
+        "agent_name": name,
+        "credential_url": f"{_course_base_url()}/credential/{token}" if token else None,
+    })
+
+
+@app.route("/credential/<token>")
+def course_credential_page(token):
+    """Public, verifiable graduation credential for an agent who finished Fast
+    Track. Anyone with the link (e.g. from a LinkedIn share) can verify it."""
+    name = _db.resolve_goal_token(token)
+    if not name:
+        return "<h2 style='font-family:sans-serif;padding:2rem'>This credential link is invalid or expired.</h2>", 404
+    prog = _db.get_course_progress(name) or {}
+    grad = prog.get("graduated_at")
+    if not grad:
+        return render_template_string(
+            "<div style='font-family:system-ui;max-width:560px;margin:4rem auto;text-align:center;color:#334155'>"
+            "<h2>Not yet graduated</h2><p>{{name}} has not completed Fast Track to Revenue yet.</p></div>",
+            name=name)
+    try:
+        grad_disp = datetime.fromisoformat(grad).strftime("%B %-d, %Y")
+    except Exception:
+        grad_disp = (grad or "")[:10]
+    return render_template_string("""
+<div style="font-family:system-ui,-apple-system,sans-serif;max-width:640px;margin:3rem auto;
+            border:1px solid #e2e8f0;border-radius:18px;padding:3rem 2.5rem;text-align:center;
+            box-shadow:0 10px 40px rgba(2,6,23,.08)">
+  <div style="font-size:.8rem;letter-spacing:.18em;text-transform:uppercase;color:#2563eb;font-weight:700">
+    Legacy Home Team</div>
+  <div style="font-size:2rem;font-weight:800;color:#0f172a;margin:1.2rem 0 .3rem">{{name}}</div>
+  <div style="color:#475569;font-size:1.05rem">has launched</div>
+  <div style="font-size:1.35rem;font-weight:700;color:#0f172a;margin:.5rem 0 1.5rem">
+    The Client-First Real Estate Practice</div>
+  <div style="color:#64748b;font-size:.95rem">Fast Track to Revenue &middot; completed {{grad_disp}}</div>
+  <div style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid #e2e8f0;
+              color:#94a3b8;font-size:.8rem">Verified credential &middot; issued by Legacy Home Team command center</div>
+</div>""", name=name, grad_disp=grad_disp)
 
 
 @app.route("/api/goals/agents-list")
