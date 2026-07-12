@@ -5277,6 +5277,25 @@ def _course_base_url():
     return os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
 
 
+def _load_leadstream_manifest():
+    """Load the LeadStream manifest (file first, then Postgres). {} if unavailable."""
+    import json as _json
+    _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
+    _cache_base = (os.environ.get("LEADSTREAM_CACHE_DIR")
+                   or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache")))
+    try:
+        with open(os.path.join(_cache_base, "leadstream_manifest.json")) as f:
+            return _json.load(f)
+    except Exception:
+        pass
+    if _db.is_available():
+        try:
+            return _db.read_manifest() or {}
+        except Exception:
+            pass
+    return {}
+
+
 @app.route("/api/course/agent-snapshot")
 def api_course_agent_snapshot():
     """Fast Track (Vercel): full per-agent monitoring snapshot for personalizing
@@ -5353,6 +5372,14 @@ def api_course_agent_snapshot():
                            if earning else
                            "Did not hit the KPI standard last week. Hit it this week to earn transfers.")
 
+    # ── LeadStream: leads in this agent's name + pond size (shared) ───
+    _mani = _load_leadstream_manifest()
+    _in_name = (_mani.get("agent", {}) or {}).get(name, []) or []
+    leadstream = {
+        "in_name": len(_in_name),
+        "pond_available": len((_mani.get("pond", []) or [])),
+    }
+
     return jsonify({
         "found": True,
         "agent_name": name,
@@ -5370,6 +5397,7 @@ def api_course_agent_snapshot():
         },
         "last_week": last_week,
         "conversion": conversion,
+        "leadstream": leadstream,
         "transfers": {"earning_next_week": earning, "reason": earn_reason},
         "standard": {
             "min_dials_per_day":  getattr(config, "MIN_OUTBOUND_CALLS", 30),
@@ -5392,22 +5420,7 @@ def api_course_pond_leads():
     except (TypeError, ValueError):
         limit = 5
 
-    import json as _json
-    _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
-    _cache_base = (os.environ.get("LEADSTREAM_CACHE_DIR")
-                   or ("/tmp/.cache" if _is_railway else os.path.join(os.path.dirname(__file__), ".cache")))
-    manifest = None
-    try:
-        with open(os.path.join(_cache_base, "leadstream_manifest.json")) as f:
-            manifest = _json.load(f)
-    except Exception:
-        pass
-    if not manifest and _db.is_available():
-        try:
-            manifest = _db.read_manifest()
-        except Exception:
-            pass
-    pond = (manifest or {}).get("pond", []) or []
+    pond = (_load_leadstream_manifest().get("pond", []) or [])
     pond = [p for p in pond if isinstance(p, dict)]
     pond.sort(key=lambda p: p.get("score", 0), reverse=True)
 
