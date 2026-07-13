@@ -5414,6 +5414,100 @@ def api_course_agent_snapshot():
     })
 
 
+@app.route("/api/course/call-progress")
+def api_course_call_progress():
+    """Fast Track REAL-TIME: how many calls an agent has made since a given
+    moment, pulled LIVE from FUB (bypasses every cache and the weekly snapshot).
+
+    This is the endpoint a lesson polls after telling the agent "make N calls
+    now." FUB logs a call within ~1 minute of it ending, so a call the agent
+    just made shows up almost immediately — the course can verify same-session.
+
+    Server-side call:
+      ?key=<COURSE_API_KEY>&email=<agent email>&since=<ISO8601 | 'today'>
+    'since' defaults to the start of today (ET). Pass the module-start
+    timestamp (e.g. 2026-07-13T14:30:00Z) to count ONLY the calls made during
+    that lesson — that's the right pattern for a "make N calls" gate.
+
+    Returns: {found, agent_name, since, now, outbound_calls, conversations,
+              last_call_at, source:"live_fub"}
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    match = _course_agent_by_email(request.args.get("email"))
+    if not match:
+        return jsonify({"found": False, "reason": "no active agent with that email"}), 404
+    name = match["agent_name"]
+
+    _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+    ET = timezone(timedelta(hours=_et_h))
+    now_utc = datetime.now(timezone.utc)
+
+    # ── Parse 'since' (default: start of today ET) ────────────────────
+    raw = (request.args.get("since") or "today").strip()
+    since_utc = None
+    if raw and raw.lower() != "today":
+        for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z",
+                    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                d = datetime.strptime(raw, fmt)
+                since_utc = (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+                break
+            except ValueError:
+                continue
+    if since_utc is None:
+        today_et = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0)
+        since_utc = today_et.astimezone(timezone.utc)
+
+    # ── Resolve FUB user id (profile first, name lookup as fallback) ──
+    uid = match.get("fub_user_id")
+    client = FUBClient()
+    if not uid:
+        try:
+            for u in client.get_users():
+                if f"{u.get('firstName','')} {u.get('lastName','')}".strip().lower() == name.strip().lower():
+                    uid = u.get("id")
+                    break
+        except Exception as e:
+            logger.warning("call-progress: user lookup failed for %s: %s", name, e)
+    if not uid:
+        return jsonify({"found": False, "reason": "no FUB user id for that agent"}), 404
+
+    # ── Live FUB pull (newest-first, stops at 'since' — fast for a short window) ──
+    try:
+        calls = client.get_calls(user_id=uid,
+                                 since=since_utc.replace(tzinfo=None),
+                                 until=now_utc.replace(tzinfo=None))
+    except Exception as e:
+        logger.error("call-progress: FUB fetch failed for %s: %s", name, e)
+        return jsonify({"found": True, "agent_name": name, "error": "fub_fetch_failed"}), 502
+
+    thr = getattr(config, "CONVERSATION_THRESHOLD_SECONDS", 120)
+    outbound = convos = 0
+    last_call = None
+    for c in calls:
+        if c.get("userId") != uid:
+            continue
+        if not c.get("isIncoming", False):
+            outbound += 1
+        if (c.get("duration", 0) or 0) >= thr:
+            convos += 1
+        cr = c.get("created", "")
+        if cr and (last_call is None or cr > last_call):
+            last_call = cr
+
+    return jsonify({
+        "found": True,
+        "agent_name": name,
+        "since": since_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "now":   now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "outbound_calls": outbound,
+        "conversations": convos,
+        "last_call_at": last_call,
+        "source": "live_fub",
+    })
+
+
 @app.route("/api/course/pond-leads")
 def api_course_pond_leads():
     """Fast Track (Module 2): the current top unclaimed POND leads, so the lesson
