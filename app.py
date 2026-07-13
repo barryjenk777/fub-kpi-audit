@@ -226,34 +226,42 @@ apply_saved_settings()
 def _kpi_window(weeks_back=1):
     """Return (since, until) as UTC datetimes for the KPI evaluation window.
 
-    Window: Mon 00:00 ET → Sun 00:00 ET (exclusive) for the most recently
-    completed Mon–Sat work week, shifted back (weeks_back-1) additional weeks.
+    Window: Mon 00:00 ET → next Mon 00:00 ET (exclusive) — a full Monday-through
+    -SUNDAY work week — for the week ending on the most recent Sunday, shifted
+    back (weeks_back-1) additional weeks.
 
-    Uses ET (not UTC) midnight boundaries so:
-      - Sunday-evening calls (8pm–midnight ET = midnight–4am UTC Mon) are NOT
-        counted toward the next week's Monday tally.
-      - Saturday-evening calls (8pm–midnight ET = midnight–4am UTC Sun) ARE
-        included in the correct week (they fall before Sun 00:00 ET).
+    Sunday IS part of its own week (changed Jul 2026). Because the transfer /
+    hype decision job fires Sunday 21:00 ET and the window end for the current
+    week is the upcoming Monday 00:00, the job naturally counts every Sunday
+    call that exists at run time — i.e. agents have all of Sunday up until the
+    9pm decision to make their dials count. A call has to exist before the job
+    reads FUB to be included, so 9pm is the effective Sunday cutoff.
 
-    Example (today ET = Sun Apr 13):
-        weeks_back=1 → Mon Apr 7 00:00 ET – Sun Apr 13 00:00 ET
-        weeks_back=2 → Mon Mar 31 00:00 ET – Sun Apr 6 00:00 ET
+    Day-of-week semantics for weeks_back=1:
+      - On Sunday: the week ending TODAY (Mon..this Sunday, through "now").
+      - On Mon–Sat: the last fully completed Mon–Sun week.
+
+    Uses ET (not UTC) midnight boundaries so Saturday- and Sunday-evening calls
+    (8pm–midnight ET) land in the correct week.
+
+    Example (today ET = Sun Jul 12):
+        weeks_back=1 → Mon Jul 6 00:00 ET – Mon Jul 13 00:00 ET (incl. Sun Jul 12)
+        weeks_back=2 → Mon Jun 29 00:00 ET – Mon Jul 6 00:00 ET
     """
     _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
     ET = timezone(timedelta(hours=_et_h))
     today_et = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0)
-    # How many days ago was last Saturday? (Mon=0 … Sat=5 … Sun=6)
-    days_since_sat = (today_et.weekday() - 5) % 7
-    if days_since_sat == 0:
-        days_since_sat = 7  # today IS Saturday; step back to the previous full week
-    # Midnight ET of last Saturday
-    last_sat_start = today_et - timedelta(days=days_since_sat)
+    # How many days ago was the most recent Sunday? (Mon=0 … Sat=5 … Sun=6)
+    # 0 when today IS Sunday, so the week closing tonight is the current one.
+    days_since_sun = (today_et.weekday() + 1) % 7
+    # Midnight ET of that week-ending Sunday
+    week_end_sunday = today_et - timedelta(days=days_since_sun)
     # Shift back for weeks_back > 1
     week_offset = timedelta(days=(weeks_back - 1) * 7)
-    # until = Sunday 00:00 ET after the target Saturday (exclusive — captures all of Sat ET)
-    until_et = last_sat_start + timedelta(days=1) - week_offset
-    # since = Monday 00:00 ET of that same work week (6 days before the Sunday boundary)
-    since_et = until_et - timedelta(days=6)
+    # until = Monday 00:00 ET after that Sunday (exclusive — captures all of Sun ET)
+    until_et = week_end_sunday + timedelta(days=1) - week_offset
+    # since = Monday 00:00 ET of that same work week (7 days = full Mon–Sun window)
+    since_et = until_et - timedelta(days=7)
     # Return as UTC for FUB API calls
     return since_et.astimezone(timezone.utc), until_et.astimezone(timezone.utc)
 

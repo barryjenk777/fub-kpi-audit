@@ -3285,7 +3285,7 @@ def save_weekly_kpi_snapshot(week_start, week_end, agents):
     """
     Upsert per-agent KPI metrics for a completed work week.
 
-    week_start / week_end: datetime.date objects (Monday / Saturday).
+    week_start / week_end: datetime.date objects (Monday / Sunday).
     agents: list of agent dicts from run_audit_data() — each has 'name',
             'user_id', 'metrics', 'evaluation', 'call_to_convo', 'convo_to_appt'.
     """
