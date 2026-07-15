@@ -5263,6 +5263,7 @@ def api_goals_setup_link():
         "found": True, "agent_name": name,
         "setup_url":     f"{base}/goals/setup/{token}" if token else None,
         "dashboard_url": f"{base}/my-goals/{token}" if token else None,
+        "block_url":     f"{base}/my-block/{token}" if token else None,
     })
 
 
@@ -5396,6 +5397,7 @@ def api_course_agent_snapshot():
         "links": {
             "setup_url":     f"{base}/goals/setup/{token}" if token else None,
             "dashboard_url": f"{base}/my-goals/{token}" if token else None,
+            "block_url":     f"{base}/my-block/{token}" if token else None,
         },
         "targets": targets,
         "streak": {
