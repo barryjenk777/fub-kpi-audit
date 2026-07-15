@@ -303,6 +303,8 @@ LEADSTREAM_SIGNAL_TAGS = {
     "Y_SELLER_CALL_AGENT":                       102,  # Clicked the Call Agent CTA on seller report
     "CALLBACK_SCHEDULED":                        100,  # Explicit commitment to a specific time
     "AI_NEEDS_FOLLOW_UP":                        100,  # rAIya text converted — call NOW
+    "SMS_Conversion":                            100,  # Replied POSITIVELY to a Project Blue text — call NOW
+    "Claude_Text_Converted":                      95,  # Converted via text reply (co-occurs w/ SMS_Conversion)
     "Y_SELLER_EMAIL_AGENT":                       98,  # Clicked the Email Agent CTA on seller report
     "ISA_ATTEMPTED_TRANSFER":                     95,  # Transfer attempt failed mid-process
     "AI_VOICE_NEEDS_FOLLOW_UP":                   95,  # AI voice converted
