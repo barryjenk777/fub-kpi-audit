@@ -268,7 +268,28 @@ ISA_TRANSFER_WARM_STAGE  = "A - Hot 1-3 Months"  # FUB stage applied on ISA tran
 
 # How many leads to tag per agent / for the pond
 LEADSTREAM_LIMIT = 20
-LEADSTREAM_POND_LIMIT = 80
+# Raised 80 -> 250 (Jul 2026): the 80 cap was binding and hid ready-to-call
+# pond leads, and it runs out fast as the team grows. The pond mailer has its
+# own daily cap, so this only widens the agent-facing pond call list.
+LEADSTREAM_POND_LIMIT = 250
+
+# FUB Events API types that count as a lead "doing something" on our site.
+# These feed the visit-recency scorer (recent activity = higher score, freshest
+# to the top). Fixes a latent bug: the scorer queried "Property Saved" but FUB's
+# real event is "Saved Property", so saved-listing signals were being missed
+# entirely. Also adds "Visited Website" and the inquiry events (real high-intent
+# actions FUB already tracks) that were previously ignored.
+LEADSTREAM_ACTIVITY_EVENT_TYPES = [
+    "Viewed Property",
+    "Viewed Page",
+    "Saved Property",
+    "Visited Website",
+    "Registration",
+    "Seller Inquiry",
+    "Property Inquiry",
+    "General Inquiry",
+    "Cash Offer Request",
+]
 
 # Ylopo signal tags and their base point values (highest tier first)
 LEADSTREAM_SIGNAL_TAGS = {

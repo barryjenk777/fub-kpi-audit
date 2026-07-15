@@ -32,6 +32,7 @@ from config import (
     EXCLUDED_USERS,
     ISA_TRANSFER_FRESH_TAG,
     ISA_TRANSFER_FRESH_FLOOR,
+    LEADSTREAM_ACTIVITY_EVENT_TYPES,
     LEADSTREAM_AGING_NEW_POINTS,
     LEADSTREAM_ALLOWED_POND_IDS,
     LEADSTREAM_API_KEY_ENV,
@@ -310,11 +311,13 @@ class LeadScorer:
         return score, tier, breakdown
 
     def _build_visit_map(self):
-        """Fetch recent IDX events and build a map of personId → latest visit time.
+        """Fetch recent IDX/activity events and build a map of personId → latest
+        activity time.
 
-        Queries the Events API for 'Viewed Page', 'Viewed Property', and
-        'Property Saved' events. Fetches 7 days to cover all LEADSTREAM_VISIT_RECENCY
-        tiers (max tier is 168 hours = 7 days).
+        Queries the Events API for every type in LEADSTREAM_ACTIVITY_EVENT_TYPES
+        (page/property views, saved listings, website visits, and the inquiry
+        events). Fetches 7 days to cover all LEADSTREAM_VISIT_RECENCY tiers (max
+        tier is 168 hours = 7 days).
         """
         if self._visit_map is not None:
             return  # already built
@@ -324,7 +327,7 @@ class LeadScorer:
         since = self.now - timedelta(days=7)
         events_loaded = 0
 
-        for event_type in ["Viewed Page", "Viewed Property", "Property Saved"]:
+        for event_type in LEADSTREAM_ACTIVITY_EVENT_TYPES:
             try:
                 events = self.client.get_events(
                     since=since, event_type=event_type, max_pages=10
@@ -347,6 +350,29 @@ class LeadScorer:
         """Get the most recent site visit datetime for a person."""
         self._build_visit_map()
         return self._visit_map.get(person_id)
+
+    def _recency_key(self, person):
+        """Tiebreaker for equal-score leads: the most recent thing this lead did,
+        as epoch seconds (higher = more recent). Uses latest site activity, then
+        falls back to when the lead was created. Without this, the top of the
+        list is a big block of same-score leads in arbitrary order, so an agent
+        can't tell which to call first. This floats the freshest one up."""
+        ts = 0.0
+        pid = person.get("id")
+        if self._visit_map:
+            v = self._visit_map.get(pid)
+            if v:
+                try:
+                    ts = max(ts, v.timestamp())
+                except Exception:
+                    pass
+        created = parse_dt(person.get("created"))
+        if created:
+            try:
+                ts = max(ts, created.timestamp())
+            except Exception:
+                pass
+        return ts
 
     def _get_person_calls(self, person_id):
         """Fetch calls for a specific person, using cache to avoid repeat API calls.
@@ -522,7 +548,7 @@ class LeadScorer:
                     pass  # DB unavailable — scoring continues unaffected
 
         # Sort by score descending, take top N
-        scored.sort(key=lambda x: x[1], reverse=True)
+        scored.sort(key=lambda x: (x[1], self._recency_key(x[0])), reverse=True)
         return scored[:limit]
 
     def _get_agent_texts_by_person(self, agent_id, since):
@@ -606,7 +632,7 @@ class LeadScorer:
         logger.info("Pond scoring complete: %d leads scored > 0 across %d allowed ponds",
                     len(scored), len(LEADSTREAM_ALLOWED_POND_IDS))
 
-        scored.sort(key=lambda x: x[1], reverse=True)
+        scored.sort(key=lambda x: (x[1], self._recency_key(x[0])), reverse=True)
         return scored[:limit]
 
     def _get_recently_contacted_pond_ids(self):
