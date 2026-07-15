@@ -1323,12 +1323,20 @@ async function forceRefreshGoals(){
 async function syncAgentRoster(){
   const btn=document.getElementById('btn-sync-roster');
   btn.disabled=true;btn.textContent='⏳ Syncing…';
-  showToast('👥 Pulling agent roster from FUB…','ok');
+  showToast('👥 Pulling roster from FUB & onboarding new agents…','ok');
   try{
-    const r=await fetch('/api/goals/scan-agents',{method:'POST'});
+    const r=await fetch('/api/goals/sync-roster',{method:'POST'});
     const d=await r.json();
-    if(d.error)throw new Error(d.error);
-    showToast(`✅ Roster synced — ${d.count} agents found. Reloading scorecard…`,'ok');
+    if(d.error||d.ok===false)throw new Error(d.error||'sync failed');
+    const onboarded=d.onboarded||[], skipped=d.skipped||[];
+    if(onboarded.length){
+      const names=onboarded.map(a=>a.name).join(', ');
+      showToast(`✅ Goal-setup email sent to: ${names}`,'ok');
+    }else if(skipped.length){
+      showToast(`⚠️ ${skipped.length} new agent(s) had no email/token — not onboarded: ${skipped.join(', ')}`,'err');
+    }else{
+      showToast(`✅ Roster synced — ${d.synced} agents, no new hires to onboard.`,'ok');
+    }
     await loadGoals();
   }catch(e){showToast('Roster sync failed: '+e.message,'err');}
   finally{btn.disabled=false;btn.textContent='👥 Sync Roster';}

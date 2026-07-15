@@ -12536,6 +12536,8 @@ def sync_fub_roster():
             print(f"[ROSTER SYNC] Marked {profile['agent_name']} as inactive (not in FUB)")
 
     # Send onboarding emails to newly detected agents
+    onboarded = []   # names/emails we actually sent the goal email to
+    skipped   = []   # new agents we could NOT email (no email/token)
     for agent in new_agents:
         try:
             name  = agent["name"]
@@ -12548,14 +12550,18 @@ def sync_fub_roster():
                 from email_report import send_goal_onboarding_email
                 send_goal_onboarding_email(name, first, agent["email"], setup_url, dashboard_url=dashboard_url)
                 _db.mark_onboarding_sent(name)
+                onboarded.append({"name": name, "email": agent["email"]})
                 print(f"[ROSTER SYNC] Onboarding email sent → {name} <{agent['email']}>")
             else:
+                skipped.append(name)
                 print(f"[ROSTER SYNC] New agent {name} — no setup URL or email, skipping email")
         except Exception as e:
+            skipped.append(agent.get("name", "?"))
             print(f"[ROSTER SYNC] Onboarding email failed for {agent['name']}: {e}")
 
     print(f"[ROSTER SYNC] Done: {synced} synced, {len(new_agents)} new, {errors} errors")
-    return {"synced": synced, "new": len(new_agents), "errors": errors}
+    return {"synced": synced, "new": len(new_agents), "errors": errors,
+            "onboarded": onboarded, "skipped": skipped}
 
 
 def scheduled_sync_fub_roster():
