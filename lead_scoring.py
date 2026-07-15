@@ -56,6 +56,11 @@ from config import (
     LEADSTREAM_SUPPRESSION_TAGS,
     LEADSTREAM_TAG,
     LEADSTREAM_VISIT_RECENCY,
+    LEADSTREAM_EMAIL_CLICK_RECENCY,
+    LEADSTREAM_EMAIL_OPEN_RECENCY,
+    LEADSTREAM_EMAIL_LOOKBACK_DAYS,
+    LEADSTREAM_POND_TAG_FRESHNESS_DAYS,
+    LEADSTREAM_POND_STALE_TAG_FACTOR,
     SELLER_TAGS,
 )
 from fub_client import FUBClient
@@ -89,6 +94,8 @@ class LeadScorer:
         self.now = datetime.now(timezone.utc)
         # Pre-built map of personId → most recent site visit datetime
         self._visit_map = None
+        # Pre-built map of personId → {"open": dt, "click": dt} from FUB /emEvents
+        self._email_map = None
         # Cache personId → calls so each lead is only fetched once per run
         self._person_call_cache = {}
 
@@ -159,9 +166,20 @@ class LeadScorer:
                 # the 2-hour contacted_ids set in score_pond_leads(). Any lead
                 # that makes it here hasn't been worked in 2+ hours — score at
                 # full strength. Per-lead API lookups for 2000+ leads = timeout.
-                score += best_points
+                # Freshness cutoff: tags have no timestamp, so if the lead shows
+                # no recent activity at all, this tag is likely stale — discount
+                # it so old tags don't ride to the top of the pond.
+                if self._pond_lead_is_fresh(person):
+                    pts = best_points
+                    breakdown.append(f"{best_tag}: +{pts} (pond, no aging check)")
+                else:
+                    pts = int(round(best_points * LEADSTREAM_POND_STALE_TAG_FACTOR))
+                    breakdown.append(
+                        f"{best_tag}: +{pts} (stale tag — no activity in "
+                        f"{LEADSTREAM_POND_TAG_FRESHNESS_DAYS}d, discounted from {best_points})"
+                    )
+                score += pts
                 tier = best_tag
-                breakdown.append(f"{best_tag}: +{best_points} (pond, no aging check)")
             else:
                 # Check whether agent has already attempted this lead recently.
                 # Uses personId-targeted call lookup so high-volume agents (33k+ calls)
@@ -218,6 +236,28 @@ class LeadScorer:
                     if not signal_scores:
                         tier = "SITE_ACTIVE"
                     break
+
+        # --- 2b. Email engagement recency (from FUB /emEvents) ---
+        # Clicks are real intent (scored strong); opens are noisy from Apple Mail
+        # auto-opens (scored light). Additive, like site-visit recency.
+        email_act = self._get_email_activity(person.get("id"))
+        if email_act:
+            click_hours = hours_ago(email_act.get("click"), self.now)
+            if click_hours is not None:
+                for threshold_hours, points in LEADSTREAM_EMAIL_CLICK_RECENCY:
+                    if click_hours <= threshold_hours:
+                        score += points
+                        breakdown.append(f"email click {click_hours:.0f}h ago: +{points}")
+                        if not signal_scores and tier == "NONE":
+                            tier = "EMAIL_CLICK"
+                        break
+            open_hours = hours_ago(email_act.get("open"), self.now)
+            if open_hours is not None:
+                for threshold_hours, points in LEADSTREAM_EMAIL_OPEN_RECENCY:
+                    if open_hours <= threshold_hours:
+                        score += points
+                        breakdown.append(f"email open {open_hours:.0f}h ago: +{points}")
+                        break
 
         # --- 3. Stale hot: had signal tag + no agent contact in 3+ days ---
         if not signal_scores:
@@ -351,12 +391,73 @@ class LeadScorer:
         self._build_visit_map()
         return self._visit_map.get(person_id)
 
+    def _build_email_map(self):
+        """Fetch recent email opens/clicks from FUB /emEvents and build a map of
+        personId → {"open": latest_dt, "click": latest_dt}.
+
+        Clicks are pulled first (rare, high-value) then opens (noisy). Newest-first
+        with an early stop past the lookback window keeps this cheap.
+        """
+        if self._email_map is not None:
+            return  # already built
+
+        self._email_map = {}
+        since = self.now - timedelta(days=LEADSTREAM_EMAIL_LOOKBACK_DAYS)
+        loaded = 0
+        for et in ("click", "open"):
+            try:
+                events = self.client.get_email_events(
+                    event_type=et, since=since, max_pages=40
+                )
+                for ev in events:
+                    pid = ev.get("personId")
+                    if not pid:
+                        continue
+                    dt = parse_dt(ev.get("updated") or ev.get("created"))
+                    if not dt:
+                        continue
+                    slot = self._email_map.setdefault(pid, {})
+                    if et not in slot or dt > slot[et]:
+                        slot[et] = dt
+                loaded += len(events)
+            except Exception as e:
+                logger.warning("emEvents fetch failed for type '%s': %s", et, e)
+
+        logger.info("Email map built: %d leads with opens/clicks from %d events (%d-day window)",
+                    len(self._email_map), loaded, LEADSTREAM_EMAIL_LOOKBACK_DAYS)
+
+    def _get_email_activity(self, person_id):
+        """Return {"open": dt, "click": dt} for a person, or None."""
+        self._build_email_map()
+        return self._email_map.get(person_id)
+
+    def _pond_lead_is_fresh(self, person):
+        """Freshness proxy for pond tag scoring. FUB tags have no timestamp, so a
+        pond lead 'counts as fresh' only if it did something recently: a site
+        visit, an email open/click, was created recently, or FUB updated the
+        record. If none of that is within LEADSTREAM_POND_TAG_FRESHNESS_DAYS, the
+        lead's high score is riding a stale, persistent tag and gets discounted."""
+        pid = person.get("id")
+        if self._visit_map and self._visit_map.get(pid):
+            return True
+        if self._email_map:
+            em = self._email_map.get(pid)
+            if em and (em.get("open") or em.get("click")):
+                return True
+        win_h = LEADSTREAM_POND_TAG_FRESHNESS_DAYS * 24
+        for field in ("created", "updated"):
+            d = parse_dt(person.get(field))
+            h = hours_ago(d, self.now) if d else None
+            if h is not None and h <= win_h:
+                return True
+        return False
+
     def _recency_key(self, person):
         """Tiebreaker for equal-score leads: the most recent thing this lead did,
-        as epoch seconds (higher = more recent). Uses latest site activity, then
-        falls back to when the lead was created. Without this, the top of the
-        list is a big block of same-score leads in arbitrary order, so an agent
-        can't tell which to call first. This floats the freshest one up."""
+        as epoch seconds (higher = more recent). Uses latest site activity, email
+        open/click, then falls back to when the lead was created. Without this,
+        the top of the list is a big block of same-score leads in arbitrary order,
+        so an agent can't tell which to call first. This floats the freshest up."""
         ts = 0.0
         pid = person.get("id")
         if self._visit_map:
@@ -366,6 +467,15 @@ class LeadScorer:
                     ts = max(ts, v.timestamp())
                 except Exception:
                     pass
+        if self._email_map:
+            em = self._email_map.get(pid) or {}
+            for k in ("click", "open"):
+                v = em.get(k)
+                if v:
+                    try:
+                        ts = max(ts, v.timestamp())
+                    except Exception:
+                        pass
         created = parse_dt(person.get("created"))
         if created:
             try:
@@ -596,8 +706,9 @@ class LeadScorer:
         scored = []
         seen_ids = set()
 
-        # Build visit map first so we know who's been on the site
+        # Build visit + email-engagement maps first so we know who's active
         self._build_visit_map()
+        self._build_email_map()
 
         # Build set of personIds contacted by ANY agent in the last 2 hours
         # so we can suppress pond leads that have already been worked

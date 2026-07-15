@@ -390,6 +390,31 @@ LEADSTREAM_VISIT_RECENCY = [
     (168, 5),   # Within 7 days — some interest
 ]
 
+# Email engagement recency (from FUB /emEvents). A CLICK (tapped a link) is real
+# intent and scored strong. An OPEN is noisy — Apple Mail privacy auto-loads the
+# tracking pixel, inflating opens — so opens are scored light. (hours: points)
+LEADSTREAM_EMAIL_CLICK_RECENCY = [
+    (24, 30),   # Clicked in last 24h — real engagement
+    (72, 22),   # Clicked in last 3 days
+    (168, 12),  # Clicked in last 7 days
+    (336, 6),   # Clicked in last 14 days
+]
+LEADSTREAM_EMAIL_OPEN_RECENCY = [
+    (24, 12),   # Opened in last 24h (light — may be an auto-open)
+    (72, 8),
+    (168, 4),
+]
+LEADSTREAM_EMAIL_LOOKBACK_DAYS = 14   # window to pull opens/clicks from /emEvents
+
+# Pond tag freshness. FUB tags carry NO timestamp, so in the shared pond (where we
+# skip per-lead contact history for speed) an old tag scores at full strength and
+# can float a stale lead to the top. Proxy for "is this tag still live": did the
+# lead do ANYTHING recently — site visit, email open/click, created, or FUB-updated
+# — within this many days. If not, the persistent tag score is discounted (not
+# dropped) by the factor below. Leads with recent activity keep full tag score.
+LEADSTREAM_POND_TAG_FRESHNESS_DAYS = 30
+LEADSTREAM_POND_STALE_TAG_FACTOR = 0.4
+
 # Bonus points for other signals
 LEADSTREAM_NEW_LEAD_24H_BONUS = 15     # Created in last 24 hours
 LEADSTREAM_NEW_LEAD_72H_BONUS = 10     # Created in last 72 hours

@@ -965,6 +965,40 @@ class FUBClient:
         data = self._request("GET", "events", params=params)
         return data.get("events", [])
 
+    def get_email_events(self, event_type=None, since=None, max_pages=40):
+        """Fetch email marketing events (opens, clicks, etc.) from /emEvents,
+        newest first, stopping once past `since`.
+
+        Each event dict has: personId, type ('open'|'click'|...), count,
+        campaignId, campaignName, created, updated. `count` is how many times
+        that person triggered the event for that campaign; `updated` is the most
+        recent occurrence. FUB sorts by -updated so we can stop early once a page
+        crosses the `since` boundary.
+        """
+        limit = 100
+        offset = 0
+        out = []
+        since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ") if since else None
+        for _ in range(max_pages):
+            params = {"limit": limit, "offset": offset, "sort": "-updated"}
+            if event_type:
+                params["type"] = event_type
+            data = self._request("GET", "emEvents", params=params)
+            items = data.get("emEvents", [])
+            if not items:
+                break
+            stop = False
+            for ev in items:
+                stamp = ev.get("updated") or ev.get("created") or ""
+                if since_str and stamp < since_str:
+                    stop = True
+                    continue
+                out.append(ev)
+            if stop or len(items) < limit:
+                break
+            offset += limit
+        return out
+
     @property
     def request_count(self):
         return self._request_count
