@@ -5510,6 +5510,43 @@ def api_course_call_progress():
     })
 
 
+@app.route("/api/course/block-status")
+def api_course_block_status():
+    """Fast Track (call-block module): whether an agent has set their prospecting
+    (call) block in Command Center yet, plus the deep-link to go set it. This is
+    what the lesson polls to confirm the agent completed the step. Server-side:
+      ?key=<COURSE_API_KEY>&email=<agent email>
+      Returns: {found, agent_name, block_set, block_url, schedule, calendar_invited}
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    match = _course_agent_by_email(request.args.get("email"))
+    if not match:
+        return jsonify({"found": False, "reason": "no active agent with that email"}), 404
+
+    name  = match["agent_name"]
+    base  = _course_base_url()
+    token = _db.get_token_for_agent(name) or _db.create_goal_token(name)
+    block = _db.get_prospecting_block(name) or {}
+    days  = block.get("prospecting_days") or []
+    block_set = bool(days)
+    schedule = None
+    if block_set:
+        schedule = {
+            "days":             days,
+            "start_time":       block.get("start_time"),
+            "duration_minutes": block.get("duration_minutes"),
+        }
+    return jsonify({
+        "found": True,
+        "agent_name": name,
+        "block_set": block_set,
+        "block_url": f"{base}/my-block/{token}" if token else None,
+        "schedule": schedule,
+        "calendar_invited": bool(block.get("invite_sent_at")),
+    })
+
+
 @app.route("/api/course/pond-leads")
 def api_course_pond_leads():
     """Fast Track (Module 2): the current top unclaimed POND leads, so the lesson
