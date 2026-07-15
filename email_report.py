@@ -1446,9 +1446,19 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
       <a href="{dashboard_url}" style="color:#667eea;font-weight:600">View My Dashboard →</a>
     </p>''' if dashboard_url else ''}
 
+    <div style="background:#eef2ff;border-radius:8px;padding:20px 24px;margin:26px 0">
+      <p style="font-size:15px;font-weight:700;color:#1a1a2e;margin:0 0 8px">What happens the moment your goal is in</p>
+      <p style="font-size:14px;line-height:1.7;color:#4a5568;margin:0">
+        You start Fast Track, our onboarding sprint. It's a step by step path from your
+        first day to your first deals: how to work your leads, what to say on the calls,
+        and the daily system that makes it all add up. Setting your goal is what turns it on,
+        so do that first and I'll get you rolling.
+      </p>
+    </div>
+
     <p style="{_S['p']}">
-      Over the next 6 days I'll walk you through everything you need to know about
-      working here. Look for these in your inbox:
+      Alongside the course, watch your inbox over the next few days. I'll walk you through
+      the essentials of working here:
     </p>
 
     <div style="{_S['bullets']}">
@@ -1476,7 +1486,7 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
   </div>
 
   <div style="{_S['footer']}">
-    Legacy Home Team &nbsp;·&nbsp; Your goal setup link is personal — don't share it
+    Legacy Home Team &nbsp;·&nbsp; Your goal setup link is personal. Don't share it.
   </div>
 
 </div>
