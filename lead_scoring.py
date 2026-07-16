@@ -861,11 +861,16 @@ class LeadScorer:
         except Exception as e:
             logger.warning("Could not save manifest to DB (non-fatal): %s", e)
 
-    def cleanup_tags(self, dry_run=True, pond_only=False):
+    def cleanup_tags(self, dry_run=True, pond_only=False, keep_ids=None):
         """Remove LeadStream tags from previously tagged leads.
 
         pond_only: if True, only cleans LEADSTREAM_POND_TAG (not agent tags).
                    Used by the hourly pond refresh so agent tags are not stripped.
+        keep_ids:  optional {tag: set(person_ids)} of leads that were just
+                   re-tagged this run. Their tag is left in place so the list is
+                   never emptied. When run() applies the fresh tags BEFORE calling
+                   cleanup, this removes ONLY the leads that dropped off, so the
+                   pond stays populated the whole time (no empty window).
 
         Uses the manifest as the primary source (fast, accurate). If the manifest
         is empty, falls back to a FUB tag query capped at MAX_CLEANUP_PER_TAG
@@ -873,6 +878,7 @@ class LeadScorer:
         Stale tags beyond the cap are cleaned gradually over future run cycles.
         """
         MAX_CLEANUP_PER_TAG = 300  # cap per tag to keep cleanup under ~2 min
+        keep_ids = keep_ids or {}
         removed = 0
         failed = 0
 
@@ -894,6 +900,14 @@ class LeadScorer:
         tags_to_clean = (LEADSTREAM_POND_TAG,) if pond_only else (LEADSTREAM_TAG, LEADSTREAM_POND_TAG)
         for tag in tags_to_clean:
             known_ids = manifest_ids[tag]
+            keep_for_tag = keep_ids.get(tag, set())
+            # Safety: if the fresh set for this tag is empty (scoring produced
+            # nothing this run, usually a transient failure), do NOT strip every
+            # lead — leave existing tags in place rather than wipe the whole list.
+            if keep_ids and not keep_for_tag:
+                logger.warning("Cleanup: skipping '%s' — fresh set empty; keeping "
+                               "existing tags to avoid emptying the list", tag)
+                continue
 
             if known_ids:
                 # Fast path: manifest has the exact leads we tagged — clean only those
@@ -924,6 +938,8 @@ class LeadScorer:
                 pid = person.get("id")
                 if not pid:
                     continue
+                if pid in keep_for_tag:
+                    continue  # still in the fresh set — leave its tag in place
                 if dry_run:
                     print(f"  [DRY RUN] Would remove '{tag}' from ID: {pid}")
                     removed += 1
@@ -1040,12 +1056,11 @@ class LeadScorer:
         print(f"  {'DRY RUN' if dry_run else 'LIVE RUN'} at {self.now.strftime('%Y-%m-%d %H:%M UTC')}")
         print(f"{'='*60}\n")
 
-        # Step 1: Cleanup
-        print("Step 1: Cleaning up old LeadStream tags...")
-        removed = self.cleanup_tags(dry_run=dry_run, pond_only=pond_only)
-        print(f"  Removed tags from {removed} leads\n")
-
-        results = {"removed": removed, "agents": {}, "pond": []}
+        # Tags are applied FIRST, then stale ones removed at the end (keeping the
+        # freshly-tagged ids), so the list is NEVER emptied mid-run. Previously
+        # cleanup ran first and the pond sat empty for the whole scoring pass.
+        keep_ids = {LEADSTREAM_TAG: set(), LEADSTREAM_POND_TAG: set()}
+        results = {"removed": 0, "agents": {}, "pond": []}
 
         # Seed manifest from existing so pond-only runs don't wipe agent section
         existing_manifest = self._load_manifest()
@@ -1078,6 +1093,7 @@ class LeadScorer:
                         print(f"         {' | '.join(breakdown)}")
 
                 tagged, tagged_ids = self.apply_tags(scored, LEADSTREAM_TAG, dry_run=dry_run)
+                keep_ids[LEADSTREAM_TAG].update(i for i in tagged_ids if i)
                 print(f"  Tagged {tagged} leads for {name}")
                 new_manifest["agent"][name] = [
                     {
@@ -1118,6 +1134,7 @@ class LeadScorer:
                     print(f"         {' | '.join(breakdown)}")
 
             tagged, pond_ids = self.apply_tags(pond_scored, LEADSTREAM_POND_TAG, dry_run=dry_run)
+            keep_ids[LEADSTREAM_POND_TAG].update(i for i in pond_ids if i)
             print(f"  Tagged {tagged} pond leads")
             new_manifest["pond"] = [
                 {
@@ -1140,6 +1157,15 @@ class LeadScorer:
                 }
                 for p, s, t, b in pond_scored
             ]
+
+        # Step 4: NOW remove the tag from leads that dropped off this run. The
+        # fresh set (keep_ids) was applied above first, so the list stayed
+        # populated the whole time — no empty window. cleanup diffs the old
+        # manifest against keep_ids and only strips leads no longer in the list.
+        print("\nStep 4: Removing tags from leads no longer in the list...")
+        removed = self.cleanup_tags(dry_run=dry_run, pond_only=pond_only, keep_ids=keep_ids)
+        results["removed"] = removed
+        print(f"  Removed tags from {removed} leads\n")
 
         # Add run metadata
         new_manifest["last_run"] = self.now.isoformat()
