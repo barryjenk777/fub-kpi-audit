@@ -1541,6 +1541,42 @@ If you've got questions or want to talk through your goal, reply to this email o
         return False
 
 
+def send_fast_track_invite_email(first_name, email, daily_dials, magic_link):
+    """Course invite sent automatically after an agent completes goal setting and
+    Command Center syncs it to Fast Track. Plain text, Barry's voice, no dashes.
+    Returns True on success (so a send failure triggers a sync retry)."""
+    subject = "Your Fast Track to Revenue starts here"
+    dd = int(round(daily_dials)) if daily_dials else None
+    standard_line = f"Your daily standard is {dd} dials. " if dd else ""
+    body = f"""{first_name},
+
+Your goal is set. {standard_line}Now it is time to learn the system that turns those dials into closings.
+
+Fast Track to Revenue is a 10-day sprint that builds two skills, your contact rate and your ask, on the same system this team runs. Seven modules across ten days, then the Legacy Team Meeting, every week, forever.
+
+Click below to enter. The course already knows the goal you just set, and everything in it will be graded against your own numbers, not a team average.
+
+{magic_link}
+
+If you have any questions, text or call me directly.
+
+Barry"""
+    try:
+        _pm.send(
+            to=email,
+            from_email=config.EMAIL_FROM,
+            subject=subject,
+            html=body.replace("\n", "<br>"),
+            text=body,
+            cc=[config.BARRY_EMAIL, config.MANAGER_EMAIL],
+        )
+        print(f"[FAST TRACK INVITE] Sent to {first_name} <{email}>")
+        return True
+    except Exception as e:
+        print(f"[FAST TRACK INVITE] Failed for {email}: {e}")
+        return False
+
+
 def send_goal_setup_nudge_email(agent_name, first_name, email, setup_url):
     """Goal-setup outreach for an ESTABLISHED agent who hasn't set a goal yet.
     Different tone than the new-hire onboarding emails: respects that they're

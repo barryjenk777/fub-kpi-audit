@@ -1098,6 +1098,105 @@ def compute_targets(goal: dict) -> dict:
 # Fast Track course progress  (90-day plan capture + graduation credential)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Fast Track course sync queue (retry + audit for the goal -> course sync)
+# ---------------------------------------------------------------------------
+
+def ensure_fasttrack_sync_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS fasttrack_sync_queue (
+                        id                  SERIAL PRIMARY KEY,
+                        agent_name          TEXT NOT NULL,
+                        email               TEXT NOT NULL,
+                        payload             JSONB NOT NULL,
+                        status              TEXT NOT NULL DEFAULT 'pending',
+                        attempts            INT  NOT NULL DEFAULT 0,
+                        last_error          TEXT,
+                        fast_track_agent_id INT,
+                        magic_link          TEXT,
+                        created_at          TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at          TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+    except Exception as e:
+        logger.warning("ensure_fasttrack_sync_table failed: %s", e)
+
+
+def enqueue_fasttrack_sync(agent_name, email, payload):
+    """Insert a pending Fast Track sync row (also the audit record). Returns id."""
+    if not is_available():
+        return None
+    try:
+        import json as _json
+        ensure_fasttrack_sync_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO fasttrack_sync_queue (agent_name, email, payload)
+                    VALUES (%s, %s, %s) RETURNING id
+                """, (agent_name, email, _json.dumps(payload)))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("enqueue_fasttrack_sync failed: %s", e)
+        return None
+
+
+def get_pending_fasttrack_syncs(max_attempts=3):
+    """Rows still pending and under the attempt cap, oldest first."""
+    if not is_available():
+        return []
+    try:
+        ensure_fasttrack_sync_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, agent_name, email, payload, attempts
+                    FROM   fasttrack_sync_queue
+                    WHERE  status = 'pending' AND attempts < %s
+                    ORDER  BY created_at ASC
+                """, (max_attempts,))
+                rows = cur.fetchall()
+        return [{"id": r[0], "agent_name": r[1], "email": r[2],
+                 "payload": r[3], "attempts": r[4]} for r in rows]
+    except Exception as e:
+        logger.warning("get_pending_fasttrack_syncs failed: %s", e)
+        return []
+
+
+def update_fasttrack_sync(row_id, status=None, attempts=None, last_error=None,
+                          fast_track_agent_id=None, magic_link=None):
+    """Update a sync row after an attempt."""
+    if not is_available():
+        return
+    try:
+        sets, vals = [], []
+        if status is not None:
+            sets.append("status = %s"); vals.append(status)
+        if attempts is not None:
+            sets.append("attempts = %s"); vals.append(attempts)
+        if last_error is not None:
+            sets.append("last_error = %s"); vals.append(last_error)
+        if fast_track_agent_id is not None:
+            sets.append("fast_track_agent_id = %s"); vals.append(fast_track_agent_id)
+        if magic_link is not None:
+            sets.append("magic_link = %s"); vals.append(magic_link)
+        sets.append("updated_at = NOW()")
+        vals.append(row_id)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE fasttrack_sync_queue SET {', '.join(sets)} WHERE id = %s",
+                    vals,
+                )
+    except Exception as e:
+        logger.warning("update_fasttrack_sync failed: %s", e)
+
+
 def ensure_course_progress_table():
     if not is_available():
         return

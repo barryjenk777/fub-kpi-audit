@@ -3587,6 +3587,87 @@ def goals_setup_page(token):
                            existing_profile=existing_profile)
 
 
+def _ft_build_payload(agent_name, email):
+    """Assemble the Fast Track sync payload from Command Center's goal, computed
+    targets, why, and identity. Includes only fields we actually have; email +
+    name are always present."""
+    year = datetime.now().year
+    goal = _db.get_goal(agent_name, year=year) or {}
+    payload = {"email": email, "name": agent_name}
+    gci = float(goal.get("gci_goal") or 0)
+    if gci > 0:
+        payload["incomeGoal"] = int(round(gci))
+        t = _db.compute_targets(goal)
+        wk_dials = t.get("dials_per_week") or 0
+        payload["weeklyDials"]         = int(round(wk_dials))
+        payload["weeklyConversations"] = int(round(t.get("convos_per_week") or 0))
+        payload["weeklyAppointments"]  = int(round(t.get("appts_per_week") or 0))
+        payload["dailyDials"]          = int(round(wk_dials / 5)) if wk_dials else 0
+        cr = float(goal.get("contact_rate") or 0)          # dials -> conversations
+        ar = float(goal.get("call_to_appt_rate") or 0)     # conversations -> appts
+        if cr:
+            payload["contactRate"] = int(round(cr * 100))
+        if ar:
+            payload["askRate"] = int(round(ar * 100))
+    why = _db.get_agent_why(agent_name) or {}
+    if why.get("why_statement"):
+        payload["whyText"] = why["why_statement"]
+    ident = _db.get_agent_identity(agent_name) or {}
+    if ident.get("identity_archetype"):
+        payload["identityArchetype"] = ident["identity_archetype"]
+    if ident.get("custom_identity"):
+        payload["identityStatement"] = ident["custom_identity"]
+    return payload
+
+
+def _ft_alert_barry_sync_failed(agent_name, email, err):
+    """Email Barry when a Fast Track sync gives up after the attempt cap."""
+    try:
+        import postmark_client as _pm
+        msg = (f"Command Center could not sync {agent_name} <{email}> to Fast Track "
+               f"after 3 attempts.\n\nThe agent's goal IS saved in Command Center, but "
+               f"they did NOT get their course invite. You may want to send it manually.\n\n"
+               f"Last error:\n{err}")
+        _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+                 subject=f"⚠️ Fast Track sync failed for {agent_name}",
+                 html=msg.replace("\n", "<br>"), text=msg)
+    except Exception as e:
+        logger.warning("fast-track failure alert to Barry failed: %s", e)
+
+
+def _ft_attempt_sync(row):
+    """Run ONE Fast Track sync attempt for a queue row. On success, emails the
+    invite and marks the row done. On failure, records the error and alerts Barry
+    once attempts hit 3. Never raises. Returns True on success."""
+    import fasttrack_client as _ft
+    row_id    = row["id"]
+    attempts  = (row.get("attempts") or 0) + 1
+    payload   = row["payload"]
+    email     = row["email"]
+    agent_name = row["agent_name"]
+    try:
+        data  = _ft.sync_agent_to_fast_track(payload)
+        magic = data.get("magic_link")
+        first = (agent_name or "").split()[0] if agent_name else ""
+        from email_report import send_fast_track_invite_email
+        if not send_fast_track_invite_email(first, email, payload.get("dailyDials"), magic):
+            raise RuntimeError("invite email send failed")
+        _db.update_fasttrack_sync(row_id, status="done", attempts=attempts,
+                                  fast_track_agent_id=data.get("agent_id"),
+                                  magic_link=magic)
+        logger.info("[fast-track sync] done agent=%s ftId=%s", email, data.get("agent_id"))
+        return True
+    except Exception as e:
+        err = str(e)[:500]
+        terminal = attempts >= 3
+        _db.update_fasttrack_sync(row_id, status=("failed" if terminal else "pending"),
+                                  attempts=attempts, last_error=err)
+        logger.warning("[fast-track sync] attempt %d failed agent=%s: %s", attempts, email, err)
+        if terminal:
+            _ft_alert_barry_sync_failed(agent_name, email, err)
+        return False
+
+
 @app.route("/api/goals/setup/<token>", methods=["POST"])
 def api_goals_setup_save(token):
     agent_name = _db.resolve_goal_token(token)
@@ -3737,6 +3818,32 @@ def api_goals_setup_save(token):
                 print(f"[GOAL NOTIFY] Sent Barry notification for {agent_name} goal {'set' if is_first else 'update'}")
         except Exception as _ne:
             print(f"[GOAL NOTIFY] Failed to notify Barry: {_ne}")
+        # ───────────────────────────────────────────────────────────────
+
+        # ── Sync to Fast Track course + send invite (fire-and-forget) ──
+        # Never blocks goal completion: the goal is already saved above. On any
+        # failure the sync is queued and retried by scheduled_fasttrack_sync_retry.
+        try:
+            _all_pf     = {p["agent_name"]: p for p in (_db.get_agent_profiles(active_only=False) or [])}
+            _ft_email   = (contact.get("email") or "").strip() or _all_pf.get(agent_name, {}).get("email", "")
+            if _ft_email:
+                _ft_payload = _ft_build_payload(agent_name, _ft_email)
+                _ft_id      = _db.enqueue_fasttrack_sync(agent_name, _ft_email, _ft_payload)
+                if _ft_id:
+                    # Run the sync+email in a daemon thread so the agent's goal-save
+                    # returns instantly. Durability comes from the queued row: if the
+                    # thread dies, scheduled_fasttrack_sync_retry picks it up.
+                    import threading as _threading
+                    _ft_row = {"id": _ft_id, "agent_name": agent_name,
+                               "email": _ft_email, "payload": _ft_payload, "attempts": 0}
+                    _threading.Thread(target=_ft_attempt_sync, args=(_ft_row,),
+                                      daemon=True).start()
+                else:
+                    logger.warning("[FAST TRACK] could not queue sync for %s (DB unavailable)", agent_name)
+            else:
+                print(f"[FAST TRACK] No email for {agent_name} — skipping course sync")
+        except Exception as _fte:
+            print(f"[FAST TRACK] sync wiring error for {agent_name}: {_fte}")
         # ───────────────────────────────────────────────────────────────
 
         return jsonify({"success": True, "goal": goal,
@@ -12617,6 +12724,24 @@ def scheduled_sync_fub_roster():
         _db.release_job_lock("roster_sync")
 
 
+def scheduled_fasttrack_sync_retry():
+    """Retry any Fast Track course syncs that failed on the goal-completion path.
+    Each row is attempted up to 3 times; after that Barry is alerted and the row
+    is marked failed (handled inside _ft_attempt_sync)."""
+    if not _db.try_acquire_job_lock("fasttrack_sync_retry"):
+        return
+    try:
+        pending = _db.get_pending_fasttrack_syncs(max_attempts=3)
+        if pending:
+            logger.info("[fast-track sync] retrying %d pending sync(s)", len(pending))
+        for row in pending:
+            _ft_attempt_sync(row)
+    except Exception as e:
+        logger.warning("scheduled_fasttrack_sync_retry error: %s", e)
+    finally:
+        _db.release_job_lock("fasttrack_sync_retry")
+
+
 def sync_daily_activity_from_fub(target_date=None):
     """
     Pull call and appointment counts from FUB for a single date and upsert
@@ -14438,6 +14563,11 @@ def start_scheduler():
     _scheduler.add_job(scheduled_sync_fub_roster,
                        CronTrigger(hour="2,6,10,14,18,22", minute=15, timezone=ET),
                        id="roster_sync", name="FUB roster sync (every 4h)",
+                       max_instances=1, coalesce=True)
+
+    _scheduler.add_job(scheduled_fasttrack_sync_retry,
+                       CronTrigger(minute="*/15", timezone=ET),
+                       id="fasttrack_sync_retry", name="Fast Track course sync retry (every 15m)",
                        max_instances=1, coalesce=True)
 
     # Daily activity sync: 3:30am + every 2 hours 7am–9pm ET

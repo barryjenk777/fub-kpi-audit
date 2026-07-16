@@ -64,6 +64,13 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
 import os as _os
 COURSE_API_KEY = _os.environ.get("COURSE_API_KEY", "fasttrack-2026")
 
+# Fast Track course sync: when an agent completes goal setting, Command Center
+# POSTs their goal data here and gets back a magic link to email them. Secret
+# reads from env (set FAST_TRACK_SYNC_SECRET on Railway) with a default fallback.
+FAST_TRACK_SYNC_URL = _os.environ.get(
+    "FAST_TRACK_SYNC_URL", "https://www.legacyhometeamtraining.com/api/cc/sync-goal")
+FAST_TRACK_SYNC_SECRET = _os.environ.get("FAST_TRACK_SYNC_SECRET", "fasttrack-2026")
+
 # AI Sales Coach phone number — Buyers line.
 # Shown in coaching texts when an agent is calling but not converting to appointments.
 AI_SALES_COACH_PHONE_BUYERS = "1-337-486-3563"
