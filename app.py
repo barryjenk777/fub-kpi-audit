@@ -13855,7 +13855,7 @@ def _sales_manager_analytics(weeks=8):
     # --- Owner view: is Joe doing his job? ---
     latest_met = subs[0]["agents_met"] if subs else 0
     joe = {"met_this_week": latest_met, "target_min": 3, "target_max": 4,
-           "hitting": latest_met >= 3, "submitted": bool(subs),
+           "hitting": latest_met >= 4, "submitted": bool(subs),
            "last_submitted": subs[0]["submitted_at"] if subs else None,
            "history": [{"when": s["submitted_at"], "met": s["agents_met"]} for s in subs[:6]]}
 
@@ -14009,9 +14009,9 @@ function render(d){{
   const col=hit?'#1c6b52':'#a3352e', bg=hit?'var(--good-bg,#e4efe9)':'var(--bad-bg,#f6e2df)';
   html+='<div class="card"><div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9fb0c8;font-weight:700;margin-bottom:8px">1 &middot; Is Joe doing his job?</div>';
   html+='<div style="background:'+bg+';border-radius:12px;padding:18px 20px">'+
-        '<div style="font-size:34px;font-weight:800;color:'+col+';line-height:1">'+met+' of 3 to 4</div>'+
+        '<div style="font-size:34px;font-weight:800;color:'+col+';line-height:1">'+met+' of 4</div>'+
         '<div style="font-size:15px;color:var(--ink);margin-top:6px;font-weight:600">'+
-        (joe.submitted? (hit? 'Joe hit his number of 1:1s this week.' : 'Joe met '+met+' agent'+(met===1?'':'s')+' this week. You asked for 3 to 4. He is short.') : 'No update from Joe yet this week.')+'</div></div>';
+        (joe.submitted? (hit? 'Joe hit his number of 1:1s this week.' : 'Joe met '+met+' agent'+(met===1?'':'s')+' this week. You asked for 4. He is short.') : 'No update from Joe yet this week.')+'</div></div>';
   if((joe.history||[]).length>1){{
     html+='<div style="margin-top:12px;font-size:13px;color:#9fb0c8">Recent weeks: '+joe.history.map(function(h){{return (h.met||0)+' met'}}).join(' &middot; ')+'</div>';
   }}
@@ -14059,10 +14059,10 @@ function render(d){{
   // IS JOE MAKING AN IMPACT? (honest)
   html+='<div class="card"><div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9fb0c8;font-weight:700;margin-bottom:4px">Is Joe making an impact yet?</div>';
   const avgMet=(d.accountability||{{}}).avg_agents_per_week;
-  if(avgMet && avgMet>=3){{
+  if(avgMet && avgMet>=4){{
     html+='<p class="lead">Joe is meeting enough agents to matter. Watch the leak table above over the next few weeks: if the agents he coaches start booking more appointments, that is his impact showing up.</p>';
   }} else {{
-    html+='<p class="lead" style="max-width:66ch">Not yet, and here is the honest reason: Joe is averaging about '+(avgMet||1)+' agent a week, not the 3 to 4 you asked for. There is not enough coaching happening to move the team. The single highest-value thing you can do is get Joe consistently meeting 3 to 4, focused on the appointment ask. Then this page will show whether it works.</p>';
+    html+='<p class="lead" style="max-width:66ch">Not yet, and here is the honest reason: Joe is averaging about '+(avgMet||1)+' agent a week, not the 4 you asked for. There is not enough coaching happening to move the team. The single highest-value thing you can do is get Joe consistently meeting 4, focused on the appointment ask. Then this page will show whether it works.</p>';
   }}
   html+='</div>';
 

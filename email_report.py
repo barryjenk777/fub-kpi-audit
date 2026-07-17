@@ -1878,14 +1878,14 @@ def build_impact_tracker_email(date_label, entries, stats, analytics, insight):
 
     # --- Q1: is Joe doing his job? ---
     n_met = joe.get("met_this_week", len(met))
-    hitting = joe.get("hitting", n_met >= 3)
+    hitting = joe.get("hitting", n_met >= 4)
     j_col = "#0f6e56" if hitting else "#a32d2d"
     j_bg = "#e1f5ee" if hitting else "#fcebeb"
     j_line = ("Joe hit his number of 1:1s this week." if hitting
-              else f"You asked for 3 to 4. Joe met {n_met}. He is short.")
+              else f"You asked for 4. Joe met {n_met}. He is short.")
     q1 = (f'<div style="background:{j_bg};border-radius:10px;padding:16px 20px;margin:0 0 22px">'
           f'<div style="font-size:12px;font-weight:700;color:#5f5e5a;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">1. Is Joe doing his job?</div>'
-          f'<div style="font-size:28px;font-weight:800;color:{j_col};line-height:1">{n_met} of 3 to 4</div>'
+          f'<div style="font-size:28px;font-weight:800;color:{j_col};line-height:1">{n_met} of 4</div>'
           f'<div style="font-size:14px;color:#2d3748;margin-top:5px;font-weight:600">{j_line}</div></div>')
 
     # --- Q2: where is the business leaking? ---
