@@ -548,7 +548,6 @@ def run_morning_nudges(dry_run: bool = False):
                 _pm.send(
                     to=email, from_email=EMAIL_FROM,
                     subject=subject, html=html, text=body_text,
-                    cc=EMAIL_FROM,
                 )
             send_status = "sent" if not dry_run else "dry_run"
             _db.log_nudge(name, "morning", subject, status=send_status, arc=selected_arc)
