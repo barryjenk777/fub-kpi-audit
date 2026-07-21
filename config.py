@@ -82,6 +82,38 @@ AI_COACH_MIN_CALLS_THRESHOLD = 10
 # If appts_last_7d is below this fraction of the weekly appt goal, prompt the AI coach.
 AI_COACH_APPT_CONVERSION_THRESHOLD = 0.5
 
+# Maverick AI call-practice scenarios. When an agent is flagged (calling enough but
+# not converting to appointments), we prescribe a rep: one BUYER scenario + one
+# SELLER scenario, each as its own text with a line of persona context. The two
+# lists are difficulty-ordered and advance together each week the agent is flagged
+# (Standard -> Irate -> Confused -> Disinterested, then it cycles), so the reps get
+# harder the longer someone stays stuck. `context` is a short "who you're calling"
+# line; edit freely.
+MAVERICK_BUYER_SCENARIOS = [
+    {"label": "Standard Buyer",      "phone": "+13374863563",
+     "context": "a normal online buyer, a little guarded but reachable"},
+    {"label": "Irate Buyer",         "phone": "+13322863051",
+     "context": "annoyed you called, testing whether you'll fold"},
+    {"label": "Confused Buyer",      "phone": "+13374863523",
+     "context": "overwhelmed and unsure, needs you to bring the clarity"},
+    {"label": "Disinterested Buyer", "phone": "+13526045216",
+     "context": "acting like they don't care, you have to create the value"},
+]
+MAVERICK_SELLER_SCENARIOS = [
+    {"label": "Standard Seller",      "phone": "+13865176392",
+     "context": "an online seller feeling out their options"},
+    {"label": "Irate Seller",         "phone": "+14074567710",
+     "context": "irritated and skeptical, holding your frame is the test"},
+    {"label": "Confused Seller",      "phone": "+13865176224",
+     "context": "unsure how any of it works, wants you to guide them"},
+    {"label": "Disinterested Seller", "phone": "+13213997494",
+     "context": "lukewarm on selling, you have to find the motivation"},
+]
+
+# Only prescribe the Maverick rep on this weekday (keeps it to once a week, not
+# every coaching text). Set to None to prescribe on any flagged coaching day.
+MAVERICK_PRESCRIBE_WEEKDAY = "monday"
+
 # FUB user IDs whose calls should NEVER be counted or fetched.
 # userId=1 is a system/automated account that logs thousands of calls/week
 # and serves no purpose in any call metric.

@@ -14791,12 +14791,10 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
     met_calls  = calls_goal  > 0 and calls  >= calls_goal
     met_convos = convos_goal > 0 and convos >= convos_goal
 
-    # AI-coach trigger: calling but not converting to appointments.
-    _min_calls   = getattr(config, "AI_COACH_MIN_CALLS_THRESHOLD", 10)
-    _appt_thresh = getattr(config, "AI_COACH_APPT_CONVERSION_THRESHOLD", 0.5)
-    _coach_phone = getattr(config, "AI_SALES_COACH_PHONE_BUYERS", "1-337-486-3563")
-    _appt_low    = appts == 0 or (appts_goal > 0 and appts < appts_goal * _appt_thresh)
-    _ai_coach    = calls >= _min_calls and _appt_low
+    # AI-coach prescription is now handled as a separate 2-text Maverick rep
+    # (one buyer + one seller scenario) in _build_coaching_message, so the old
+    # single inline coach line is disabled here.
+    _ai_coach    = False
 
     # Claude-generated copy first (fresh + in Barry's coach voice). Falls back to
     # the deterministic template below if the API is down or output is weak.
@@ -15010,6 +15008,33 @@ def _fetch_7d_activity_from_fub(fub, profiles):
     }
 
 
+def _maverick_rep_texts(agent_first, iso_week):
+    """Two texts prescribing a Maverick call-practice rep for an agent whose ask
+    (conversation -> appointment) is lagging: one BUYER scenario + one SELLER
+    scenario, each with a line of persona context. Difficulty advances by ISO
+    week, so an agent flagged multiple weeks climbs Standard -> Irate ->
+    Confused -> Disinterested. Returns [] if scenarios aren't configured."""
+    buyers  = getattr(config, "MAVERICK_BUYER_SCENARIOS", []) or []
+    sellers = getattr(config, "MAVERICK_SELLER_SCENARIOS", []) or []
+    if not buyers or not sellers:
+        return []
+    b = buyers[iso_week % len(buyers)]
+    s = sellers[iso_week % len(sellers)]
+    t1 = (f"{agent_first}, you're making the calls but the appointments aren't "
+          f"following. That's the ask, and the ask is a muscle. Today's buyer rep: "
+          f"{b['label']}, {b['context']}. Call {b['phone']} and practice getting "
+          f"the appointment.")
+    t2 = (f"Now the seller side, since your list has both. {s['label']}, "
+          f"{s['context']}. Call {s['phone']}. Same job, book the appointment. "
+          f"10 minutes total, and the real calls start feeling easy.")
+    try:
+        import coach_voice as _cv
+        t1, t2 = _cv._strip_dashes(t1), _cv._strip_dashes(t2)
+    except Exception:
+        pass
+    return [t1, t2]
+
+
 def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
                             call_ranks, active_with_calls, pct_elapsed, today):
     """Decide and generate the coaching text for one agent. Single source of
@@ -15020,7 +15045,9 @@ def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
       goal set, first 7 days -> onboarding follow-up
       goal set, past day 7   -> regular KPI / accountability text
 
-    Returns (message, kpi_snapshot) — kpi_snapshot is None for onboarding/setup.
+    Returns (messages, kpi_snapshot) — messages is a list of 1 text normally, or
+    2 texts when a Maverick buyer+seller rep is prescribed. kpi_snapshot is None
+    for onboarding/setup.
     """
     agent_first = agent_name.split()[0]
     goal_set = bool(goals and goals.get("gci_goal", 0))
@@ -15044,13 +15071,13 @@ def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
     setup_url = f"{base_url}/goals/setup/{token}" if base_url and token else ""
 
     if not goal_set:
-        return _generate_new_agent_text(
+        return [_generate_new_agent_text(
             agent_first, week_day, goal_set=False,
-            setup_url=setup_url, days_on_team=days_on_team or 0), None
+            setup_url=setup_url, days_on_team=days_on_team or 0)], None
     if within_onboarding:
-        return _generate_new_agent_text(
+        return [_generate_new_agent_text(
             agent_first, week_day, goal_set=True,
-            setup_url=setup_url, days_on_team=days_on_team), None
+            setup_url=setup_url, days_on_team=days_on_team)], None
 
     targets = _db.compute_targets(goals) if goals else {}
     kpi = {
@@ -15069,7 +15096,22 @@ def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
         "team_size":           active_with_calls,
         "pct_of_year_elapsed": round(pct_elapsed, 3),
     }
-    return _generate_agent_coaching_text(agent_first, kpi, week_day), kpi
+    # Maverick rep: if the agent is calling enough but not converting to
+    # appointments, prescribe a 2-text buyer+seller practice rep instead of the
+    # normal coaching text (text 1 carries the diagnostic). Gated to once a week.
+    _min_calls   = getattr(config, "AI_COACH_MIN_CALLS_THRESHOLD", 10)
+    _appt_thresh = getattr(config, "AI_COACH_APPT_CONVERSION_THRESHOLD", 0.5)
+    _appt_goal   = kpi.get("appts_per_week", 0)
+    _appts7      = kpi.get("appts_last_7d", 0)
+    _appt_low    = _appts7 == 0 or (_appt_goal > 0 and _appts7 < _appt_goal * _appt_thresh)
+    _flagged     = kpi.get("calls_last_7d", 0) >= _min_calls and _appt_low
+    _mav_day     = getattr(config, "MAVERICK_PRESCRIBE_WEEKDAY", "monday")
+    if _flagged and (_mav_day is None or week_day == _mav_day):
+        reps = _maverick_rep_texts(agent_first, today.isocalendar()[1])
+        if reps:
+            return reps, kpi
+
+    return [_generate_agent_coaching_text(agent_first, kpi, week_day)], kpi
 
 
 def scheduled_agent_coaching_texts():
@@ -15143,22 +15185,23 @@ def scheduled_agent_coaching_texts():
         ytd   = ytd_cache.get(agent_name, {})
         rec   = recent.get(agent_name, {"calls": 0, "convos": 0, "appts": 0})
 
-        message, kpi = _build_coaching_message(
+        messages, kpi = _build_coaching_message(
             agent_name, profile, goals, ytd, rec, week_day,
             call_ranks, active_with_calls, pct_elapsed, today,
         )
 
-        try:
-            row_id = _db.queue_agent_imessage(
-                agent_name=agent_name, fub_user_id=fub_user_id,
-                phone=phone, message=message,
-                week_day=week_day, kpi_snapshot=kpi,
-            )
-            if row_id:
-                queued += 1
-                logger.info("[AGENT TEXTS] Queued for %s: %r", agent_name, message[:80])
-        except Exception as _qe:
-            logger.error("[AGENT TEXTS] Queue failed for %s: %s", agent_name, _qe)
+        for message in messages:
+            try:
+                row_id = _db.queue_agent_imessage(
+                    agent_name=agent_name, fub_user_id=fub_user_id,
+                    phone=phone, message=message,
+                    week_day=week_day, kpi_snapshot=kpi,
+                )
+                if row_id:
+                    queued += 1
+                    logger.info("[AGENT TEXTS] Queued for %s: %r", agent_name, message[:80])
+            except Exception as _qe:
+                logger.error("[AGENT TEXTS] Queue failed for %s: %s", agent_name, _qe)
 
     logger.info("[AGENT TEXTS] Done — %d texts queued for %s", queued, week_day)
     return queued
@@ -15293,7 +15336,7 @@ def api_agent_texts_preview():
             rec     = recent.get(agent_name, {"calls": 0, "convos": 0, "appts": 0})
 
             # Same routing the scheduler uses (goal-setup / onboarding / KPI).
-            message, kpi = _build_coaching_message(
+            messages, kpi = _build_coaching_message(
                 agent_name, profile, goals, ytd, rec, week_day,
                 call_ranks, active_with_calls, pct_elapsed, today,
             )
@@ -15302,7 +15345,9 @@ def api_agent_texts_preview():
                 "phone":   profile.get("phone") or profile.get("fub_phone") or "NO PHONE",
                 "mode":    "kpi" if kpi else "onboarding/goal-setup",
                 "kpi":     kpi,
-                "message": message,
+                "message": messages[0] if len(messages) == 1 else None,
+                "messages": messages,
+                "maverick_rep": len(messages) == 2,
             })
 
         return jsonify({"ok": True, "day": week_day, "count": len(results), "previews": results})
