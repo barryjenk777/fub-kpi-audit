@@ -11139,7 +11139,14 @@ def webhook_projectblue():
                                            person_name, _stored_vid_id, _vid_ready)
                             _ab_variant = "voice"   # fall through to voice path
 
-                    if _ab_variant != "video":
+                    if _ab_variant == "none":
+                        # Conversation-only arm: consent still routes (tags +
+                        # handoff below) but no recording is sent. This is the
+                        # readable control against the voice arm.
+                        logger.info("A/B variant 'none' for %s — no recording sent (conversation-only arm)",
+                                    person_name)
+
+                    if _ab_variant == "voice":
                         # Voice variant: ElevenLabs audio bubble in iMessage
                         if _el.is_available() and _pb_reply.is_available():
                             _vn_behavior = {}
@@ -11184,6 +11191,85 @@ def webhook_projectblue():
                             logger.info("Voice note skipped — ElevenLabs or Project Blue not configured")
                 except Exception as _vne:
                     logger.warning("Recording send failed (non-fatal): %s", _vne)
+
+                # ── Post-consent HeyGen render ─────────────────────────────
+                # Video generation moved here from send time: the daily render
+                # budget now lands on leads who actually asked. If this
+                # consented lead has no video yet, submit one in the background
+                # and store the id — available for follow-up touches, the
+                # agent, and the /v landing page. claim_once guards against
+                # double renders; the reply above is never blocked on this.
+                try:
+                    if (not _db.get_video_id_for_lead(person_id)
+                            and _db.claim_once(f"pcvideo:{person_id}")):
+                        import heygen_client as _hg_pc
+                        from config import HEYGEN_DAILY_CAP as _HG_CAP_PC
+                        if _hg_pc.is_available() and _db.count_heygen_today() < _HG_CAP_PC:
+                            _pc_behavior = _audit_behavior or {}
+                            if not _pc_behavior:
+                                try:
+                                    from pond_mailer import analyze_behavior as _pc_ab
+                                    _pc_events   = fub.get_events_for_person(
+                                        person_id, days=90, limit=100)
+                                    _pc_tags     = fub.get_person(person_id).get("tags", [])
+                                    _pc_behavior = _pc_ab(_pc_events, _pc_tags)
+                                except Exception:
+                                    _pc_behavior = {}
+                            _pc_first  = (person_name or "").split()[0] if person_name else "there"
+                            _pc_mv     = _pc_behavior.get("most_viewed") or {}
+                            _pc_street = _pc_mv.get("street") or ""
+                            _pc_cities = sorted(_pc_behavior.get("cities") or [])
+                            _pc_city   = _pc_cities[0] if _pc_cities else "Hampton Roads"
+
+                            if _audit_lead_type == "zbuyer":
+                                _pc_bg     = _hg_pc.get_background_url(
+                                    "zbuyer", address=_pc_street, city=_pc_city)
+                                _pc_script = _hg_pc.generate_zbuyer_video_script(
+                                    first_name=_pc_first,
+                                    street=_pc_street or "your home",
+                                    city=_pc_city)
+                            elif _audit_lead_type == "seller":
+                                _pc_bg     = _hg_pc.get_background_url(
+                                    "seller", address=_pc_street, city=_pc_city)
+                                _pc_script = _hg_pc.generate_seller_video_script(
+                                    first_name=_pc_first,
+                                    street=_pc_street or "your home",
+                                    city=_pc_city)
+                            else:
+                                _pc_bg     = _hg_pc.get_background_url(
+                                    "buyer", address=_pc_street, city=_pc_city)
+                                _pc_script = _hg_pc.generate_buyer_video_script(
+                                    first_name=_pc_first,
+                                    city=_pc_city,
+                                    price_min=_pc_behavior.get("price_min"),
+                                    price_max=_pc_behavior.get("price_max"),
+                                    beds=sorted(_pc_behavior.get("beds_seen") or []) or None,
+                                    property_type=_pc_behavior.get("property_type"),
+                                    most_viewed_street=_pc_street or None,
+                                    strategy="post_consent",
+                                    view_count=_pc_behavior.get("view_count", 0))
+
+                            _pc_video_id = _hg_pc.submit_video(
+                                _pc_script,
+                                background_url=_pc_bg,
+                                avatar_id=_hg_pc.DEFAULT_AVATAR,
+                                voice_id=_hg_pc.DEFAULT_VOICE,
+                                character_type=_hg_pc.DEFAULT_AVATAR_TYPE,
+                            )
+                            if _pc_video_id:
+                                _db.set_video_id_for_lead(person_id, _pc_video_id)
+                                if not _audit_video_id:
+                                    _audit_video_id = _pc_video_id
+                                logger.info("Post-consent HeyGen render submitted for %s: %s",
+                                            person_name, _pc_video_id)
+                            else:
+                                logger.warning("Post-consent HeyGen submit failed for %s",
+                                               person_name)
+                        else:
+                            logger.info("Post-consent HeyGen skipped for %s — "
+                                        "not configured or daily cap reached", person_name)
+                except Exception as _hg_pc_err:
+                    logger.warning("Post-consent HeyGen render failed (non-fatal): %s", _hg_pc_err)
 
             _lead_first = (person_name or "").split()[0] if person_name else ""
 
@@ -11335,7 +11421,10 @@ def webhook_projectblue():
                 ]
                 if _consent:
                     _resolved_variant = _db.get_ab_variant_for_lead(person_id) or "voice"
-                    _lines.append(f"Consent: YES — {_resolved_variant} recording sent")
+                    if _resolved_variant == "none":
+                        _lines.append("Consent: YES — conversation-only arm (no recording)")
+                    else:
+                        _lines.append(f"Consent: YES — {_resolved_variant} recording sent")
                 _lines += [
                     "",
                     "─── Their reply ────────────────────────────────────",

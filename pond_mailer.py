@@ -3224,10 +3224,10 @@ def run_new_lead_mailer(dry_run=True):
             logger.debug("New lead %s — no email address, SMS-only path", name)
 
         # ── SMS path ──────────────────────────────────────────────────────────
-        # Fire the "would it be ok if I sent a quick recording?" opener via
-        # Project Blue (iMessage-first). This is the consent-gathering text that
-        # triggers a voice note send when the lead replies with "ok/sure/yes."
-        # Runs whether or not we sent an email — covers phone-only leads too.
+        # Fire the question-first opener via Project Blue (iMessage-first).
+        # A consenting/positive reply triggers the recording as beat two
+        # (webhook consent path). Runs whether or not we sent an email —
+        # covers phone-only leads too.
         import projectblue_client as _pb_nl
         import random as _rand_nl
 
@@ -3246,9 +3246,14 @@ def run_new_lead_mailer(dry_run=True):
             logger.debug("New lead %s — already received a pond SMS, skipping", name)
         else:
             # TCPA quiet hours enforced inside _pb_nl.send_message()
-            # A/B test: 50% voice (ElevenLabs audio bubble), 50% video (HeyGen map)
+            # A/B test: 50% voice (ElevenLabs audio bubble on consent), 50%
+            # none (conversation only, no recording). "video" is never assigned
+            # here — no HeyGen video exists at send time for a brand new lead,
+            # and a coin-flipped video arm with no video is fiction. HeyGen
+            # renders happen post-consent (webhook) so the daily render budget
+            # lands on leads who actually asked.
             import random as _rand_nl
-            _nl_ab_variant = "voice" if _rand_nl.random() < 0.5 else "video"
+            _nl_ab_variant = "voice" if _rand_nl.random() < 0.5 else "none"
 
             # Project Blue sends iMessage — not carrier SMS, no 10DLC opt-out required.
             # Check quiet hours BEFORE generating — don't waste a Claude API call
@@ -3300,103 +3305,11 @@ def run_new_lead_mailer(dry_run=True):
                 _nl_result = _pb_nl.send_message(_nl_phone, _nl_sms_body, dry_run=dry_run)
 
                 if _nl_result.get("success"):
-                    # ── Video variant: generate HeyGen video in background ─────
-                    # Start after the text goes out so the lead gets the opener
-                    # immediately. Video typically renders in 60-90s — will be
-                    # ready long before most leads reply. video_id stored in DB
-                    # so the webhook can retrieve it on consent reply.
-                    # _nl_is_z / _nl_is_seller already detected above before SMS body gen.
-
+                    # No send-time HeyGen render — that produced a phantom video
+                    # arm (264 assigned, 40 generated). Video renders now happen
+                    # post-consent in the reply webhook, where the daily render
+                    # budget lands on leads who asked.
                     _nl_video_id = None
-                    if _nl_ab_variant == "video" and not dry_run:
-                        try:
-                            from heygen_client import (
-                                is_available as _hg_avail,
-                                generate_buyer_video_script as _hg_buyer_script,
-                                generate_seller_video_script as _hg_seller_script,
-                                generate_zbuyer_video_script as _hg_zbuyer_script,
-                                submit_video as _hg_submit,
-                                get_background_url as _hg_bg,
-                                DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
-                            )
-                            if _hg_avail():
-                                _nl_city = _city_from_tags(tags) or (
-                                    list(behavior.get("cities") or [])[0]
-                                    if behavior.get("cities") else "Hampton Roads"
-                                )
-                                _nl_mv     = behavior.get("most_viewed") or {}
-                                _nl_street = _nl_mv.get("street") or ""
-
-                                if _nl_is_z:
-                                    # Zbuyer: cash-offer script (NOT the seller home-value script)
-                                    _nl_bg = _hg_bg("zbuyer", address=_nl_street, city=_nl_city)
-                                    _nl_script = _hg_zbuyer_script(
-                                        first_name=first,
-                                        street=_nl_street or "your home",
-                                        city=_nl_city,
-                                        tags=tags,
-                                    )
-                                    _nl_map_type = "zbuyer (cash offer, property zoom)"
-                                elif _nl_is_seller:
-                                    # Seller: home-value script, property address map
-                                    _nl_bg = _hg_bg("seller", address=_nl_street, city=_nl_city)
-                                    _nl_script = _hg_seller_script(
-                                        first_name=first,
-                                        street=_nl_street or "your home",
-                                        city=_nl_city,
-                                        tags=tags,
-                                    )
-                                    _nl_map_type = "seller (property zoom)"
-                                else:
-                                    # Buyer: most-viewed street map or city map, buyer script
-                                    _nl_bg = _hg_bg(
-                                        "buyer",
-                                        address=_nl_street,
-                                        city=_nl_city,
-                                    )
-                                    _nl_script = _hg_buyer_script(
-                                        first_name=first,
-                                        city=_nl_city,
-                                        price_min=behavior.get("price_min"),
-                                        price_max=behavior.get("price_max"),
-                                        beds=sorted(behavior.get("beds_seen") or []) or None,
-                                        property_type=behavior.get("property_type"),
-                                        most_viewed_street=_nl_street or None,
-                                        strategy="new_lead_immediate",
-                                        view_count=behavior.get("view_count", 0),
-                                        tags=tags,
-                                    )
-                                    _nl_map_type = "buyer (street/city zoom)"
-
-                                # Submit only — do NOT block waiting for the render.
-                                # HeyGen renders in ~60-90s on their side; we store the
-                                # video_id now and the consent-reply path resolves the
-                                # finished video on demand via /mthumb and /v (which call
-                                # HeyGen's status API at click time). Blocking here used
-                                # to time out the whole run and silently drop to voice.
-                                print(f"    Submitting HeyGen video for {name} — {_nl_map_type}...")
-                                _nl_video_id = _hg_submit(
-                                    _nl_script,
-                                    background_url=_nl_bg,
-                                    avatar_id=DEFAULT_AVATAR,
-                                    voice_id=DEFAULT_VOICE,
-                                    character_type=DEFAULT_AVATAR_TYPE,
-                                )
-                                if _nl_video_id:
-                                    print(f"    HeyGen video submitted: {_nl_video_id} (rendering in background)")
-                                    logger.info("HeyGen video submitted for new lead %s (%s): %s",
-                                                name, _nl_map_type, _nl_video_id)
-                                else:
-                                    logger.warning("HeyGen submit failed for new lead %s — "
-                                                   "falling back to voice on consent", name)
-                                    _nl_ab_variant = "voice"
-                            else:
-                                logger.info("HeyGen not configured — new lead %s gets voice", name)
-                                _nl_ab_variant = "voice"
-                        except Exception as _hg_nl_err:
-                            logger.warning("HeyGen generation failed for new lead %s: %s — "
-                                           "falling back to voice", name, _hg_nl_err)
-                            _nl_ab_variant = "voice"
 
                     _db.ensure_pond_sms_log_table()
                     _db.log_pond_sms(
@@ -3822,10 +3735,12 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
             _sms_hist_count = _db.count_pond_sms_sent(pid)
             _needs_optout   = False
 
-            # A/B variant: 50/50 voice (ElevenLabs) vs video (HeyGen) for the
-            # follow-up recording that fires when the lead consents.
+            # A/B variant for the follow-up recording that fires when the lead
+            # consents: 50/50 voice (ElevenLabs) vs none (conversation only).
+            # "video" is never coin-flipped — no HeyGen video exists for this
+            # lead at send time. Post-consent renders happen in the webhook.
             import random as _rand
-            _sms_ab_variant = "voice" if _rand.random() < 0.5 else "video"
+            _sms_ab_variant = "voice" if _rand.random() < 0.5 else "none"
 
             print(f"\n  [SMS-ONLY] {name} (ID: {pid}) · {to_phone}")
             print(f"    Tier: {_tier2} | Strategy: {_strat2} | A/B: {_sms_ab_variant}" +
@@ -4754,9 +4669,15 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 _is_high_intent    = is_z or any(t in tags for t in _tc.DUAL_CHANNEL_TAGS)
                 _dual_body         = None
 
-                # A/B variant for consent-reply follow-up
+                # Variant for consent-reply follow-up: "video" ONLY when a
+                # HeyGen video was actually rendered for this lead's email
+                # (same video_id rides along at no extra credit cost).
+                # Otherwise 50/50 voice vs none — no phantom video arm.
                 import random as _rand
-                _dual_ab_variant = "voice" if _rand.random() < 0.5 else "video"
+                if video_result and video_result.get("video_id"):
+                    _dual_ab_variant = "video"
+                else:
+                    _dual_ab_variant = "voice" if _rand.random() < 0.5 else "none"
 
                 if _is_high_intent:
                     # Claude-written urgent angle — different voice from email

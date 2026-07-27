@@ -4307,7 +4307,8 @@ def count_unreplied_pond_sms(person_id):
 def get_ab_variant_for_lead(person_id):
     """
     Return the A/B variant assigned to this lead's most recent outbound SMS.
-    Values: "voice" | "video" | None (if never assigned or pre-A/B send).
+    Values: "voice" | "video" | "none" | None (if never assigned or pre-A/B send).
+    "none" = conversation-only arm: consent still routes, no recording is sent.
 
     Used in the inbound webhook to decide whether to send an ElevenLabs
     audio bubble or a HeyGen thumbnail when the lead consents to a recording.
@@ -4354,6 +4355,36 @@ def get_video_id_for_lead(person_id):
     except Exception as e:
         logger.warning("get_video_id_for_lead failed for %s: %s", person_id, e)
         return None
+
+
+def set_video_id_for_lead(person_id, video_id):
+    """
+    Store a HeyGen video_id on this lead's most recent outbound SMS row.
+
+    Used by the post-consent render path: video generation now happens after
+    a consenting/positive reply (not at send time), so the id is attached to
+    the opener row where get_video_id_for_lead() will find it.
+    Returns True on success.
+    """
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE pond_sms_log
+                    SET video_id = %s
+                    WHERE id = (
+                        SELECT id FROM pond_sms_log
+                        WHERE person_id = %s AND dry_run = FALSE
+                        ORDER BY sent_at DESC
+                        LIMIT 1
+                    )
+                """, (video_id, person_id))
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("set_video_id_for_lead failed for %s: %s", person_id, e)
+        return False
 
 
 def ensure_pond_reply_log_table():
