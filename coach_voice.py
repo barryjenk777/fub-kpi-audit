@@ -65,7 +65,7 @@ HARD RULES (breaking these ruins the message)
 - No fake urgency or manipulation.
 - End with one specific action they can take today, or one direct question. Not vague inspiration. (A question-only message satisfies this by itself.)
 - Use the agent's first name somewhere in the message, but it does NOT have to be the opener. Write in first person as Barry (I, me).
-- Vary your phrasing AND your structure every time. Never lean on a stock opening or a stock closing. If the last message was long, go short. "Hey {name}" as a default opener is banned."""
+- Vary your phrasing AND your structure every time. Never lean on a stock opening or a stock closing. If the last message was long, go short. Opening with "Hey" plus their name as a default is banned."""
 
 
 _ARC_ANGLES = {
@@ -223,7 +223,7 @@ FORMAT:
 - 1 to 4 short lines. Texting length, not an email. This is going to a personal cell.
 - Some days the whole text should be ONE line or one question. Unpredictable length is the point. If the numbers are bad, shorter and sharper. If the numbers are great, celebrate with real specificity.
 - Use a PATTERN DISRUPT device from your instructions: cold open on a number, one direct question, the dollar math, or their own goal quoted back. Do not build every text as greeting + stats + push. That shape is worn out and they skim it.
-- Their first name appears somewhere, but "Hey {first}" as the opener is banned.
+- Their first name appears somewhere, but opening with "Hey" plus their name is banned.
 - Use the real numbers to make it specific.
 - End with one specific action or one direct question they will feel obligated to answer.
 - No sign-off, no links unless explicitly told to include one above.
