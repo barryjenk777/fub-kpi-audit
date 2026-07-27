@@ -1803,8 +1803,11 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
     Generate a standalone SMS body (25-40 words) via Claude.
 
     This is NOT a condensed email. It's written from scratch specifically for
-    the SMS channel — two sentences, curiosity gap, yes/no CTA, reads like
-    Barry typed it from his truck in 30 seconds.
+    the SMS channel — two sentences: one anchor in the lead's real behavior,
+    one easy question answerable in five words. Reads like Barry typed it from
+    his truck in 30 seconds. NO recording offer — the recording is beat two,
+    sent only after a consenting/positive reply (webhook consent path).
+    Question shapes rotate so first touches are not uniform.
 
     channel values:
         "sms_only"  — this is the ONLY outreach (lead has no email address)
@@ -1812,8 +1815,9 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
         "new_lead"  — immediate text to a brand new lead at peak interest
 
     needs_optout: True on first SMS ever sent to a lead, and every 5th SMS after
-        that. Claude weaves casual TCPA opt-out language into the middle of the
-        message (between the hook and the CTA), not bolted onto the end.
+        that. Claude weaves casual opt-out language into the message in Barry's
+        shape ("if you'd rather i not text you just let me know, but...") that
+        flows straight into the question. Never "reply STOP" phrasing.
     """
     tags = tags or []
     first_name = person.get("firstName") or "there"
@@ -1824,13 +1828,11 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
         return f"[DRY RUN SMS — {tier_label} / {strategy} / {channel}{optout_tag}]"
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
 
     try:
         import anthropic as _ant
     except ImportError:
-        raise RuntimeError("anthropic package not installed")
+        _ant = None
 
     # ── Build a rich behavioral brief using ALL available signals ─────────────
     b = behavior or {}
@@ -2021,12 +2023,12 @@ def generate_sms_body(person, behavior, strategy, leadstream_tier,
         "cross": (
             "CROSS-CHANNEL NUDGE: Barry just sent this person an email with a personalized video. "
             "This text arrives alongside it -- a short, personal note with ONE specific data point "
-            "tied to their actual search, then a natural bridge to the email.\n\n"
+            "tied to their actual search, a light bridge to the email, then the question.\n\n"
             "Structure (3 short sentences):\n"
             "  1. Their specific data -- address viewed, city + price range, market signal. Concrete. Personal.\n"
-            "  2. One market insight that matters to them right now -- inventory shift, price movement, competition. Real, not generic.\n"
-            "  3. Bridge to the email. 'Sent you more on this in the email' or 'put the full picture in the email I just sent.' "
-            "Easy, not salesy. Do NOT mention a video, link, or attachment."
+            "  2. Quick bridge to the email. 'sent you the details in the email' or 'put the full picture in the email i just sent.' "
+            "Easy, not salesy. Do NOT mention a video, link, or attachment.\n"
+            "  3. End with the ONE easy question (the assigned question angle). The text ends on the question, not the bridge."
         ),
     }
     channel_note = channel_notes.get(channel, channel_notes["sms_only"])
@@ -2105,58 +2107,137 @@ Reference "my assistant" to tie back to the conversation they already had."""
         )
 
     # ── TCPA opt-out section ──────────────────────────────────────────────────
+    # Barry's rule: never "reply STOP to opt out" or any robotic compliance
+    # phrasing. The weave-in is casual and flows straight into the question:
+    # "if you'd rather i not text you just let me know, but..."
     optout_section = ""
     if needs_optout:
         optout_section = """
-OPT-OUT (required by law -- weave it in naturally between the observation and the ask):
-  "hey marcus, saw you were looking around harbour view, lmk if you want me to stop texting. would it be ok if i sent a quick recording of some info on that area?"
-  "hey sarah, saw you saved that place on shore drive, you can always tell me to stop. would it be ok if i sent a quick recording about that street?"
-keep it casual. one short phrase. never "reply STOP to opt out."
+OPT-OUT (required by law, weave it in so it flows straight into the question):
+the shape is always: "if you'd rather i not text you just let me know, but..." then continue right into the question.
+  "hey marcus, saw you keep coming back to that place on harbour view. if you'd rather i not text you just let me know, but are you still looking or did something already grab you?"
+  "hey karen, got your cash offer request on maple ave. if you'd rather i not text you just let me know, but is the house empty right now or is someone living in it?"
+keep it casual and lowercase. never "reply STOP to opt out". never robotic compliance language.
 """
 
-    # ── Prompt ────────────────────────────────────────────────────────────────
-    if channel == "cross":
-        # Cross-channel: still permission-based but ties to email
-        channel_rules = """this is going alongside an email. 2 sentences max.
-example: "hey jordan, saw you've been looking around chesapeake. sent you an email too but would it be ok if i sent a quick recording of some info on that area?"
-"""
-    else:
-        channel_rules = """pure iMessage. 2 sentences max. that's it."""
+    # ── Question-shape rotation ───────────────────────────────────────────────
+    # Message 1 is a QUESTION anchored in their real behavior, not a permission
+    # ask. The recording is beat two: offered only after a consenting or
+    # positive reply (webhook consent path handles it). Rotate distinct
+    # question shapes so first touches are not uniform.
+    import random as _rand_shape
 
     if is_z:
+        _shapes = [
+            ("occupancy",
+             "is the house empty right now or is someone living in it? (this genuinely changes the number)",
+             "\"hey karen, got your cash offer request on maple ave. before i run a number, one thing that changes it a lot. is the house empty right now or is someone living in it?\""),
+            ("timeline",
+             "are they hoping to have this done in the next month or two, or is there no rush?",
+             "\"hey marcus, got your cash offer request on your place. are you hoping to have this wrapped up in the next month or two, or no rush?\""),
+            ("condition",
+             "is the place pretty move in ready or does it need some work? (so the number is real, not a lowball)",
+             "\"hey lisa, saw your cash offer request over in norfolk. quick question so my number is real, is the place pretty move in ready or does it need some work?\""),
+        ]
+    elif is_seller:
+        _shapes = [
+            ("timeline",
+             "are they thinking this year or more like someday?",
+             "\"hey lisa, saw you were checking what your place on shore drive might be worth. are you thinking this year or more like someday?\""),
+            ("curiosity",
+             "was checking the value just curiosity or is a move actually on the table?",
+             "\"hey dana, saw you looked up your home value over in chesapeake. was that just curiosity or is a move actually on the table?\""),
+            ("number",
+             "did the value they saw feel high, low, or about right?",
+             "\"hey paul, saw you checked what your place might be worth. did the number feel high, low, or about right to you?\""),
+        ]
+    else:
+        _shapes = [
+            ("still_looking",
+             "are they still looking or did something already grab them? (best when they kept viewing or saved a specific place)",
+             "\"hey marcus, saw you keep coming back to that place on harbour view. are you still looking or did something already grab you?\""),
+            ("location_pull",
+             "are they set on their city or would the right house in a nearby city pull them over?",
+             "\"hey jordan, noticed you've been looking around $380k in chesapeake. quick question, are you set on chesapeake or would the right house in suffolk pull you over?\""),
+            ("timeline",
+             "are they hoping to move this year or more like keeping an eye on things?",
+             "\"hey dana, saw you've been browsing places in norfolk. are you hoping to move this year or more like keeping an eye on things?\""),
+            ("narrow_down",
+             "they're split across cities, which one is actually winning? (best when SEARCH SPREAD shows multiple cities)",
+             "\"hey david, saw you've been bouncing between chesapeake and virginia beach. which one is actually winning right now?\""),
+        ]
+
+    _shape_name, _shape_angle, _shape_example = _rand_shape.choice(_shapes)
+
+    # ── Hardcoded fallbacks (used if Claude is unavailable or errors) ────────
+    def _sms_fallback():
+        _fn = (first_name or "there").split()[0].lower()
+        if is_z:
+            _street = (person.get("streetAddress") or person.get("street") or "").lower()
+            _place = _street or "your place"
+            _pairs = [
+                (f"hey {_fn}, got your cash offer request on {_place}.",
+                 "before i run a number, is the house empty right now or is someone living in it?"),
+                (f"hey {_fn}, saw your cash offer request on {_place}.",
+                 "are you hoping to get this done in the next month or two, or no rush?"),
+            ]
+        elif is_seller:
+            _city_fb = (person.get("city") or "").lower()
+            _where = f"your place in {_city_fb}" if _city_fb else "your place"
+            _pairs = [
+                (f"hey {_fn}, saw you were checking what {_where} might be worth.",
+                 "are you thinking this year or more like someday?"),
+                (f"hey {_fn}, saw you looked into the value on {_where}.",
+                 "was that just curiosity or is a move actually on the table?"),
+            ]
+        else:
+            _b_fb = behavior or {}
+            _cities_fb = sorted(_b_fb.get("cities") or [])
+            _city_fb = _cities_fb[0].lower() if _cities_fb else "the area"
+            _pairs = [
+                (f"hey {_fn}, saw you've been looking at homes around {_city_fb}.",
+                 "are you still looking or did something already grab you?"),
+                (f"hey {_fn}, noticed you've been browsing around {_city_fb}.",
+                 "are you hoping to move this year or more like keeping an eye on things?"),
+            ]
+        _anchor, _question = _rand_shape.choice(_pairs)
+        if needs_optout:
+            return f"{_anchor} if you'd rather i not text you just let me know, but {_question}"
+        return f"{_anchor} {_question}"
+
+    # ── Prompt ────────────────────────────────────────────────────────────────
+    if is_z:
         fixed_format = (
-            "THE FORMAT IS FIXED -- follow it exactly:\n"
-            "sentence 1: \"hey [first name], saw you asked about a cash offer on [their street if known, else 'your place'].\"\n"
-            "sentence 2: \"would it be ok if i sent you a quick recording on how i'd handle it?\"\n"
+            "THE SHAPE IS FIXED -- follow it exactly:\n"
+            "sentence 1: acknowledge they ASKED FOR a cash offer (they raised their hand). reference their street or city if known, otherwise 'your place'.\n"
+            "sentence 2: ONE short, easy question they can answer in five words or less.\n"
+            f"the question angle for THIS text: {_shape_angle}\n"
+            "NEVER offer to send a recording, video, voice note, link, or 'some info'. the first text asks a question, it does not deliver anything.\n"
         )
         examples_block = (
-            "EXAMPLES -- these are exactly the right tone and length:\n"
-            "with street:    \"hey karen, saw you asked about a cash offer on maple ave. would it be ok if i sent you a quick recording on how i'd handle it?\"\n"
-            "no street:      \"hey marcus, saw you asked about a cash offer on your place. would it be ok if i sent you a quick recording on how that works?\"\n"
-            "with city only: \"hey lisa, saw you asked about a cash offer over in norfolk. would it be ok if i sent you a quick recording on how i'd handle it?\""
+            "EXAMPLE -- this is exactly the right tone and length for this angle:\n"
+            f"{_shape_example}"
         )
         sentence_rules = (
-            "- sentence 1 acknowledges they ASKED FOR a cash offer (they raised their hand, they were not 'looking around'). reference their street or city if known, otherwise 'your place'.\n"
-            "- sentence 2 is always a permission ask for a quick recording. keep the wording close to the examples."
+            "- sentence 1 acknowledges they ASKED FOR a cash offer (they were not 'looking around').\n"
+            "- sentence 2 is one easy question barry genuinely needs answered to run their number. answerable in five words."
         )
     else:
         fixed_format = (
-            "THE FORMAT IS FIXED -- follow it exactly:\n"
-            "sentence 1: \"hey [first name], saw you were looking around [specific area/detail from their search].\"\n"
-            "sentence 2: \"would it be ok if i sent a quick recording of some info on [that area / what i'm seeing there / that neighborhood]?\"\n"
+            "THE SHAPE IS FIXED -- follow it exactly:\n"
+            "sentence 1: anchor in ONE real, specific thing they did (property they keep viewing, a save, their price range, their city or cities).\n"
+            "sentence 2: ONE short, easy question they can answer in five words or less.\n"
+            f"the question angle for THIS text: {_shape_angle}\n"
+            "if their data doesn't fit that angle, pick the closest angle their data supports. still one question.\n"
+            "NEVER offer to send a recording, video, voice note, link, or 'some info'. the first text asks a question, it does not deliver anything.\n"
         )
         examples_block = (
-            "EXAMPLES -- these are exactly the right tone and length:\n"
-            "buyer (repeat viewer):   \"hey marcus, saw you were looking around harbour view. would it be ok if i sent a quick recording of some info on that area?\"\n"
-            "buyer (saved property):  \"hey sarah, saw you saved that place on shore drive. would it be ok if i sent a quick recording about that street?\"\n"
-            "buyer (price range):     \"hey jordan, saw you've been looking at places around $380k in chesapeake. would it be ok if i sent a quick recording on what i'm seeing there?\"\n"
-            "buyer (multiple cities): \"hey david, saw you've been looking around chesapeake and virginia beach. would it be ok if i sent a quick recording to help narrow it down?\"\n"
-            "seller:                  \"hey lisa, saw you were looking into your home value on harbour view. would it be ok if i sent a quick recording of what i'm seeing on that street?\"\n"
-            "cross-channel:           \"hey jordan, saw you've been looking around chesapeake. sent you an email too but would it be ok if i sent a quick recording of some info on that area?\""
+            "EXAMPLE -- this is exactly the right tone and length for this angle:\n"
+            f"{_shape_example}"
         )
         sentence_rules = (
             "- sentence 1 must reference ONE specific thing from their actual search (area, property, price range, city)\n"
-            "- sentence 2 is always a permission ask for a voice recording. keep the wording close to the examples."
+            "- sentence 2 is one easy question that gives barry real information. answerable in five words. \"yes.\" \"no.\" \"still looking.\" done."
         )
 
     prompt = f"""you are writing a casual iMessage opener for barry jenkins, hampton roads' #1 real estate agent.
@@ -2184,18 +2265,27 @@ WHAT YOU KNOW ABOUT THEM (pick the single most specific detail for sentence 1):
 
 output ONLY the raw message. nothing else."""
 
-    ant_client = _ant.Anthropic(api_key=api_key)
+    if not api_key or _ant is None:
+        logger.warning("generate_sms_body: Claude unavailable — using hardcoded fallback")
+        return _sms_fallback()
+
     if channel == "cross":
         _max_tok = 120 if needs_optout else 90
     else:
         _max_tok = 100 if needs_optout else 75
-    response = ant_client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=_max_tok,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    sms_text = response.content[0].text.strip()
+    try:
+        ant_client = _ant.Anthropic(api_key=api_key)
+        response = ant_client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=_max_tok,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        sms_text = response.content[0].text.strip()
+        if not sms_text:
+            raise ValueError("empty SMS body from Claude")
+    except Exception as _gen_err:
+        logger.warning("generate_sms_body: Claude generation failed (%s) — using fallback", _gen_err)
+        return _sms_fallback()
 
     # Hard post-processing: strip any em/en dashes that slipped through
     import re as _re_sms
