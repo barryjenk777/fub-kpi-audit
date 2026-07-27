@@ -9577,6 +9577,88 @@ def _is_consent_reply(body_text: str) -> bool:
     return False
 
 
+def _generate_neutral_reply_sms(person_name="", reply_text="", lead_type="buyer"):
+    """
+    Write a short, human-sounding answer for a NEUTRAL, non-consent reply
+    ("who is this?", "how did you get my number?", "what recording?").
+
+    These leads are curious or cautious, not converted. They get a real
+    answer, not a recording. Claude Haiku with a hand-written fallback.
+
+    The reply must: identify Barry by name and team, answer their actual
+    question, and end with ONE easy follow-up question. No pitch, no tags,
+    no handoff, no recording.
+    """
+    import random as _rand_nr
+
+    first = (person_name or "").split()[0].lower() if person_name else ""
+    _hey = f"hey {first}, " if first else "hey, "
+
+    fallbacks = [
+        (f"sorry, should have said. this is barry jenkins, i run legacy home team "
+         f"here in hampton roads. you were on our home search site and i keep an eye "
+         f"on what's moving in the areas people look at. no pressure at all, want me "
+         f"to keep you posted or leave you be?"),
+        (_hey + "fair question. barry jenkins with legacy home team in hampton roads. "
+         "you popped up on our home search site a while back, that's how i have your "
+         "number. happy to be useful or happy to leave you alone, which would you prefer?"),
+    ]
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return _rand_nr.choice(fallbacks)
+
+    try:
+        import anthropic as _ant
+        client = _ant.Anthropic(api_key=api_key)
+
+        _lt_note = {
+            "zbuyer": "They previously requested a cash offer on their home through our site.",
+            "seller": "They previously checked their home's value through our site.",
+            "buyer":  "They previously browsed homes on our home search site (legacyhomesearch.com).",
+        }.get(lead_type, "They previously used our home search site.")
+
+        prompt = f"""you are texting as barry jenkins, who runs legacy home team in hampton roads, virginia.
+
+a lead replied to one of barry's texts with something neutral or cautious, NOT a yes and NOT a no. examples of this kind of reply: "who is this?", "how did you get my number?", "what is this about?".
+
+their exact reply: "{reply_text[:300]}"
+their first name (may be empty): "{first}"
+context: {_lt_note}
+
+write barry's one-text answer. it must:
+1. identify barry by name and team (barry jenkins, legacy home team) since they clearly don't know who this is
+2. actually answer THEIR question honestly and plainly (if they asked how he got their number, say it came from the home search site they used)
+3. end with exactly ONE easy, low-pressure question they can answer in a few words, offering a genuine out ("want me to keep you posted or leave you be?")
+
+rules:
+- all lowercase except proper nouns.
+- 2 to 3 short sentences. under 45 words total.
+- never use em dashes or en dashes. commas and periods only.
+- no pitch, no recording offer, no links, no "just", no "reaching out", no "following up".
+- warm neighbor tone, zero pressure. never defensive.
+
+output ONLY the message text."""
+
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=120,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text.strip()
+        import re as _re_nr
+        text = _re_nr.sub(r'\s*[‒–—―−]\s*', ', ', text)
+        text = text.replace('&mdash;', ', ').replace('&ndash;', ', ').strip()
+        text = _re_nr.sub(r',\s*,', ',', text)
+        if len(text) > 20:
+            return text
+        logger.warning("Neutral reply generation returned suspiciously short text: %r", text)
+        return _rand_nr.choice(fallbacks)
+    except Exception as _ce:
+        logger.warning("Claude neutral reply generation failed: %s — using fallback", _ce)
+        return _rand_nr.choice(fallbacks)
+
+
 def _pond_analyze_sentiment(reply_text, person_name=""):
     """
     Use Claude Haiku to classify a reply as positive / neutral / negative.
@@ -10400,10 +10482,10 @@ def webhook_sendblue():
       1. Parse JSON body — filter to inbound received messages only
       2. Hard-gate STOP keywords (opt-out before Claude runs)
       3. Match phone number to lead via pond_sms_log
-      4. Claude Haiku sentiment analysis
-      5. Positive  → SMS_Conversion + FUB note + handoff SMS (4.5 min)
-      6. Negative  → SMS_OptOut tag
-      7. Neutral   → FUB note only
+      4. Claude Haiku sentiment analysis + consent detection (_is_consent_reply)
+      5. Consent or positive → SMS_Conversion + FUB note + handoff SMS (4.5 min)
+      6. Negative            → SMS_OptOut tag
+      7. Neutral non-consent → short human answer + FUB note (no tags, no handoff)
       8. Log to pond_sms_reply_log + notify Barry
 
     Always returns 200 so Sendblue doesn't retry.
@@ -10478,13 +10560,24 @@ def webhook_sendblue():
 
     logger.info("Sendblue sentiment: %s (%.2f) — %s", sentiment, sentiment_score, sentiment_reason)
 
+    # CONSENT GATE: conversion tags + handoff fire only on actual consent
+    # (_is_consent_reply) or a clearly positive reply. Neutral non-consent
+    # replies get a short human answer — no tags, no handoff.
+    _sb_consent = _is_consent_reply(body_text)
+
     # ── Route by sentiment ────────────────────────────────────────────────────
     try:
         from fub_client import FUBClient
         fub = FUBClient()
 
-        if sentiment == "positive":
+        if sentiment == "negative":
+            fub.add_tag_fast(person_id, "SMS_OptOut", [])
+            _pond_add_fub_note(fub, person_id, person_name, body_text,
+                               "iMessage Reply", sentiment_reason)
+
+        elif _sb_consent or sentiment == "positive":
             fub.add_tag_fast(person_id, "SMS_Conversion", [])
+            fub.add_tag_fast(person_id, "Claude_Text_Converted", [])
             _pond_add_fub_note(fub, person_id, person_name, body_text,
                                "iMessage Reply", sentiment_reason)
             try:
@@ -10501,14 +10594,34 @@ def webhook_sendblue():
                 lead_type=_sb_ltype,
             )
 
-        elif sentiment == "negative":
-            fub.add_tag_fast(person_id, "SMS_OptOut", [])
+        else:  # neutral, no consent — answer like a human, don't route
+            if not getattr(config, "PROJECT_BLUE_PAUSED", False):
+                try:
+                    import sendblue_client as _sb_reply
+                    if _sb_reply.is_available():
+                        try:
+                            _sb_nr_ltype = _db.get_lead_type_for_lead(person_id) or "buyer"
+                        except Exception:
+                            _sb_nr_ltype = "buyer"
+                        _sb_neutral_body = _generate_neutral_reply_sms(
+                            person_name=person_name,
+                            reply_text=body_text,
+                            lead_type=_sb_nr_ltype,
+                        )
+                        _sb_nr_result = _sb_reply.send_imessage(
+                            from_number, _sb_neutral_body, dry_run=False
+                        )
+                        if _sb_nr_result.get("success"):
+                            logger.info("Sendblue neutral human reply sent to %s: %r",
+                                        from_number, _sb_neutral_body[:80])
+                        else:
+                            logger.warning("Sendblue neutral reply failed for %s: %s",
+                                           person_id, _sb_nr_result.get("error"))
+                except Exception as _sb_nre:
+                    logger.warning("Sendblue neutral reply send failed (non-fatal): %s", _sb_nre)
             _pond_add_fub_note(fub, person_id, person_name, body_text,
-                               "iMessage Reply", sentiment_reason)
-
-        else:  # neutral
-            _pond_add_fub_note(fub, person_id, person_name, body_text,
-                               "iMessage Reply", sentiment_reason)
+                               "iMessage Reply (neutral, not routed — human answer sent)",
+                               sentiment_reason)
 
     except Exception as _e:
         logger.error("Sendblue FUB routing failed for %s: %s", person_id, _e)
@@ -10846,10 +10959,10 @@ def webhook_projectblue():
       2. Skip outbound confirmations (direction != "inbound")
       3. STOP keyword hard-gate
       4. Match phone to FUB lead via pond_sms_log
-      5. Sentiment analysis (Claude Haiku)
-      6. Positive  -> SMS_Conversion + FUB note + handoff text
-      7. Negative  -> SMS_OptOut
-      8. Neutral   -> FUB note
+      5. Sentiment analysis (Claude Haiku) + consent detection (_is_consent_reply)
+      6. Consent or positive -> recording + SMS_Conversion + FUB note + handoff text
+      7. Negative            -> SMS_OptOut
+      8. Neutral non-consent -> short human answer (no tags, no handoff, no recording)
       9. Log to pond_sms_reply_log + email Barry
     """
     try:
@@ -10955,9 +11068,13 @@ def webhook_projectblue():
         try:
             from fub_client import FUBClient
             fub = FUBClient()
-            # Send the recording to anyone who isn't negative/opted-out —
-            # explicit consent, positive, AND neutral all get the video/voice.
-            _send_recording = (sentiment != "negative") and not getattr(config, "PROJECT_BLUE_PAUSED", False)
+            # CONSENT GATE: the recording, conversion tags, and handoff fire
+            # ONLY when the lead actually said yes (_is_consent_reply) or the
+            # reply is clearly positive. Neutral non-consent replies ("who is
+            # this?") get a short human answer instead — no recording, no tags,
+            # no "an agent will call you" promise.
+            _route_as_conversion = _consent or (sentiment == "positive")
+            _send_recording = _route_as_conversion and not getattr(config, "PROJECT_BLUE_PAUSED", False)
             if _send_recording:
                 logger.info("Recording send triggered for %s (%s): sentiment=%s consent=%s body=%r",
                             person_name, from_phone, sentiment, _consent, body_text[:60])
@@ -11070,7 +11187,14 @@ def webhook_projectblue():
 
             _lead_first = (person_name or "").split()[0] if person_name else ""
 
-            if sentiment == "positive":
+            if sentiment == "negative":
+                fub.add_tag(person_id, "SMS_OptOut")
+                fub_note_ok = _pond_add_sms_reply_fub_note(
+                    fub, person_id, person_name, body_text, sentiment_reason
+                )
+            elif _route_as_conversion:
+                # Consent OR positive — the lead raised their hand. Full flow:
+                # recording (sent above), conversion tags, note, handoff.
                 fub.add_tag(person_id, "SMS_Conversion")
                 fub.add_tag(person_id, "Claude_Text_Converted")
                 routed = True
@@ -11087,30 +11211,34 @@ def webhook_projectblue():
                     delay_seconds=270,
                     lead_type=_audit_lead_type,
                 )
-            elif sentiment == "negative":
-                fub.add_tag(person_id, "SMS_OptOut")
-                fub_note_ok = _pond_add_sms_reply_fub_note(
-                    fub, person_id, person_name, body_text, sentiment_reason
-                )
             else:
-                # Neutral — recording already sent above.
-                # Tag and route same as positive so an agent follows up after
-                # the lead has had time to watch/listen (15 min delay).
-                fub.add_tag(person_id, "SMS_Conversion")
-                fub.add_tag(person_id, "Claude_Text_Converted")
-                routed = True
+                # Neutral, no consent ("who is this?", "what recording?").
+                # They're curious or cautious, not converted. Answer like a
+                # human: identify Barry, answer the question, one easy follow-up.
+                # NO conversion tags, NO handoff, NO recording.
+                if not getattr(config, "PROJECT_BLUE_PAUSED", False):
+                    try:
+                        import projectblue_client as _pb_neutral
+                        if _pb_neutral.is_available():
+                            _neutral_body = _generate_neutral_reply_sms(
+                                person_name=person_name,
+                                reply_text=body_text,
+                                lead_type=_audit_lead_type,
+                            )
+                            _nr_result = _pb_neutral.send_message(
+                                from_phone, _neutral_body, dry_run=False
+                            )
+                            if _nr_result.get("success"):
+                                logger.info("Neutral human reply sent to %s (%s): %r",
+                                            person_name, from_phone, _neutral_body[:80])
+                            else:
+                                logger.warning("Neutral human reply failed for %s: %s",
+                                               person_name, _nr_result.get("error"))
+                    except Exception as _nre:
+                        logger.warning("Neutral reply send failed (non-fatal): %s", _nre)
                 fub_note_ok = _pond_add_sms_reply_fub_note(
                     fub, person_id, person_name, body_text,
-                    "neutral reply — recording sent, agent follow-up queued"
-                )
-                _audit_handoff_secs = 270
-                _schedule_sms_handoff(
-                    person_id,
-                    from_phone,
-                    reply_text=body_text,
-                    lead_first_name=_lead_first,
-                    delay_seconds=270,   # treat neutral as full conversion
-                    lead_type=_audit_lead_type,
+                    "neutral non-consent reply — human answer sent, needs human text follow-up (not routed)"
                 )
         except Exception as e:
             logger.error("FUB PB reply handling failed for %s (ID %s): %s",
@@ -11144,8 +11272,9 @@ def webhook_projectblue():
         # Delayed so FUB group-rule automation has time to reassign the lead
         # before we look up who to email. Fires BEFORE the T+270s handoff SMS
         # so the agent is ready to call when the lead gets the "you'll be called" text.
-        # Only fire for conversion sentiments — negative leads don't need a call.
-        if sentiment in ("positive", "neutral"):
+        # Only fire for routed conversions (consent or positive) — neutral
+        # non-consent replies get a human text answer, not a call.
+        if routed:
             try:
                 _resolved_recording = _db.get_ab_variant_for_lead(person_id) or "voice"
                 _schedule_agent_notification(
