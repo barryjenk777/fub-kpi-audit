@@ -4034,6 +4034,18 @@ def ensure_pond_sms_log_table():
                     ALTER TABLE pond_sms_log
                     ADD COLUMN IF NOT EXISTS lead_type VARCHAR(20)
                 """)
+                # Measurement columns — added July 2026 (audit QW4)
+                # message_type: delivery type returned by the send API
+                #   ("iMessage" | "SMS" | "RCS" | "unknown") — was being thrown away
+                # step_num: 1-based sequence position of this SMS for this lead
+                cur.execute("""
+                    ALTER TABLE pond_sms_log
+                    ADD COLUMN IF NOT EXISTS message_type VARCHAR(30)
+                """)
+                cur.execute("""
+                    ALTER TABLE pond_sms_log
+                    ADD COLUMN IF NOT EXISTS step_num INTEGER
+                """)
                 # Generic idempotency / dedup guard. One row per unique key:
                 #   reply:<guid>      — webhook already processed this message
                 #   handoff:<pid>     — handoff already scheduled for this lead
@@ -4126,7 +4138,8 @@ def log_pond_sms(person_id, person_name, phone_number, body,
                  strategy, leadstream_tier="POND",
                  dry_run=False, twilio_sid=None,
                  status="queued", channel="sms_only",
-                 ab_variant=None, video_id=None, lead_type=None):
+                 ab_variant=None, video_id=None, lead_type=None,
+                 message_type=None, step_num=None):
     """
     Record a sent pond SMS. Returns the inserted row id or None.
 
@@ -4139,9 +4152,14 @@ def log_pond_sms(person_id, person_name, phone_number, body,
     ab_variant:
         "voice"  — ElevenLabs audio bubble will be sent on consent reply
         "video"  — HeyGen map thumbnail will be sent on consent reply
+        "none"   — conversation-only arm; consent routes, no recording
 
     lead_type: "buyer" | "seller" | "zbuyer" — frozen here at opener time,
                reused on reply so handoff framing stays consistent.
+
+    message_type: delivery type returned by the send API
+                  ("iMessage" | "SMS" | "RCS" | "unknown").
+    step_num:     1-based sequence position of this SMS for this lead.
     """
     if not is_available():
         return None
@@ -4152,12 +4170,14 @@ def log_pond_sms(person_id, person_name, phone_number, body,
                     INSERT INTO pond_sms_log
                         (person_id, person_name, phone_number, body,
                          strategy, leadstream_tier, dry_run, twilio_sid,
-                         status, channel, ab_variant, video_id, lead_type)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         status, channel, ab_variant, video_id, lead_type,
+                         message_type, step_num)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     RETURNING id
                 """, (person_id, person_name, phone_number, body,
                       strategy, leadstream_tier, dry_run, twilio_sid,
-                      status, channel, ab_variant, video_id, lead_type))
+                      status, channel, ab_variant, video_id, lead_type,
+                      message_type, step_num))
                 row = cur.fetchone()
                 return row[0] if row else None
     except Exception as e:

@@ -3323,6 +3323,8 @@ def run_new_lead_mailer(dry_run=True):
                         ab_variant=_nl_ab_variant,
                         video_id=_nl_video_id,
                         lead_type=_nl_lead_type,
+                        message_type=_nl_result.get("message_type"),
+                        step_num=_nl_hist_count + 1,
                     )
                     # Enroll zbuyer leads in the 7-day cash-offer drip (opener = touch 1).
                     if _nl_is_z and not dry_run:
@@ -3772,18 +3774,23 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
             _sms_sid     = _sms_result.get("pb_handle")
 
             if _sms_result.get("success"):
+                # Persist attribution: lead_type via the shared classifier,
+                # delivery message_type from the PB response, and step number.
+                _lt2 = _db.classify_lead_type(tags, person.get("source"))
                 _db.log_pond_sms(pid, name, to_phone, _sms_body,
                                  strategy=_strat2, leadstream_tier=_tier2,
                                  dry_run=dry_run,
                                  twilio_sid=_sms_sid,
                                  status=_sms_result.get("status", "queued"),
                                  channel=_sms_channel,
-                                 ab_variant=_sms_ab_variant)
+                                 ab_variant=_sms_ab_variant,
+                                 lead_type=_lt2,
+                                 message_type=_sms_result.get("message_type"),
+                                 step_num=_sms_hist_count + 1)
                 # Log to FUB timeline — 📱 note so agents see what text went out
                 if not dry_run:
                     try:
                         from config import BARRY_FUB_USER_ID
-                        _lt2 = "zbuyer" if _is_z2 else "buyer"
                         client.log_sms_sent(
                             person_id=pid,
                             sms_body=_sms_body,
@@ -4750,6 +4757,9 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                         # Store video_id with the log so the consent webhook can
                         # fetch it when the lead replies yes to the recording offer.
                         _log_vid_id = video_result.get("video_id") if video_result else None
+                        # Persist attribution: lead_type via the shared classifier,
+                        # delivery message_type from the PB response, and step number.
+                        _lt_dual = _db.classify_lead_type(tags, person.get("source"))
                         _db.log_pond_sms(pid, name, to_phone, _dual_body,
                                          strategy=strategy, leadstream_tier=leadstream_tier,
                                          dry_run=dry_run,
@@ -4757,12 +4767,14 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                                          status=_dual_result.get("status", "queued"),
                                          channel=_dual_channel,
                                          ab_variant=_dual_ab_variant,
-                                         video_id=_log_vid_id)
+                                         video_id=_log_vid_id,
+                                         lead_type=_lt_dual,
+                                         message_type=_dual_result.get("message_type"),
+                                         step_num=_dual_sms_count + 1)
                         # Log to FUB timeline — 📱 note alongside the email note
                         if not dry_run:
                             try:
                                 from config import BARRY_FUB_USER_ID
-                                _lt_dual = "zbuyer" if is_z else ("seller" if is_ylopo_seller else "buyer")
                                 client.log_sms_sent(
                                     person_id=pid,
                                     sms_body=_dual_body,
