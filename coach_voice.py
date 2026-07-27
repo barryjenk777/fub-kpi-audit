@@ -206,6 +206,19 @@ def generate_coaching_sms(facts):
     if facts.get("goal_set") is False and facts.get("setup_url"):
         extra = ("\nThis NEW agent has not filled out their goal setup yet. Your whole message is a warm, "
                  f"low-pressure push to complete it. Include this exact link once: {facts.get('setup_url')}")
+    _stance = facts.get("stance")
+    if _stance == "applaud":
+        extra += ("\nSTANCE: APPLAUD. This agent is doing it right. Celebrate the specific win like you mean it, "
+                  "then raise the bar one notch. No manufactured criticism. Winners get lifted, not audited.")
+    elif _stance == "edge":
+        extra += ("\nSTANCE: EDGE. This agent just slipped after being capable of more. Full pattern-disrupt: "
+                  "cold open, mirror, one uncomfortable question. Sharp because you believe in them.")
+    elif _stance == "compassion":
+        extra += (f"\nSTANCE: COMPASSION. This agent has missed the standard for {facts.get('missed_weeks', 'several')} "
+                  "straight weeks. An extended slump is almost never laziness, something is usually going on. Drop the "
+                  "edge entirely. No sarcasm, no mirror, no math. Be the leader who notices the person: name the rough "
+                  "stretch honestly, tell them you are in their corner, make the restart tiny and doable (one call "
+                  "block, five dials), and ask what is actually in the way. Warm, human, zero pressure theater.")
     if facts.get("ai_coach") and facts.get("ai_coach_phone"):
         extra += ("\nThis agent is making calls but not converting to appointments. Work in a suggestion to "
                   f"call the AI sales coach at {facts.get('ai_coach_phone')} about 5 times this week to practice "

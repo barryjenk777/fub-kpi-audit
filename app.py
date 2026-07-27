@@ -14814,6 +14814,8 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
             "team_size":   team_size if week_day in ("wednesday", "friday") else None,
             "ai_coach":    _ai_coach,
             "ai_coach_phone": _coach_phone if _ai_coach else None,
+            "stance":       kpi.get("stance"),
+            "missed_weeks": kpi.get("missed_weeks"),
         })
         if _sms:
             return _sms
@@ -15080,7 +15082,30 @@ def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
             setup_url=setup_url, days_on_team=days_on_team)], None
 
     targets = _db.compute_targets(goals) if goals else {}
+
+    # ── Adaptive coaching stance (Barry's rule): applaud when right, edge when
+    # freshly wrong, compassion when wrong for an extended stretch. Derived from
+    # consecutive missed weeks in the KPI snapshots + current-week pace.
+    stance, missed_weeks = "edge", 0
+    try:
+        _hist = _db.get_weekly_kpi_history(weeks=5) or []
+        for wk in _hist:  # newest first
+            row = next((a for a in wk.get("agents", []) if a.get("name") == agent_name), None)
+            if row is None or row.get("kpi_pass"):
+                break
+            missed_weeks += 1
+        _wk_goal = (targets.get("calls_per_week") or 0)
+        _on_pace = (rec.get("calls", 0) >= _wk_goal * 0.7 if _wk_goal else rec.get("calls", 0) >= 20)
+        if missed_weeks == 0 or _on_pace:
+            stance = "applaud" if (_on_pace or missed_weeks == 0) else "edge"
+        if missed_weeks >= 3:
+            stance = "compassion"
+    except Exception as _st_e:
+        logger.warning("stance calc failed for %s: %s", agent_name, _st_e)
+
     kpi = {
+        "stance":              stance,
+        "missed_weeks":        missed_weeks,
         "calls_actual":        ytd.get("calls_ytd", 0) or 0,
         "convos_actual":       ytd.get("convos_ytd", 0) or 0,
         "appts_actual":        ytd.get("appts_ytd", 0) or 0,
@@ -15106,7 +15131,9 @@ def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
     _appt_low    = _appts7 == 0 or (_appt_goal > 0 and _appts7 < _appt_goal * _appt_thresh)
     _flagged     = kpi.get("calls_last_7d", 0) >= _min_calls and _appt_low
     _mav_day     = getattr(config, "MAVERICK_PRESCRIBE_WEEKDAY", "monday")
-    if _flagged and (_mav_day is None or week_day == _mav_day):
+    # Compassion stance skips the practice-rep prescription: someone 3+ weeks
+    # down gets a human check-in, not homework. Reps resume once they're moving.
+    if _flagged and kpi.get("stance") != "compassion" and (_mav_day is None or week_day == _mav_day):
         reps = _maverick_rep_texts(agent_first, today.isocalendar()[1])
         if reps:
             return reps, kpi

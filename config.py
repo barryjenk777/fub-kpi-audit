@@ -48,6 +48,7 @@ EXCLUDED_USERS = [
     "Barry Jenkins",
     "Fhalen Tendencia",
     "Joseph Fuscaldo",
+    "Bobby Strunk",     # removed from all accountability per Barry, Jul 2026
 ]
 
 # Agents excluded from Mon/Wed/Fri coaching texts (iMessage).
