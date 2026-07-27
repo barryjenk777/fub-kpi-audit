@@ -3264,8 +3264,12 @@ def run_new_lead_mailer(dry_run=True):
                 print(f"\n  [NEW LEAD SMS] {name} (ID: {pid}) — held, outside 8am-9pm window")
                 continue
 
+            # Opt-out weave-in: iMessage-first is not guaranteed — Project Blue
+            # falls back to carrier SMS for Android and Sendblue auto-downgrades,
+            # so the first text (and every 5th) carries Barry's casual opt-out
+            # ("if you'd rather i not text you just let me know, but...").
             _nl_hist_count = _db.count_pond_sms_sent(pid)
-            _nl_needs_optout = False
+            _nl_needs_optout = (_nl_hist_count == 0) or (_nl_hist_count % 5 == 4)
 
             # Detect lead type BEFORE generating the SMS body so the prompt
             # gets the correct framing. Zbuyer = homeowner requesting cash offer,
@@ -3733,9 +3737,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                 skipped_no_strategy += 1
                 continue
 
-            # Project Blue sends iMessage — not carrier SMS, no 10DLC opt-out required.
+            # Opt-out weave-in: iMessage-first is not guaranteed — Project Blue
+            # falls back to carrier SMS for Android, so the first text (and
+            # every 5th) carries Barry's casual opt-out phrase.
             _sms_hist_count = _db.count_pond_sms_sent(pid)
-            _needs_optout   = False
+            _needs_optout   = (_sms_hist_count == 0) or (_sms_hist_count % 5 == 4)
 
             # A/B variant for the follow-up recording that fires when the lead
             # consents: 50/50 voice (ElevenLabs) vs none (conversation only).
@@ -3746,7 +3752,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
 
             print(f"\n  [SMS-ONLY] {name} (ID: {pid}) · {to_phone}")
             print(f"    Tier: {_tier2} | Strategy: {_strat2} | A/B: {_sms_ab_variant}" +
-                  (" | FIRST TEXT — opt-out required" if _sms_hist_count == 0 else ""))
+                  (" | opt-out weave-in" if _needs_optout else ""))
 
             try:
                 _sms_body = generate_sms_body(
@@ -4669,9 +4675,11 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                             name, _dual_unreplied)
 
             if (_dual_sms_days is None or _dual_sms_days >= SMS_COOLDOWN_DAYS) and _dual_unreplied < 2:
-                # Project Blue sends iMessage — not carrier SMS, no 10DLC opt-out required.
+                # Opt-out weave-in: iMessage-first is not guaranteed — Project
+                # Blue falls back to carrier SMS for Android, so the first text
+                # (and every 5th) carries Barry's casual opt-out phrase.
                 _dual_sms_count    = _db.count_pond_sms_sent(pid)
-                _dual_needs_optout = False
+                _dual_needs_optout = (_dual_sms_count == 0) or (_dual_sms_count % 5 == 4)
                 import twilio_client as _tc
                 _is_high_intent    = is_z or any(t in tags for t in _tc.DUAL_CHANNEL_TAGS)
                 _dual_body         = None

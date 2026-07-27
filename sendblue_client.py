@@ -38,10 +38,11 @@ logger = logging.getLogger("sendblue_client")
 
 SENDBLUE_API_BASE = "https://api.sendblue.co"
 
-# Sign-off appended automatically to every outbound iMessage.
-# iMessage supports Unicode so we use the real em dash.
-# Keep it short — blue bubbles read personal, not corporate.
-SENDBLUE_SIGN_OFF = "\n\n- Barry Jenkins w/ Legacy Home Team @LPT"
+# No automatic sign-off. The corporate footer here violated the SMS
+# generator's no-sign-off rule and read like a business blast on what is
+# supposed to be a personal text. Sender identity is handled in the copy
+# itself (first text carries "Barry w/ LPT Realty" from the send path).
+SENDBLUE_SIGN_OFF = ""
 
 # Hard stop words — CTIA-standard opt-out keywords
 # Sendblue handles STOP at the carrier level, but we also gate locally so
