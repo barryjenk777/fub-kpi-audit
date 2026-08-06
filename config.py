@@ -49,6 +49,7 @@ EXCLUDED_USERS = [
     "Fhalen Tendencia",
     "Joseph Fuscaldo",
     "Bobby Strunk",     # removed from all accountability per Barry, Jul 2026
+    "Ana Pena",         # transaction manager, not an agent (Barry, Aug 2026)
 ]
 
 # Agents excluded from Mon/Wed/Fri coaching texts (iMessage).
