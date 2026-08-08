@@ -1432,29 +1432,48 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
     </p>
 
     <p style="{_S['p']}">
-      First thing: set up your goals. It takes 5 minutes and it's the foundation everything else runs on.
-      Your income target, your why, your prospecting schedule. Once it's done, the system calculates
-      your daily call target and tracks your pace all year long.
+      Your first day here is three steps. Do them in order and everything else clicks into place.
     </p>
 
-    <div style="{_S['cta_wrap']}">
-      <a href="{setup_url}" style="{_S['cta_btn']}">Set Up My Goals →</a>
+    <div style="border:1px solid #e2e8f0;border-radius:10px;padding:22px 24px;margin:22px 0">
+      <p style="font-size:15px;font-weight:700;color:#1a1a2e;margin:0 0 6px">Step 1 &nbsp;·&nbsp; Set your goals (5 minutes)</p>
+      <p style="font-size:14px;line-height:1.7;color:#4a5568;margin:0 0 14px">
+        Your income target, your why, your prospecting schedule. Once it's in, the system
+        calculates your daily call target and tracks your pace all year long. This is the
+        foundation everything else runs on.
+      </p>
+      <div style="text-align:center;margin:0 0 6px">
+        <a href="{setup_url}" style="{_S['cta_btn']}">Set Up My Goals →</a>
+      </div>
+      <p style="text-align:center;font-size:12px;color:#a0aec0;margin:0">Your link is personal and secure</p>
     </div>
-    <p style="{_S['time_note']}">Takes about 5 minutes &nbsp;·&nbsp; Your link is personal and secure</p>
-    {f'''<p style="text-align:center;font-size:13px;color:#718096;margin:0 0 24px">
-      Once you've set up your goals, bookmark your personal dashboard:<br>
-      <a href="{dashboard_url}" style="color:#667eea;font-weight:600">View My Dashboard →</a>
-    </p>''' if dashboard_url else ''}
 
-    <div style="background:#eef2ff;border-radius:8px;padding:20px 24px;margin:26px 0">
-      <p style="font-size:15px;font-weight:700;color:#1a1a2e;margin:0 0 8px">What happens the moment your goal is in</p>
+    <div style="border:1px solid #e2e8f0;border-radius:10px;padding:22px 24px;margin:22px 0">
+      <p style="font-size:15px;font-weight:700;color:#1a1a2e;margin:0 0 6px">Step 2 &nbsp;·&nbsp; Review and sign your commission agreement</p>
+      <p style="font-size:14px;line-height:1.7;color:#4a5568;margin:0 0 14px">
+        The onboarding portal has everything about how this team works, including exactly how
+        you get paid. No fine print, no surprises. Read it, then sign the last page of the
+        handbook and email the signed copy back to me. That's what makes it official.
+      </p>
+      <div style="text-align:center">
+        <a href="{GAMMA_SITE}" style="display:inline-block;background:#1a1a2e;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;padding:13px 32px;border-radius:8px;">Open Onboarding Portal →</a>
+      </div>
+    </div>
+
+    <div style="background:#eef2ff;border-radius:10px;padding:22px 24px;margin:22px 0">
+      <p style="font-size:15px;font-weight:700;color:#1a1a2e;margin:0 0 6px">Step 3 &nbsp;·&nbsp; Fast Track starts automatically</p>
       <p style="font-size:14px;line-height:1.7;color:#4a5568;margin:0">
-        You start Fast Track, our onboarding sprint. It's a step by step path from your
-        first day to your first deals: how to work your leads, what to say on the calls,
-        and the daily system that makes it all add up. Setting your goal is what turns it on,
-        so do that first and I'll get you rolling.
+        The moment your goals are in from Step 1, you'll get an email invite to Fast Track,
+        our onboarding sprint. It's a step by step path from your first day to your first
+        deals: how to work your leads, what to say on the calls, and the daily system that
+        makes it all add up. Nothing to click here. Finish Step 1 and watch your inbox.
       </p>
     </div>
+
+    {f'''<p style="text-align:center;font-size:13px;color:#718096;margin:0 0 24px">
+      Once your goals are set, bookmark your personal dashboard:<br>
+      <a href="{dashboard_url}" style="color:#667eea;font-weight:600">View My Dashboard →</a>
+    </p>''' if dashboard_url else ''}
 
     <p style="{_S['p']}">
       Alongside the course, watch your inbox over the next few days. I'll walk you through
@@ -1468,14 +1487,6 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
       <p style="{_S['bullet']}"><strong>Day 5</strong> &nbsp; Getting set up at LPT Realty (10 things to do this week)</p>
       <p style="{_S['bullet']}"><strong>Day 6</strong> &nbsp; What accountability looks like week to week</p>
       <p style="{_S['bullet']}"><strong>Day 7</strong> &nbsp; One last thing to make it official</p>
-    </div>
-
-    <p style="{_S['p']}">
-      Everything you need is also in the full onboarding portal. 13 sections, 13 videos, self-paced.
-    </p>
-
-    <div style="{_S['cta_wrap']}">
-      <a href="{GAMMA_SITE}" style="display:inline-block;background:#1a1a2e;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;padding:13px 32px;border-radius:8px;">View Onboarding Portal →</a>
     </div>
 
     <p style="{_S['p']}">
