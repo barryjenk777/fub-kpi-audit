@@ -1416,6 +1416,7 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
   <div style="{_S['header']};text-align:center">
     <img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">
     <p style="{_S['header_title']}">Welcome to Legacy Home Team</p>
+    <p style="{_S['header_sub']}">One of the top teams in Virginia. 850+ families a year. Built on a system you now own.</p>
   </div>
 
   <div style="{_S['body_pad']}">
@@ -1426,13 +1427,22 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
     </p>
 
     <p style="{_S['p']}">
-      The agents who earn the most here aren't necessarily the most talented.
-      They're the ones who know exactly what they're building toward and have a system
-      to get there every single day. That's what we're going to build for you, starting now.
+      You just joined a team that helps 850+ families buy and sell every year, and none
+      of that happens by accident. It happens because everything here runs on a system,
+      and as of today that system is running for you.
     </p>
 
+    <div style="{_S['bullets']}">
+      <p style="{_S['bullet']}">✓ &nbsp;The moment you set your goal, it gets turned into your own daily call target. Not a team average. Yours.</p>
+      <p style="{_S['bullet']}">✓ &nbsp;Your leads come pre-ranked. Over 60 signals decide who's most ready to talk, so your first call each day is already chosen.</p>
+      <p style="{_S['bullet']}">✓ &nbsp;Every morning you get a scorecard with your number for the day. Every week you'll know exactly where you stand.</p>
+      <p style="{_S['bullet']}">✓ &nbsp;And I coach you directly, in your inbox and on your phone, from day one.</p>
+    </div>
+
     <p style="{_S['p']}">
-      Your first day here is three steps. Do them in order and everything else clicks into place.
+      The agents who earn the most here aren't necessarily the most talented. They're the
+      ones who plug into that system and work it every single day. Your job today is three
+      steps. Do them in order and everything clicks into place.
     </p>
 
     <div style="border:1px solid #e2e8f0;border-radius:10px;padding:22px 24px;margin:22px 0">
@@ -1488,6 +1498,12 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
       <p style="{_S['bullet']}"><strong>Day 6</strong> &nbsp; What accountability looks like week to week</p>
       <p style="{_S['bullet']}"><strong>Day 7</strong> &nbsp; One last thing to make it official</p>
     </div>
+
+    <p style="{_S['p']}">
+      One more thing. You're not starting from zero here. You're stepping into a machine
+      that already works, with people who want you to win. Bring the effort. The system
+      handles the rest.
+    </p>
 
     <p style="{_S['p']}">
       If you have questions at any point, reply here or text me directly. I'm glad you're here.
