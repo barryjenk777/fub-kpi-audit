@@ -5924,7 +5924,7 @@ def api_meeting_brief(agent_name):
         prompt = f"""You are helping Barry Jenkins prepare for a 1-on-1 coaching meeting with one of his agents.
 
 Barry Jenkins background:
-- Team leader of Legacy Home Team, Virginia's #1 real estate team (850+ homes/year)
+- Team leader of Legacy Home Team (Hampton Roads); teaches these systems to team leaders nationwide
 - Author of "Too Nice for Sales" — his entire philosophy: teaching beats pushing, serve people genuinely
 - Former pastor of 10 years. He holds the mirror up clearly but the reflection is always an opportunity.
 - Core phrase: "You're being too nice to your comfort zone." He names avoidance with empathy, then redirects.
@@ -7269,7 +7269,7 @@ _MCP_TOOLS = [
         "name": "get_daily_brief",
         "description": (
             "Returns today's complete business brief for Legacy Home Team "
-            "(Virginia's #1 real estate team, 850+ homes/year). Covers lead flow, "
+            "(Hampton Roads team running systems Barry teaches nationwide). Covers lead flow, "
             "upcoming appointments, overdue outcomes, ISA handoff SLA, pipeline GCI vs goal, "
             "agent accountability, AI outreach stats, and tech health. "
             "Call this first for any general question about the team or business."
@@ -9059,7 +9059,7 @@ def api_ask_claude():
     system_prompt = (
         "You are Barry Jenkins' real estate coaching partner. "
         "Barry leads Legacy Home Team in Virginia Beach/Chesapeake/Suffolk — "
-        "Virginia's #1 real estate team, closing 850+ homes per year. "
+        "a top Hampton Roads real estate team. "
         "He runs a small team of agents and tracks their KPIs (calls, conversations, "
         "appointment set rate, show rate, contract rate) weekly. "
         "He uses a coaching philosophy from his book 'Too Nice for Sales': "
@@ -10328,7 +10328,7 @@ def _generate_handoff_sms(lead_first, reply_text, agent_first, agent_phone, lead
             ),
         }.get(lead_type, "")
 
-        prompt = f"""You are Barry Jenkins' AI assistant at Legacy Home Team, Virginia's #1 real estate team (850+ homes/year, Hampton Roads VA).
+        prompt = f"""You are Barry Jenkins' AI assistant at Legacy Home Team, a top real estate team in Hampton Roads VA.
 
 A lead just replied positively to one of Barry's AI outreach texts. You're sending a final handoff SMS before a human agent takes over the conversation.
 

@@ -1416,7 +1416,7 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
   <div style="{_S['header']};text-align:center">
     <img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">
     <p style="{_S['header_title']}">Welcome to Legacy Home Team</p>
-    <p style="{_S['header_sub']}">One of the top teams in Virginia. 850+ families a year. Built on a system you now own.</p>
+    <p style="{_S['header_sub']}">Built on the systems team leaders across the country learn from us.</p>
   </div>
 
   <div style="{_S['body_pad']}">
@@ -1427,9 +1427,11 @@ def build_goal_onboarding_email(first_name, setup_url, dashboard_url=None):
     </p>
 
     <p style="{_S['p']}">
-      You just joined a team that helps 850+ families buy and sell every year, and none
-      of that happens by accident. It happens because everything here runs on a system,
-      and as of today that system is running for you.
+      Here's something most agents never get to say on day one. The systems you're about
+      to plug into are the same ones team leaders across the country bring me in to teach
+      their teams. I don't say that to brag. I say it so you know what you just got handed:
+      the newest tools in the industry, already built, already running, and as of today,
+      running for you.
     </p>
 
     <div style="{_S['bullets']}">
