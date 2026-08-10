@@ -453,8 +453,12 @@ def run_morning_nudges(dry_run: bool = False):
         weekly_leaderboard.sort(key=lambda x: x["score"], reverse=True)
 
     sent = 0
+    import config as _cfg
+    _acct_excluded = getattr(_cfg, "COACHING_TEXT_EXCLUDED_AGENTS", set())
     for rank, agent in enumerate(leaderboard, 1):
         name  = agent["name"]
+        if name in _acct_excluded:
+            continue
         email = AGENT_EMAIL_OVERRIDES.get(name) or agent["email"]
         if not email:
             continue

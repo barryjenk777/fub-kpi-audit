@@ -54,9 +54,12 @@ EXCLUDED_USERS = [
 
 # Agents excluded from Mon/Wed/Fri coaching texts (iMessage).
 # Add full agent name exactly as it appears in FUB.
+# Excluded from ALL accountability nudges: Mon/Wed/Fri coaching texts AND the
+# daily/weekend goal scorecard emails (nudge_engine honors this list too).
 COACHING_TEXT_EXCLUDED_AGENTS = {
     "Bobby Strunk",
     "Barry Jenkin$",   # Ylopo test account (barry@ylopo.com), not a real agent
+    "Julz Gat",        # accountability paused per Barry, Aug 2026
 }
 
 # Key the Fast Track onboarding course (Vercel) uses to look up an agent's
