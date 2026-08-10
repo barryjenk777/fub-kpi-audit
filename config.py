@@ -268,14 +268,14 @@ APT_EMAIL_CC = [
 ]
 
 # Sales Manager email (Joe's Monday morning coaching email)
-MANAGER_EMAIL = "thejoefu@gmail.com"
+MANAGER_EMAIL = ""   # Joe off sales-manager role (Barry, Aug 2026) — blank disables all his emails
 
 # Token baked into Joe's weekly manager-update link (texted to him each week).
 # Light gate so the form isn't fully open on a guessable URL.
 MANAGER_UPDATE_KEY = "joe-weekly-2026"
 
 # Sales manager (Joe) cell for the weekly Impact Tracker text + reminder.
-MANAGER_PHONE = "+17572867819"
+MANAGER_PHONE = ""   # blank disables Impact Tracker texts to Joe
 MANAGER_FIRST = "Joe"
 
 

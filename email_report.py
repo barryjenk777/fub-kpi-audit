@@ -550,7 +550,7 @@ def send_manager_email(manager_data, period_label):
     subject = _catchy_subject("manager", {"meeting": meeting, "total": total})
 
     # Joe + Barry — deduplicated
-    recipients = [getattr(config, "MANAGER_EMAIL", "thejoefu@gmail.com")] + list(config.EMAIL_RECIPIENTS)
+    recipients = [r for r in [getattr(config, "MANAGER_EMAIL", "")] if r] + list(config.EMAIL_RECIPIENTS)
     seen = set()
     unique = [e for e in recipients if e not in seen and not seen.add(e)]
 
@@ -1597,7 +1597,7 @@ Barry"""
             subject=subject,
             html=body.replace("\n", "<br>"),
             text=body,
-            cc=[config.BARRY_EMAIL, config.MANAGER_EMAIL],
+            cc=[a for a in (config.BARRY_EMAIL, config.MANAGER_EMAIL) if a],
         )
         print(f"[FAST TRACK INVITE] Sent to {first_name} <{email}>")
         return True
@@ -1632,7 +1632,7 @@ Barry"""
             subject=subject,
             html=body.replace("\n", "<br>"),
             text=body,
-            cc=[config.BARRY_EMAIL, config.MANAGER_EMAIL],
+            cc=[a for a in (config.BARRY_EMAIL, config.MANAGER_EMAIL) if a],
         )
         print(f"[GOAL OUTREACH] Nudge sent to {agent_name} <{email}>")
         return True
@@ -1655,7 +1655,7 @@ def send_goal_onboarding_email(agent_name, first_name, email, setup_url, dashboa
             from_email=config.EMAIL_FROM,
             subject=subject,
             html=html_body,
-            cc=[config.BARRY_EMAIL, config.MANAGER_EMAIL],
+            cc=[a for a in (config.BARRY_EMAIL, config.MANAGER_EMAIL) if a],
         )
         print(f"[ONBOARDING EMAIL] ✅ Sent to {agent_name} <{email}>")
         return True
@@ -1875,7 +1875,7 @@ def send_onboarding_sequence_email(agent_name, first_name, email, setup_url, day
             subject=subject,
             html=html,
             text=body,
-            cc=[config.MANAGER_EMAIL],
+            cc=[a for a in (config.MANAGER_EMAIL,) if a] or None,
         )
         print(f"[ONBOARDING SEQ] Day {day} sent to {agent_name} <{email}>")
         return True
