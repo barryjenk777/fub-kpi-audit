@@ -3839,7 +3839,18 @@ def api_onboarding_retry_sync():
         payload = _ft_build_payload(agent_name, email)
         row_id  = _db.enqueue_fasttrack_sync(agent_name, email, payload)
         logger.info("[onboarding board] retry sync queued for %s (row %s)", email, row_id)
-        return jsonify({"ok": True, "queued": bool(row_id), "agent_name": agent_name,
+        # Fire it now rather than waiting for the 15-minute retry sweep, so the
+        # button gives real feedback. Falls back to the queue if this attempt fails.
+        sent_now = False
+        if row_id:
+            try:
+                sent_now = bool(_ft_attempt_sync({"id": row_id, "attempts": 0,
+                                                  "payload": payload, "email": email,
+                                                  "agent_name": agent_name}))
+            except Exception as _ie:
+                logger.warning("[onboarding board] immediate sync failed for %s: %s", email, _ie)
+        return jsonify({"ok": True, "queued": bool(row_id), "sent_now": sent_now,
+                        "agent_name": agent_name,
                         "goal_set": bool(payload.get("incomeGoal"))})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
