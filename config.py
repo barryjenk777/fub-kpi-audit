@@ -255,7 +255,6 @@ EMAIL_FROM = "barry@yourfriendlyagent.net"
 EMAIL_RECIPIENTS = [
     "clientreview@yourfriendlyagent.net",
     "barry@yourfriendlyagent.net",
-    "thejoefu@gmail.com",
 ]
 
 # Person responsible for updating the Live Calls inbox in FUB
@@ -266,7 +265,6 @@ LIVE_CALLS_ADMIN_EMAIL = "clientreview@yourfriendlyagent.net"
 # CC list for per-agent appointment accountability emails
 APT_EMAIL_CC = [
     "barry@yourfriendlyagent.net",
-    "thejoefu@gmail.com",
     "clientreview@yourfriendlyagent.net",
 ]
 

@@ -1719,7 +1719,7 @@ Do the math: if your average commission check is $6,000 per deal, you hit the ca
 
 There's also a Business Builder option ($500 flat per transaction, $5,000 cap, 100% from day one) that works better for high-volume agents focused on rapid growth. Full comparison is in Section 8 of the onboarding portal.
 
-What the team covers: leads, FUB CRM, AI engagement, ISA support, weekly training, 1:1 coaching with Joe, office access, and all LPT tools.
+What the team covers: leads, FUB CRM, AI engagement, ISA support, weekly training, 1:1 coaching, office access, and all LPT tools.
 
 What you cover: your license, dues, CE, mileage, and personal marketing.
 
@@ -1808,13 +1808,13 @@ You've been through the handbook. You know how leads work, how you get paid, and
 
 Here's what the rhythm looks like going forward.
 
-Every week Joe is going to sit down with you and go through your numbers. Calls, conversations, pipeline movement. Come ready to be honest about what's working and what isn't. That conversation is not a performance review. It's the whole point of being on this team.
+Every week we sit down with you and go through your numbers. Calls, conversations, pipeline movement. Come ready to be honest about what's working and what isn't. That conversation is not a performance review. It's the whole point of being on this team.
 
-Reach Joe at (757) 286-7819 for your weekly 1:1s.
+Text me at (757) 816-4037 to get your weekly 1:1 on the calendar.
 
 The Maverick system will flag leads that need attention. When it does, log a call or a text and it clears. No drama. Just stay on top of it.
 
-If you ever get stuck on anything, text Joe. Anything urgent, text me at (757) 816-4037.
+If you ever get stuck on anything, text me at (757) 816-4037.
 
 One last thing coming tomorrow. It takes two minutes.
 
