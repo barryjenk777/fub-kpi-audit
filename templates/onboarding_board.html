@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fast Track Onboarding Board</title>
+<style>
+:root{
+  --bg:#0f172a; --panel:#16213e; --panel2:#1c2a4a; --line:#26365c;
+  --ink:#e8eefc; --muted:#93a4c4; --gold:#f5a623;
+  --gray:#7c8aa5; --blue:#4b8ef1; --amber:#f5a623; --green:#37c98b; --red:#e5544b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:14px}
+.wrap{max-width:1240px;margin:0 auto;padding:24px 20px 60px}
+h1{font-size:22px;margin:0 0 2px}
+.sub{color:var(--muted);font-size:12.5px;margin:0 0 18px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:0 0 18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card .label{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.card .val{font-size:26px;font-weight:800;line-height:1.15;margin-top:4px}
+.btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:7px;
+  padding:7px 13px;font-size:12.5px;font-weight:600;cursor:pointer}
+.btn:hover{border-color:var(--gold)}
+.btn-gold{background:var(--gold);color:#20160a;border-color:var(--gold)}
+.sec{margin:22px 0 8px;font-size:15px;font-weight:700}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;overflow:hidden}
+th{background:var(--panel2);text-align:left;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--muted);padding:10px 12px;cursor:pointer;user-select:none;white-space:nowrap}
+th:hover{color:var(--gold)}
+td{padding:11px 12px;border-top:1px solid var(--line);vertical-align:middle}
+tr.stalled td:first-child{box-shadow:inset 3px 0 0 var(--amber)}
+tr.not_started td:first-child{box-shadow:inset 3px 0 0 var(--gray)}
+tr.nosync td:first-child{box-shadow:inset 3px 0 0 var(--red)}
+.nm{font-weight:700}
+.em{color:var(--muted);font-size:11.5px}
+.pill{display:inline-block;padding:3px 9px;border-radius:99px;font-size:10.5px;font-weight:800;
+  letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+.p-not_started{background:rgba(124,138,165,.18);color:#b6c3d8}
+.p-in_progress{background:rgba(75,142,241,.18);color:#8fbcff}
+.p-stalled{background:rgba(245,166,35,.18);color:#ffcb72}
+.p-graduated{background:rgba(55,201,139,.18);color:#79e5ba}
+.p-nosync{background:rgba(229,84,75,.18);color:#ff9d96}
+.bar{height:7px;background:#0d1729;border-radius:99px;overflow:hidden;min-width:96px}
+.bar i{display:block;height:100%;background:var(--gold);border-radius:99px}
+.pct{font-size:11.5px;color:var(--muted);margin-top:3px;white-space:nowrap}
+.dark-warn{color:var(--amber);font-weight:700}
+.dark-bad{color:var(--red);font-weight:700}
+.muted{color:var(--muted)}
+.banner{background:rgba(229,84,75,.12);border:1px solid rgba(229,84,75,.5);color:#ffb3ad;
+  border-radius:9px;padding:11px 14px;margin:0 0 16px;font-size:13px}
+.banner.warn{background:rgba(245,166,35,.12);border-color:rgba(245,166,35,.5);color:#ffcb72}
+details{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin-top:18px}
+summary{cursor:pointer;font-weight:700;color:var(--muted)}
+.modal{position:fixed;inset:0;background:rgba(5,9,18,.72);display:none;align-items:flex-start;
+  justify-content:center;padding:40px 16px;overflow:auto;z-index:50}
+.modal.on{display:flex}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:12px;max-width:640px;width:100%;padding:22px 24px}
+.sheet h2{margin:0 0 2px;font-size:19px}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:6px 12px;margin:14px 0;font-size:13px}
+.kv div:nth-child(odd){color:var(--muted)}
+.chip{display:inline-block;padding:4px 10px;border-radius:7px;font-size:11.5px;font-weight:700;
+  background:var(--panel2);border:1px solid var(--line);margin-right:8px}
+.mods{margin-top:14px;border-top:1px solid var(--line)}
+.mod{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
+.mod .t{color:var(--muted);font-size:11.5px}
+textarea{width:100%;min-height:110px;background:#0d1729;color:var(--ink);border:1px solid var(--line);
+  border-radius:8px;padding:11px;font:inherit;font-size:13px;resize:vertical}
+.right{text-align:right}
+.spin{color:var(--muted);padding:26px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="justify-content:space-between;align-items:flex-start">
+    <div>
+      <h1>Fast Track Onboarding Board</h1>
+      <p class="sub" id="sub">Loading live course progress...</p>
+    </div>
+    <div class="row">
+      <button class="btn" id="btn-refresh">Refresh</button>
+    </div>
+  </div>
+
+  <div id="banner-wrap"></div>
+  <div class="stats" id="stats"></div>
+
+  <div id="nosync-wrap"></div>
+
+  <div class="sec">Agents in Fast Track</div>
+  <div id="table-wrap"><div class="spin">Loading...</div></div>
+
+  <div id="unmatched-wrap"></div>
+</div>
+
+<div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
+<div class="modal" id="nudge"><div class="sheet" id="nudge-sheet"></div></div>
+
+<script>
+var KEY = {{ api_key|tojson }};
+var DATA = null, SORT = {col:null, dir:1};
+
+function qs(p){ return KEY ? (p + (p.indexOf('?')>-1?'&':'?') + 'key=' + encodeURIComponent(KEY)) : p; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function fmtDate(iso){ if(!iso) return null;
+  var d=new Date(iso); if(isNaN(d)) return null;
+  return d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}); }
+function relTime(iso){ if(!iso) return 'Unknown';
+  var d=new Date(iso); if(isNaN(d)) return 'Unknown';
+  var days=Math.floor((Date.now()-d.getTime())/86400000);
+  if(days<1) return 'today';
+  if(days===1) return 'yesterday';
+  if(days<14) return days+' days ago';
+  if(days<60) return Math.floor(days/7)+' weeks ago';
+  return Math.floor(days/30)+' months ago'; }
+function darkCell(n){
+  if(n===null||n===undefined) return '<span class="muted">Unknown</span>';
+  var cls = n>=14 ? 'dark-bad' : (n>=7 ? 'dark-warn' : '');
+  return '<span class="'+cls+'">'+n+' d</span>'; }
+
+function load(force){
+  document.getElementById('table-wrap').innerHTML='<div class="spin">Loading...</div>';
+  fetch(qs('/api/admin/onboarding-board'+(force?'?force=1':'')))
+    .then(function(r){ return r.json(); })
+    .then(function(d){ DATA=d; render(); })
+    .catch(function(e){
+      document.getElementById('table-wrap').innerHTML =
+        '<div class="banner">Could not load the board. <button class="btn" onclick="load(1)">Retry</button></div>'; });
+}
+
+function render(){
+  var d=DATA;
+  if(!d || d.ok===false){
+    document.getElementById('table-wrap').innerHTML =
+      '<div class="banner">Fast Track progress unavailable'+(d&&d.error?': '+esc(d.error):'')+
+      ' <button class="btn" onclick="load(1)">Retry</button></div>';
+    return;
+  }
+  var s=d.stats||{};
+  document.getElementById('sub').textContent =
+    'Live from Fast Track' + (d.generated_at? ' · generated '+relTime(d.generated_at):'') +
+    (d.cache_age_s!=null? ' · cache '+d.cache_age_s+'s':'');
+
+  var bw=document.getElementById('banner-wrap'); bw.innerHTML='';
+  if(d.stale){ bw.innerHTML='<div class="banner warn">Fast Track progress unavailable. Showing cached data from '+
+    esc(fmtDate(d.last_good_at)||'earlier')+'.</div>'; }
+
+  document.getElementById('stats').innerHTML =
+    card('In Fast Track', s.matched||0, '') +
+    card('Not started', s.not_started||0, 'var(--gray)') +
+    card('Stalled', s.stalled||0, 'var(--amber)') +
+    card('Graduated', s.graduated||0, 'var(--green)') +
+    card('Not synced', s.not_synced||0, 'var(--red)');
+
+  renderNoSync(d.not_synced||[]);
+  renderTable(d.matched||[]);
+  renderUnmatched(d.unmatched||[]);
+}
+
+function card(label,val,color){
+  return '<div class="card"><div class="label">'+esc(label)+'</div>'+
+         '<div class="val"'+(color?' style="color:'+color+'"':'')+'>'+val+'</div></div>'; }
+
+function renderNoSync(rows){
+  var w=document.getElementById('nosync-wrap');
+  if(!rows.length){ w.innerHTML=''; return; }
+  var h='<div class="sec" style="color:var(--red)">Not synced to Fast Track ('+rows.length+')</div>'+
+        '<div class="sub" style="margin:-4px 0 8px">These agents exist in Command Center but Fast Track has no record of them. They never got a course invite.</div>'+
+        '<table><thead><tr><th>Agent</th><th>Email</th><th class="right">Action</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    h+='<tr class="nosync"><td><span class="nm">'+esc(r.cc_name)+'</span> '+
+       '<span class="pill p-nosync">not synced</span></td>'+
+       '<td class="em">'+esc(r.email)+'</td>'+
+       '<td class="right"><button class="btn" onclick="retrySync(\''+esc(r.email)+'\',this)">Retry sync</button></td></tr>';
+  });
+  w.innerHTML=h+'</tbody></table>';
+}
+
+var COLS=[
+  {k:'cc_name',   t:'Agent'},
+  {k:'status',    t:'Status'},
+  {k:'percent_complete', t:'Progress'},
+  {k:'current_module',   t:'Current Module'},
+  {k:'furthest_lesson',  t:'Furthest'},
+  {k:'days_since_active',t:'Days Dark'},
+  {k:'invited_at', t:'Invited'},
+  {k:null, t:'Actions'}
+];
+
+function renderTable(rows){
+  if(!rows.length){
+    document.getElementById('table-wrap').innerHTML='<div class="card muted">No agents matched between Command Center and Fast Track yet.</div>';
+    return; }
+  var sorted=rows.slice();
+  if(SORT.col){
+    sorted.sort(function(a,b){
+      var x=a[SORT.col], y=b[SORT.col];
+      if(x==null&&y==null) return 0; if(x==null) return 1; if(y==null) return -1;
+      if(typeof x==='number'&&typeof y==='number') return (x-y)*SORT.dir;
+      return String(x).localeCompare(String(y))*SORT.dir; });
+  }
+  var h='<table><thead><tr>';
+  COLS.forEach(function(c){
+    h+='<th'+(c.k?' onclick="sortBy(\''+c.k+'\')"':'')+(c.t==='Actions'?' class="right"':'')+'>'+esc(c.t)+
+       (SORT.col===c.k?(SORT.dir>0?' &uarr;':' &darr;'):'')+'</th>'; });
+  h+='</tr></thead><tbody>';
+  sorted.forEach(function(a){
+    var pct=a.percent_complete||0, st=a.status||'in_progress';
+    var mods=(a.modules_completed!=null?a.modules_completed:0)+'/'+(DATA.modules_total||7);
+    h+='<tr class="'+esc(st)+'">'+
+      '<td><div class="nm">'+esc(a.cc_name||a.name||'')+'</div><div class="em">'+esc(a.email)+'</div></td>'+
+      '<td><span class="pill p-'+esc(st)+'">'+esc(st.replace('_',' '))+'</span></td>'+
+      '<td>'+(st==='graduated'
+          ? '<span style="color:var(--green);font-weight:700">&#10003; Complete</span>'
+          : '<div class="bar"><i style="width:'+pct+'%"></i></div><div class="pct">'+mods+' modules, '+pct+'%</div>')+'</td>'+
+      '<td>'+(a.current_module? 'Module '+a.current_module+(a.current_module_title? ': '+esc(a.current_module_title):'')
+          : '<span class="muted">&mdash;</span>')+'</td>'+
+      '<td>'+(a.furthest_lesson? esc(a.furthest_lesson) : '<span class="muted">None yet</span>')+'</td>'+
+      '<td>'+darkCell(a.days_since_active)+'</td>'+
+      '<td class="muted">'+esc(relTime(a.invited_at))+'</td>'+
+      '<td class="right"><button class="btn" onclick="viewAgent(\''+esc(a.email)+'\')">View</button> '+
+      '<button class="btn" onclick="openNudge(\''+esc(a.email)+'\',\''+esc((a.cc_name||a.name||'').split(" ")[0])+'\','+
+        (a.days_since_active==null?'null':a.days_since_active)+')">Nudge</button></td>'+
+      '</tr>'; });
+  document.getElementById('table-wrap').innerHTML=h+'</tbody></table>';
+}
+
+function renderUnmatched(rows){
+  var w=document.getElementById('unmatched-wrap');
+  if(!rows.length){ w.innerHTML=''; return; }
+  var h='<details><summary>Unmatched Fast Track rows ('+rows.length+') — old test accounts, no Command Center agent</summary>'+
+        '<div style="margin-top:10px">';
+  rows.forEach(function(r){
+    h+='<div class="em" style="padding:3px 0">'+esc(r.email)+' &middot; '+esc(r.status||'')+' &middot; '+(r.percent_complete||0)+'%</div>'; });
+  w.innerHTML=h+'</div></details>';
+}
+
+function sortBy(k){ if(SORT.col===k){ SORT.dir*=-1; } else { SORT.col=k; SORT.dir=1; } render(); }
+
+function viewAgent(email){
+  var m=document.getElementById('modal'), s=document.getElementById('sheet');
+  s.innerHTML='<div class="spin">Loading '+esc(email)+'...</div>'; m.classList.add('on');
+  fetch(qs('/api/admin/onboarding-board/agent?email='+encodeURIComponent(email)))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d.ok||!d.agent){ s.innerHTML='<h2>Not in Fast Track</h2><p class="muted">'+esc(email)+
+        ' has no Fast Track record.</p><button class="btn" onclick="closeModal()">Close</button>'; return; }
+      var a=d.agent, pct=a.percent_complete||0;
+      var h='<div class="row" style="justify-content:space-between"><div><h2>'+esc(a.name||email)+'</h2>'+
+        '<div class="em">'+esc(a.email)+'</div></div>'+
+        '<span class="pill p-'+esc(a.status||'in_progress')+'">'+esc((a.status||'').replace('_',' '))+'</span></div>'+
+        '<div class="bar" style="margin:14px 0 4px"><i style="width:'+pct+'%"></i></div>'+
+        '<div class="pct">'+(a.modules_completed||0)+' of '+(d.modules_total||7)+' modules, '+pct+'%</div>'+
+        '<div class="kv">'+
+          '<div>Invited</div><div>'+esc(fmtDate(a.invited_at)||'Unknown')+'</div>'+
+          '<div>First login</div><div>'+(a.first_login_at? esc(fmtDate(a.first_login_at)) : '<span class="muted">Never logged in</span>')+'</div>'+
+          '<div>Last active</div><div>'+(a.last_active_at? esc(fmtDate(a.last_active_at))+' ('+a.days_since_active+' d ago)' : '<span class="muted">Unknown</span>')+'</div>'+
+          '<div>Graduated</div><div>'+(a.graduated_at? esc(fmtDate(a.graduated_at)) : '<span class="muted">Not yet</span>')+'</div>'+
+        '</div>'+
+        '<div><span class="chip">Call gate: '+(a.call_gate_passed===true?'Passed':'Not yet')+'</span>'+
+        '<span class="chip">90 day plan: '+(a.ninety_day_plan_submitted?'Submitted':'Not submitted')+'</span></div>';
+      if(a.furthest_lesson){ h+='<div class="banner warn" style="margin:14px 0 0">Currently sitting in lesson '+esc(a.furthest_lesson)+'</div>'; }
+      h+='<div class="mods">';
+      (a.modules||[]).forEach(function(m2){
+        var lbl = m2.status==='complete' ? esc(fmtDate(m2.completed_at)||'Complete')
+                : (m2.status==='in_progress' ? 'In progress' : 'Not started');
+        var col = m2.status==='complete' ? 'var(--green)' : (m2.status==='in_progress' ? 'var(--gold)' : 'var(--muted)');
+        h+='<div class="mod"><div><strong>'+m2.number+'.</strong> '+esc(m2.title||'')+'</div>'+
+           '<div class="t" style="color:'+col+'">'+lbl+'</div></div>'; });
+      h+='</div><div class="right" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>';
+      s.innerHTML=h; })
+    .catch(function(){ s.innerHTML='<h2>Error</h2><p class="muted">Could not load that agent.</p>'+
+      '<button class="btn" onclick="closeModal()">Close</button>'; });
+}
+
+function openNudge(email, first, dark){
+  var n=document.getElementById('nudge'), s=document.getElementById('nudge-sheet');
+  var days = (dark==null? 'a while' : dark+' days');
+  var msg = first+', noticed you have not been in Fast Track in '+days+'. '+
+            'What is blocking you? Text me if you got stuck on anything.';
+  s.innerHTML='<h2>Send a nudge</h2><div class="em" style="margin-bottom:12px">'+esc(email)+
+    ' &middot; goes out as an email from you</div>'+
+    '<textarea id="nudge-msg">'+esc(msg)+'</textarea>'+
+    '<div class="right" style="margin-top:14px">'+
+      '<button class="btn" onclick="closeNudge()">Cancel</button> '+
+      '<button class="btn btn-gold" id="nudge-send" onclick="sendNudge(\''+esc(email)+'\')">Send nudge</button></div>';
+  n.classList.add('on');
+}
+
+function sendNudge(email){
+  var btn=document.getElementById('nudge-send');
+  btn.disabled=true; btn.textContent='Sending...';
+  fetch(qs('/api/admin/onboarding-board/nudge'),{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email:email,message:document.getElementById('nudge-msg').value})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      document.getElementById('nudge-sheet').innerHTML = d.ok
+        ? '<h2>Nudge sent</h2><p class="muted">Sent to '+esc(email)+' and logged.</p><div class="right"><button class="btn" onclick="closeNudge()">Done</button></div>'
+        : '<h2>Did not send</h2><p class="muted">'+esc(d.error||'Unknown error')+'</p><div class="right"><button class="btn" onclick="closeNudge()">Close</button></div>'; })
+    .catch(function(){ btn.disabled=false; btn.textContent='Send nudge'; });
+}
+
+function retrySync(email, btn){
+  btn.disabled=true; btn.textContent='Queuing...';
+  fetch(qs('/api/admin/onboarding-board/retry-sync'),{method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:email})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      btn.textContent = d.ok ? (d.goal_set? 'Queued' : 'Queued (no goal yet)') : 'Failed';
+      if(!d.ok){ btn.disabled=false; } })
+    .catch(function(){ btn.textContent='Failed'; btn.disabled=false; });
+}
+
+function closeModal(){ document.getElementById('modal').classList.remove('on'); }
+function closeNudge(){ document.getElementById('nudge').classList.remove('on'); load(0); }
+
+document.getElementById('btn-refresh').onclick=function(){ load(1); };
+document.getElementById('modal').onclick=function(e){ if(e.target.id==='modal') closeModal(); };
+document.getElementById('nudge').onclick=function(e){ if(e.target.id==='nudge') closeNudge(); };
+load(0);
+</script>
+</body>
+</html>

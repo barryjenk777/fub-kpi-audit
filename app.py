@@ -3668,6 +3668,284 @@ def _ft_attempt_sync(row):
         return False
 
 
+# ---------------------------------------------------------------------------
+# Fast Track onboarding board — live read of course progress, joined to CC
+# ---------------------------------------------------------------------------
+# Progress is read live from Fast Track (source of truth) and never persisted
+# here. The join is by lowercased email. Three buckets come out of it:
+#   matched    — in both systems (the real board)
+#   not_synced — in CC but Fast Track has no row (integrity failure, actionable)
+#   unmatched  — Fast Track rows with no CC agent (old test rows, informational)
+
+_ft_last_good = {"payload": None, "at": None}
+
+
+def _ft_board_data(force=False):
+    """Join the Fast Track roster to the CC roster. Returns the full board dict.
+    On a Fast Track error, serves the last good payload with stale=True."""
+    import fasttrack_client as _ft
+    cc_rows = _db.get_agent_profiles(active_only=True) or []
+    cc_by_email = {}
+    for p in cc_rows:
+        e = (p.get("email") or "").strip().lower()
+        if e:
+            cc_by_email[e] = p.get("agent_name")
+
+    err = None
+    try:
+        roster = _ft.fetch_fast_track_roster(force=force)
+        _ft_last_good["payload"] = roster
+        _ft_last_good["at"] = datetime.now(timezone.utc).isoformat()
+        stale = False
+    except Exception as e:
+        err = str(e)[:300]
+        logger.warning("[onboarding board] Fast Track roster fetch failed: %s", err)
+        roster = _ft_last_good["payload"]
+        stale = True
+        if roster is None:
+            return {"ok": False, "error": err, "matched": [], "not_synced": [],
+                    "unmatched": [], "stats": {}, "stale": True, "last_good_at": None}
+
+    ft_agents = roster.get("agents") or []
+    ft_by_email = {(a.get("email") or "").strip().lower(): a for a in ft_agents}
+
+    matched, unmatched = [], []
+    for e, a in ft_by_email.items():
+        row = dict(a)
+        if e in cc_by_email:
+            row["cc_name"] = cc_by_email[e]
+            matched.append(row)
+        else:
+            unmatched.append(row)
+
+    not_synced = [{"email": e, "cc_name": n}
+                  for e, n in sorted(cc_by_email.items(), key=lambda kv: kv[1] or "")
+                  if e not in ft_by_email]
+
+    # Least progress first, then longest dark — the people who need help on top.
+    matched.sort(key=lambda a: (a.get("percent_complete") or 0,
+                                -(a.get("days_since_active") or 0)))
+
+    stats = {
+        "total_ft":     len(ft_agents),
+        "matched":      len(matched),
+        "not_synced":   len(not_synced),
+        "unmatched":    len(unmatched),
+        "not_started":  sum(1 for a in matched if a.get("status") == "not_started"),
+        "in_progress":  sum(1 for a in matched if a.get("status") == "in_progress"),
+        "stalled":      sum(1 for a in matched if a.get("status") == "stalled"),
+        "graduated":    sum(1 for a in matched if a.get("status") == "graduated"),
+    }
+    return {"ok": True, "error": err, "stale": stale,
+            "last_good_at": _ft_last_good["at"],
+            "generated_at": roster.get("generated_at"),
+            "modules_total": roster.get("modules_total") or 7,
+            "cache_age_s": roster.get("_cache_age_s"),
+            "stats": stats, "matched": matched,
+            "not_synced": not_synced, "unmatched": unmatched}
+
+
+@app.route("/api/admin/onboarding-board")
+def api_onboarding_board():
+    """JSON behind the onboarding board. ?force=1 bypasses the 60s cache."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    force = request.args.get("force") in ("1", "true", "yes")
+    if force:
+        import fasttrack_client as _ft
+        _ft.clear_roster_cache()
+    try:
+        return jsonify(_ft_board_data(force=force))
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e),
+                        "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/api/admin/onboarding-board/agent")
+def api_onboarding_agent():
+    """Drilldown: one agent's live Fast Track detail. Never cached."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    email = (request.args.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"ok": False, "error": "email required"}), 400
+    try:
+        import fasttrack_client as _ft
+        agent = _ft.fetch_fast_track_agent(email)
+        if not agent:
+            return jsonify({"ok": False, "found": False, "email": email}), 404
+        return jsonify({"ok": True, "found": True, "agent": agent})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 502
+
+
+@app.route("/api/admin/onboarding-board/nudge", methods=["POST"])
+def api_onboarding_nudge():
+    """Send ONE human-approved nudge to an agent who has stalled in Fast Track.
+    Body: {email, message}. Never auto-fires; the board asks for confirmation."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body    = request.get_json(silent=True) or {}
+    email   = (body.get("email") or "").strip().lower()
+    message = (body.get("message") or "").strip()
+    if not email or not message:
+        return jsonify({"ok": False, "error": "email and message required"}), 400
+    try:
+        import coach_voice as _cv
+        message = _cv._strip_dashes(message)
+    except Exception:
+        pass
+
+    name = email
+    for p in (_db.get_agent_profiles(active_only=False) or []):
+        if (p.get("email") or "").strip().lower() == email:
+            name = p.get("agent_name") or email
+            break
+    first = (name.split()[0] if name and " " in name else name)
+    try:
+        import postmark_client as _pm
+        _pm.send(to=email, from_email=config.EMAIL_FROM,
+                 subject=f"{first}, quick check on Fast Track",
+                 html=message.replace("\n", "<br>"), text=message)
+        try:
+            _db.log_nudge(name, "fasttrack_stall", message, status="sent")
+        except Exception:
+            pass
+        logger.info("[onboarding board] nudge sent to %s", email)
+        return jsonify({"ok": True, "sent_to": email})
+    except Exception as e:
+        logger.error("[onboarding board] nudge failed for %s: %s", email, e)
+        return jsonify({"ok": False, "error": str(e)[:300]}), 502
+
+
+@app.route("/api/admin/onboarding-board/retry-sync", methods=["POST"])
+def api_onboarding_retry_sync():
+    """Re-enqueue a Fast Track sync for a CC agent who never made it across."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body  = request.get_json(silent=True) or {}
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"ok": False, "error": "email required"}), 400
+    agent_name = None
+    for p in (_db.get_agent_profiles(active_only=True) or []):
+        if (p.get("email") or "").strip().lower() == email:
+            agent_name = p.get("agent_name")
+            break
+    if not agent_name:
+        return jsonify({"ok": False, "error": "no active CC agent with that email"}), 404
+    try:
+        payload = _ft_build_payload(agent_name, email)
+        row_id  = _db.enqueue_fasttrack_sync(agent_name, email, payload)
+        logger.info("[onboarding board] retry sync queued for %s (row %s)", email, row_id)
+        return jsonify({"ok": True, "queued": bool(row_id), "agent_name": agent_name,
+                        "goal_set": bool(payload.get("incomeGoal"))})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+def scheduled_onboarding_digest(dry_run=False):
+    """Daily 8am ET. Emails Barry the Fast Track roster exceptions: who stalled,
+    who never synced, who graduated in the last 24h. Silent when there's nothing
+    to report, so it never becomes daily noise."""
+    if not dry_run and _already_fired_recently("onboarding_digest", within_hours=20):
+        return None
+    try:
+        board = _ft_board_data()
+    except Exception as e:
+        logger.warning("[onboarding digest] board build failed: %s", e)
+        return None
+    if not board.get("ok"):
+        return None
+
+    matched   = board.get("matched") or []
+    not_synced = board.get("not_synced") or []
+    stalled = [a for a in matched if a.get("status") == "stalled"]
+
+    grads = []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    for a in matched:
+        g = a.get("graduated_at")
+        if not g:
+            continue
+        try:
+            if datetime.fromisoformat(str(g).replace("Z", "+00:00")) >= cutoff:
+                grads.append(a)
+        except Exception:
+            pass
+
+    if not (stalled or not_synced or grads):
+        logger.info("[onboarding digest] nothing to report, skipping send")
+        if not dry_run:
+            _record_fired("onboarding_digest")
+        return {"sent": False, "reason": "nothing to report"}
+
+    base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+    parts = []
+    if grads:
+        parts.append("<p style='font-size:15px'><strong>Graduated in the last 24 hours</strong></p><ul>" +
+                     "".join(f"<li>{a.get('cc_name') or a.get('name')} finished Fast Track</li>" for a in grads) +
+                     "</ul>")
+    if stalled:
+        rows = "".join(
+            f"<li><strong>{a.get('cc_name') or a.get('name')}</strong>, "
+            f"{a.get('percent_complete', 0)}% done, "
+            f"{'no activity in ' + str(a.get('days_since_active')) + ' days' if a.get('days_since_active') is not None else 'activity unknown'}"
+            f"{', sitting in lesson ' + str(a.get('furthest_lesson')) if a.get('furthest_lesson') else ''}</li>"
+            for a in stalled)
+        parts.append(f"<p style='font-size:15px'><strong>Stalled ({len(stalled)})</strong></p><ul>{rows}</ul>")
+    if not_synced:
+        rows = "".join(f"<li>{r.get('cc_name')} ({r.get('email')})</li>" for r in not_synced)
+        parts.append(f"<p style='font-size:15px'><strong>Never synced to Fast Track ({len(not_synced)})</strong><br>"
+                     f"<span style='color:#666;font-size:13px'>These agents are in Command Center but Fast Track has no record, "
+                     f"so they never got a course invite.</span></p><ul>{rows}</ul>")
+
+    html = ("<div style=\"font-family:-apple-system,Arial,sans-serif;color:#222;max-width:600px\">"
+            "<h2 style='margin:0 0 4px'>Fast Track roster</h2>"
+            f"<p style='color:#666;margin:0 0 16px'>{datetime.now().strftime('%A, %B %d')}</p>"
+            + "".join(parts) +
+            f"<p style='margin-top:20px'><a href='{base}/team/onboarding' "
+            "style='background:#f5a623;color:#20160a;padding:10px 18px;border-radius:7px;"
+            "text-decoration:none;font-weight:700'>Open the board</a></p></div>")
+    subject = f"Fast Track roster: {len(stalled)} stalled, {len(grads)} graduated today"
+
+    if dry_run:
+        return {"sent": False, "dry_run": True, "subject": subject,
+                "stalled": len(stalled), "not_synced": len(not_synced), "graduated": len(grads)}
+    try:
+        import postmark_client as _pm
+        import re as _re_local
+        _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+                 subject=subject, html=html,
+                 text=_re_local.sub(r"<[^>]+>", " ", html))
+        _record_fired("onboarding_digest")
+        logger.info("[onboarding digest] sent: %d stalled, %d not synced, %d grads",
+                    len(stalled), len(not_synced), len(grads))
+        return {"sent": True, "stalled": len(stalled),
+                "not_synced": len(not_synced), "graduated": len(grads)}
+    except Exception as e:
+        logger.error("[onboarding digest] send failed: %s", e)
+        return {"sent": False, "error": str(e)[:200]}
+
+
+@app.route("/api/admin/onboarding-board/digest-preview")
+def api_onboarding_digest_preview():
+    """Dry-run the daily digest without sending, so Barry can see what it would say."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(scheduled_onboarding_digest(dry_run=True) or {"sent": False, "reason": "no data"})
+
+
+@app.route("/team/onboarding")
+def team_onboarding_page():
+    """Barry's Fast Track onboarding board. Leadership only."""
+    if not _perplexity_auth():
+        return "Not authorized", 403
+    return render_template("onboarding_board.html",
+                           api_key=request.args.get("key", ""))
+
+
 @app.route("/api/goals/setup/<token>", methods=["POST"])
 def api_goals_setup_save(token):
     agent_name = _db.resolve_goal_token(token)
@@ -14659,6 +14937,11 @@ def start_scheduler():
     # KPI Audit email: Monday 8:30am ET
     _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET),
                        id="audit_email", name="Monday KPI audit email",
+                       max_instances=1, coalesce=True)
+
+    # Fast Track onboarding digest: daily 8am ET, only when there's something to say
+    _scheduler.add_job(scheduled_onboarding_digest, CronTrigger(hour=8, minute=0, timezone=ET),
+                       id="onboarding_digest", name="Fast Track onboarding digest (daily 8am)",
                        max_instances=1, coalesce=True)
 
     # Weekly Hype email: Sunday 9pm ET — auto-computes AI text + AI voice
