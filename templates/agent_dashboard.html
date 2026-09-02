@@ -265,7 +265,7 @@ button{cursor:pointer;border:none;font-family:inherit}
       <div id="dn-main">
         <div class="dn-number-wrap">
           <div class="dn-big" id="dn-big">—</div>
-          <div class="dn-unit">dials</div>
+          <div class="dn-unit">conversations</div>
         </div>
         <div class="dn-context" id="dn-context"></div>
         <div class="dn-progress-wrap" id="dn-progress-wrap"></div>
@@ -323,7 +323,7 @@ button{cursor:pointer;border:none;font-family:inherit}
       <div class="chain-legend">
         <span><div class="chain-dot" style="background:var(--green)"></div> Hit target</span>
         <span><div class="chain-dot" style="background:var(--yellow)"></div> Partial</span>
-        <span><div class="chain-dot" style="background:var(--red-bg);border:1px solid var(--red)"></div> Missed</span>
+        <span><div class="chain-dot" style="background:var(--red-bg);border:1px solid var(--red)"></div> No activity logged</span>
       </div>
     </div>
 
@@ -460,8 +460,11 @@ function renderDailyNumber(goal, actuals, today) {
   const a2c      = parseFloat(goal.appt_to_contract_rate || 0.30);
   const c2cl     = parseFloat(goal.contract_to_close_rate || 0.80);
 
-  // 1 in 4 conversations → appointment (industry standard; reflects call→convo→appt chain)
-  const CONVO_TO_APPT = 0.25;
+  // Conversation -> appointment ("the ask"). Use the agent's OWN rate from their
+  // goal, same field and same 0.10 default the server uses in compute_targets.
+  // This was hardcoded at 0.25, which made this page disagree with the goal
+  // setup page by 2.5x for the same agent.
+  const CONVO_TO_APPT = parseFloat(goal.call_to_appt_rate || 0.10);
 
   const closingsYtd    = actuals?.closings_ytd || 0;
   const closingsNeeded = perDeal > 0 ? gci / perDeal : 0;
@@ -627,6 +630,7 @@ function renderTodayLog(today, ident) {
 
 function renderChain(activityLog, ident) {
   const callsT = ident?.daily_calls_target || 1;
+  const START_DATE = (_data && _data.start_date) ? String(_data.start_date).slice(0,10) : null;
   const grid = document.getElementById('chain-grid');
   if (!grid) return;
 
@@ -653,10 +657,17 @@ function renderChain(activityLog, ident) {
     const act = logMap[dateStr];
     const isFuture = dateStr > todayStr;
     const isToday  = dateStr === todayStr;
+    const d        = new Date(dateStr + 'T12:00:00');
+    // Sunday is a grace day in the streak math, so never mark it missed here.
+    const isGrace  = d.getDay() === 0;
+    // Days before the agent joined are not theirs to answer for.
+    const beforeStart = START_DATE && dateStr < START_DATE;
     let cls = 'chain-day';
-    let label = new Date(dateStr + 'T12:00:00').getDate();
+    let label = d.getDate();
     if (isFuture) {
       cls += ' future';
+    } else if (beforeStart || isGrace) {
+      cls += ' future';   // neutral tile, no judgment
     } else if (!act || (act.calls === 0 && act.texts === 0 && act.appts === 0)) {
       cls += ' missed';
     } else if ((act.calls || 0) >= callsT) {

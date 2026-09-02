@@ -14941,9 +14941,11 @@ def start_scheduler():
     # Joe's coaching email: Sunday 3pm ET
     # No misfire_grace_time: if server is down at send time, skip it — never retry.
     # Retrying after restart is what caused duplicate emails.
-    _scheduler.add_job(scheduled_send_manager_email, CronTrigger(day_of_week="sun", hour=15, minute=0, timezone=ET),
-                       id="manager_email", name="Joe's Sunday coaching email",
-                       max_instances=1, coalesce=True)
+    # RETIRED Sep 2026: Joe no longer manages agents. Restore this job (and the
+    # two Impact Tracker jobs below) if a sales manager is hired again.
+    # _scheduler.add_job(scheduled_send_manager_email, CronTrigger(day_of_week="sun", hour=15, minute=0, timezone=ET),
+    #                    id="manager_email", name="Sunday sales-manager coaching email",
+    #                    max_instances=1, coalesce=True)
 
     # KPI Audit email: Monday 8:30am ET
     _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET),
@@ -15108,14 +15110,15 @@ def start_scheduler():
     # Impact Tracker (Joe's weekly agent-update text): Thursday 9am send (this
     # week's 1:1s, ahead of Friday's sales meeting), Thursday 3pm reminder only
     # if he hasn't submitted yet.
-    _scheduler.add_job(scheduled_impact_tracker_send,
-                       CronTrigger(day_of_week="thu", hour=9, minute=0, timezone=ET),
-                       id="impact_tracker_send", name="Impact Tracker text to Joe (Thu 9am)",
-                       max_instances=1, coalesce=True)
-    _scheduler.add_job(scheduled_impact_tracker_reminder,
-                       CronTrigger(day_of_week="thu", hour=15, minute=0, timezone=ET),
-                       id="impact_tracker_reminder", name="Impact Tracker reminder to Joe (Thu 3pm)",
-                       max_instances=1, coalesce=True)
+    # RETIRED Sep 2026 with the sales-manager role. Re-enable if one is hired.
+    # _scheduler.add_job(scheduled_impact_tracker_send,
+    #                    CronTrigger(day_of_week="thu", hour=9, minute=0, timezone=ET),
+    #                    id="impact_tracker_send", name="Impact Tracker text (Thu 9am)",
+    #                    max_instances=1, coalesce=True)
+    # _scheduler.add_job(scheduled_impact_tracker_reminder,
+    #                    CronTrigger(day_of_week="thu", hour=15, minute=0, timezone=ET),
+    #                    id="impact_tracker_reminder", name="Impact Tracker reminder (Thu 3pm)",
+    #                    max_instances=1, coalesce=True)
 
     # Agent coaching texts via Mac iMessage: Mon/Wed/Fri at 8:15am ET
     # Generates personalized KPI-based coaching texts in Barry's voice,
