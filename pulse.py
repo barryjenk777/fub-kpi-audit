@@ -287,7 +287,14 @@ def _isa_themes(cur):
     if t30:
         pct = round(called / t30 * 100)
         pct24 = round(called24 / t30 * 100)
-        if pct24 >= 60:
+        if called == 0 and t30 >= 20:
+            # first_call_at is stamped by the FUB call webhook. Zero across a
+            # month of transfers means the tracking is not wired (no webhooks
+            # registered in FUB, found Sep 2026), not that no agent ever calls.
+            not_doing.append("Transfer follow-up is untracked right now (FUB call "
+                             "webhook not wired), so speed-to-transfer is a blind "
+                             "spot. Fix is queued.")
+        elif pct24 >= 60:
             doing.append("%d%% of transfers get an agent call within 24 hours." % pct24)
         else:
             not_doing.append("Only %d%% of transfers get an agent call within 24 "
