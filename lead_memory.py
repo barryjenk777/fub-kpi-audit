@@ -245,18 +245,25 @@ HARD RULES (breaking any of these ruins the note):
 - NEVER use em dashes or en dashes. Periods and commas only.
 - Punchy telegraphic utility copy. Fragments over sentences. No filler, no coaching, no cheerleading, no restating the obvious.
 - MISSING grades against the Motivation / Timeframe / Location rubric (what MaverickRE grades calls on), plus financing when unknown. Name only what is actually missing.
-- NEXT MOVE is one specific opening question grounded in a real detail that appears in KNOW.
-- SOURCE names only data sources actually supplied and used. Text messages were NOT supplied, never cite texts."""
+- NEXT MOVE is one specific opening question grounded in a real detail that appears in KNOW, followed by the bridge toward a face to face meeting (see NEXT MOVE DOCTRINE).
+- SOURCE names only data sources actually supplied and used. Text messages were NOT supplied, never cite texts.
+
+NEXT MOVE DOCTRINE (Barry Jenkins, "Too Nice for Sales"):
+The goal of every call is a face to face meeting, not information gathering. Most of these leads think they do not need an agent yet. Many are 6 to 12 months out. The team's proven accelerator: get the not-ready lead to see the value of education NOW, because early conversations prevent expensive mistakes later and quietly win the relationship before any competitor exists.
+So NEXT MOVE has two beats, written as one short flow:
+1. The opener: a permission-based, disarming question grounded in a real detail from KNOW. Teach, do not push. The signature reframe for not-ready leads, adapt it to their situation, never verbatim every time: acknowledging they are not ready yet, then offering the one or two things they need to know so they do not make a mistake when they are ready.
+2. The bridge: if they engage, move to the meeting with a low-pressure, assumptive, two-option close tied to something concrete for THEM (seeing the house to give a real number, a 20 minute walk-through, a sit-down on their numbers). Example shape: "Worth 20 minutes at the house so you are not guessing? I can do Thursday evening or Saturday morning."
+Rules for the doctrine: never fake urgency, never pressure, never make the meeting about the agent's need. The meeting is framed as the lead getting clarity earlier than everyone else. If the lead already has a meeting on the books, NEXT MOVE protects or advances that meeting instead."""
 
 _TIER_STEER = {
     "talked": """This lead HAS a conversation record (AI call transcript in the notes). Full brief:
 - KNOW: facts from the transcript and CRM fields. Timeline, motivation, price band, area, financing, decision makers, personal details, last real touch. The transcript is the richest source, mine it.
-- NEXT MOVE: one opening question that picks up a real thread from the conversation.
+- NEXT MOVE: one opening question that picks up a real thread from the conversation, then the face to face bridge per the doctrine.
 - SOURCE: cite "AI transcript" with the note's real date, plus "site activity" if events were used.""",
     "behavioral": """This lead has NEVER been reached. No conversation exists. Behavioral brief:
 - KNOW: open with exactly "Never reached, no conversation yet." Then summarize BEHAVIOR from the site activity: property types viewed, price band (and whether it drifted), areas, view and save counts with recency, time-of-day pattern only if clearly evident, plus source and lead age from CRM fields.
 - MISSING: state plainly that everything conversational is unknown, then the rubric items.
-- NEXT MOVE: a behavioral opener referencing a specific property or pattern from the events, with its real street or area. Example shape: a question about the specific home they keep returning to.
+- NEXT MOVE: a behavioral opener referencing a specific property or pattern from the events, with its real street or area (the home they keep returning to), then the face to face bridge per the doctrine, for example offering to get them inside that specific house.
 - SOURCE: "site activity" plus "CRM fields". No transcript exists, never claim one.""",
 }
 
