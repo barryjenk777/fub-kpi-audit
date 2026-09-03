@@ -620,6 +620,41 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
   white-space: pre-wrap;
   display: none;
 }
+/* ── Pulse (v2 home) ─────────────────────────────────────────── */
+.pulse-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.8rem;margin-bottom:1rem}
+.pulse-tile{background:var(--surface);border:1px solid var(--border-sub);border-radius:var(--r);padding:.9rem 1rem .7rem}
+.pulse-tile .pt-label{font-size:.72rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.pulse-tile .pt-value{font-size:1.9rem;font-weight:650;line-height:1.15;margin:.15rem 0 .1rem}
+.pulse-tile .pt-delta{display:inline-block;font-size:.72rem;font-weight:600;padding:.05rem .45rem;border-radius:99px}
+.pt-delta.up{color:var(--green);background:var(--green-bg)}
+.pt-delta.down{color:var(--red);background:var(--red-bg)}
+.pt-delta.flat{color:var(--muted);background:var(--surface2)}
+.pulse-tile svg{display:block;width:100%;height:34px;margin-top:.45rem}
+.pulse-rates{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:1.2rem}
+.pulse-rate{background:var(--surface2);border:1px solid var(--border-sub);border-radius:var(--r-sm);padding:.5rem .85rem;font-size:.8rem;color:var(--muted)}
+.pulse-rate b{color:var(--text);font-weight:650}
+.pulse-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:.9rem;margin-bottom:1.2rem}
+.pulse-card{background:var(--surface);border:1px solid var(--border-sub);border-radius:var(--r);padding:1rem 1.1rem}
+.pulse-card .pc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem}
+.pulse-card .pc-title{font-size:.9rem;font-weight:650}
+.pulse-card .pc-drill{font-size:.72rem;color:var(--muted)}
+.pulse-card .pc-drill:hover{color:var(--gold)}
+.pulse-card h5{font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin:.55rem 0 .25rem}
+.pulse-card h5.pc-working{color:var(--green)}
+.pulse-card h5.pc-attention{color:var(--yellow)}
+.pulse-card ul{list-style:none;margin:0;padding:0}
+.pulse-card li{font-size:.82rem;color:var(--text);padding:.22rem 0 .22rem 1.1rem;position:relative;line-height:1.45}
+.pulse-card li::before{content:'';position:absolute;left:.15rem;top:.65rem;width:6px;height:6px;border-radius:99px}
+.pulse-card .pc-working-list li::before{background:var(--green)}
+.pulse-card .pc-attention-list li::before{background:var(--yellow)}
+.pulse-card .pc-empty{font-size:.78rem;color:var(--subtle);padding:.2rem 0}
+.pulse-engines{background:var(--surface);border:1px solid var(--border-sub);border-radius:var(--r);padding:.85rem 1.1rem}
+.pulse-engines .pe-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.55rem}
+.pulse-engines .pe-title{font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.pulse-engines .pe-chips{display:flex;flex-wrap:wrap;gap:.5rem}
+.pulse-engines .pe-chip{background:var(--surface2);border:1px solid var(--border-sub);border-radius:var(--r-sm);padding:.4rem .7rem;font-size:.76rem;color:var(--muted)}
+.pulse-engines .pe-chip b{color:var(--text);font-weight:600;margin-right:.35rem}
+.pulse-asof{font-size:.7rem;color:var(--subtle);margin-top:.7rem}
 </style>
 </head>
 <body>
@@ -635,11 +670,14 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
     </div>
   </div>
   <nav class="sidebar-nav">
+    <button class="nav-item active" data-tab="pulse" onclick="switchTab('pulse')">
+      <span class="nav-icon">📈</span> Pulse
+    </button>
     <button class="nav-item nav-item-cc" data-tab="cc" onclick="switchTab('cc')">
       <span class="nav-icon">🧠</span> Command Center
     </button>
     <div class="nav-section">Performance</div>
-    <button class="nav-item active" data-tab="goals" onclick="switchTab('goals')">
+    <button class="nav-item" data-tab="goals" onclick="switchTab('goals')">
       <span class="nav-icon">🎯</span> Goals
     </button>
     <button class="nav-item" data-tab="kpi" onclick="switchTab('kpi')">
@@ -701,7 +739,13 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
     </div>
 
     <!-- ══════════════════════════════════════ GOALS TAB -->
-    <div class="tab-pane active" id="tab-goals">
+    <!-- ══════════════════════════════════════ PULSE TAB (v2 home) -->
+    <div class="tab-pane active" id="tab-pulse">
+      <div id="loading-pulse" class="loading-pane"><span class="spinner"></span> Reading the last 90 days…</div>
+      <div id="dashboard-pulse" style="display:none"></div>
+    </div>
+
+    <div class="tab-pane" id="tab-goals">
       <!-- Summary row -->
       <div class="stat-row" id="goals-summary">
         <div class="stat-card"><div class="stat-label">Agents with Goals</div><div class="stat-value c-gold" id="g-with">—</div><div class="stat-sub" id="g-total">of — agents</div></div>
@@ -882,7 +926,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 // ── GLOBAL STATE ──
 let agentData=null, managerData=null, isaData=null, appointmentData=null;
 let _goalsData=null, _emailLinks=[];
-let _loaded={goals:false,kpi:false,manager:false,appointments:false,isa:false,meeting:false};
+let _loaded={pulse:false,goals:false,kpi:false,manager:false,appointments:false,isa:false,meeting:false};
 const MEDALS=['🥇','🥈','🥉'];
 
 // ── SIDEBAR DATE ──
@@ -905,14 +949,18 @@ function switchTab(name){
   document.querySelectorAll('.nav-item[data-tab]').forEach(el=>el.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
   const btn=document.querySelector(`.nav-item[data-tab="${name}"]`);
-  if(btn){btn.classList.add('active');btn.scrollIntoView({block:'nearest',behavior:'smooth'});}
+  if(btn){btn.classList.add('active');}
+  /* NOTE: no scrollIntoView here — smooth-scrolling the sidebar container on
+     every click made nav sections visibly slide out of view ("menus disappear
+     and reappear"), reported as a bug Sep 2026. */
 
-  const titles={cc:'🧠 Command Center',goals:'🎯 Goals — '+new Date().getFullYear(),kpi:'📊 Team KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
+  const titles={pulse:'📈 Pulse — 60/90 day themes',cc:'🧠 Command Center',goals:'🎯 Goals — '+new Date().getFullYear(),kpi:'📊 Team KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
   document.getElementById('topbar-title').textContent=titles[name]||name;
 
   if(!_loaded[name]){
     _loaded[name]=true;
-    if(name==='cc')          loadCommandCenter();
+    if(name==='pulse')       loadPulse();
+    else if(name==='cc')     loadCommandCenter();
     else if(name==='goals')  loadGoals();
     else if(name==='kpi')    loadAgents();
     else if(name==='appointments') loadAppointments();
@@ -930,9 +978,19 @@ async function loadCommandCenter(force){
   ld.style.display='flex';db.style.display='none';
   try{
     const url=force?'/api/command-center?force=true':'/api/command-center';
-    const r=await fetch(url,{signal:AbortSignal.timeout(120000)});
+    const r=await fetch(url,{signal:AbortSignal.timeout(30000)});
     const d=await r.json();
     if(d.error)throw new Error(d.error);
+    if(d.warming){
+      // Cold cache: server is building the briefing in the background.
+      // Show a friendly state and poll — never leave Barry on a dead spinner.
+      window._ccPolls=(window._ccPolls||0)+1;
+      if(window._ccPolls<40)setTimeout(()=>loadCommandCenter(),8000);
+      db.innerHTML=`<div class="alert yellow"><span class="alert-icon">🧠</span><div><div class="alert-title">Building your briefing</div><div class="alert-body">First load of the day pulls fresh numbers from Follow Up Boss (about 2 minutes). This page will update itself — no need to refresh.${d.errorText?'<br>'+d.errorText:''}</div></div></div>`;
+      ld.style.display='none';db.style.display='block';
+      return;
+    }
+    window._ccPolls=0;
     db.innerHTML=buildCommandCenter(d);
   }catch(e){
     db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not build briefing</div><div class="alert-body">${e.message||'Unknown error — check Railway logs'}</div><div style="margin-top:.6rem"><button class="btn btn-ghost btn-sm" onclick="loadCommandCenter(true)">↻ Try Again</button></div></div></div>`;
@@ -2761,8 +2819,97 @@ async function syncBounces(){
   }
 }
 
-// ── INIT ── load Goals first (it's the home tab)
-loadGoals();
+/* ════════════════════════════════════════════════
+   PULSE — 60/90 day themes (v2 home)
+════════════════════════════════════════════════ */
+function pulseSpark(series){
+  if(!series||series.length<2)return '';
+  const w=140,h=34,pad=3;
+  const max=Math.max(...series,1),min=Math.min(...series,0);
+  const x=i=>pad+i*(w-2*pad)/(series.length-1);
+  const y=v=>h-pad-(v-min)*(h-2*pad)/((max-min)||1);
+  const pts=series.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const li=series.length-1;
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+    <polyline points="${pts}" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity=".55"/>
+    <circle cx="${x(li).toFixed(1)}" cy="${y(series[li]).toFixed(1)}" r="3" fill="var(--gold)"/>
+  </svg>`;
+}
+function pulseDelta(d){
+  if(d===null||d===undefined)return '<span class="pt-delta flat">new</span>';
+  if(d>2)  return `<span class="pt-delta up">▲ ${d}%</span>`;
+  if(d<-2) return `<span class="pt-delta down">▼ ${Math.abs(d)}%</span>`;
+  return `<span class="pt-delta flat">≈ flat</span>`;
+}
+function pulseThemeCard(icon,title,drillLabel,drillAction,t){
+  const li=arr=>arr&&arr.length?arr.map(x=>`<li>${x}</li>`).join(''):'';
+  const working=li(t.doing),attention=li(t.not_doing);
+  return `<div class="pulse-card">
+    <div class="pc-head"><span class="pc-title">${icon} ${title}</span>
+      <a class="pc-drill" href="javascript:void(0)" onclick="${drillAction}">${drillLabel} →</a></div>
+    <h5 class="pc-working">Working</h5>
+    ${working?`<ul class="pc-working-list">${working}</ul>`:'<div class="pc-empty">Nothing stood out this period.</div>'}
+    <h5 class="pc-attention">Needs attention</h5>
+    ${attention?`<ul class="pc-attention-list">${attention}</ul>`:'<div class="pc-empty">Nothing flagged. Good.</div>'}
+  </div>`;
+}
+function buildPulse(d){
+  const f=d.funnel||{},tiles=f.tiles||[],rates=f.rates||{},th=d.themes||{};
+  const fmt=n=>n>=10000?(n/1000).toFixed(1)+'K':(n||0).toLocaleString();
+  const tileHtml=tiles.map(t=>`<div class="pulse-tile">
+      <div class="pt-label">${t.label}</div>
+      <div class="pt-value">${fmt(t.d30)}</div>
+      ${pulseDelta(t.delta_pct)} <span style="font-size:.68rem;color:var(--subtle)">vs prior 30d</span>
+      ${pulseSpark(t.series)}
+    </div>`).join('');
+  const rate=(label,r,unit)=>{
+    if(!r||r.d30===null||r.d30===undefined)return '';
+    let cmp='';
+    if(r.prev30!==null&&r.prev30!==undefined)cmp=` <span style="color:var(--subtle)">(was ${r.prev30}${unit})</span>`;
+    return `<div class="pulse-rate">${label} <b>${r.d30}${unit}</b>${cmp}</div>`;
+  };
+  const ratesHtml=[
+    rate('Calls → Convos',rates.call_to_convo,'%'),
+    rate('Convos → Appts',rates.convo_to_appt,'%'),
+    rate('Held rate',rates.held_rate,'%'),
+    rate('Held → Contract',rates.appt_to_contract,'%'),
+  ].join('');
+  const cards=[
+    pulseThemeCard('🧑‍💼','Agents','Team KPIs',"switchTab('kpi')",th.agents||{}),
+    pulseThemeCard('📞','ISA — Fhalen','ISA detail',"switchTab('isa')",th.isa||{}),
+    pulseThemeCard('🌱','Leads','LeadStream',"window.location='/leadstream'",th.leads||{}),
+    pulseThemeCard('📅','Appointments','Appointments',"switchTab('appointments')",th.appointments||{}),
+  ].join('');
+  const chips=(d.engines||[]).map(e=>`<span class="pe-chip"><b>${e.name}</b>${e.stat}</span>`).join('');
+  const asof=d.as_of?new Date(d.as_of).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
+  return `
+    <div class="pulse-tiles">${tileHtml}</div>
+    <div class="pulse-rates">${ratesHtml}</div>
+    <div class="pulse-cards">${cards}</div>
+    <div class="pulse-engines">
+      <div class="pe-head"><span class="pe-title">Engines running for you</span>
+        <a class="pc-drill" href="/system">Mission Control →</a></div>
+      <div class="pe-chips">${chips}</div>
+    </div>
+    <div class="pulse-asof">Last 30 days vs the 30 before. Sparklines: 13 weeks. Updated ${asof}. <a href="javascript:void(0)" onclick="loadPulse(true)" style="color:var(--muted)">↻ Refresh</a></div>`;
+}
+async function loadPulse(force){
+  const ld=document.getElementById('loading-pulse'),db=document.getElementById('dashboard-pulse');
+  ld.style.display='flex';db.style.display='none';
+  try{
+    const r=await fetch('/api/pulse'+(force?'?force=1':''),{signal:AbortSignal.timeout(45000)});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    db.innerHTML=buildPulse(d);
+  }catch(e){
+    db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not load Pulse</div><div class="alert-body">${e.message||'Unknown error'}</div><div style="margin-top:.6rem"><button class="btn btn-ghost btn-sm" onclick="loadPulse(true)">↻ Try Again</button></div></div></div>`;
+  }
+  ld.style.display='none';db.style.display='block';
+}
+
+// ── INIT ── Pulse is the home tab
+_loaded.pulse=true;
+loadPulse();
 </script>
 </body>
 </html>

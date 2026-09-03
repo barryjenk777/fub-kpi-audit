@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import time
+import threading
 from datetime import datetime, timedelta, timezone
 
 logging.basicConfig(
@@ -995,54 +996,115 @@ def _build_command_center(audit, manager, deal_summaries, goal_data):
     }
 
 
+def _build_command_center_cache():
+    """Heavy path: pull FUB (minutes cold), build the briefing, warm the caches.
+    Runs in a background thread or the scheduled warmer — NEVER inline in a
+    request. Railway's edge kills requests around 120s, which is why the old
+    inline version 500'd every cold morning."""
+    audit = cache_get("audit")
+    if not audit:
+        audit = run_audit_data()
+        cache_set("audit", audit)
+
+    manager = cache_get("manager")  # nice-to-have for trend data; ok if None
+
+    deal_summaries, goal_data = {}, {}
+    for a in (audit.get("agents", []) if audit else []):
+        name = a["name"]
+        try:
+            deal_summaries[name] = _db.get_deal_summary(name, year=datetime.now(timezone.utc).year) or {}
+        except Exception:
+            deal_summaries[name] = {}
+        try:
+            g = _db.get_goal(name)
+            if g:
+                goal_data[name] = g
+        except Exception:
+            pass
+
+    result = _build_command_center(audit, manager, deal_summaries, goal_data)
+    result["from_cache"] = False
+    result["cached_at"] = datetime.now(timezone.utc).isoformat()
+    cache_set("command_center", result)
+    return result
+
+
+_cc_build_state = {"running": False, "started": None, "error": None}
+_cc_build_lock = threading.Lock()
+
+
+def _start_cc_build():
+    """Kick the heavy briefing build in a daemon thread. Single-flight."""
+    with _cc_build_lock:
+        if _cc_build_state["running"]:
+            return False
+        _cc_build_state.update(running=True, error=None,
+                               started=datetime.now(timezone.utc).isoformat())
+
+    def _bg():
+        try:
+            _build_command_center_cache()
+        except Exception as e:
+            logger.error("command-center background build failed: %s", e, exc_info=True)
+            _cc_build_state["error"] = str(e)
+        finally:
+            _cc_build_state["running"] = False
+
+    threading.Thread(target=_bg, daemon=True).start()
+    return True
+
+
 @app.route("/api/command-center")
 def api_command_center():
-    """Barry's mentor briefing — synthesizes all team data into actionable guidance."""
+    """Barry's mentor briefing. Always answers instantly: cached data when we
+    have it, {"warming": true} while a background build runs on a cold cache."""
     force = request.args.get("force", "false").lower() == "true"
     try:
-        if not force:
-            cached = cache_get("command_center")
-            if cached:
-                cached["from_cache"] = True
-                return jsonify(cached)
-
-        # Use cached audit/manager data where possible to avoid double-fetching
-        audit = cache_get("audit")
-        if not audit:
-            try:
-                audit = run_audit_data()
-                cache_set("audit", audit)
-            except Exception as e:
-                logger.warning("command-center: audit fetch failed: %s", e)
-                audit = {"agents": [], "totals": {}, "period": {}, "thresholds": {}}
-
-        manager = cache_get("manager")  # nice-to-have for trend data; ok if None
-
-        # Deal summaries + goals from DB
-        deal_summaries = {}
-        goal_data = {}
-        for a in (audit.get("agents", []) if audit else []):
-            name = a["name"]
-            try:
-                deal_summaries[name] = _db.get_deal_summary(name, year=datetime.now(timezone.utc).year) or {}
-            except Exception:
-                deal_summaries[name] = {}
-            try:
-                g = _db.get_goal(name)
-                if g:
-                    goal_data[name] = g
-            except Exception:
-                pass
-
-        result = _build_command_center(audit, manager, deal_summaries, goal_data)
-        result["from_cache"] = False
-        result["cached_at"] = datetime.now(timezone.utc).isoformat()
-        cache_set("command_center", result)
-        return jsonify(result)
+        cached = None if force else cache_get("command_center")
+        if cached:
+            cached["from_cache"] = True
+            return jsonify(cached)
+        _start_cc_build()
+        return jsonify({"warming": True,
+                        "started": _cc_build_state["started"],
+                        "error": _cc_build_state["error"]})
     except Exception as e:
         import traceback
-        tb = traceback.format_exc()
-        logger.error("command-center failed: %s\n%s", e, tb)
+        logger.error("command-center failed: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+
+# ── Pulse: the 60/90-day themes home tab ────────────────────────────────────
+
+_pulse_cache = {"data": None, "time": None}
+_PULSE_TTL_SECS = 900  # 15 min
+
+
+@app.route("/api/pulse")
+def api_pulse():
+    """60/90-day themes: funnel tiles, four theme cards, engine strip.
+    Postgres only — never touches FUB live, so it always answers fast."""
+    force = request.args.get("force") in ("1", "true")
+    now = datetime.now(timezone.utc)
+    if (not force and _pulse_cache["data"] is not None and _pulse_cache["time"]
+            and (now - _pulse_cache["time"]).total_seconds() < _PULSE_TTL_SECS):
+        out = dict(_pulse_cache["data"])
+        out["from_cache"] = True
+        return jsonify(out)
+    try:
+        import pulse as _pulse_mod
+        data = _pulse_mod.build_pulse()
+        _pulse_cache["data"] = data
+        _pulse_cache["time"] = now
+        return jsonify(data)
+    except Exception as e:
+        import traceback
+        logger.error("pulse failed: %s\n%s", e, traceback.format_exc())
+        if _pulse_cache["data"] is not None:
+            out = dict(_pulse_cache["data"])
+            out["from_cache"] = True
+            out["stale"] = True
+            return jsonify(out)
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
 
@@ -13375,16 +13437,32 @@ def scheduled_cache_warm():
         return  # Another worker is already running this job
     try:
         print(f"[SCHEDULER] Cache warm started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
-        cache_clear()
+        # NOTE: the old version used unauthenticated test_client GETs, which the
+        # global auth gate has 401'd since the lockdown — it printed "warmed ✓"
+        # on failures and warmed nothing, so every first tab click of the day
+        # paid a multi-minute cold FUB build (and /api/command-center died at
+        # Railway's ~120s edge). Warm via authenticated requests, verify status,
+        # and warm the Command Center briefing + Pulse too.
+        _warm_key = os.environ.get("PERPLEXITY_API_KEY", "")
         with app.test_client() as tc:
-            tc.get("/api/audit")
-            print("[SCHEDULER] Audit cache warmed ✓")
-            tc.get("/api/manager")
-            print("[SCHEDULER] Manager cache warmed ✓")
-            tc.get("/api/isa")
-            print("[SCHEDULER] ISA cache warmed ✓")
-            tc.get("/api/appointments")
-            print("[SCHEDULER] Appointments cache warmed ✓")
+            for _ep in ("/api/audit", "/api/manager", "/api/isa", "/api/appointments"):
+                _resp = tc.get(f"{_ep}?key={_warm_key}")
+                if _resp.status_code == 200:
+                    print(f"[SCHEDULER] {_ep} cache warmed OK")
+                else:
+                    print(f"[SCHEDULER] {_ep} warm FAILED: HTTP {_resp.status_code}")
+        try:
+            _build_command_center_cache()
+            print("[SCHEDULER] command-center cache warmed OK")
+        except Exception as _cce:
+            print(f"[SCHEDULER] command-center warm FAILED: {_cce}")
+        try:
+            import pulse as _pulse_mod
+            _pulse_cache["data"] = _pulse_mod.build_pulse()
+            _pulse_cache["time"] = datetime.now(timezone.utc)
+            print("[SCHEDULER] pulse cache warmed OK")
+        except Exception as _pe:
+            print(f"[SCHEDULER] pulse warm FAILED: {_pe}")
         _record_fired("cache_warm")
     except Exception as e:
         _alert_on_job_failure("cache_warm", str(e))
