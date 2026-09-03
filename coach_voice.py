@@ -151,7 +151,7 @@ Remember: no em-dashes or en-dashes anywhere. Never invent a number or fact not 
             max_tokens=500,
             system=COACH_PERSONA,
             messages=[{"role": "user", "content": prompt}],
-            temperature=1.0,
+            extra_body={"temperature": 1.0},
         )
         raw = resp.content[0].text.strip()
         subject, body = _split_subject_body(raw)
@@ -250,7 +250,7 @@ Output ONLY the message text."""
             max_tokens=300,
             system=COACH_PERSONA,
             messages=[{"role": "user", "content": prompt}],
-            temperature=1.0,
+            extra_body={"temperature": 1.0},
         )
         text = _strip_dashes(resp.content[0].text.strip())
         # One-line disrupt texts are legit ("Jon. 10 calls. Why?") so the floor
@@ -315,7 +315,7 @@ No em-dashes. Only use the facts above. Output only the three labeled paragraphs
             model=_MODEL, max_tokens=400,
             system=_MANAGER_COACH_PERSONA,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
+            extra_body={"temperature": 0.7},
         )
         text = _strip_dashes(resp.content[0].text.strip())
         return text if len(text) > 40 else None
