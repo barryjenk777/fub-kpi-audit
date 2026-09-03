@@ -261,9 +261,11 @@ _TIER_STEER = {
 }
 
 
-def _generate_brief(client, data, tier):
+def _generate_brief(client, data, tier, errs=None):
     """Call Claude to compile the 4 content lines. Returns the full note text
-    (header + 4 lines, dash-stripped) or None on any failure."""
+    (header + 4 lines, dash-stripped) or None on any failure. When errs (a
+    list) is passed, failure detail is appended so the run summary can show
+    WHY briefs failed instead of a bare error count."""
     today_label = datetime.now(_ET).strftime("%b %d")
     prompt = f"""Compile the Lead Memory note for this lead.
 
@@ -281,7 +283,7 @@ SOURCE: ...
 Keep the four lines under 600 characters combined. No em dashes or en dashes anywhere. Never invent a name, date, price, or intent."""
     try:
         resp = client.messages.create(
-            model=getattr(config, "LEAD_MEMORY_MODEL", "claude-haiku-4-5-20251001"),
+            model=getattr(config, "LEAD_MEMORY_MODEL", "claude-haiku-4-5"),
             max_tokens=400,
             system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
@@ -290,6 +292,8 @@ Keep the four lines under 600 characters combined. No em dashes or en dashes any
         raw = resp.content[0].text.strip()
     except Exception as e:
         logger.warning("lead_memory generation failed: %s", e)
+        if errs is not None:
+            errs.append(f"generation: {str(e)[:200]}")
         return None
 
     lines = {}
@@ -307,6 +311,8 @@ Keep the four lines under 600 characters combined. No em dashes or en dashes any
             lines[current] += " " + stripped  # wrapped continuation
     if any(not lines.get(l) for l in ("KNOW:", "MISSING:", "NEXT MOVE:", "SOURCE:")):
         logger.warning("lead_memory: weak output, dropping. raw=%r", raw[:160])
+        if errs is not None:
+            errs.append(f"weak output: {raw[:120]}")
         return None
 
     body = "\n".join(f"{l} {lines[l]}" for l in
@@ -429,6 +435,7 @@ def run_lead_memory_refresh(dry_run=None):
         "generated": 0, "written": 0, "new": 0, "unchanged_brief": 0,
         "skipped_thin": 0, "deferred": 0, "errors": 0,
         "tiers": {"talked": 0, "behavioral": 0},
+        "error_detail": [],   # first few failure reasons, for diagnosability
     }
 
     llm = _client()
@@ -480,6 +487,8 @@ def run_lead_memory_refresh(dry_run=None):
         except Exception as e:
             logger.warning("[LEAD MEMORY] assembly failed for %s: %s", pid, e)
             summary["errors"] += 1
+            if len(summary["error_detail"]) < 3:
+                summary["error_detail"].append(f"assembly {pid}: {str(e)[:200]}")
             continue
 
         if tier == "thin":
@@ -491,9 +500,12 @@ def run_lead_memory_refresh(dry_run=None):
                                       marker, "SKIPPED_THIN")
             continue
 
-        brief = _generate_brief(llm, data, tier)
+        gen_errs = [] if len(summary["error_detail"]) < 3 else None
+        brief = _generate_brief(llm, data, tier, errs=gen_errs)
         if brief is None:
             summary["errors"] += 1
+            if gen_errs:
+                summary["error_detail"].extend(gen_errs[:1])
             continue
         summary["generated"] += 1
         summary["tiers"][tier] += 1

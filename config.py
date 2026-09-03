@@ -715,7 +715,9 @@ LEAD_MEMORY_DRY_RUN = _os.environ.get("LEAD_MEMORY_DRY_RUN", "1").strip().lower(
 
 # Model for brief compilation. Haiku: this is extraction, not copywriting —
 # fast and cheap at ~150 briefs/night. Low temperature keeps it literal.
-LEAD_MEMORY_MODEL = "claude-haiku-4-5-20251001"
+# NOTE: current Anthropic model IDs take no date suffix — the dated variant
+# ("claude-haiku-4-5-20251001") is rejected by the API with model_not_found.
+LEAD_MEMORY_MODEL = "claude-haiku-4-5"
 LEAD_MEMORY_TEMPERATURE = 0.3
 
 # Subject on the FUB note. One note per lead, updated in place — never a pile.
