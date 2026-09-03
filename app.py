@@ -4348,6 +4348,507 @@ def team_onboarding_page():
                            api_key=request.args.get("key", ""))
 
 
+# ---------------------------------------------------------------------------
+# Mission Control — one read-only page showing what the whole machine did.
+# Served behind the global auth gate (owner or coach). No buttons, no sends.
+# ---------------------------------------------------------------------------
+
+def _mc_fmt(iso):
+    """ISO timestamp -> short ET string like 'Sep 3, 7:31am'. None-safe."""
+    if not iso:
+        return "unknown"
+    try:
+        from zoneinfo import ZoneInfo
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(ZoneInfo("America/New_York"))
+        return dt.strftime("%b %-d, %-I:%M%p").replace("AM", "am").replace("PM", "pm")
+    except Exception:
+        return str(iso)[:16]
+
+
+def _mc_age_days(iso):
+    """Days since an ISO timestamp, or None if unparseable."""
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
+    except Exception:
+        return None
+
+
+def _mc_job_next(job_id):
+    """Next scheduled run for one APScheduler job id, formatted, or 'unknown'."""
+    try:
+        if _scheduler is not None:
+            job = _scheduler.get_job(job_id)
+            if job is not None and job.next_run_time is not None:
+                return _mc_fmt(job.next_run_time.isoformat())
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _mc_fired_guard(job_id):
+    """(iso_or_none, pretty) for the /tmp fired-guard record of one job.
+    The record does not survive a deploy, so 'no record' is normal."""
+    try:
+        last = _job_last_fired.get(job_id)
+    except Exception:
+        last = None
+    if not last:
+        return None, "no record since the last deploy"
+    return last, _mc_fmt(last)
+
+
+def _system_status():
+    """Build the Mission Control row list. Each source is isolated in its own
+    try/except so one broken feed shows a red dot, never a broken page."""
+    from zoneinfo import ZoneInfo
+    ET = ZoneInfo("America/New_York")
+    now_et = datetime.now(ET)
+    today_iso = now_et.date().isoformat()
+    is_weekday = now_et.weekday() < 5
+    rows = []
+
+    def add(section, name, builder):
+        try:
+            row = builder()
+        except Exception as e:
+            row = {"dot": "red",
+                   "summary": "Status check failed: " + str(e)[:180],
+                   "detail_rows": []}
+        row["section"] = section
+        row["name"] = name
+        rows.append(row)
+
+    LEAD, COACH, HEALTH = "Lead engine", "Agent coaching", "Reporting and health"
+
+    # -- LEAD ENGINE --------------------------------------------------------
+
+    def _leadstream():
+        log = _db.read_engagement_log(days=7) or {}
+        last_pond, last_agents, pond_tagged = None, None, None
+        for run_iso in sorted(log.keys()):
+            rec = log[run_iso] or {}
+            mode = rec.get("mode") or "full"
+            pond = rec.get("pond") or {}
+            agents = rec.get("agents") or {}
+            if mode == "pond" or (pond and not agents):
+                last_pond, pond_tagged = run_iso, pond.get("tagged")
+            else:
+                last_agents = run_iso
+                if pond.get("tagged"):
+                    last_pond, pond_tagged = run_iso, pond.get("tagged")
+        dot = "green"
+        pond_age = _mc_age_days(last_pond)
+        if pond_age is None or pond_age * 24 > 3:
+            dot = "amber"
+        bits = []
+        if last_pond:
+            bits.append("Pond rescored %s%s." % (
+                _mc_fmt(last_pond),
+                (", %s leads tagged" % pond_tagged) if pond_tagged is not None else ""))
+        else:
+            bits.append("No pond run recorded in the last 7 days.")
+        bits.append("Agent lists %s." % (_mc_fmt(last_agents) if last_agents else "unknown"))
+        detail = []
+        for run_iso in sorted(log.keys(), reverse=True)[:10]:
+            rec = log[run_iso] or {}
+            detail.append({
+                "run": _mc_fmt(run_iso),
+                "mode": rec.get("mode") or "full",
+                "pond_tagged": (rec.get("pond") or {}).get("tagged"),
+                "agents_scored": len(rec.get("agents") or {}),
+            })
+        return {"dot": dot, "summary": " ".join(bits), "detail_rows": detail}
+    add(LEAD, "LeadStream scoring", _leadstream)
+
+    def _phoenix():
+        logs = _db.get_phoenix_log(limit=300) or []
+        today = [r for r in logs if r.get("run_date") == today_iso]
+        week = [r for r in logs if (_mc_age_days(r.get("created_at")) or 99) <= 7]
+
+        def counts(rs):
+            c = {}
+            for r in rs:
+                c[r.get("status") or "unknown"] = c.get(r.get("status") or "unknown", 0) + 1
+            return c
+        tc, wc = counts(today), counts(week)
+        dot = "green"
+        if not today and (now_et.hour, now_et.minute) >= (8, 0):
+            dot = "amber"
+        if today:
+            parts = []
+            for k, label in (("owner_alerted", "owner alert"), ("assigned", "assigned"),
+                             ("pond_fallback", "pond fallback"), ("dry_run", "dry run")):
+                if tc.get(k):
+                    parts.append("%d %s%s" % (tc[k], label, "s" if tc[k] != 1 and not label.endswith("run") else ""))
+            summary = "Ran today: " + (", ".join(parts) or "%d actions" % len(today)) + "."
+        else:
+            summary = "No run recorded today (sweep fires 7:30am)."
+        summary += " Last 7 days: %d total (%s)." % (
+            len(week),
+            ", ".join("%d %s" % (v, k) for k, v in sorted(wc.items())) or "none")
+        detail = [{
+            "lead": r.get("lead_name") or r.get("person_id"),
+            "route": "%s -> %s" % (r.get("owner_before") or "?", r.get("assigned_to") or "-"),
+            "status": r.get("status"),
+            "route_path": r.get("route_path") or "-",
+            "dormant_days": r.get("dormant_days"),
+            "when": _mc_fmt(r.get("created_at")),
+        } for r in logs[:15]]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(LEAD, "Phoenix resurrection sweep", _phoenix)
+
+    def _pond_mailer():
+        act = _db.get_pond_recent_activity() or {}
+        t = act.get("today") or {}
+        w = act.get("last_7_days") or {}
+        sends = act.get("recent_sends") or []
+        last_send = None
+        jobs = act.get("recent_jobs") or []
+        if jobs:
+            last_send = jobs[0].get("started_et")
+        seq_t = t.get("sequence_emails")
+        imm_t = t.get("immediate_texts")
+        if seq_t is None and imm_t is None:
+            summary = "Send counts unavailable."
+            dot = "amber"
+        else:
+            summary = "Today: %s nurture emails, %s new-lead immediates. Last 7 days: %s emails to %s leads." % (
+                seq_t if seq_t is not None else "unknown",
+                imm_t if imm_t is not None else "unknown",
+                w.get("sequence_emails", "unknown"), w.get("unique_leads", "unknown"))
+            dot = "green"
+        if last_send:
+            summary += " Last run %s ET." % last_send
+        detail = [{
+            "lead": s.get("name") or s.get("person_id"),
+            "strategy": s.get("strategy"),
+            "step": s.get("sequence_num"),
+            "dry_run": "yes" if s.get("dry_run") else "no",
+            "sent": s.get("sent_et"),
+        } for s in sends[:10]]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(LEAD, "Nurture emails (pond mailer)", _pond_mailer)
+
+    def _blue_sms():
+        st = _db.pond_sms_status(recent_limit=10) or {}
+        summary = "Sent %d texts today, %d in the last 7 days." % (
+            st.get("sent_today", 0), st.get("sent_7d", 0))
+        if st.get("replies_7d"):
+            summary += " %d replies this week: %d positive, %d neutral, %d negative." % (
+                st.get("replies_7d", 0), st.get("positive_7d", 0),
+                st.get("neutral_7d", 0), st.get("negative_7d", 0))
+        else:
+            summary += " No replies logged this week."
+        detail = [{
+            "lead": r.get("lead") or "unknown",
+            "strategy": r.get("strategy"),
+            "step": r.get("step"),
+            "status": r.get("status"),
+            "sent": _mc_fmt(r.get("sent_at")),
+        } for r in (st.get("recent") or [])]
+        return {"dot": "green", "summary": summary, "detail_rows": detail}
+    add(LEAD, "Blue SMS engagement", _blue_sms)
+
+    def _isa():
+        c = _db.count_weekly_transfers_by_type(days=7) or {}
+        total = c.get("total", 0)
+        summary = "%d transfer%s this week" % (total, "" if total == 1 else "s")
+        parts = []
+        if c.get("text"):
+            parts.append("%d text" % c["text"])
+        if c.get("voice"):
+            parts.append("%d voice" % c["voice"])
+        if c.get("unknown"):
+            parts.append("%d untyped" % c["unknown"])
+        if parts:
+            summary += ": " + ", ".join(parts)
+        summary += "."
+        if c.get("no_answer"):
+            summary += " %d cadence run%s ended with no answer." % (
+                c["no_answer"], "" if c["no_answer"] == 1 else "s")
+        active = _db.get_all_isa_transfers() or []
+        if active:
+            summary += " %d in the active follow-up window." % len(active)
+        recent = active[:10]
+        detail = [{
+            "lead": r.get("lead_name") or r.get("person_id"),
+            "agent": r.get("agent_name") or "-",
+            "transferred": _mc_fmt(r.get("transfer_date")),
+            "days_ago": r.get("days_since"),
+        } for r in recent]
+        return {"dot": "green", "summary": summary, "detail_rows": detail}
+    add(LEAD, "ISA transfers", _isa)
+
+    add(LEAD, "Market Pulse", lambda: {
+        "dot": "gray",
+        "summary": "Not built yet. Pages and lead-record links land next.",
+        "detail_rows": []})
+
+    # -- AGENT COACHING -----------------------------------------------------
+
+    def _lead_memory():
+        st = _db.lead_briefs_status() or {}
+        dot = "green"
+        if (st.get("updated_today", 0) == 0) and now_et.hour >= 5:
+            dot = "amber"
+        summary = "%d briefs on file, %d with a live FUB note. %d updated today." % (
+            st.get("total", 0), st.get("with_note", 0), st.get("updated_today", 0))
+        if st.get("last_updated"):
+            summary += " Last update %s." % _mc_fmt(st["last_updated"])
+        elif dot == "amber":
+            summary += " Refresher runs 4:30am."
+        detail = [{
+            "person_id": b.get("person_id"),
+            "note": "yes" if b.get("note_id") else "no",
+            "updated": _mc_fmt(b.get("updated_at")),
+        } for b in (_db.get_recent_lead_briefs(10) or [])]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(COACH, "Lead Memory briefs", _lead_memory)
+
+    def _savebot():
+        logs = _db.get_savebot_log(limit=100) or []
+        today = [r for r in logs if r.get("run_date") == today_iso]
+        agents = sorted({r.get("agent_name") for r in today if r.get("agent_name")})
+        appts = sum(r.get("appt_count") or 0 for r in today)
+        dot = "green"
+        if not today and is_weekday and now_et.hour >= 8:
+            dot = "amber"
+        if today:
+            summary = "Texted %d agent%s today covering %d appointment%s." % (
+                len(agents), "" if len(agents) == 1 else "s",
+                appts, "" if appts == 1 else "s")
+            if any(r.get("status") == "dry_run" for r in today):
+                summary += " (Dry run mode: previews emailed to Barry, nothing queued.)"
+        else:
+            summary = "No prompts today (runs 7:45am; quiet when no appointments)."
+        detail = [{
+            "agent": r.get("agent_name"),
+            "appts": r.get("appt_count"),
+            "status": r.get("status"),
+            "preview": (r.get("message_preview") or "")[:60],
+            "when": _mc_fmt(r.get("created_at")),
+        } for r in logs[:10]]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(COACH, "Script prompts (Save-Bot)", _savebot)
+
+    def _coaching_texts():
+        st = _db.agent_imessage_queue_status(recent_limit=10) or {}
+        dot = "amber" if st.get("failed_today", 0) else "green"
+        summary = "%d queued and %d sent today." % (
+            st.get("queued_today", 0), st.get("sent_today", 0))
+        if st.get("pending_now"):
+            summary += " %d waiting on the Mac to send." % st["pending_now"]
+        if st.get("failed_today"):
+            summary += " %d failed today." % st["failed_today"]
+        detail = [{
+            "agent": r.get("agent"),
+            "status": r.get("status"),
+            "message": r.get("message"),
+            "when": _mc_fmt(r.get("created_at")),
+        } for r in (st.get("recent") or [])]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(COACH, "Coaching texts (iMessage)", _coaching_texts)
+
+    def _danny():
+        u = _db.get_latest_manager_update()
+        if not u:
+            return {"dot": "amber", "summary": "No submissions yet.", "detail_rows": []}
+        age = _mc_age_days(u.get("submitted_at"))
+        entries = u.get("entries") or []
+        met = sum(1 for e in entries if isinstance(e, dict) and e.get("met") == "yes")
+        if age is not None and age <= 7:
+            dot = "green"
+            summary = "Submitted %s. Met with %d of %d agents." % (
+                _mc_fmt(u.get("submitted_at")), met, len(entries))
+        else:
+            dot = "amber"
+            n = int(age) if age is not None else "?"
+            summary = "No submission in %s days (last: %s, met %d of %d)." % (
+                n, _mc_fmt(u.get("submitted_at")), met, len(entries))
+        detail = [{
+            "agent": e.get("agent") or "?",
+            "met": e.get("met") or "?",
+            "status": e.get("status") or "-",
+            "note": (str(e.get("note") or e.get("commit") or "")[:70]),
+        } for e in entries if isinstance(e, dict)][:12]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(COACH, "Danny's 1:1 tracker", _danny)
+
+    def _merit():
+        val, updated_at = _db.get_app_state("merit_scorecard_v1")
+        if not val:
+            return {"dot": "amber", "summary": "No scorecard computed yet.",
+                    "detail_rows": []}
+        sc = json.loads(val)
+        computed = sc.get("computed_at") or updated_at
+        age = _mc_age_days(computed)
+        team = sc.get("team") or {}
+        lanes_ok = sum(1 for d in team.values() if (d or {}).get("sufficient_agents"))
+        dot = "green" if (age is not None and age < 8) else "amber"
+        summary = "Computed %s. %d of %d lanes have enough data to route on." % (
+            _mc_fmt(computed), lanes_ok, len(team) or 0)
+        if dot == "amber":
+            summary += " Refresh is overdue (weekly, Monday 5:30am)."
+        detail = [{
+            "lane": ln,
+            "sufficient_agents": len((d or {}).get("sufficient_agents") or []),
+            "avg_metric": (d or {}).get("avg_metric"),
+        } for ln, d in sorted(team.items())]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(COACH, "Merit scorecard", _merit)
+
+    # -- REPORTING AND HEALTH ----------------------------------------------
+
+    def _command_sheet():
+        last_iso, pretty = _mc_fired_guard("friday_command_sheet")
+        nxt = _mc_job_next("friday_command_sheet")
+        days_back = (now_et.weekday() - 4) % 7
+        last_friday = (now_et - timedelta(days=days_back)).date()
+        if last_iso:
+            age_ok = False
+            try:
+                dt = datetime.fromisoformat(last_iso).astimezone(ET)
+                age_ok = dt.date() >= last_friday
+            except Exception:
+                pass
+            dot = "green" if age_ok else "amber"
+            summary = "Last sent %s." % pretty
+        else:
+            dot = "green" if nxt != "unknown" else "amber"
+            summary = "Fire record unknown (%s)." % pretty
+        summary += " Next: Friday 6:30am ET."
+        return {"dot": dot, "summary": summary,
+                "detail_rows": [{"job": "friday_command_sheet", "next_run": nxt}]}
+    add(HEALTH, "Friday Command Sheet", _command_sheet)
+
+    def _weekly_emails():
+        hype_iso, _ = _db.get_app_state("hype_email_last_sent")
+        audit_iso, audit_pretty = _mc_fired_guard("audit_email")
+        digest_iso, digest_pretty = _mc_fired_guard("onboarding_digest")
+        hype_age = _mc_age_days(hype_iso)
+        audit_age = _mc_age_days(audit_iso)
+        digest_age = _mc_age_days(digest_iso)
+        stale = []
+        if hype_age is not None and hype_age > 8:
+            stale.append("hype email")
+        if audit_age is not None and audit_age > 8:
+            stale.append("Monday audit")
+        if digest_age is not None and digest_age > 1.2:
+            stale.append("onboarding digest")
+        dot = "amber" if stale else "green"
+        summary = "Hype email %s. Monday audit %s. Onboarding digest %s." % (
+            _mc_fmt(hype_iso) if hype_iso else "unknown",
+            audit_pretty, digest_pretty)
+        if stale:
+            summary += " Overdue: %s." % ", ".join(stale)
+        detail = [
+            {"email": "Sunday hype email", "last": _mc_fmt(hype_iso) if hype_iso else "unknown",
+             "next": _mc_job_next("hype_email")},
+            {"email": "Monday audit email", "last": audit_pretty,
+             "next": _mc_job_next("audit_email")},
+            {"email": "Onboarding digest", "last": digest_pretty,
+             "next": _mc_job_next("onboarding_digest")},
+        ]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(HEALTH, "Weekly emails", _weekly_emails)
+
+    def _onboarding():
+        d = _ft_board_data(force=False) or {}
+        s = d.get("stats") or {}
+        if d.get("ok") is False:
+            return {"dot": "red",
+                    "summary": "Fast Track unreachable: %s" % (d.get("error") or "unknown"),
+                    "detail_rows": []}
+        dot = "amber" if s.get("not_synced") else "green"
+        summary = "%d agents in Fast Track, %d stalled, %d graduated." % (
+            s.get("matched", 0), s.get("stalled", 0), s.get("graduated", 0))
+        if s.get("not_synced"):
+            summary += " %d Command Center agent%s never synced." % (
+                s["not_synced"], "" if s["not_synced"] == 1 else "s")
+        if d.get("stale"):
+            summary += " (Showing cached data; live fetch failed.)"
+        detail = [{
+            "agent": a.get("cc_name") or a.get("name"),
+            "status": a.get("status"),
+            "progress": "%s%%" % (a.get("percent_complete") or 0),
+            "days_dark": a.get("days_since_active"),
+        } for a in (d.get("matched") or [])[:10]]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(HEALTH, "Onboarding (Fast Track)", _onboarding)
+
+    def _ft_sync():
+        c = _db.fasttrack_sync_counts(recent_limit=10) or {}
+        failed, pending = c.get("failed", 0), c.get("pending", 0)
+        dot = "red" if failed else ("amber" if pending else "green")
+        summary = "%d pending, %d failed, %d synced." % (
+            pending, failed, c.get("synced", 0))
+        if failed:
+            summary += " Failed rows need a look."
+        elif pending:
+            summary += " Retry runs automatically."
+        detail = [{
+            "agent": r.get("agent"),
+            "status": r.get("status"),
+            "attempts": r.get("attempts"),
+            "last_error": r.get("last_error") or "-",
+            "updated": _mc_fmt(r.get("updated_at")),
+        } for r in (c.get("recent") or [])]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(HEALTH, "Fast Track sync queue", _ft_sync)
+
+    def _jobs():
+        if _scheduler is None:
+            return {"dot": "red", "summary": "Scheduler is not running.",
+                    "detail_rows": []}
+        jobs = _scheduler.get_jobs()
+        dead = [j for j in jobs if j.next_run_time is None]
+        dot = "red" if dead else "green"
+        summary = "%d jobs scheduled." % len(jobs)
+        summary += (" %d will never fire again: %s." % (
+            len(dead), ", ".join(j.id for j in dead))) if dead else " All have a next run."
+        detail = [{
+            "job": j.name or j.id,
+            "next_run": _mc_fmt(j.next_run_time.isoformat()) if j.next_run_time else "NEVER",
+        } for j in jobs]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(HEALTH, "Scheduled jobs", _jobs)
+
+    def _self_audit():
+        _, pretty = _mc_fired_guard("system_self_audit")
+        nxt = _mc_job_next("system_self_audit")
+        dot = "green" if nxt != "unknown" else "amber"
+        summary = ("Runs Friday 7am ET and only emails when it finds something. "
+                   "Last fire record: %s. Next: %s." % (pretty, nxt))
+        return {"dot": dot, "summary": summary,
+                "detail_rows": [{"job": "system_self_audit", "next_run": nxt}]}
+    add(HEALTH, "Self-audit", _self_audit)
+
+    return {"generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at_et": now_et.strftime("%b %-d, %-I:%M%p ET").replace("AM", "am").replace("PM", "pm"),
+            "rows": rows}
+
+
+@app.route("/api/admin/system-status")
+def api_admin_system_status():
+    """Mission Control JSON. Auth handled by the global gate (owner or coach)."""
+    return jsonify(_system_status())
+
+
+@app.route("/system")
+def system_page():
+    """Mission Control page. Auth handled by the global gate (owner or coach)."""
+    return render_template("mission_control.html",
+                           api_key=request.args.get("key", ""))
+
+
 @app.route("/api/goals/setup/<token>", methods=["POST"])
 def api_goals_setup_save(token):
     agent_name = _db.resolve_goal_token(token)

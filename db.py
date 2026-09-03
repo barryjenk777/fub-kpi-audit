@@ -7292,3 +7292,177 @@ def get_phoenix_latest_for_person(person_id):
     except Exception as e:
         logger.warning("get_phoenix_latest_for_person failed: %s", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Mission Control — read-only status helpers for /system
+# ---------------------------------------------------------------------------
+
+def get_recent_lead_briefs(limit=10):
+    """Most recently updated lead_briefs rows, newest first."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, note_id, updated_at
+                    FROM lead_briefs
+                    ORDER BY updated_at DESC NULLS LAST
+                    LIMIT %s
+                """, (int(limit),))
+                rows = cur.fetchall()
+        return [{
+            "person_id":  r[0],
+            "note_id":    r[1],
+            "updated_at": r[2].isoformat() if r[2] else None,
+        } for r in rows]
+    except Exception as e:
+        logger.warning("get_recent_lead_briefs failed: %s", e)
+        return []
+
+
+def agent_imessage_queue_status(recent_limit=10):
+    """Counts + recent rows for the coaching-text iMessage queue.
+    All 'today' counts use the ET calendar day."""
+    empty = {"queued_today": 0, "sent_today": 0, "failed_today": 0,
+             "pending_now": 0, "recent": []}
+    if not is_available():
+        return empty
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date
+                                             = (NOW() AT TIME ZONE 'America/New_York')::date),
+                        COUNT(*) FILTER (WHERE status = 'sent'
+                                           AND (sent_at AT TIME ZONE 'America/New_York')::date
+                                             = (NOW() AT TIME ZONE 'America/New_York')::date),
+                        COUNT(*) FILTER (WHERE status = 'failed'
+                                           AND (created_at AT TIME ZONE 'America/New_York')::date
+                                             = (NOW() AT TIME ZONE 'America/New_York')::date),
+                        COUNT(*) FILTER (WHERE status = 'pending')
+                    FROM agent_imessage_queue
+                """)
+                c = cur.fetchone()
+                cur.execute("""
+                    SELECT agent_name, status, LEFT(message, 60), created_at
+                    FROM agent_imessage_queue
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                """, (int(recent_limit),))
+                rows = cur.fetchall()
+        return {
+            "queued_today": c[0] or 0,
+            "sent_today":   c[1] or 0,
+            "failed_today": c[2] or 0,
+            "pending_now":  c[3] or 0,
+            "recent": [{
+                "agent":      r[0],
+                "status":     r[1],
+                "message":    r[2],
+                "created_at": r[3].isoformat() if r[3] else None,
+            } for r in rows],
+        }
+    except Exception as e:
+        logger.warning("agent_imessage_queue_status failed: %s", e)
+        return empty
+
+
+def fasttrack_sync_counts(recent_limit=10):
+    """Fast Track sync queue counts by status plus recent rows."""
+    empty = {"pending": 0, "failed": 0, "synced": 0, "error": 0, "recent": []}
+    if not is_available():
+        return empty
+    try:
+        ensure_fasttrack_sync_table()
+        out = dict(empty)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT status, COUNT(*) FROM fasttrack_sync_queue GROUP BY status
+                """)
+                for status, n in cur.fetchall():
+                    key = status if status in ("pending", "failed", "synced") else "error"
+                    out[key] = out.get(key, 0) + int(n)
+                cur.execute("""
+                    SELECT agent_name, status, attempts, LEFT(COALESCE(last_error, ''), 80),
+                           updated_at
+                    FROM fasttrack_sync_queue
+                    ORDER BY updated_at DESC
+                    LIMIT %s
+                """, (int(recent_limit),))
+                out["recent"] = [{
+                    "agent":      r[0],
+                    "status":     r[1],
+                    "attempts":   r[2],
+                    "last_error": r[3] or "",
+                    "updated_at": r[4].isoformat() if r[4] else None,
+                } for r in cur.fetchall()]
+        return out
+    except Exception as e:
+        logger.warning("fasttrack_sync_counts failed: %s", e)
+        return empty
+
+
+def pond_sms_status(recent_limit=10):
+    """Blue SMS engagement snapshot: outbound counts (ET day / 7d), reply
+    counts with sentiment split (7d), and the most recent sends."""
+    empty = {"sent_today": 0, "sent_7d": 0, "replies_7d": 0,
+             "positive_7d": 0, "neutral_7d": 0, "negative_7d": 0,
+             "last_sent_at": None, "recent": []}
+    if not is_available():
+        return empty
+    try:
+        out = dict(empty)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        COUNT(*) FILTER (WHERE dry_run = FALSE
+                                           AND (sent_at AT TIME ZONE 'America/New_York')::date
+                                             = (NOW() AT TIME ZONE 'America/New_York')::date),
+                        COUNT(*) FILTER (WHERE dry_run = FALSE
+                                           AND sent_at >= NOW() - INTERVAL '7 days'),
+                        MAX(sent_at) FILTER (WHERE dry_run = FALSE)
+                    FROM pond_sms_log
+                """)
+                r = cur.fetchone()
+                out["sent_today"] = r[0] or 0
+                out["sent_7d"] = r[1] or 0
+                out["last_sent_at"] = r[2].isoformat() if r[2] else None
+                cur.execute("""
+                    SELECT person_name, strategy, step_num, status, sent_at
+                    FROM pond_sms_log
+                    WHERE dry_run = FALSE
+                    ORDER BY sent_at DESC
+                    LIMIT %s
+                """, (int(recent_limit),))
+                out["recent"] = [{
+                    "lead":     rr[0],
+                    "strategy": rr[1],
+                    "step":     rr[2],
+                    "status":   rr[3],
+                    "sent_at":  rr[4].isoformat() if rr[4] else None,
+                } for rr in cur.fetchall()]
+                try:
+                    cur.execute("""
+                        SELECT COUNT(*),
+                               COUNT(*) FILTER (WHERE sentiment = 'positive'),
+                               COUNT(*) FILTER (WHERE sentiment = 'neutral'),
+                               COUNT(*) FILTER (WHERE sentiment = 'negative')
+                        FROM pond_sms_reply_log
+                        WHERE received_at >= NOW() - INTERVAL '7 days'
+                    """)
+                    rp = cur.fetchone()
+                    out["replies_7d"] = rp[0] or 0
+                    out["positive_7d"] = rp[1] or 0
+                    out["neutral_7d"] = rp[2] or 0
+                    out["negative_7d"] = rp[3] or 0
+                except Exception as re:
+                    logger.warning("pond_sms_status reply count failed: %s", re)
+        return out
+    except Exception as e:
+        logger.warning("pond_sms_status failed: %s", e)
+        return empty
