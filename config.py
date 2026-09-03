@@ -286,6 +286,24 @@ TM_FIRST       = "Ana"
 TM_EMAIL       = "ana@yourfriendlyagent.net"
 
 # Lead sources she picks from. Keep in sync with FUB's Maverick lead-source field.
+# Source economics, from the Fast Track ground-truth doc (Sep 2026). Referral
+# comes off the top BEFORE the team split. team_split = the TEAM's share of what
+# remains (agent keeps the rest, minus their own LPT plan costs). The $595
+# client-paid fee ($195 LPT + $400 Legacy admin) is separate and never touches
+# the agent's commission. Used by the TM Contract Desk for net-GCI defaults.
+SOURCE_ECONOMICS = {
+    #  source key          referral_pct  team_split_pct
+    "Sphere / Past Client": {"referral": 0.00, "team_split": 0.20},
+    "Referral":             {"referral": 0.00, "team_split": 0.20},
+    "zbuyer":               {"referral": 0.00, "team_split": 0.50},
+    "Qazzoo":               {"referral": 0.00, "team_split": 0.50},
+    "Probate":              {"referral": 0.25, "team_split": 0.50},
+    "Ylopo PPC":            {"referral": 0.40, "team_split": 0.50},
+    "Ylopo Seller":         {"referral": 0.40, "team_split": 0.50},
+    "Ylopo Prospecting":    {"referral": 0.40, "team_split": 0.50},
+}
+TEAM_ADMIN_FEE_PER_CLOSING = 400   # Legacy's client-paid admin fee per closing
+
 TM_LEAD_SOURCES = [
     "Ylopo PPC", "Ylopo Seller", "Ylopo Prospecting", "Google PPC", "Facebook",
     "zbuyer", "Probate", "Qazzoo", "Sphere / Past Client", "Referral",
