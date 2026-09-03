@@ -6839,3 +6839,146 @@ def delete_transaction(tx_id):
     except Exception as e:
         logger.warning("delete_transaction failed: %s", e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Phoenix — dead-lead resurrection log
+# ---------------------------------------------------------------------------
+
+def ensure_phoenix_log_table():
+    """Create phoenix_log for the resurrection sweep (idempotent)."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS phoenix_log (
+                        id            SERIAL PRIMARY KEY,
+                        person_id     TEXT NOT NULL,
+                        lead_name     TEXT,
+                        owner_before  TEXT,
+                        assigned_to   TEXT,
+                        dormant_days  INTEGER,
+                        came_back     DATE,
+                        activity_type TEXT,
+                        status        TEXT NOT NULL,
+                                      -- dry_run | owner_alerted | assigned |
+                                      -- pond_fallback | skipped
+                        run_date      DATE,
+                        created_at    TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_phoenix_person
+                    ON phoenix_log (person_id, created_at DESC);
+                """)
+    except Exception as e:
+        logger.warning("ensure_phoenix_log_table failed: %s", e)
+
+
+def log_phoenix(person_id, lead_name, owner_before, assigned_to, dormant_days,
+                came_back, activity_type, status, run_date=None):
+    """Insert one phoenix_log row. Returns new row id or None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO phoenix_log
+                        (person_id, lead_name, owner_before, assigned_to,
+                         dormant_days, came_back, activity_type, status, run_date)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_DATE))
+                    RETURNING id
+                """, (str(person_id), lead_name, owner_before, assigned_to,
+                      dormant_days, came_back, activity_type, status, run_date))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("log_phoenix failed for %s: %s", person_id, e)
+        return None
+
+
+def phoenix_recent_person_ids(days=30):
+    """
+    Person IDs the sweep should skip. A person is deduped only when:
+      - a LIVE action row (assigned / owner_alerted) exists within `days`, OR
+      - a dry_run or pond_fallback row exists from TODAY (prevents double
+        processing when the manual endpoint and the scheduled job both fire).
+    Dry-run rows from prior days do NOT block, so the first live run after a
+    dry-run week still processes everything.
+    """
+    if not is_available():
+        return set()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT person_id FROM phoenix_log
+                    WHERE (status IN ('assigned', 'owner_alerted')
+                           AND created_at >= NOW() - (%s || ' days')::interval)
+                       OR (status IN ('dry_run', 'pond_fallback')
+                           AND run_date = CURRENT_DATE)
+                """, (int(days),))
+                rows = cur.fetchall()
+        return {r[0] for r in rows}
+    except Exception as e:
+        logger.warning("phoenix_recent_person_ids failed: %s", e)
+        return set()
+
+
+def get_phoenix_log(limit=100):
+    """Recent phoenix_log rows, newest first."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, person_id, lead_name, owner_before, assigned_to,
+                           dormant_days, came_back, activity_type, status,
+                           run_date, created_at
+                    FROM phoenix_log
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                """, (int(limit),))
+                rows = cur.fetchall()
+        return [{
+            "id":            r[0],
+            "person_id":     r[1],
+            "lead_name":     r[2],
+            "owner_before":  r[3],
+            "assigned_to":   r[4],
+            "dormant_days":  r[5],
+            "came_back":     r[6].isoformat() if r[6] else None,
+            "activity_type": r[7],
+            "status":        r[8],
+            "run_date":      r[9].isoformat() if r[9] else None,
+            "created_at":    r[10].isoformat() if r[10] else None,
+        } for r in rows]
+    except Exception as e:
+        logger.warning("get_phoenix_log failed: %s", e)
+        return []
+
+
+def get_phoenix_tag_expiry_candidates(expire_days=7, window_days=21):
+    """
+    Person IDs whose PHOENIX tag boost should expire: live rows (assigned or
+    pond_fallback) with run_date more than `expire_days` ago. Bounded at
+    `window_days` back so the cleanup never rescans ancient history — the tag
+    remover is idempotent, so re-checking a small trailing window is cheap.
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT person_id FROM phoenix_log
+                    WHERE status IN ('assigned', 'pond_fallback')
+                      AND run_date <= CURRENT_DATE - (%s || ' days')::interval
+                      AND run_date >  CURRENT_DATE - (%s || ' days')::interval
+                """, (int(expire_days), int(window_days)))
+                rows = cur.fetchall()
+        return [r[0] for r in rows]
+    except Exception as e:
+        logger.warning("get_phoenix_tag_expiry_candidates failed: %s", e)
+        return []

@@ -13473,6 +13473,558 @@ def scheduled_expire_isa_transfers():
         _db.release_job_lock("isa_transfer_expire")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# PHOENIX — Dead-Lead Resurrection Engine
+#
+# Dead leads (no agent contact in 45+ days) who resume activity on the team's
+# website are "resurrections". Owned resurrections always alert the owning
+# agent and are never reassigned. Unowned resurrections with STRONG intent
+# (Viewed Property / Saved Property) are the bonus pool, direct-assigned
+# round-robin to agents who earned Phoenix status: last week they hit their
+# personal daily dial target on 4+ of the 5 weekdays.
+#
+# SAFETY: config.PHOENIX_DRY_RUN defaults ON. In dry-run the sweep computes
+# everything and emails Barry the report but performs ZERO FUB writes and
+# ZERO agent alerts. Every write below is inside an `if not dry_run:` block.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Events that make an unowned lead bonus-pool worthy. Weak signals (Viewed
+# Page / Visited Website) still trigger owner alerts but are never handed
+# out as a prize — a weak lead assigned as a reward cheapens the reward loop.
+_PHOENIX_STRONG_EVENTS = {"Viewed Property", "Saved Property"}
+
+# Max bonus leads one agent can receive per run (overwhelm guard). Overflow
+# is left unprocessed (no log row) so the next run picks it up naturally.
+_PHOENIX_MAX_ASSIGNS_PER_AGENT = 2
+
+_PHOENIX_ACTIVITY_PHRASES = {
+    "Viewed Property":  "Viewed a property",
+    "Saved Property":   "Saved a property",
+    "Viewed Page":      "Browsed the site",
+    "Visited Website":  "Visited the site",
+}
+
+
+def _phoenix_et():
+    _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+    return timezone(timedelta(hours=_et_h))
+
+
+def _phoenix_parse_dt(s):
+    """Parse a FUB ISO timestamp. Returns aware datetime or None."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def _phoenix_strip(text):
+    """Route copy through coach_voice._strip_dashes (Barry's no-dashes rule)."""
+    try:
+        import coach_voice as _cv
+        return _cv._strip_dashes(text)
+    except Exception:
+        return text
+
+
+def _phoenix_when(date_str):
+    """'2026-09-01' -> 'on Sep 1'. Falls back to 'recently'."""
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        return f"on {d.strftime('%b')} {d.day}"
+    except Exception:
+        return "recently"
+
+
+def _phoenix_qualified_agents(client):
+    """
+    Compute Phoenix status for every active agent.
+
+    Qualified = last completed Mon-Fri week, the agent hit their PERSONAL
+    daily dial target (round(dials_per_week / 5) from their goal) on at
+    least PHOENIX_QUALIFY_DAYS_REQUIRED of the 5 weekdays. Agents with no
+    goal on file (gci_goal <= 0) are never qualified. Excluded/coaching-
+    excluded agents are never qualified.
+
+    Returns (qualified: {name: row}, evaluated: [row, ...]).
+    """
+    ET = _phoenix_et()
+    today_et = datetime.now(ET).date()
+    last_monday = today_et - timedelta(days=today_et.weekday() + 7)
+    weekdays = [last_monday + timedelta(days=i) for i in range(5)]
+
+    # Outbound dials per user per ET day. One bulk fetch per day (mirrors
+    # scheduled_sync_daily_activity) — a whole week in one fetch could blow
+    # past FUB's hard 2000-offset cap on the calls endpoint.
+    dials = {d: {} for d in weekdays}
+    for d in weekdays:
+        d_start = datetime.combine(d, datetime.min.time()).replace(tzinfo=ET).astimezone(timezone.utc)
+        d_end   = datetime.combine(d, datetime.max.time()).replace(tzinfo=ET).astimezone(timezone.utc)
+        try:
+            day_calls = client.get_calls(since=d_start, until=d_end)
+        except Exception as e:
+            logger.warning("[PHOENIX] calls fetch failed for %s: %s", d, e)
+            day_calls = []
+        for c in day_calls:
+            uid = c.get("userId")
+            if not uid or uid in config.EXCLUDED_CALL_USER_IDS:
+                continue
+            if not c.get("isIncoming", False):
+                dials[d][uid] = dials[d].get(uid, 0) + 1
+
+    never_qualified = set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set())) \
+        | set(config.EXCLUDED_USERS)
+    qualified, evaluated = {}, []
+    for name, user in auto_detect_agents(client).items():
+        if name in never_qualified:
+            continue
+        uid = user.get("id")
+        goal = _db.get_goal(name)
+        if not goal or float(goal.get("gci_goal") or 0) <= 0:
+            continue  # no goal set = not Phoenix-qualified
+        daily_target = round(_db.compute_targets(goal)["dials_per_week"] / 5)
+        if daily_target < 1:
+            continue
+        days_met = sum(1 for d in weekdays if dials[d].get(uid, 0) >= daily_target)
+        row = {
+            "agent_name":   name,
+            "fub_user_id":  uid,
+            "daily_target": daily_target,
+            "days_met":     days_met,
+            "dials_by_day": {d.isoformat(): dials[d].get(uid, 0) for d in weekdays},
+            "qualified":    days_met >= config.PHOENIX_QUALIFY_DAYS_REQUIRED,
+        }
+        evaluated.append(row)
+        if row["qualified"]:
+            qualified[name] = row
+    return qualified, evaluated
+
+
+def _phoenix_add_note(client, lead, extra=""):
+    """POST a context note to the lead's FUB timeline. LIVE MODE ONLY."""
+    body = _phoenix_strip(
+        f"PHOENIX: Came back on their own after {lead['dormant_days']} days quiet. "
+        f"Last seen: {lead['activity_type']} on {lead['came_back']}. "
+        f"Zero competition, call first." + (f" {extra}" if extra else "")
+    )
+    client._request("POST", "notes", json_data={
+        "personId": int(lead["person_id"]),
+        "body":     body,
+    })
+
+
+def _phoenix_queue_text(agent_name, message):
+    """Queue an iMessage to an agent via the Mac coaching-text pipeline.
+    LIVE MODE ONLY. Returns True if queued."""
+    profile = None
+    for p in (_db.get_agent_profiles(active_only=True) or []):
+        if p.get("agent_name") == agent_name:
+            profile = p
+            break
+    phone = (profile or {}).get("phone") or ""
+    if not phone:
+        logger.warning("[PHOENIX] no phone on file for %s — note only, no text", agent_name)
+        return False
+    row_id = _db.queue_agent_imessage(
+        agent_name=agent_name,
+        fub_user_id=(profile or {}).get("fub_user_id"),
+        phone=phone,
+        message=_phoenix_strip(message),
+        week_day="phoenix",
+    )
+    return bool(row_id)
+
+
+def run_phoenix_sweep(dry_run=None):
+    """
+    The Phoenix sweep. Returns a JSON-safe summary dict.
+
+    dry_run=None reads config.PHOENIX_DRY_RUN (defaults ON). In dry-run this
+    function makes ZERO FUB writes and queues ZERO agent texts — it only
+    reads, logs status 'dry_run', and emails Barry what WOULD have happened.
+    """
+    if dry_run is None:
+        dry_run = bool(getattr(config, "PHOENIX_DRY_RUN", True))
+    dry_run = bool(dry_run)
+
+    _db.ensure_phoenix_log_table()
+    client = FUBClient()
+    now_utc = datetime.now(timezone.utc)
+    ET = _phoenix_et()
+    run_date = datetime.now(ET).date()
+
+    # ── a. Recent site activity, freshest event per person ────────────────
+    since = now_utc - timedelta(days=config.PHOENIX_EVENT_LOOKBACK_DAYS)
+    since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+    activity = {}   # pid -> {created, type, strong}
+    for etype in config.PHOENIX_EVENT_TYPES:
+        try:
+            events = client.get_events(since=since, event_type=etype, max_pages=6)
+        except Exception as e:
+            logger.warning("[PHOENIX] events fetch failed for %s: %s", etype, e)
+            continue
+        for ev in events:
+            created = ev.get("created") or ""
+            # FUB ignores since= server-side on /events — filter client-side.
+            if not created or created < since_str:
+                continue
+            pid = ev.get("personId")
+            if not pid:
+                continue
+            pid = str(pid)
+            rec = activity.get(pid)
+            if rec is None:
+                rec = activity[pid] = {"created": created, "type": etype, "strong": False}
+            elif created > rec["created"]:
+                rec["created"], rec["type"] = created, etype
+            if etype in _PHOENIX_STRONG_EVENTS:
+                rec["strong"] = True
+
+    # ── b. Filter to true resurrections ───────────────────────────────────
+    recent_ids     = _db.phoenix_recent_person_ids(config.PHOENIX_DEDUPE_DAYS)
+    suppression    = set(config.LEADSTREAM_SUPPRESSION_TAGS)
+    excluded_users = set(config.EXCLUDED_USERS)
+    owned, bonus, weak_unowned = [], [], []
+    for pid, act in activity.items():
+        if pid in recent_ids:
+            continue
+        try:
+            person = client._request("GET", f"people/{pid}")
+        except Exception as e:
+            logger.warning("[PHOENIX] person fetch failed for %s: %s", pid, e)
+            continue
+        if not isinstance(person, dict) or not person.get("id"):
+            continue
+        stage = (person.get("stage") or "").lower()
+        if any(s in stage for s in ("closed", "trash", "sold")):
+            continue
+        if set(person.get("tags") or []) & suppression:
+            continue
+        last_comm = ((person.get("lastCommunication") or {}).get("createdAt")
+                     or person.get("created"))
+        last_dt = _phoenix_parse_dt(last_comm)
+        if last_dt is None:
+            continue
+        dormant_days = (now_utc - last_dt).days
+        if dormant_days < config.PHOENIX_DORMANT_DAYS:
+            continue
+        name = (person.get("name")
+                or f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
+                or f"Lead {pid}")
+        assigned_to = (person.get("assignedTo") or "").strip()
+        in_pond = bool(person.get("assignedPondId"))
+        lead = {
+            "person_id":     pid,
+            "lead_name":     name,
+            "owner_before":  assigned_to,
+            "dormant_days":  dormant_days,
+            "came_back":     act["created"][:10],
+            "activity_type": act["type"],
+        }
+        if not assigned_to or assigned_to in excluded_users or in_pond:
+            (bonus if act["strong"] else weak_unowned).append(lead)
+        else:
+            owned.append(lead)
+
+    n_resurrections = len(owned) + len(bonus) + len(weak_unowned)
+    summary = {
+        "ok": True, "dry_run": dry_run, "run_date": run_date.isoformat(),
+        "resurrections": n_resurrections, "bonus_pool": len(bonus),
+        "owned": [], "assigned": [], "pond_fallback": [], "weak_unowned": [],
+        "deferred": 0, "qualified_agents": [], "agents_evaluated": 0,
+    }
+    if n_resurrections == 0:
+        # Report noise guard: zero-finding runs just log, no email to Barry.
+        logger.info("[PHOENIX] sweep found 0 resurrections (dry_run=%s)", dry_run)
+        return summary
+
+    # ── d. Phoenix-qualified agents (computed once per run) ───────────────
+    qualified, evaluated = _phoenix_qualified_agents(client)
+    qualified_names = sorted(qualified.keys())
+    summary["qualified_agents"] = [
+        {"agent_name": r["agent_name"], "days_met": r["days_met"],
+         "daily_target": r["daily_target"]}
+        for r in evaluated if r["qualified"]
+    ]
+    summary["agents_evaluated"] = len(evaluated)
+
+    # ── e1. OWNED: note + one bundled text per owner, never reassigned ────
+    owner_groups = {}
+    for lead in owned:
+        owner_groups.setdefault(lead["owner_before"], []).append(lead)
+    for owner, leads in owner_groups.items():
+        first = owner.split()[0] if owner else "Hey"
+        for lead in leads:
+            status = "dry_run" if dry_run else "owner_alerted"
+            if not dry_run:
+                try:
+                    _phoenix_add_note(client, lead)
+                except Exception as e:
+                    logger.warning("[PHOENIX] note failed for %s: %s", lead["person_id"], e)
+                    status = "skipped"
+            _db.log_phoenix(lead["person_id"], lead["lead_name"], owner, owner,
+                            lead["dormant_days"], lead["came_back"],
+                            lead["activity_type"], status, run_date)
+            summary["owned"].append(dict(lead, status=status))
+        if not dry_run:
+            # One text per owner per run, bundled when several leads revived.
+            if len(leads) == 1:
+                ld = leads[0]
+                phrase = _PHOENIX_ACTIVITY_PHRASES.get(ld["activity_type"], "Came back to the site")
+                msg = (f"{first}, your lead {ld['lead_name']} just came back after "
+                       f"{ld['dormant_days']} days quiet. {phrase} "
+                       f"{_phoenix_when(ld['came_back'])}. Call them before they wander off.")
+            else:
+                names = ", ".join(ld["lead_name"] for ld in leads)
+                msg = (f"{first}, {len(leads)} of your quiet leads came back this week: "
+                       f"{names}. All noted in FUB. Call them before they wander off.")
+            _phoenix_queue_text(owner, msg)
+
+    # ── e2. UNOWNED strong-intent: bonus pool, round-robin to qualified ───
+    if bonus and qualified_names:
+        rr_val, _ = _db.get_app_state("phoenix_rr")
+        try:
+            rr = int(rr_val or 0)
+        except (TypeError, ValueError):
+            rr = 0
+        assign_counts, assigned_pairs = {}, []
+        for lead in bonus:
+            picked = None
+            for _ in range(len(qualified_names)):
+                cand = qualified_names[rr % len(qualified_names)]
+                rr += 1
+                if assign_counts.get(cand, 0) < _PHOENIX_MAX_ASSIGNS_PER_AGENT:
+                    picked = cand
+                    break
+            if picked is None:
+                # Every qualified agent is at cap. Leave the rest unprocessed
+                # (no log row) so tomorrow's run picks them up naturally.
+                summary["deferred"] = len(bonus) - len(assigned_pairs)
+                break
+            assign_counts[picked] = assign_counts.get(picked, 0) + 1
+            assigned_pairs.append((lead, picked))
+
+        for lead, agent in assigned_pairs:
+            status = "dry_run" if dry_run else "assigned"
+            if not dry_run:
+                try:
+                    client.update_person_fields(
+                        lead["person_id"],
+                        # assignedUserId (FUB user id) is more reliable than
+                        # the assignedTo name string for reassignment.
+                        {"assignedUserId": qualified[agent]["fub_user_id"]})
+                    client.add_tag(lead["person_id"], config.PHOENIX_TAG)
+                    _phoenix_add_note(client, lead)
+                except Exception as e:
+                    logger.warning("[PHOENIX] assign failed for %s: %s", lead["person_id"], e)
+                    status = "skipped"
+                if status == "assigned":
+                    first = agent.split()[0]
+                    _phoenix_queue_text(agent, (
+                        f"{first}, bonus lead earned. {lead['lead_name']} went quiet "
+                        f"{lead['dormant_days']} days ago and just came back on the site. "
+                        f"Already assigned to you, top of your LeadStream. "
+                        f"You earned this one by hitting your standard last week."))
+            _db.log_phoenix(lead["person_id"], lead["lead_name"],
+                            lead["owner_before"], agent, lead["dormant_days"],
+                            lead["came_back"], lead["activity_type"], status, run_date)
+            summary["assigned"].append(dict(lead, assigned_to=agent, status=status))
+        if not dry_run and assigned_pairs:
+            _db.set_app_state("phoenix_rr", str(rr))
+
+    # ── e3. Zero-qualified fallback: don't let bonus leads rot ────────────
+    elif bonus:
+        for lead in bonus:
+            status = "dry_run" if dry_run else "pond_fallback"
+            if not dry_run:
+                try:
+                    # PHOENIX tag floats them to the top of the pond call
+                    # list (LEADSTREAM_SIGNAL_TAGS) — first to claim wins.
+                    client.add_tag(lead["person_id"], config.PHOENIX_TAG)
+                    _phoenix_add_note(client, lead, extra="First to claim wins.")
+                except Exception as e:
+                    logger.warning("[PHOENIX] pond fallback failed for %s: %s", lead["person_id"], e)
+                    status = "skipped"
+            _db.log_phoenix(lead["person_id"], lead["lead_name"],
+                            lead["owner_before"], "", lead["dormant_days"],
+                            lead["came_back"], lead["activity_type"], status, run_date)
+            summary["pond_fallback"].append(dict(lead, status=status))
+
+    # ── Weak-signal unowned: reported, never assigned as a bonus ──────────
+    for lead in weak_unowned:
+        status = "dry_run" if dry_run else "skipped"
+        _db.log_phoenix(lead["person_id"], lead["lead_name"],
+                        lead["owner_before"], "", lead["dormant_days"],
+                        lead["came_back"], lead["activity_type"], status, run_date)
+        summary["weak_unowned"].append(dict(lead, status=status))
+
+    # ── f. Email Barry the report (only when something was found) ─────────
+    try:
+        _phoenix_email_report(summary)
+        summary["report_emailed"] = True
+    except Exception as e:
+        logger.warning("[PHOENIX] report email failed: %s", e)
+        summary["report_emailed"] = False
+
+    logger.info("[PHOENIX] sweep done: %d resurrections, %d bonus pool, dry_run=%s",
+                n_resurrections, len(bonus), dry_run)
+    return summary
+
+
+def _phoenix_email_report(summary):
+    """Email Barry the sweep report via Postmark. Fires in BOTH modes."""
+    import postmark_client as _pm
+    dry_run = summary["dry_run"]
+    subject = (f"Phoenix report: {summary['resurrections']} resurrections, "
+               f"{summary['bonus_pool']} bonus-pool")
+    if dry_run:
+        subject = "[DRY RUN] " + subject
+
+    def _row(lead, who):
+        phrase = _PHOENIX_ACTIVITY_PHRASES.get(lead["activity_type"], lead["activity_type"])
+        return (f"<li><b>{lead['lead_name']}</b> ({who}) . quiet "
+                f"{lead['dormant_days']} days . {phrase.lower()} "
+                f"{_phoenix_when(lead['came_back'])}</li>")
+
+    parts = []
+    if dry_run:
+        parts.append("<p><b>DRY RUN.</b> No FUB writes were made and no agent "
+                     "was texted. Everything below is what WOULD have happened "
+                     "if Phoenix were live.</p>")
+    if summary["owned"]:
+        verb = "would be alerted" if dry_run else "alerted"
+        parts.append(f"<h3>Owned resurrections (owner {verb}, never reassigned)</h3><ul>")
+        parts += [_row(l, f"owner: {l['owner_before']}") for l in summary["owned"]]
+        parts.append("</ul>")
+    if summary["assigned"]:
+        verb = "would be assigned" if dry_run else "assigned"
+        parts.append(f"<h3>Bonus pool ({verb} round-robin)</h3><ul>")
+        parts += [_row(l, f"to: {l['assigned_to']}") for l in summary["assigned"]]
+        parts.append("</ul>")
+    if summary["pond_fallback"]:
+        parts.append("<h3>Pond fallback (no agent earned Phoenix status last week)</h3>"
+                     "<p>No one qualified, so these were tagged PHOENIX to rank "
+                     "top of the pond, first to claim wins.</p><ul>")
+        parts += [_row(l, "pond") for l in summary["pond_fallback"]]
+        parts.append("</ul>")
+    if summary["deferred"]:
+        parts.append(f"<p>{summary['deferred']} bonus lead(s) deferred, every "
+                     f"qualified agent hit the {_PHOENIX_MAX_ASSIGNS_PER_AGENT}-per-run "
+                     "cap. Tomorrow's sweep picks them up.</p>")
+    if summary["weak_unowned"]:
+        parts.append("<h3>Weak-signal unowned (watch only, not bonus material)</h3>"
+                     "<p>Only browsed pages or visited the site. Owner alerts "
+                     "apply to this signal level, bonus assignment does not.</p><ul>")
+        parts += [_row(l, "unowned") for l in summary["weak_unowned"]]
+        parts.append("</ul>")
+
+    parts.append("<h3>Phoenix-qualified agents (last week)</h3>")
+    if summary["qualified_agents"]:
+        parts.append("<ul>")
+        parts += [f"<li><b>{a['agent_name']}</b>: {a['days_met']}/5 days at "
+                  f"{a['daily_target']}+ dials</li>" for a in summary["qualified_agents"]]
+        parts.append("</ul>")
+    else:
+        parts.append(f"<p>None of the {summary['agents_evaluated']} evaluated "
+                     "agents qualified.</p>")
+
+    if dry_run:
+        parts.append("<p style='color:#888'>Before going live confirm no FUB "
+                     "automation fires on assignment change. Flip live by "
+                     "setting PHOENIX_DRY_RUN=0 on Railway (env edits are "
+                     "staged, click Deploy).</p>")
+
+    html = "".join(parts)
+    _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+             subject=subject, html=html)
+
+
+def scheduled_phoenix_sweep():
+    """Daily 7:30am ET — Phoenix resurrection sweep."""
+    if _already_fired_recently("phoenix_sweep", within_hours=20):
+        print("[SCHEDULER] Phoenix sweep: skipped — already ran within 20h")
+        return
+    if not _db.try_acquire_job_lock("phoenix_sweep"):
+        return
+    try:
+        summary = run_phoenix_sweep()
+        print(f"[SCHEDULER] Phoenix sweep: {summary['resurrections']} resurrections, "
+              f"{summary['bonus_pool']} bonus pool (dry_run={summary['dry_run']})")
+        _record_fired("phoenix_sweep")
+    except Exception as e:
+        _alert_on_job_failure("phoenix_sweep", str(e))
+        print(f"[SCHEDULER] Phoenix sweep error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("phoenix_sweep")
+
+
+def scheduled_phoenix_tag_expiry():
+    """Daily 6:10am ET — remove PHOENIX tags 7+ days old so the LeadStream
+    boost doesn't outlive the moment (same pattern as ISA_TRANSFER_FRESH
+    expiry). Safe regardless of dry-run: dry-run never adds tags, so the
+    only candidates come from live runs."""
+    if not _db.try_acquire_job_lock("phoenix_tag_expiry"):
+        return
+    try:
+        pids = _db.get_phoenix_tag_expiry_candidates(expire_days=7)
+        if not pids:
+            return
+        client = FUBClient()
+        removed, failed = 0, 0
+        for pid in pids:
+            try:
+                client.remove_tag(pid, config.PHOENIX_TAG)  # no-op if absent
+                removed += 1
+            except Exception as e:
+                failed += 1
+                print(f"[SCHEDULER] Phoenix tag expiry failed for {pid}: {e}")
+        print(f"[SCHEDULER] Phoenix tag expiry: {removed} checked/removed, {failed} failed")
+        _record_fired("phoenix_tag_expiry")
+    except Exception as e:
+        print(f"[SCHEDULER] Phoenix tag expiry error: {e}")
+    finally:
+        _db.release_job_lock("phoenix_tag_expiry")
+
+
+@app.route("/api/admin/phoenix/run", methods=["POST"])
+def api_phoenix_run():
+    """Run the Phoenix sweep now. Body {"dry_run": true|false} overrides
+    config.PHOENIX_DRY_RUN. Returns the summary JSON.
+
+    Synchronous on purpose: a full sweep takes 1-3 minutes and gunicorn runs
+    with --timeout 300 (Procfile), so the request finishes inside the worker
+    timeout without needing a background thread."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    dry_run = body.get("dry_run")
+    if dry_run is None:
+        dry_run = bool(getattr(config, "PHOENIX_DRY_RUN", True))
+    try:
+        return jsonify(run_phoenix_sweep(dry_run=bool(dry_run)))
+    except Exception as e:
+        logger.error("[PHOENIX] manual run failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)[:400]}), 500
+
+
+@app.route("/api/admin/phoenix/log", methods=["GET"])
+def api_phoenix_log():
+    """Recent phoenix_log rows, newest first. ?limit= up to 500."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        limit = min(int(request.args.get("limit", 100)), 500)
+    except (TypeError, ValueError):
+        limit = 100
+    return jsonify({"ok": True, "rows": _db.get_phoenix_log(limit=limit)})
+
+
 def scheduled_send_appointment_email():
     """Tuesday 9am ET — send appointment accountability email."""
     if _already_fired_recently("appt_email", within_hours=20):
@@ -15478,6 +16030,20 @@ def start_scheduler():
                        id="isa_transfer_expire", name="ISA transfer fresh tag expiry (daily 6:05am)",
                        max_instances=1, misfire_grace_time=600)
 
+    # Phoenix resurrection sweep: daily 7:30am ET
+    # Dead leads (45+ days quiet) back on the site → owner alerts + bonus-pool
+    # round-robin to Phoenix-qualified agents. Ships with PHOENIX_DRY_RUN on:
+    # report-only until Barry flips the env var.
+    _scheduler.add_job(scheduled_phoenix_sweep, CronTrigger(hour=7, minute=30, timezone=ET),
+                       id="phoenix_sweep", name="Phoenix resurrection sweep (daily 7:30am)",
+                       max_instances=1, misfire_grace_time=600)
+
+    # Phoenix tag expiry: daily 6:10am ET — removes PHOENIX tags 7+ days old
+    # so the LeadStream boost doesn't outlive the resurrection moment.
+    _scheduler.add_job(scheduled_phoenix_tag_expiry, CronTrigger(hour=6, minute=10, timezone=ET),
+                       id="phoenix_tag_expiry", name="Phoenix tag expiry (daily 6:10am)",
+                       max_instances=1, misfire_grace_time=600)
+
     # Joe's coaching email: Sunday 3pm ET
     # No misfire_grace_time: if server is down at send time, skip it — never retry.
     # Retrying after restart is what caused duplicate emails.
@@ -16660,3 +17226,5 @@ else:
     _db.ensure_audio_blob_table()
     # Ensure agent iMessage coaching queue table exists
     _db.ensure_agent_imessage_queue_table()
+    # Ensure Phoenix resurrection log table exists
+    _db.ensure_phoenix_log_table()

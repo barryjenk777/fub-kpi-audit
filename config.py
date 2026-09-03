@@ -395,6 +395,7 @@ LEADSTREAM_SIGNAL_TAGS = {
     "SMS_Conversion":                            100,  # Replied POSITIVELY to a Project Blue text — call NOW
     "Claude_Text_Converted":                      95,  # Converted via text reply (co-occurs w/ SMS_Conversion)
     "Y_SELLER_EMAIL_AGENT":                       98,  # Clicked the Email Agent CTA on seller report
+    "PHOENIX":                                    96,  # Phoenix resurrection bonus lead — came back on their own, call first
     "ISA_ATTEMPTED_TRANSFER":                     95,  # Transfer attempt failed mid-process
     "AI_VOICE_NEEDS_FOLLOW_UP":                   95,  # AI voice converted
     "call_for_preapproval=yes":                   92,  # Wants a preapproval call
@@ -655,3 +656,44 @@ SERENDIPITY_EMAIL_COOLDOWN_HOURS = 48
 
 # Max lead lookups per detect run — controls FUB API budget per 10-min tick
 SERENDIPITY_MAX_CANDIDATES   = 30
+
+
+# =============================================================================
+# PHOENIX — Dead-Lead Resurrection Engine
+# Leads with no agent contact in 45+ days who resume activity on the team's
+# website are "resurrections". Owned resurrections alert the owning agent
+# (never reassigned). Unowned resurrections (blank assignedTo, excluded user,
+# or pond) are the BONUS POOL: direct-assigned round-robin to agents who
+# earned Phoenix status by hitting their personal daily dial target on 4 of
+# the 5 weekdays last week.
+# =============================================================================
+
+# CRITICAL SAFETY: dry-run defaults ON. In dry-run the sweep computes
+# everything and emails Barry the report but performs ZERO FUB writes and
+# ZERO agent alerts. Flip live by setting PHOENIX_DRY_RUN=0 on Railway
+# (remember: Railway env var edits are STAGED — click Deploy to apply).
+PHOENIX_DRY_RUN = _os.environ.get("PHOENIX_DRY_RUN", "1").strip().lower() not in ("0", "false")
+
+# Days of agent silence before a lead counts as "dead" (dormant)
+PHOENIX_DORMANT_DAYS = 45
+
+# How far back to pull FUB site-activity events each sweep
+PHOENIX_EVENT_LOOKBACK_DAYS = 3
+
+# FUB event types that count as a lead "coming back" on the site
+PHOENIX_EVENT_TYPES = [
+    "Viewed Property",
+    "Viewed Page",
+    "Saved Property",
+    "Visited Website",
+]
+
+# One Phoenix action per lead per this many days (dedupe window)
+PHOENIX_DEDUPE_DAYS = 30
+
+# Tag applied to bonus-pool leads on assignment (scored in LEADSTREAM_SIGNAL_TAGS)
+PHOENIX_TAG = "PHOENIX"
+
+# Weekdays (of last week's Mon-Fri) an agent must hit their personal daily
+# dial target to earn Phoenix status for this week's bonus pool
+PHOENIX_QUALIFY_DAYS_REQUIRED = 4
