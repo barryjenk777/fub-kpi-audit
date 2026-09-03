@@ -287,7 +287,10 @@ Keep the four lines under 600 characters combined. No em dashes or en dashes any
             max_tokens=400,
             system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
-            temperature=float(getattr(config, "LEAD_MEMORY_TEMPERATURE", 0.3)),
+            # anthropic SDK 1.x dropped the temperature kwarg from
+            # Messages.create(); Haiku 4.5 still honors it at the API level,
+            # so send it through extra_body to keep extraction literal.
+            extra_body={"temperature": float(getattr(config, "LEAD_MEMORY_TEMPERATURE", 0.3))},
         )
         raw = resp.content[0].text.strip()
     except Exception as e:
