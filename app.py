@@ -16523,8 +16523,9 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
         })
         if _sms:
             return _sms
+        logger.warning("[coach-voice fallback] %s got the TEMPLATE (generation returned None)", agent_first)
     except Exception as _cv_e:
-        logger.warning("coach_voice SMS failed, using template: %s", _cv_e)
+        logger.warning("[coach-voice fallback] %s got the TEMPLATE (exception: %s)", agent_first, _cv_e)
 
     # Deterministic variation seed: changes each week, differs per agent
     from datetime import date as _date

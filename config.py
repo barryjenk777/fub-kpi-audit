@@ -60,6 +60,7 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
     "Bobby Strunk",
     "Barry Jenkin$",   # Ylopo test account (barry@ylopo.com), not a real agent
     "Julz Gat",        # accountability paused per Barry, Aug 2026
+    "Ana Pena",        # transaction manager, was still getting agent texts (bug, Sep 2026)
 }
 
 # Key the Fast Track onboarding course (Vercel) uses to look up an agent's
