@@ -16484,15 +16484,16 @@ def start_scheduler():
     # Impact Tracker (Joe's weekly agent-update text): Thursday 9am send (this
     # week's 1:1s, ahead of Friday's sales meeting), Thursday 3pm reminder only
     # if he hasn't submitted yet.
-    # RETIRED Sep 2026 with the sales-manager role. Re-enable if one is hired.
-    # _scheduler.add_job(scheduled_impact_tracker_send,
-    #                    CronTrigger(day_of_week="thu", hour=9, minute=0, timezone=ET),
-    #                    id="impact_tracker_send", name="Impact Tracker text (Thu 9am)",
-    #                    max_instances=1, coalesce=True)
-    # _scheduler.add_job(scheduled_impact_tracker_reminder,
-    #                    CronTrigger(day_of_week="thu", hour=15, minute=0, timezone=ET),
-    #                    id="impact_tracker_reminder", name="Impact Tracker reminder (Thu 3pm)",
-    #                    max_instances=1, coalesce=True)
+    # Re-enabled Sep 2026 for Danny (productivity coach). His Thursday submission
+    # feeds the Friday Command Sheet.
+    _scheduler.add_job(scheduled_impact_tracker_send,
+                       CronTrigger(day_of_week="thu", hour=9, minute=0, timezone=ET),
+                       id="impact_tracker_send", name="Impact Tracker text to Danny (Thu 9am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_impact_tracker_reminder,
+                       CronTrigger(day_of_week="thu", hour=15, minute=0, timezone=ET),
+                       id="impact_tracker_reminder", name="Impact Tracker reminder to Danny (Thu 3pm)",
+                       max_instances=1, coalesce=True)
 
     # Agent coaching texts via Mac iMessage: Mon/Wed/Fri at 8:15am ET
     # Generates personalized KPI-based coaching texts in Barry's voice,

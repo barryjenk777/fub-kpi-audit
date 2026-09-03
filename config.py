@@ -324,8 +324,8 @@ TM_MILESTONES = [
 TM_REMINDER_LEAD_DAYS = 3
 
 # Sales manager (Joe) cell for the weekly Impact Tracker text + reminder.
-MANAGER_PHONE = ""   # blank disables Impact Tracker texts to Joe
-MANAGER_FIRST = "Joe"
+MANAGER_PHONE = "+13475980913"   # Danny, productivity coach (Impact Tracker cadence)
+MANAGER_FIRST = "Danny"
 
 
 # =============================================================================
