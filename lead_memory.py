@@ -421,11 +421,13 @@ def _pick_samples(samples, cap):
 # The run
 # ---------------------------------------------------------------------------
 
-def run_lead_memory_refresh(dry_run=None):
+def run_lead_memory_refresh(dry_run=None, include_briefs=False, send_email=True):
     """Compile/update Lead Memory briefs. Returns a JSON-safe summary dict.
 
     dry_run=None reads config.LEAD_MEMORY_DRY_RUN (defaults ON). Dry run:
-    first 5 changed leads, ZERO writes anywhere, samples emailed to Barry."""
+    first 5 changed leads, ZERO writes anywhere, samples emailed to Barry.
+    include_briefs=True puts the sample brief texts in the summary (dry run
+    only); send_email=False suppresses the dry-run sample email (preview)."""
     if dry_run is None:
         dry_run = bool(getattr(config, "LEAD_MEMORY_DRY_RUN", True))
     dry_run = bool(dry_run)
@@ -547,8 +549,13 @@ def run_lead_memory_refresh(dry_run=None):
 
     if dry_run:
         samples = _pick_samples(samples, sample_cap)
-        summary["samples"] = [{"lead_name": n, "tier": t} for n, t, _ in samples]
-        if samples:
+        summary["samples"] = [
+            dict({"lead_name": n, "tier": t}, **({"brief": b} if include_briefs else {}))
+            for n, t, b in samples
+        ]
+        if not send_email:
+            summary["samples_emailed"] = 0
+        elif samples:
             try:
                 _email_dry_run_samples(samples, summary)
                 summary["samples_emailed"] = len(samples)

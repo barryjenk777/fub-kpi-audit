@@ -14067,7 +14067,13 @@ def api_lead_memory_run():
         dry_run = bool(getattr(config, "LEAD_MEMORY_DRY_RUN", True))
     try:
         import lead_memory as _lm
-        return jsonify(_lm.run_lead_memory_refresh(dry_run=bool(dry_run)))
+        return jsonify(_lm.run_lead_memory_refresh(
+            dry_run=bool(dry_run),
+            # Preview knobs (dry run only): include the brief texts in the
+            # JSON, and optionally skip the sample email to Barry.
+            include_briefs=bool(body.get("include_briefs")),
+            send_email=body.get("send_email", True) is not False,
+        ))
     except Exception as e:
         logger.error("[LEAD MEMORY] manual run failed: %s", e)
         return jsonify({"ok": False, "error": str(e)[:400]}), 500
