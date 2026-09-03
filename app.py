@@ -14025,6 +14025,69 @@ def api_phoenix_log():
     return jsonify({"ok": True, "rows": _db.get_phoenix_log(limit=limit)})
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LEAD MEMORY — auto-maintained prep note on priority leads (see lead_memory.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scheduled_lead_memory_refresh():
+    """Nightly 4:30am ET — refresh Lead Memory briefs on priority leads."""
+    if _already_fired_recently("lead_memory", within_hours=20):
+        print("[SCHEDULER] Lead Memory: skipped — already ran within 20h")
+        return
+    if not _db.try_acquire_job_lock("lead_memory"):
+        return
+    try:
+        import lead_memory as _lm
+        summary = _lm.run_lead_memory_refresh()
+        print(f"[SCHEDULER] Lead Memory: {summary.get('generated', 0)} generated, "
+              f"{summary.get('written', 0)} written, {summary.get('new', 0)} new, "
+              f"{summary.get('skipped_thin', 0)} thin-skipped "
+              f"(dry_run={summary.get('dry_run')})")
+        _record_fired("lead_memory")
+    except Exception as e:
+        _alert_on_job_failure("lead_memory", str(e))
+        print(f"[SCHEDULER] Lead Memory error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("lead_memory")
+
+
+@app.route("/api/admin/lead-memory/run", methods=["POST"])
+def api_lead_memory_run():
+    """Run the Lead Memory refresh now. Body {"dry_run": true|false} overrides
+    config.LEAD_MEMORY_DRY_RUN. Returns the summary JSON.
+
+    Synchronous on purpose, same reasoning as the Phoenix endpoint: gunicorn
+    runs with --timeout 300 so the run finishes inside the worker timeout."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    dry_run = body.get("dry_run")
+    if dry_run is None:
+        dry_run = bool(getattr(config, "LEAD_MEMORY_DRY_RUN", True))
+    try:
+        import lead_memory as _lm
+        return jsonify(_lm.run_lead_memory_refresh(dry_run=bool(dry_run)))
+    except Exception as e:
+        logger.error("[LEAD MEMORY] manual run failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)[:400]}), 500
+
+
+@app.route("/api/admin/lead-memory/status", methods=["GET"])
+def api_lead_memory_status():
+    """lead_briefs counts + last scheduled run + current dry-run flag."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    _db.ensure_lead_briefs_table()
+    status = _db.lead_briefs_status()
+    return jsonify({
+        "ok": True,
+        "dry_run": bool(getattr(config, "LEAD_MEMORY_DRY_RUN", True)),
+        "last_run": _job_last_fired.get("lead_memory", "never"),
+        **status,
+    })
+
+
 def scheduled_send_appointment_email():
     """Tuesday 9am ET — send appointment accountability email."""
     if _already_fired_recently("appt_email", within_hours=20):
@@ -16042,6 +16105,14 @@ def start_scheduler():
     # so the LeadStream boost doesn't outlive the resurrection moment.
     _scheduler.add_job(scheduled_phoenix_tag_expiry, CronTrigger(hour=6, minute=10, timezone=ET),
                        id="phoenix_tag_expiry", name="Phoenix tag expiry (daily 6:10am)",
+                       max_instances=1, misfire_grace_time=600)
+
+    # Lead Memory refresh: nightly 4:30am ET — compiles/updates the
+    # "LEAD MEMORY (auto)" prep note on priority leads (LeadStream, pond,
+    # PHOENIX, fresh ISA transfers). Delta rule: only changed leads hit the
+    # LLM. Ships with LEAD_MEMORY_DRY_RUN on: 5 emailed samples, zero writes.
+    _scheduler.add_job(scheduled_lead_memory_refresh, CronTrigger(hour=4, minute=30, timezone=ET),
+                       id="lead_memory", name="Lead Memory refresh (nightly 4:30am)",
                        max_instances=1, misfire_grace_time=600)
 
     # Joe's coaching email: Sunday 3pm ET

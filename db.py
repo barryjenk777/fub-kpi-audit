@@ -6982,3 +6982,136 @@ def get_phoenix_tag_expiry_candidates(expire_days=7, window_days=21):
     except Exception as e:
         logger.warning("get_phoenix_tag_expiry_candidates failed: %s", e)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Lead Memory — auto-maintained prep briefs on priority leads
+# ---------------------------------------------------------------------------
+
+def ensure_lead_briefs_table():
+    """Create lead_briefs for the Lead Memory engine (idempotent).
+
+    One row per priority lead: which FUB note holds their brief, the last
+    activity marker we compiled against (the delta rule), and a hash of the
+    brief body so an unchanged brief never rewrites the note."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS lead_briefs (
+                        person_id          TEXT PRIMARY KEY,
+                        note_id            TEXT,
+                        last_activity_seen TEXT,
+                        brief_hash         TEXT,
+                        updated_at         TIMESTAMPTZ DEFAULT NOW()
+                    );
+                """)
+    except Exception as e:
+        logger.warning("ensure_lead_briefs_table failed: %s", e)
+
+
+def get_all_lead_briefs():
+    """All lead_briefs rows as {person_id: row_dict}. Empty dict if no DB."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, note_id, last_activity_seen, brief_hash, updated_at
+                    FROM lead_briefs
+                """)
+                rows = cur.fetchall()
+        return {r[0]: {
+            "person_id":          r[0],
+            "note_id":            r[1],
+            "last_activity_seen": r[2],
+            "brief_hash":         r[3],
+            "updated_at":         r[4].isoformat() if r[4] else None,
+        } for r in rows}
+    except Exception as e:
+        logger.warning("get_all_lead_briefs failed: %s", e)
+        return {}
+
+
+def upsert_lead_brief(person_id, note_id, last_activity_seen, brief_hash):
+    """Insert or update one lead_briefs row. Returns True on success."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO lead_briefs
+                        (person_id, note_id, last_activity_seen, brief_hash, updated_at)
+                    VALUES (%s, %s, %s, %s, NOW())
+                    ON CONFLICT (person_id) DO UPDATE
+                    SET note_id            = EXCLUDED.note_id,
+                        last_activity_seen = EXCLUDED.last_activity_seen,
+                        brief_hash         = EXCLUDED.brief_hash,
+                        updated_at         = NOW()
+                """, (str(person_id), note_id, last_activity_seen, brief_hash))
+                return True
+    except Exception as e:
+        logger.warning("upsert_lead_brief failed for %s: %s", person_id, e)
+        return False
+
+
+def lead_briefs_status():
+    """Counts for the status endpoint: total briefs, with notes, updated today,
+    and the most recent updated_at. Safe empty shape if no DB."""
+    empty = {"total": 0, "with_note": 0, "updated_today": 0, "last_updated": None}
+    if not is_available():
+        return empty
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*),
+                           COUNT(note_id),
+                           COUNT(*) FILTER (WHERE updated_at::date = CURRENT_DATE),
+                           MAX(updated_at)
+                    FROM lead_briefs
+                """)
+                row = cur.fetchone()
+        return {
+            "total":         row[0] or 0,
+            "with_note":     row[1] or 0,
+            "updated_today": row[2] or 0,
+            "last_updated":  row[3].isoformat() if row[3] else None,
+        }
+    except Exception as e:
+        logger.warning("lead_briefs_status failed: %s", e)
+        return empty
+
+
+def get_phoenix_latest_for_person(person_id):
+    """Most recent phoenix_log row for one lead, or None. Feeds the Lead
+    Memory brief so a resurrection shows up in the agent's prep note."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT dormant_days, came_back, activity_type, status, run_date
+                    FROM phoenix_log
+                    WHERE person_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """, (str(person_id),))
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "dormant_days":  row[0],
+            "came_back":     row[1].isoformat() if row[1] else None,
+            "activity_type": row[2],
+            "status":        row[3],
+            "run_date":      row[4].isoformat() if row[4] else None,
+        }
+    except Exception as e:
+        logger.warning("get_phoenix_latest_for_person failed: %s", e)
+        return None

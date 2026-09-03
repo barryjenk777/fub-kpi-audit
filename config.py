@@ -697,3 +697,36 @@ PHOENIX_TAG = "PHOENIX"
 # Weekdays (of last week's Mon-Fri) an agent must hit their personal daily
 # dial target to earn Phoenix status for this week's bonus pool
 PHOENIX_QUALIFY_DAYS_REQUIRED = 4
+
+
+# =============================================================================
+# LEAD MEMORY — auto-maintained prep note on priority leads
+# Compiles a short "LEAD MEMORY (auto)" note on every priority lead (LeadStream,
+# pond list, PHOENIX resurrections, fresh ISA transfers) so an agent's call prep
+# drops from 3 minutes of timeline scrolling to a 30-second read. Claude compiles
+# it nightly from the lead's real FUB data. Never fabricates: unknown stays unknown.
+# =============================================================================
+
+# CRITICAL SAFETY: dry-run defaults ON. In dry-run the job processes only the
+# first 5 changed leads, makes ZERO FUB writes, and emails Barry the sample
+# briefs. Flip live by setting LEAD_MEMORY_DRY_RUN=0 on Railway (remember:
+# Railway env var edits are STAGED — click Deploy to apply).
+LEAD_MEMORY_DRY_RUN = _os.environ.get("LEAD_MEMORY_DRY_RUN", "1").strip().lower() not in ("0", "false")
+
+# Model for brief compilation. Haiku: this is extraction, not copywriting —
+# fast and cheap at ~150 briefs/night. Low temperature keeps it literal.
+LEAD_MEMORY_MODEL = "claude-haiku-4-5-20251001"
+LEAD_MEMORY_TEMPERATURE = 0.3
+
+# Subject on the FUB note. One note per lead, updated in place — never a pile.
+LEAD_MEMORY_NOTE_SUBJECT = "LEAD MEMORY (auto)"
+
+# Scope cap: max priority leads considered per run (union of all source tags).
+LEAD_MEMORY_MAX_LEADS = 250
+
+# LLM budget: max brief generations per run. Changed leads beyond this are
+# left for the next night — the delta rule means the backlog drains fast.
+LEAD_MEMORY_MAX_GENERATIONS = 150
+
+# Dry-run sample size (briefs generated + emailed to Barry, zero FUB writes).
+LEAD_MEMORY_DRY_RUN_SAMPLES = 5

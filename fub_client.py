@@ -927,6 +927,55 @@ class FUBClient:
             logger.warning("FUB SMS note log error for person %s: %s", person_id, e)
             return None
 
+    # ---- Notes ----
+
+    def get_person_notes(self, person_id, limit=100):
+        """All notes on a person, newest first.
+
+        Uses GET /v1/notes?personId= (FUB's documented filter). Verified
+        client-side anyway — same caution as the tag filter, which FUB also
+        claims to support and quietly ignores. Ylopo AI call transcripts land
+        here as notes, which is why Lead Memory reads them.
+
+        Non-fatal: returns [] on failure.
+        """
+        params = {"personId": int(person_id), "limit": min(int(limit), 100)}
+        try:
+            items = self._get_paginated("notes", params, max_pages=3)
+        except Exception as e:
+            logger.warning("get_person_notes failed for %s: %s", person_id, e)
+            return []
+        mine = [n for n in items if str(n.get("personId")) == str(person_id)]
+        mine.sort(key=lambda n: n.get("created") or "", reverse=True)
+        return mine[:limit]
+
+    def create_note(self, person_id, subject, body):
+        """Create a note: POST /v1/notes {personId, subject, body}.
+
+        Same endpoint log_email_sent uses — omit userId so FUB attributes the
+        note to the API key owner (sending userId triggers a 400).
+        Returns the created note dict (with its id). Raises on failure so the
+        caller can decide what a failed write means.
+        """
+        return self._request("POST", "notes", json_data={
+            "personId": int(person_id),
+            "subject": subject,
+            "body": body,
+        })
+
+    def update_note(self, note_id, subject=None, body=None):
+        """Update a note in place: PUT /v1/notes/{id}.
+
+        Raises requests.HTTPError on failure — a 404 means the note was
+        deleted in FUB and the caller should create a fresh one.
+        """
+        payload = {}
+        if subject is not None:
+            payload["subject"] = subject
+        if body is not None:
+            payload["body"] = body
+        return self._request("PUT", f"notes/{int(note_id)}", json_data=payload)
+
     def get_events(self, since=None, event_type=None, limit=100, max_pages=5):
         """Get events (site visits, property views, etc.) with optional filters.
 
