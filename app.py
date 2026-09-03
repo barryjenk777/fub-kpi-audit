@@ -3948,6 +3948,144 @@ def api_onboarding_digest_preview():
     return jsonify(scheduled_onboarding_digest(dry_run=True) or {"sent": False, "reason": "no data"})
 
 
+# ---------------------------------------------------------------------------
+# Transaction Manager portal — scoped access, no Command Center
+# ---------------------------------------------------------------------------
+
+def _tm_auth() -> bool:
+    """Transaction-manager key. Separate from the admin key so it can be rotated
+    or revoked without touching Barry's access, and grants ONLY /tm."""
+    expected = getattr(config, "TM_PORTAL_KEY", "")
+    if not expected:
+        return False
+    provided = (request.args.get("k", "").strip()
+                or (request.get_json(silent=True) or {}).get("k", "")
+                or request.headers.get("X-TM-Key", "").strip())
+    return provided == expected
+
+
+def _tm_due_soon(txs):
+    """Milestones coming due or overdue across active transactions.
+    This is what makes the portal useful TO Ana, not just to Barry."""
+    from datetime import date as _d
+    today = _d.today()
+    lead  = int(getattr(config, "TM_REMINDER_LEAD_DAYS", 3))
+    labels = {k: lbl for k, lbl, _ in getattr(config, "TM_MILESTONES", [])}
+    out = []
+    for t in txs:
+        if t.get("status") != "active":
+            continue
+        for key, m in (t.get("milestones") or {}).items():
+            if not isinstance(m, dict) or m.get("done"):
+                continue
+            ds = m.get("date")
+            if not ds:
+                continue
+            try:
+                d = _d.fromisoformat(str(ds)[:10])
+            except Exception:
+                continue
+            days = (d - today).days
+            if days <= lead:
+                out.append({"tx_id": t["id"], "address": t.get("address"),
+                            "agent_name": t.get("agent_name"),
+                            "milestone": labels.get(key, key), "key": key,
+                            "date": d.isoformat(), "days_out": days,
+                            "overdue": days < 0})
+    out.sort(key=lambda r: r["days_out"])
+    return out
+
+
+def _tm_roi(txs):
+    """The number Barry actually needs: money by lead source."""
+    by = {}
+    for t in txs:
+        if t.get("status") == "fell_through":
+            continue
+        src = (t.get("lead_source") or "Unattributed").strip() or "Unattributed"
+        b = by.setdefault(src, {"source": src, "under_contract": 0, "closed": 0,
+                                "gci_closed": 0.0, "gci_pipeline": 0.0, "volume": 0.0})
+        gci = float(t.get("gci") or 0)
+        if t.get("status") == "closed":
+            b["closed"] += 1; b["gci_closed"] += gci
+        else:
+            b["under_contract"] += 1; b["gci_pipeline"] += gci
+        b["volume"] += float(t.get("sale_price") or 0)
+    rows = sorted(by.values(), key=lambda r: -(r["gci_closed"] + r["gci_pipeline"]))
+    return rows
+
+
+@app.route("/tm")
+def tm_portal_page():
+    """Ana's contract workspace. Scoped key, no Command Center access."""
+    if not _tm_auth():
+        return ("<h2 style='font-family:sans-serif;padding:2rem'>Not authorized.</h2>"
+                "<p style='font-family:sans-serif;padding:0 2rem;color:#666'>"
+                "Ask Barry for your link.</p>"), 403
+    agents = [p.get("agent_name") for p in (_db.get_agent_profiles(active_only=True) or [])
+              if p.get("agent_name") not in getattr(config, "EXCLUDED_USERS", [])]
+    return render_template("tm_portal.html",
+                           tm_key=request.args.get("k", ""),
+                           tm_first=getattr(config, "TM_FIRST", "there"),
+                           agents=sorted(agents),
+                           sources=getattr(config, "TM_LEAD_SOURCES", []),
+                           milestones=getattr(config, "TM_MILESTONES", []))
+
+
+@app.route("/api/tm/transactions")
+def api_tm_list():
+    if not (_tm_auth() or _perplexity_auth()):
+        return jsonify({"error": "Unauthorized"}), 401
+    txs = _db.get_transactions()
+    return jsonify({"ok": True, "transactions": txs,
+                    "due_soon": _tm_due_soon(txs),
+                    "roi": _tm_roi(txs)})
+
+
+@app.route("/api/tm/transaction", methods=["POST"])
+def api_tm_save():
+    if not (_tm_auth() or _perplexity_auth()):
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    if not (body.get("address") or "").strip():
+        return jsonify({"ok": False, "error": "Property address is required"}), 400
+    tx_id = body.get("id")
+    new_id = _db.save_transaction(body, tx_id=tx_id)
+    if not new_id:
+        return jsonify({"ok": False, "error": "Could not save"}), 500
+    logger.info("[tm] transaction %s saved (%s)", new_id, body.get("address"))
+    return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/tm/transaction/delete", methods=["POST"])
+def api_tm_delete():
+    if not (_tm_auth() or _perplexity_auth()):
+        return jsonify({"error": "Unauthorized"}), 401
+    tx_id = (request.get_json(silent=True) or {}).get("id")
+    if not tx_id:
+        return jsonify({"ok": False, "error": "id required"}), 400
+    return jsonify({"ok": bool(_db.delete_transaction(tx_id))})
+
+
+@app.route("/api/admin/roi")
+def api_admin_roi():
+    """Barry's view of the ROI loop: money by lead source, from Ana's entries."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    txs = _db.get_transactions()
+    roi = _tm_roi(txs)
+    return jsonify({"ok": True, "roi": roi,
+                    "totals": {
+                        "under_contract": sum(r["under_contract"] for r in roi),
+                        "closed":         sum(r["closed"] for r in roi),
+                        "gci_closed":     round(sum(r["gci_closed"] for r in roi), 2),
+                        "gci_pipeline":   round(sum(r["gci_pipeline"] for r in roi), 2),
+                    },
+                    "attribution_rate": (
+                        round(100 * sum(1 for t in txs if (t.get("lead_source") or "").strip())
+                              / max(len(txs), 1)) if txs else 0)})
+
+
 @app.route("/team/onboarding")
 def team_onboarding_page():
     """Barry's Fast Track onboarding board. Leadership only."""
@@ -13468,13 +13606,32 @@ def scheduled_sync_goals_data():
                 sale_price = deal.get("price") or deal.get("salePrice") or 0
                 deal_name  = deal.get("name") or deal.get("address") or f"Deal #{fub_deal_id}"
 
-                close_date    = _pd(deal.get("closedAt") or deal.get("closeDate"))
-                contract_date = _pd(deal.get("contractDate") or deal.get("created"))
+                # FUB's real field names. We previously read closedAt/closeDate and
+                # contractDate/created, none of which FUB sends, so EVERY deal synced
+                # with null dates (closings read as 0 while the scorecard said 13).
+                close_date    = _pd(deal.get("closedAt") or deal.get("closeDate")
+                                    or deal.get("projectedCloseDate"))
+                contract_date = _pd(deal.get("mutualAcceptanceDate")
+                                    or deal.get("customAcceptanceDateMaverick")
+                                    or deal.get("contractDate")
+                                    or deal.get("createdAt") or deal.get("created"))
+                # Prefer real commission entered on the deal over the goal estimate.
                 comm_pct      = comm_lookup.get(agent_name)
+                real_comm     = (deal.get("teamCommission") or deal.get("commissionValue")
+                                 or deal.get("agentCommission") or 0)
+                try:
+                    real_comm = float(real_comm or 0)
+                except (TypeError, ValueError):
+                    real_comm = 0.0
+                if real_comm and sale_price:
+                    comm_pct = round(real_comm / float(sale_price), 4)
+                lead_source = (deal.get("customLeadSourceMaverick") or "").strip()
 
                 result = _db.upsert_deal(fub_deal_id, agent_name, deal_name, sale_price,
                                          stage_raw, contract_date, close_date,
-                                         commission_pct=comm_pct)
+                                         commission_pct=comm_pct,
+                                         lead_source=lead_source,
+                                         gci_actual=(real_comm or None))
                 if result:
                     synced += 1
                 else:

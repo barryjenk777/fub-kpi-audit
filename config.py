@@ -275,6 +275,35 @@ MANAGER_EMAIL = ""   # Joe off sales-manager role (Barry, Aug 2026) — blank di
 # Light gate so the form isn't fully open on a guessable URL.
 MANAGER_UPDATE_KEY = "joe-weekly-2026"
 
+# ---------------------------------------------------------------------------
+# Transaction Manager portal (/tm)
+# ---------------------------------------------------------------------------
+# Ana works every contract, so she is the one person who can close the ROI loop:
+# which lead source produced this deal, what it actually paid, and when it closes.
+# She gets a scoped page, NOT Command Center. Rotate this key to revoke access.
+TM_PORTAL_KEY  = _os.environ.get("TM_PORTAL_KEY", "tm-2026")
+TM_FIRST       = "Ana"
+TM_EMAIL       = "ana@yourfriendlyagent.net"
+
+# Lead sources she picks from. Keep in sync with FUB's Maverick lead-source field.
+TM_LEAD_SOURCES = [
+    "Ylopo PPC", "Ylopo Seller", "Ylopo Prospecting", "Google PPC", "Facebook",
+    "zbuyer", "Probate", "Qazzoo", "Sphere / Past Client", "Referral",
+    "Open House", "Sign Call", "Other",
+]
+
+# Contract milestones she tracks. Each becomes a reminder when its date nears.
+TM_MILESTONES = [
+    ("earnest_money",  "Earnest money due",      "EMD received and receipted"),
+    ("inspection",     "Inspection deadline",    "Inspection scheduled or waived"),
+    ("appraisal",      "Appraisal ordered",      "Appraisal ordered with lender"),
+    ("loan_approval",  "Loan approval",          "Final loan approval received"),
+    ("final_walk",     "Final walkthrough",      "Walkthrough scheduled"),
+    ("closing",        "Closing",                "Closing scheduled and confirmed"),
+]
+# Days before a milestone date that it starts showing as "due soon".
+TM_REMINDER_LEAD_DAYS = 3
+
 # Sales manager (Joe) cell for the weekly Impact Tracker text + reminder.
 MANAGER_PHONE = ""   # blank disables Impact Tracker texts to Joe
 MANAGER_FIRST = "Joe"

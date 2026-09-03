@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Contract Desk</title>
+<style>
+:root{
+  --bg:#f6f7fb; --card:#fff; --ink:#1d2735; --muted:#6b7891; --line:#e3e8f0;
+  --navy:#1a2540; --gold:#c08a2d; --green:#12855f; --amber:#c9820f; --red:#c0392b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:15px}
+.wrap{max-width:1080px;margin:0 auto;padding:22px 18px 70px}
+h1{font-size:22px;margin:0 0 2px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 20px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.btn{background:#fff;border:1px solid var(--line);border-radius:8px;padding:9px 15px;
+  font-size:14px;font-weight:600;cursor:pointer;color:var(--ink)}
+.btn:hover{border-color:var(--gold)}
+.btn-gold{background:var(--gold);border-color:var(--gold);color:#fff}
+.btn-sm{padding:5px 10px;font-size:12.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 12px;letter-spacing:.01em}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 15px}
+.stat .l{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.stat .v{font-size:24px;font-weight:800;margin-top:3px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+  padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.pill{display:inline-block;padding:3px 9px;border-radius:99px;font-size:10.5px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+.p-active{background:#e8f0fe;color:#1a56b5}
+.p-closed{background:#e3f5ee;color:var(--green)}
+.p-fell_through{background:#fdeceb;color:var(--red)}
+.p-none{background:#fdf2e0;color:var(--amber)}
+.due{border-left:3px solid var(--amber);padding:9px 12px;margin-bottom:7px;background:#fffdf7;border-radius:0 8px 8px 0}
+.due.over{border-left-color:var(--red);background:#fff7f6}
+.due b{display:block;font-size:14px}
+.due span{font-size:12.5px;color:var(--muted)}
+.modal{position:fixed;inset:0;background:rgba(18,24,38,.5);display:none;align-items:flex-start;
+  justify-content:center;padding:26px 14px;overflow:auto;z-index:50}
+.modal.on{display:flex}
+.sheet{background:#fff;border-radius:14px;max-width:640px;width:100%;padding:22px 24px}
+label{display:block;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);margin:12px 0 4px}
+input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+  font:inherit;font-size:14px;background:#fff;color:var(--ink)}
+textarea{min-height:64px;resize:vertical}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 14px}
+.ms{display:grid;grid-template-columns:1fr 150px 70px;gap:8px;align-items:center;
+  padding:7px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+.ms:last-child{border-bottom:none}
+.ms input[type=date]{padding:6px 8px;font-size:13px}
+.ms input[type=checkbox]{width:auto;transform:scale(1.2)}
+.right{text-align:right}
+.muted{color:var(--muted)}
+.empty{color:var(--muted);padding:22px;text-align:center}
+.req{color:var(--red)}
+@media(max-width:640px){.grid2,.grid3{grid-template-columns:1fr}.ms{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="row" style="justify-content:space-between;align-items:flex-start">
+    <div>
+      <h1>Contract Desk</h1>
+      <p class="sub">Hey {{ tm_first }}. Every contract you are working, with what is coming due.</p>
+    </div>
+    <button class="btn btn-gold" onclick="openForm()">+ Add contract</button>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="card">
+    <h2>Coming due</h2>
+    <div id="due"></div>
+  </div>
+
+  <div class="card">
+    <h2>Contracts</h2>
+    <div id="list"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
+<div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
+
+<script>
+var KEY   = {{ tm_key|tojson }};
+var AGENTS= {{ agents|tojson }};
+var SOURCES={{ sources|tojson }};
+var MS    = {{ milestones|tojson }};
+var DATA  = {transactions:[], due_soon:[], roi:[]};
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function money(n){return (n==null||n==='')?'':'$'+Number(n).toLocaleString(undefined,{maximumFractionDigits:0});}
+function fmt(d){ if(!d) return ''; var x=new Date(d+'T12:00:00'); return isNaN(x)?'':
+  x.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'2-digit'}); }
+
+function load(){
+  fetch('/api/tm/transactions?k='+encodeURIComponent(KEY))
+    .then(function(r){return r.json();})
+    .then(function(d){ DATA=d; render(); })
+    .catch(function(){ document.getElementById('list').innerHTML='<div class="empty">Could not load. Refresh the page.</div>'; });
+}
+
+function render(){
+  var tx=DATA.transactions||[], due=DATA.due_soon||[];
+  var active=tx.filter(function(t){return t.status==='active';});
+  var closed=tx.filter(function(t){return t.status==='closed';});
+  var gciP=active.reduce(function(a,t){return a+(t.gci||0);},0);
+  var gciC=closed.reduce(function(a,t){return a+(t.gci||0);},0);
+  var missing=tx.filter(function(t){return t.status!=='fell_through' && !t.lead_source;}).length;
+
+  document.getElementById('stats').innerHTML=
+    stat('Under contract',active.length,'')+
+    stat('Closed',closed.length,'var(--green)')+
+    stat('Pipeline commission',money(gciP)||'$0','')+
+    stat('Closed commission',money(gciC)||'$0','var(--green)')+
+    stat('Coming due',due.length,due.length?'var(--amber)':'');
+
+  var dh='';
+  if(!due.length){ dh='<div class="muted" style="font-size:13.5px">Nothing due in the next few days. Nice.</div>'; }
+  due.forEach(function(d){
+    var when = d.overdue ? ('Overdue by '+Math.abs(d.days_out)+' day'+(Math.abs(d.days_out)===1?'':'s'))
+             : (d.days_out===0 ? 'Due today' : 'Due in '+d.days_out+' day'+(d.days_out===1?'':'s'));
+    dh+='<div class="due'+(d.overdue?' over':'')+'"><b>'+esc(d.milestone)+' &middot; '+esc(d.address)+'</b>'+
+        '<span>'+when+' ('+fmt(d.date)+')'+(d.agent_name?' &middot; '+esc(d.agent_name):'')+
+        ' &middot; <a href="#" onclick="editById('+d.tx_id+');return false">open</a></span></div>';
+  });
+  document.getElementById('due').innerHTML=dh;
+
+  if(!tx.length){ document.getElementById('list').innerHTML=
+    '<div class="empty">No contracts yet. Click <b>Add contract</b> to log your first one.</div>'; return; }
+
+  var h='';
+  if(missing){ h+='<div class="due" style="border-left-color:var(--gold);background:#fffaf0">'+
+    '<b>'+missing+' contract'+(missing===1?'':'s')+' missing a lead source</b>'+
+    '<span>Adding it lets Barry see which marketing actually pays for itself.</span></div>'; }
+  h+='<table><thead><tr><th>Property</th><th>Agent</th><th>Source</th><th>Price</th>'+
+     '<th>Commission</th><th>Closing</th><th>Status</th><th></th></tr></thead><tbody>';
+  tx.forEach(function(t){
+    h+='<tr>'+
+      '<td><b>'+esc(t.address)+'</b>'+(t.client_name?'<div class="muted" style="font-size:12px">'+esc(t.client_name)+'</div>':'')+'</td>'+
+      '<td>'+esc(t.agent_name||'')+'</td>'+
+      '<td>'+(t.lead_source?esc(t.lead_source):'<span class="pill p-none">add source</span>')+'</td>'+
+      '<td>'+money(t.sale_price)+'</td>'+
+      '<td>'+money(t.gci)+'</td>'+
+      '<td>'+fmt(t.close_date)+'</td>'+
+      '<td><span class="pill p-'+esc(t.status)+'">'+esc((t.status||'').replace('_',' '))+'</span></td>'+
+      '<td class="right"><button class="btn btn-sm" onclick="editById('+t.id+')">Open</button></td>'+
+    '</tr>';
+  });
+  document.getElementById('list').innerHTML=h+'</tbody></table>';
+}
+function stat(l,v,c){return '<div class="stat"><div class="l">'+esc(l)+'</div><div class="v"'+(c?' style="color:'+c+'"':'')+'>'+v+'</div></div>';}
+
+function editById(id){ var t=(DATA.transactions||[]).filter(function(x){return x.id===id;})[0]; if(t) openForm(t); }
+
+function openForm(t){
+  t=t||{milestones:{}};
+  var ms=t.milestones||{};
+  var opts=function(arr,cur){ return ['<option value=""></option>'].concat(arr.map(function(a){
+    return '<option value="'+esc(a)+'"'+(cur===a?' selected':'')+'>'+esc(a)+'</option>';})).join(''); };
+  var h='<h2 style="margin:0 0 4px;font-size:19px">'+(t.id?'Edit contract':'New contract')+'</h2>'+
+    '<div class="muted" style="font-size:13px;margin-bottom:8px">Only the address is required. Fill the rest as you get it.</div>'+
+    '<label>Property address <span class="req">*</span></label><input id="f-address" value="'+esc(t.address||'')+'" placeholder="123 Main St, Chesapeake">'+
+    '<div class="grid2">'+
+      '<div><label>Agent</label><select id="f-agent">'+opts(AGENTS,t.agent_name)+'</select></div>'+
+      '<div><label>Client name</label><input id="f-client" value="'+esc(t.client_name||'')+'"></div>'+
+    '</div>'+
+    '<div class="grid3">'+
+      '<div><label>Side</label><select id="f-side">'+opts(['buyer','seller','both'],t.side)+'</select></div>'+
+      '<div><label>Lead source</label><select id="f-source">'+opts(SOURCES,t.lead_source)+'</select></div>'+
+      '<div><label>Status</label><select id="f-status">'+
+        ['active','closed','fell_through'].map(function(s){return '<option value="'+s+'"'+((t.status||'active')===s?' selected':'')+'>'+s.replace('_',' ')+'</option>';}).join('')+
+      '</select></div>'+
+    '</div>'+
+    '<div class="grid2">'+
+      '<div><label>Sale price</label><input id="f-price" type="number" step="1000" value="'+(t.sale_price==null?'':t.sale_price)+'"></div>'+
+      '<div><label>Commission to the team</label><input id="f-gci" type="number" step="100" value="'+(t.gci==null?'':t.gci)+'"></div>'+
+    '</div>'+
+    '<div class="grid2">'+
+      '<div><label>Contract date</label><input id="f-cdate" type="date" value="'+esc(t.contract_date||'')+'"></div>'+
+      '<div><label>Closing date</label><input id="f-close" type="date" value="'+esc(t.close_date||'')+'"></div>'+
+    '</div>'+
+    '<label style="margin-top:16px">Milestones (set a date and it will remind you)</label><div>';
+  MS.forEach(function(m){
+    var key=m[0], lbl=m[1], hint=m[2], cur=ms[key]||{};
+    h+='<div class="ms"><div><b>'+esc(lbl)+'</b><div class="muted" style="font-size:11.5px">'+esc(hint)+'</div></div>'+
+       '<input type="date" id="ms-d-'+key+'" value="'+esc(cur.date||'')+'">'+
+       '<label style="margin:0;display:flex;align-items:center;gap:6px;text-transform:none;font-size:12px;color:var(--ink)">'+
+       '<input type="checkbox" id="ms-c-'+key+'"'+(cur.done?' checked':'')+'> done</label></div>';
+  });
+  h+='</div><label>Notes</label><textarea id="f-notes">'+esc(t.notes||'')+'</textarea>'+
+    '<div class="row" style="justify-content:space-between;margin-top:18px">'+
+      '<div>'+(t.id?'<button class="btn btn-sm" style="color:var(--red)" onclick="delTx('+t.id+')">Delete</button>':'')+'</div>'+
+      '<div><button class="btn" onclick="closeForm()">Cancel</button> '+
+      '<button class="btn btn-gold" id="save" onclick="saveTx('+(t.id||'null')+')">Save</button></div>'+
+    '</div>';
+  document.getElementById('sheet').innerHTML=h;
+  document.getElementById('modal').classList.add('on');
+}
+
+function saveTx(id){
+  var v=function(x){var e=document.getElementById(x);return e?e.value:'';};
+  if(!v('f-address').trim()){ alert('Property address is required.'); return; }
+  var ms={};
+  MS.forEach(function(m){
+    var k=m[0], d=v('ms-d-'+k), c=document.getElementById('ms-c-'+k);
+    if(d || (c&&c.checked)) ms[k]={date:d||null, done:!!(c&&c.checked)};
+  });
+  var body={k:KEY, id:id||null, address:v('f-address').trim(), agent_name:v('f-agent'),
+    client_name:v('f-client'), side:v('f-side'), lead_source:v('f-source'),
+    status:v('f-status'), sale_price:v('f-price'), gci:v('f-gci'),
+    contract_date:v('f-cdate'), close_date:v('f-close'), notes:v('f-notes'), milestones:ms};
+  var b=document.getElementById('save'); b.disabled=true; b.textContent='Saving...';
+  fetch('/api/tm/transaction',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){return r.json();})
+    .then(function(d){ if(d.ok){ closeForm(); load(); }
+      else { b.disabled=false; b.textContent='Save'; alert(d.error||'Could not save.'); } })
+    .catch(function(){ b.disabled=false; b.textContent='Save'; alert('Could not save.'); });
+}
+
+function delTx(id){
+  if(!confirm('Delete this contract? This cannot be undone.')) return;
+  fetch('/api/tm/transaction/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({k:KEY,id:id})})
+    .then(function(r){return r.json();}).then(function(){ closeForm(); load(); });
+}
+
+function closeForm(){ document.getElementById('modal').classList.remove('on'); }
+document.getElementById('modal').onclick=function(e){ if(e.target.id==='modal') closeForm(); };
+load();
+</script>
+</body>
+</html>

@@ -209,6 +209,20 @@ CREATE TABLE IF NOT EXISTS deal_log (
 );
 CREATE INDEX IF NOT EXISTS idx_dl_agent_year ON deal_log (agent_name, year);
 CREATE INDEX IF NOT EXISTS idx_dl_stage      ON deal_log (stage, year);
+-- lead_source: which source produced this deal (Ylopo PPC, sphere, zbuyer, probate...).
+-- Without it there is no way to answer "is our ad spend profitable", which is the
+-- whole point of tracking deals. Comes from FUB's customLeadSourceMaverick or the
+-- transaction-manager portal.
+DO $$ BEGIN
+  ALTER TABLE deal_log ADD COLUMN IF NOT EXISTS lead_source TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+-- gci_actual: real commission entered by the transaction manager, as opposed to
+-- gci_estimated which is only sale_price * the agent's assumed commission_pct.
+DO $$ BEGIN
+  ALTER TABLE deal_log ADD COLUMN IF NOT EXISTS gci_actual NUMERIC(12,2);
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 -- Cached YTD actuals per agent (refreshed by scheduled job Mon/Thu 6am ET)
 -- Avoids live FUB API calls on every scorecard page load
@@ -1777,7 +1791,7 @@ def stop_zbuyer_drip(person_id, reason="replied") -> bool:
 
 def upsert_deal(fub_deal_id, agent_name, deal_name, sale_price, stage_raw,
                 contract_date=None, close_date=None, source="fub_sync",
-                commission_pct=None):
+                commission_pct=None, lead_source=None, gci_actual=None):
     """Insert or update a deal. Returns the classified stage or None if unrecognized."""
     if not is_available():
         return None
@@ -1797,8 +1811,8 @@ def upsert_deal(fub_deal_id, agent_name, deal_name, sale_price, stage_raw,
                     INSERT INTO deal_log (
                         fub_deal_id, agent_name, deal_name, sale_price,
                         stage, stage_raw, contract_date, close_date,
-                        year, gci_estimated, source, synced_at
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                        year, gci_estimated, lead_source, gci_actual, source, synced_at
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
                     ON CONFLICT (fub_deal_id) DO UPDATE SET
                         agent_name    = EXCLUDED.agent_name,
                         deal_name     = EXCLUDED.deal_name,
@@ -1809,10 +1823,12 @@ def upsert_deal(fub_deal_id, agent_name, deal_name, sale_price, stage_raw,
                         close_date    = COALESCE(EXCLUDED.close_date,    deal_log.close_date),
                         year          = EXCLUDED.year,
                         gci_estimated = COALESCE(EXCLUDED.gci_estimated, deal_log.gci_estimated),
+                        lead_source   = COALESCE(EXCLUDED.lead_source,   deal_log.lead_source),
+                        gci_actual    = COALESCE(EXCLUDED.gci_actual,    deal_log.gci_actual),
                         synced_at     = NOW()
                 """, (fub_deal_id, agent_name, deal_name, sale_price,
                       stage, stage_raw, contract_date, close_date,
-                      year, gci_est, source))
+                      year, gci_est, (lead_source or None), gci_actual, source))
         return stage
     except Exception as e:
         logger.warning("upsert_deal failed: %s", e)
@@ -6689,3 +6705,137 @@ def get_manager_updates(limit=16):
     except Exception as e:
         logger.warning("get_manager_updates failed: %s", e)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Transaction Manager portal — contract tracking + ROI attribution
+# ---------------------------------------------------------------------------
+# One row per contract Ana works. This is the record that finally connects
+# activity to money: which lead source produced it, what it actually pays, and
+# whether it closed. deal_log stays the FUB mirror; this is the human layer.
+
+def ensure_transactions_table():
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS transactions (
+                        id              SERIAL PRIMARY KEY,
+                        address         TEXT NOT NULL,
+                        agent_name      TEXT,
+                        side            TEXT,           -- buyer | seller | both
+                        lead_source     TEXT,
+                        client_name     TEXT,
+                        sale_price      NUMERIC(12,2),
+                        gci             NUMERIC(12,2),  -- actual commission to the team
+                        contract_date   DATE,
+                        close_date      DATE,
+                        status          TEXT NOT NULL DEFAULT 'active',
+                                        -- active | closed | fell_through
+                        milestones      JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        notes           TEXT,
+                        fub_deal_id     INTEGER,
+                        created_by      TEXT DEFAULT 'tm',
+                        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_tx_status ON transactions (status, close_date);
+                    CREATE INDEX IF NOT EXISTS idx_tx_agent  ON transactions (agent_name);
+                """)
+        return True
+    except Exception as e:
+        logger.warning("ensure_transactions_table failed: %s", e)
+        return False
+
+
+def save_transaction(data: dict, tx_id=None):
+    """Insert or update one transaction. Returns the row id, or None."""
+    if not is_available():
+        return None
+    import json as _json
+    ensure_transactions_table()
+    cols = ("address", "agent_name", "side", "lead_source", "client_name",
+            "sale_price", "gci", "contract_date", "close_date", "status", "notes")
+    vals = [data.get(c) or None for c in cols]
+    # numerics: empty string -> None so Postgres does not choke
+    for i, c in enumerate(cols):
+        if c in ("sale_price", "gci") and vals[i] in ("", None):
+            vals[i] = None
+    ms = _json.dumps(data.get("milestones") or {})
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if tx_id:
+                    cur.execute(f"""
+                        UPDATE transactions SET
+                          {", ".join(f"{c}=%s" for c in cols)},
+                          milestones=%s, updated_at=NOW()
+                        WHERE id=%s RETURNING id
+                    """, (*vals, ms, tx_id))
+                else:
+                    cur.execute(f"""
+                        INSERT INTO transactions ({", ".join(cols)}, milestones)
+                        VALUES ({", ".join(["%s"]*len(cols))}, %s) RETURNING id
+                    """, (*vals, ms))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("save_transaction failed: %s", e)
+        return None
+
+
+def get_transactions(status=None, limit=300):
+    """All transactions, newest contract first."""
+    if not is_available():
+        return []
+    import json as _json
+    ensure_transactions_table()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                q = """SELECT id, address, agent_name, side, lead_source, client_name,
+                              sale_price, gci, contract_date, close_date, status,
+                              milestones, notes, updated_at
+                       FROM transactions"""
+                args = []
+                if status:
+                    q += " WHERE status = %s"; args.append(status)
+                q += " ORDER BY COALESCE(contract_date, created_at::date) DESC LIMIT %s"
+                args.append(limit)
+                cur.execute(q, args)
+                rows = cur.fetchall()
+        out = []
+        for r in rows:
+            ms = r[11]
+            if isinstance(ms, str):
+                try: ms = _json.loads(ms)
+                except Exception: ms = {}
+            out.append({
+                "id": r[0], "address": r[1], "agent_name": r[2], "side": r[3],
+                "lead_source": r[4], "client_name": r[5],
+                "sale_price": float(r[6]) if r[6] is not None else None,
+                "gci": float(r[7]) if r[7] is not None else None,
+                "contract_date": r[8].isoformat() if r[8] else None,
+                "close_date": r[9].isoformat() if r[9] else None,
+                "status": r[10], "milestones": ms or {}, "notes": r[12],
+                "updated_at": r[13].isoformat() if r[13] else None,
+            })
+        return out
+    except Exception as e:
+        logger.warning("get_transactions failed: %s", e)
+        return []
+
+
+def delete_transaction(tx_id):
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM transactions WHERE id=%s", (tx_id,))
+        return True
+    except Exception as e:
+        logger.warning("delete_transaction failed: %s", e)
+        return False
