@@ -32,6 +32,7 @@ from flask import Flask, render_template, render_template_string, jsonify, reque
 from fub_client import FUBClient
 import config
 import db as _db
+import merit as _merit
 from kpi_audit import (
     auto_detect_agents,
     count_calls_for_user,
@@ -13725,6 +13726,11 @@ def run_phoenix_sweep(dry_run=None):
             "dormant_days":  dormant_days,
             "came_back":     act["created"][:10],
             "activity_type": act["type"],
+            # Merit lane inputs: source string + ISA transfer history
+            # (any ISA_TRANSFER_* tag on the person).
+            "source":        (person.get("source") or ""),
+            "is_transfer":   any(str(t).startswith("ISA_TRANSFER")
+                                 for t in (person.get("tags") or [])),
         }
         if not assigned_to or assigned_to in excluded_users or in_pond:
             (bonus if act["strong"] else weak_unowned).append(lead)
@@ -13785,8 +13791,15 @@ def run_phoenix_sweep(dry_run=None):
                        f"{names}. All noted in FUB. Call them before they wander off.")
             _phoenix_queue_text(owner, msg)
 
-    # ── e2. UNOWNED strong-intent: bonus pool, round-robin to qualified ───
+    # ── e2. UNOWNED strong-intent: bonus pool, merit-ordered assignment ───
+    # DOCTRINE (sacred): Phoenix qualification is BINARY and earned weekly.
+    # Merit NEVER decides who is in the qualified pool — it only orders the
+    # matching INSIDE that earned pool. Merit orders within the earned pool,
+    # never expands or shrinks it. When the lead's lane lacks sufficient
+    # scorecard data (or the scorecard is missing), assignment falls back to
+    # the exact round-robin that ran before Merit Routing v1.
     if bonus and qualified_names:
+        scorecard = _merit.get_cached_scorecard()
         rr_val, _ = _db.get_app_state("phoenix_rr")
         try:
             rr = int(rr_val or 0)
@@ -13794,22 +13807,39 @@ def run_phoenix_sweep(dry_run=None):
             rr = 0
         assign_counts, assigned_pairs = {}, []
         for lead in bonus:
-            picked = None
-            for _ in range(len(qualified_names)):
-                cand = qualified_names[rr % len(qualified_names)]
-                rr += 1
+            picked, path = None, "round_robin"
+            lane = _merit.lane_for_lead(lead.get("source"),
+                                        lead.get("is_transfer"))
+            # Merit path: best sufficient-lane agent among the QUALIFIED set
+            # (appts-set-per-lead metric; transfer_conversion for the
+            # transfer lane), respecting the per-agent per-run cap.
+            for cand, _metric in _merit.rank_lane_agents(scorecard, lane,
+                                                         qualified_names):
                 if assign_counts.get(cand, 0) < _PHOENIX_MAX_ASSIGNS_PER_AGENT:
-                    picked = cand
+                    picked, path = cand, "merit"
                     break
+            if picked is None:
+                # Round-robin fallback (insufficient lane data, no scorecard,
+                # or every merit-ranked agent already at cap).
+                path = "round_robin"
+                for _ in range(len(qualified_names)):
+                    cand = qualified_names[rr % len(qualified_names)]
+                    rr += 1
+                    if assign_counts.get(cand, 0) < _PHOENIX_MAX_ASSIGNS_PER_AGENT:
+                        picked = cand
+                        break
             if picked is None:
                 # Every qualified agent is at cap. Leave the rest unprocessed
                 # (no log row) so tomorrow's run picks them up naturally.
                 summary["deferred"] = len(bonus) - len(assigned_pairs)
                 break
             assign_counts[picked] = assign_counts.get(picked, 0) + 1
-            assigned_pairs.append((lead, picked))
+            logger.info("[PHOENIX] bonus pick via %s (lane=%s): %s -> %s",
+                        path, lane or "unmapped", lead["person_id"], picked)
+            assigned_pairs.append((lead, picked, path))
+        summary["merit_scorecard_loaded"] = bool(scorecard)
 
-        for lead, agent in assigned_pairs:
+        for lead, agent, path in assigned_pairs:
             status = "dry_run" if dry_run else "assigned"
             if not dry_run:
                 try:
@@ -13832,8 +13862,10 @@ def run_phoenix_sweep(dry_run=None):
                         f"You earned this one by hitting your standard last week."))
             _db.log_phoenix(lead["person_id"], lead["lead_name"],
                             lead["owner_before"], agent, lead["dormant_days"],
-                            lead["came_back"], lead["activity_type"], status, run_date)
-            summary["assigned"].append(dict(lead, assigned_to=agent, status=status))
+                            lead["came_back"], lead["activity_type"], status, run_date,
+                            route_path=path)
+            summary["assigned"].append(dict(lead, assigned_to=agent, status=status,
+                                            route_path=path))
         if not dry_run and assigned_pairs:
             _db.set_app_state("phoenix_rr", str(rr))
 
@@ -13903,8 +13935,11 @@ def _phoenix_email_report(summary):
         parts.append("</ul>")
     if summary["assigned"]:
         verb = "would be assigned" if dry_run else "assigned"
-        parts.append(f"<h3>Bonus pool ({verb} round-robin)</h3><ul>")
-        parts += [_row(l, f"to: {l['assigned_to']}") for l in summary["assigned"]]
+        parts.append(f"<h3>Bonus pool ({verb}, merit ordered where the lane "
+                     "has data, round robin otherwise)</h3><ul>")
+        parts += [_row(l, f"to: {l['assigned_to']}, "
+                          f"{l.get('route_path') or 'round_robin'} pick")
+                  for l in summary["assigned"]]
         parts.append("</ul>")
     if summary["pond_fallback"]:
         parts.append("<h3>Pond fallback (no agent earned Phoenix status last week)</h3>"
@@ -14023,6 +14058,77 @@ def api_phoenix_log():
     except (TypeError, ValueError):
         limit = 100
     return jsonify({"ok": True, "rows": _db.get_phoenix_log(limit=limit)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MERIT ROUTING v1 — measurement + advisory (see merit.py)
+# DOCTRINE: rotation/eligibility is binary and earned weekly. Merit never
+# decides who is eligible, only the order/matching inside the eligible set.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/admin/merit/scorecard", methods=["GET"])
+def api_merit_scorecard():
+    """Cached merit scorecard. ?refresh=1 recomputes (slow: one bulk FUB
+    people pull). Owner-key gated."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    refresh = request.args.get("refresh", "").lower() in ("1", "true", "yes")
+    try:
+        if refresh:
+            sc = _merit.refresh_scorecard()
+            from_cache = False
+        else:
+            sc = _merit.get_cached_scorecard()
+            from_cache = sc is not None
+            if sc is None:
+                sc = _merit.refresh_scorecard()
+        return jsonify({"ok": True, "from_cache": from_cache, "scorecard": sc})
+    except Exception as e:
+        logger.exception("merit scorecard endpoint failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def run_merit_weekly():
+    """Refresh the merit scorecard cache, then send Barry the probate
+    advisory when (and only when) the probate lane has at least one agent
+    with sufficient volume. Returns a summary dict."""
+    sc = _merit.refresh_scorecard()
+    out = {"ok": True, "computed_at": sc.get("computed_at"),
+           "team": sc.get("team"), "advisory_sent": False}
+    built = _merit.build_advisory_email(sc)
+    if built:
+        subject, html, text = built
+        try:
+            import postmark_client as _pm
+            _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+                     subject=subject, html=html, text=text)
+            out["advisory_sent"] = True
+        except Exception as e:
+            logger.warning("[MERIT] advisory email failed: %s", e)
+            out["advisory_error"] = str(e)
+    else:
+        logger.info("[MERIT] no probate lane agent with sufficient volume, "
+                    "advisory skipped")
+    return out
+
+
+def scheduled_merit_weekly():
+    """Monday 5:30am ET — weekly merit scorecard refresh + probate advisory."""
+    if _already_fired_recently("merit_weekly", within_hours=20):
+        print("[SCHEDULER] Merit weekly: skipped — already ran within 20h")
+        return
+    if not _db.try_acquire_job_lock("merit_weekly"):
+        return
+    try:
+        out = run_merit_weekly()
+        print(f"[SCHEDULER] Merit weekly: scorecard refreshed, "
+              f"advisory_sent={out.get('advisory_sent')}")
+        _record_fired("merit_weekly")
+    except Exception as e:
+        _alert_on_job_failure("merit_weekly", str(e))
+        print(f"[SCHEDULER] Merit weekly error: {e}")
+    finally:
+        _db.release_job_lock("merit_weekly")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -16189,6 +16295,14 @@ def start_scheduler():
     _scheduler.add_job(scheduled_phoenix_tag_expiry, CronTrigger(hour=6, minute=10, timezone=ET),
                        id="phoenix_tag_expiry", name="Phoenix tag expiry (daily 6:10am)",
                        max_instances=1, misfire_grace_time=600)
+
+    # Merit Routing v1: Monday 5:30am ET — refresh the merit scorecard cache
+    # (per agent, per lane, trailing 180 days) + probate advisory to Barry.
+    # Doctrine: merit orders within the earned pool, never expands or
+    # shrinks it. Runs before the 7:30am Phoenix sweep so ordering is fresh.
+    _scheduler.add_job(scheduled_merit_weekly, CronTrigger(day_of_week="mon", hour=5, minute=30, timezone=ET),
+                       id="merit_weekly", name="Merit scorecard refresh (Mon 5:30am)",
+                       max_instances=1, misfire_grace_time=3600)
 
     # Lead Memory refresh: nightly 4:30am ET — compiles/updates the
     # "LEAD MEMORY (auto)" prep note on priority leads (LeadStream, pond,
