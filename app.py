@@ -9156,14 +9156,17 @@ def api_owner_sync_appointments():
     """
     POST /api/owner/sync-appointments
 
-    Syncs the last 30 days of FUB appointments into the local appointments table.
-    Run once to backfill, then rely on the FUB webhook for real-time updates.
+    Syncs FUB appointments into the local appointments table. ?days=N (default
+    30, max 180) controls the backfill window. Also runs nightly (see
+    scheduled_sync_appointments_db) because webhook-only upkeep proved
+    unreliable — the table sat empty while Pulse read zeros from it (Sep 2026).
     """
     try:
         from fub_client import FUBClient
         fub = FUBClient()
+        days = min(max(request.args.get("days", 30, type=int), 1), 180)
         now = datetime.now(timezone.utc)
-        since = now - timedelta(days=30)
+        since = now - timedelta(days=days)
         until = now + timedelta(days=14)
 
         appts = fub.get_appointments(since=since, until=until)
@@ -15282,6 +15285,29 @@ def sync_week_activity_from_fub():
         d += timedelta(days=1)
 
 
+def scheduled_sync_appointments_db():
+    """Nightly 4:50am ET — roll the local FUB appointments mirror forward
+    (last 7 days + next 14). Webhooks are the realtime path; this is the
+    safety net. The table sat empty for months on webhook-only upkeep, which
+    zeroed out every appointment stat in Pulse (found Sep 2026)."""
+    if not _db.try_acquire_job_lock("appt_db_sync"):
+        return
+    try:
+        _warm_key = os.environ.get("PERPLEXITY_API_KEY", "")
+        with app.test_client() as tc:
+            r = tc.post(f"/api/owner/sync-appointments?days=7&key={_warm_key}")
+            print(f"[SCHEDULER] appointment DB sync: HTTP {r.status_code} "
+                  f"{r.get_data(as_text=True)[:200]}")
+            if r.status_code != 200:
+                raise RuntimeError(f"appointment DB sync HTTP {r.status_code}")
+        _record_fired("appt_db_sync")
+    except Exception as e:
+        _alert_on_job_failure("appt_db_sync", str(e))
+        raise
+    finally:
+        _db.release_job_lock("appt_db_sync")
+
+
 def scheduled_sync_daily_activity():
     """Scheduler wrapper for sync_daily_activity_from_fub().
 
@@ -17213,6 +17239,10 @@ def start_scheduler():
     _scheduler.add_job(scheduled_sync_daily_activity,
                        CronTrigger(hour="3,7,9,11,13,15,17,19,21", minute=30, timezone=ET),
                        id="activity_sync", name="FUB daily activity sync (3:30am + intraday)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_sync_appointments_db,
+                       CronTrigger(hour=4, minute=50, timezone=ET),
+                       id="appt_db_sync", name="FUB appointments DB mirror (4:50am)",
                        max_instances=1, coalesce=True)
 
     # Onboarding escalation: daily 8am ET (Day 3 + Day 7 follow-ups)
