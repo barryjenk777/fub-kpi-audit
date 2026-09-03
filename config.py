@@ -733,3 +733,28 @@ LEAD_MEMORY_MAX_GENERATIONS = 150
 
 # Dry-run sample size (briefs generated + emailed to Barry, zero FUB writes).
 LEAD_MEMORY_DRY_RUN_SAMPLES = 5
+
+
+# =============================================================================
+# APPOINTMENT SAVE-BOT — Stage 1 (agent-facing ONLY, see savebot.py)
+# Morning script prompts: 7:45am ET, each agent with a FUB appointment today
+# or tomorrow gets ONE bundled iMessage with a ready-to-send value-touch text
+# per appointment (never a bare confirmation), personalized from the lead's
+# real data or a safe generic when nothing real exists.
+# =============================================================================
+
+# CRITICAL SAFETY: dry-run defaults ON. In dry-run everything is computed and
+# the would-be texts are emailed to Barry, ZERO texts are queued. Stage 1
+# never contacts a lead either way: agents only, via the iMessage queue.
+# Flip live by setting SAVEBOT_DRY_RUN=0 on Railway (remember: Railway env
+# var edits are STAGED — click Deploy to apply).
+SAVEBOT_DRY_RUN = _os.environ.get("SAVEBOT_DRY_RUN", "1").strip().lower() not in ("0", "false")
+
+# Script generation model. Haiku: short single-line extraction-grounded copy,
+# ~1 call per appointment. Temperature 0.4 keeps it literal but not robotic.
+SAVEBOT_MODEL = "claude-haiku-4-5"
+SAVEBOT_TEMPERATURE = 0.4
+
+# LLM budget: max personalized scripts per run. Appointments beyond the cap
+# get the deterministic fallback template instead.
+SAVEBOT_MAX_SCRIPTS_PER_RUN = 40

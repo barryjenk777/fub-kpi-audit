@@ -14094,6 +14094,83 @@ def api_lead_memory_status():
     })
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# APPOINTMENT SAVE-BOT — Stage 1, agent-facing script prompts (see savebot.py)
+# Agents ONLY, via the iMessage queue. SAVEBOT_DRY_RUN defaults ON: computes
+# everything, emails Barry the would-be texts, queues nothing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scheduled_savebot_scripts():
+    """Daily 7:45am ET — morning script prompts to agents with appointments
+    today or tomorrow. One bundled text per agent."""
+    if _already_fired_recently("savebot_scripts", within_hours=20):
+        print("[SCHEDULER] Save-Bot scripts: skipped — already ran within 20h")
+        return
+    if not _db.try_acquire_job_lock("savebot_scripts"):
+        return
+    try:
+        import savebot as _sb
+        summary = _sb.run_scripts()
+        print(f"[SCHEDULER] Save-Bot scripts: {len(summary.get('messages', []))} agents, "
+              f"{summary.get('queued', 0)} queued, "
+              f"llm={summary.get('llm', {})} (dry_run={summary.get('dry_run')})")
+        _record_fired("savebot_scripts")
+    except Exception as e:
+        _alert_on_job_failure("savebot_scripts", str(e))
+        print(f"[SCHEDULER] Save-Bot scripts error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("savebot_scripts")
+
+
+@app.route("/api/admin/savebot/run", methods=["POST"])
+def api_savebot_run():
+    """Run the Save-Bot now. Body {"kind": "scripts", "dry_run": true|false};
+    dry_run omitted falls back to config.SAVEBOT_DRY_RUN. Returns the summary
+    JSON including the exact would-be messages.
+
+    Synchronous on purpose, same reasoning as the Phoenix endpoint: gunicorn
+    runs with --timeout 300 so the run finishes inside the worker timeout."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    kind = (body.get("kind") or "scripts").strip().lower()
+    if kind != "scripts":
+        return jsonify({
+            "ok": False,
+            "error": f"unknown kind '{kind}'. Stage 1 ships 'scripts' only. "
+                     "Outcome chase, no-show recovery, and the weekly report "
+                     "were cut: MaverickRE and the Tuesday appointment email "
+                     "already cover them.",
+        }), 400
+    dry_run = body.get("dry_run")
+    if dry_run is None:
+        dry_run = bool(getattr(config, "SAVEBOT_DRY_RUN", True))
+    try:
+        import savebot as _sb
+        return jsonify(_sb.run_scripts(dry_run=bool(dry_run)))
+    except Exception as e:
+        logger.error("[SAVEBOT] manual run failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)[:400]}), 500
+
+
+@app.route("/api/admin/savebot/log", methods=["GET"])
+def api_savebot_log():
+    """Recent savebot_log rows, newest first. ?limit= up to 500."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        limit = min(int(request.args.get("limit", 100)), 500)
+    except (TypeError, ValueError):
+        limit = 100
+    _db.ensure_savebot_log_table()
+    return jsonify({
+        "ok": True,
+        "dry_run": bool(getattr(config, "SAVEBOT_DRY_RUN", True)),
+        "rows": _db.get_savebot_log(limit=limit),
+    })
+
+
 def scheduled_send_appointment_email():
     """Tuesday 9am ET — send appointment accountability email."""
     if _already_fired_recently("appt_email", within_hours=20):
@@ -16339,6 +16416,15 @@ def start_scheduler():
                        id="system_self_audit", name="System self audit (Fri 7am)",
                        max_instances=1, coalesce=True)
 
+    # Save-Bot morning script prompts: daily 7:45am ET — one bundled iMessage
+    # per agent with appointments today/tomorrow, containing ready-to-send
+    # value-touch texts for each lead. Agents only. Dry-run by default
+    # (SAVEBOT_DRY_RUN): emails Barry the would-be texts, queues nothing.
+    _scheduler.add_job(scheduled_savebot_scripts,
+                       CronTrigger(hour=7, minute=45, timezone=ET),
+                       id="savebot_scripts", name="Save-Bot script prompts (daily 7:45am)",
+                       max_instances=1, coalesce=True)
+
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
     for job in _scheduler.get_jobs():
@@ -17306,3 +17392,5 @@ else:
     _db.ensure_agent_imessage_queue_table()
     # Ensure Phoenix resurrection log table exists
     _db.ensure_phoenix_log_table()
+    # Ensure Save-Bot log table exists (agent script-prompt dedupe)
+    _db.ensure_savebot_log_table()

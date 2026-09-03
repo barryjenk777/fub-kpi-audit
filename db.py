@@ -6985,6 +6985,105 @@ def get_phoenix_tag_expiry_candidates(expire_days=7, window_days=21):
 
 
 # ---------------------------------------------------------------------------
+# Appointment Save-Bot — agent-facing script prompts (see savebot.py)
+# ---------------------------------------------------------------------------
+
+def ensure_savebot_log_table():
+    """Create savebot_log for the Save-Bot agent texts (idempotent)."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS savebot_log (
+                        id              SERIAL PRIMARY KEY,
+                        run_date        DATE NOT NULL,
+                        kind            TEXT NOT NULL,   -- 'scripts'
+                        agent_name      TEXT NOT NULL,
+                        appt_count      INTEGER,
+                        message_preview TEXT,
+                        status          TEXT NOT NULL,   -- dry_run | queued
+                        created_at      TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_savebot_kind_date
+                    ON savebot_log (kind, run_date, agent_name);
+                """)
+    except Exception as e:
+        logger.warning("ensure_savebot_log_table failed: %s", e)
+
+
+def log_savebot(run_date, kind, agent_name, appt_count, message_preview, status):
+    """Insert one savebot_log row. Returns new row id or None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO savebot_log
+                        (run_date, kind, agent_name, appt_count,
+                         message_preview, status)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (run_date, kind, agent_name, appt_count,
+                      message_preview, status))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("log_savebot failed for %s: %s", agent_name, e)
+        return None
+
+
+def savebot_agents_logged(kind, run_date, statuses=("queued",)):
+    """Agent names already logged for (kind, run_date) with one of `statuses`.
+    The live run checks this so an agent never gets two texts in a day."""
+    if not is_available():
+        return set()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT agent_name FROM savebot_log
+                    WHERE kind = %s AND run_date = %s AND status = ANY(%s)
+                """, (kind, run_date, list(statuses)))
+                rows = cur.fetchall()
+        return {r[0] for r in rows}
+    except Exception as e:
+        logger.warning("savebot_agents_logged failed: %s", e)
+        return set()
+
+
+def get_savebot_log(limit=100):
+    """Recent savebot_log rows, newest first."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, run_date, kind, agent_name, appt_count,
+                           message_preview, status, created_at
+                    FROM savebot_log
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                """, (int(limit),))
+                rows = cur.fetchall()
+        return [{
+            "id":              r[0],
+            "run_date":        r[1].isoformat() if r[1] else None,
+            "kind":            r[2],
+            "agent_name":      r[3],
+            "appt_count":      r[4],
+            "message_preview": r[5],
+            "status":          r[6],
+            "created_at":      r[7].isoformat() if r[7] else None,
+        } for r in rows]
+    except Exception as e:
+        logger.warning("get_savebot_log failed: %s", e)
+        return []
+
+
+# ---------------------------------------------------------------------------
 # Lead Memory — auto-maintained prep briefs on priority leads
 # ---------------------------------------------------------------------------
 
