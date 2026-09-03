@@ -27,7 +27,7 @@ if os.path.exists(_env_path):
             if _line and not _line.startswith("#") and "=" in _line:
                 _k, _v = _line.split("=", 1)
                 os.environ.setdefault(_k.strip(), _v.strip())
-from flask import Flask, render_template, render_template_string, jsonify, request
+from flask import Flask, render_template, render_template_string, jsonify, request, session, redirect
 
 from fub_client import FUBClient
 import config
@@ -44,6 +44,111 @@ from kpi_audit import (
 
 app = Flask(__name__)
 
+# Session secret: SECRET_KEY env preferred, PERPLEXITY_API_KEY as fallback so
+# cookie sessions survive restarts without a new env var. Random = last resort.
+_session_secret = (os.environ.get("SECRET_KEY") or "").strip() \
+    or (os.environ.get("PERPLEXITY_API_KEY") or "").strip()
+if not _session_secret:
+    import secrets as _secrets
+    _session_secret = _secrets.token_hex(32)
+    logger.warning(
+        "SECRET_KEY and PERPLEXITY_API_KEY both unset — using a random session "
+        "secret. Login sessions will NOT survive a restart. Set SECRET_KEY in Railway."
+    )
+app.secret_key = _session_secret
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+
+
+def _is_public_path(path: str, method: str = "GET") -> bool:
+    """
+    Decide whether a request path is reachable WITHOUT Command Center auth.
+
+    PURE function of (path, method) — no Flask, no globals — so it can be
+    extracted and unit-tested without importing the app. Everything not
+    allowed here must present the owner key, the coach key, or a session
+    cookie (see _global_auth_gate below).
+    """
+    if method == "OPTIONS":
+        return True  # CORS preflights carry no credentials
+    # Inbound webhooks: FUB, BatchLeads, SendBlue, Twilio SMS, ProjectBlue.
+    # Real lead texts arrive here — these must never be gated.
+    if "/webhook/" in path:
+        return True
+    # SendGrid Inbound Parse posts pond lead email replies here (no '/webhook/' in path)
+    if path == "/api/pond-mailer/reply":
+        return True
+    # Railway zero-downtime healthcheck (railway.toml healthcheckPath)
+    if path == "/api/health":
+        return True
+    prefixes = (
+        "/static/",
+        # Token-personalized agent pages + their APIs (the token IS the auth)
+        "/goals/setup/", "/my-goals/", "/my-block/",
+        "/api/goals/my-goals/", "/api/goals/setup/", "/api/goals/prospecting-block/",
+        "/credential/",
+        # Lead-facing video and short-link surfaces. These URLs are texted and
+        # emailed to real leads, and Twilio fetches MMS media unauthenticated.
+        "/v/", "/vp/", "/go/", "/mthumb/", "/audio/",
+        # Vercel course endpoints check COURSE_API_KEY internally
+        "/api/course/",
+        # TM portal APIs check TM_PORTAL_KEY internally
+        "/api/tm/",
+        # MCP client discovery
+        "/.well-known/",
+    )
+    if path.startswith(prefixes):
+        return True
+    exact = (
+        "/login", "/logout",
+        "/tm",                                            # own key (TM_PORTAL_KEY)
+        "/manager-update", "/api/manager-update/submit",  # own key (MANAGER_UPDATE_KEY)
+        "/api/goals/setup-link", "/api/goals/agents-list",  # needed by the Vercel course
+        "/watch", "/thumb",                               # video player + thumb in lead emails
+        "/unsubscribe", "/privacy-policy", "/terms",      # compliance pages, must stay public
+        "/mcp",                                           # own key check inside the route
+        "/favicon.ico",
+    )
+    return path in exact
+
+
+def _auth_role():
+    """
+    Returns 'owner', 'coach', or None for the current request.
+    Accepts the owner key (PERPLEXITY_API_KEY) or coach key (COACH_ACCESS_KEY)
+    via ?key= / Authorization: Bearer / X-Api-Key, or a logged-in session.
+    A valid key also upgrades the browser to a session cookie so bookmarked
+    ?key= URLs keep working and then stop needing the key.
+    """
+    owner_key = (os.environ.get("PERPLEXITY_API_KEY") or "").strip()
+    coach_key = (os.environ.get("COACH_ACCESS_KEY") or "coach-2026").strip()
+    provided = (
+        request.args.get("key", "").strip()
+        or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+        or request.headers.get("X-Api-Key", "").strip()
+    )
+    if provided:
+        if owner_key and provided == owner_key:
+            try:
+                if session.get("role") != "owner":
+                    session.permanent = True
+                    session["role"] = "owner"
+            except Exception:
+                pass
+            return "owner"
+        if coach_key and provided == coach_key:
+            try:
+                if session.get("role") not in ("owner", "coach"):
+                    session.permanent = True
+                    session["role"] = "coach"
+            except Exception:
+                pass
+            return "coach"
+    try:
+        role = session.get("role")
+    except Exception:
+        role = None
+    return role if role in ("owner", "coach") else None
+
 
 @app.before_request
 def _log_every_request():
@@ -56,6 +161,105 @@ def _log_every_request():
         request.headers.get("Origin", "-"),
         request.headers.get("Content-Type", "-"),
     )
+
+
+@app.before_request
+def _global_auth_gate():
+    """
+    Global opt-OUT auth gate. Runs on every request after the logger.
+    Public paths (webhooks, token pages, lead-facing links) pass through;
+    everything else needs the owner key, coach key, or a session cookie.
+    Coach access is read-only: any non-GET with a coach role gets 403.
+    """
+    if _is_public_path(request.path, request.method):
+        return None
+    role = _auth_role()
+    if role is None:
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Unauthorized"}), 401
+        return redirect("/login")
+    if role == "coach" and request.method not in ("GET", "HEAD", "OPTIONS"):
+        return jsonify({"error": "read-only access"}), 403
+    return None
+
+
+_LOGIN_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Legacy Command Center</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0f172a; color: #e2e8f0; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .card {
+    background: #1e293b; border: 1px solid #334155; border-radius: 16px;
+    padding: 40px 36px; width: 100%; max-width: 380px; text-align: center;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.4);
+  }
+  h1 { font-size: 20px; margin-bottom: 6px; color: #f8fafc; }
+  .sub { font-size: 13px; color: #94a3b8; margin-bottom: 26px; }
+  input[type=password] {
+    width: 100%; padding: 12px 14px; border-radius: 10px; font-size: 15px;
+    background: #0f172a; border: 1px solid #334155; color: #e2e8f0;
+    outline: none; margin-bottom: 14px;
+  }
+  input[type=password]:focus { border-color: #f5a623; }
+  button {
+    width: 100%; padding: 12px; border: none; border-radius: 10px;
+    background: #f5a623; color: #0f172a; font-size: 15px; font-weight: 700;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  .err { color: #f87171; font-size: 13px; margin-bottom: 14px; }
+  .mark { color: #f5a623; font-weight: 800; letter-spacing: 0.5px; font-size: 12px;
+          text-transform: uppercase; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+  <form class="card" method="POST" action="/login">
+    <div class="mark">Legacy Home Team</div>
+    <h1>Command Center</h1>
+    <div class="sub">Enter your access key to sign in. You will stay signed in for 30 days on this device.</div>
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <input type="password" name="password" placeholder="Access key" autofocus autocomplete="current-password">
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>"""
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    """Session login so nobody has to keep pasting ?key= into URLs."""
+    error = ""
+    if request.method == "POST":
+        pw = (request.form.get("password") or "").strip()
+        owner_key = (os.environ.get("PERPLEXITY_API_KEY") or "").strip()
+        coach_key = (os.environ.get("COACH_ACCESS_KEY") or "coach-2026").strip()
+        if owner_key and pw == owner_key:
+            session.permanent = True
+            session["role"] = "owner"
+            return redirect("/")
+        if coach_key and pw == coach_key:
+            session.permanent = True
+            session["role"] = "coach"
+            return redirect("/")
+        error = "That key does not match. Check it and try again."
+        logger.warning("Failed login attempt from %s", request.remote_addr)
+    status = 401 if error else 200
+    return render_template_string(_LOGIN_PAGE, error=error), status
+
+
+@app.route("/logout")
+def logout_page():
+    session.clear()
+    return redirect("/login")
 
 
 # Initialize Postgres schema (no-op if DATABASE_URL not set)
@@ -7325,24 +7529,29 @@ def api_debug_calls():
 # ---------------------------------------------------------------------------
 # Auth: set PERPLEXITY_API_KEY in Railway env vars.
 # Pass as ?key=TOKEN or Authorization: Bearer TOKEN header.
-# If env var is not set, endpoints are open (log a warning).
+# If env var is not set, access is DENIED (fail closed) and an error is logged.
 #
 # Architecture: direct polling (Perplexity hits on demand).
 # The owner_brief cache serves sub-300ms — no middleware needed.
 # ---------------------------------------------------------------------------
 
 def _perplexity_auth() -> bool:
-    """Returns True if the request carries the correct Perplexity API key."""
+    """Owner-level auth: the correct owner key, or a logged-in owner session."""
     expected = os.environ.get("PERPLEXITY_API_KEY", "").strip()
     if not expected:
-        logger.warning("PERPLEXITY_API_KEY not set — /api/perplexity/* is open")
-        return True  # unconfigured = open; operator should set the key
+        logger.error("PERPLEXITY_API_KEY not set — refusing access (fail closed). Set it in Railway.")
+        return False
     provided = (
         request.args.get("key", "").strip()
         or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
         or request.headers.get("X-Api-Key", "").strip()
     )
-    return provided == expected
+    if provided == expected:
+        return True
+    try:
+        return session.get("role") == "owner"
+    except Exception:
+        return False
 
 
 def _abbrev_name(full_name: str) -> str:
@@ -12468,63 +12677,6 @@ def api_test_heygen_email():
     })
 
 
-@app.route("/api/test-sms", methods=["POST"])
-def api_test_sms():
-    """
-    Send a test SMS or MMS via Twilio. Admin/dev use only.
-    Body: {
-        "to":                  "+1...",
-        "body":                "...",
-        "media_url":           "https://..." (optional),
-        "video_id":            "32-char HeyGen ID" (optional — auto-builds mthumb + short link),
-        "bypass_quiet_hours":  true           (optional — for after-hours testing to Barry's number)
-    }
-    When video_id is provided: attaches /mthumb/<id> as MMS image and appends
-    the /go/<code> short URL to the body automatically — no manual URL needed.
-    """
-    from twilio_client import send_sms as _send_sms, format_e164, is_available, SMS_SIGN_OFF
-    data               = request.json or {}
-    to                 = data.get("to", "+17578164037")
-    body               = data.get("body", "Test from Legacy Home Team system.")
-    media_url          = data.get("media_url")
-    video_id           = (data.get("video_id") or "").strip().lower()
-    bypass_quiet_hours = bool(data.get("bypass_quiet_hours", False))
-
-    # If video_id provided, auto-build mthumb URL + register short link + append to body
-    if video_id:
-        _base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
-        if not media_url:
-            media_url = f"{_base}/mthumb/{video_id}"
-        short_link = make_short_video_url(video_id)
-        if short_link not in body:
-            body = f"{body}\n\n{short_link}"
-
-    # Standard path — respects TCPA quiet hours
-    if not bypass_quiet_hours:
-        result = _send_sms(to, body, media_url=media_url, dry_run=False)
-        return jsonify(result)
-
-    # Bypass path — direct Twilio call, skips quiet-hours gate.
-    # Only safe for internal test numbers (Barry's own phone).
-    if not is_available():
-        return jsonify({"success": False, "status": "failed", "error": "Twilio not configured"})
-    try:
-        from twilio.rest import Client as _TwilioClient
-        _client = _TwilioClient(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
-        _full_body  = f"{body}\n{SMS_SIGN_OFF}"
-        _kwargs     = {
-            "messaging_service_sid": os.environ["TWILIO_MESSAGING_SERVICE_SID"],
-            "to":   format_e164(to),
-            "body": _full_body,
-        }
-        if media_url:
-            _kwargs["media_url"] = [media_url]
-        _msg = _client.messages.create(**_kwargs)
-        return jsonify({"success": True, "twilio_sid": _msg.sid, "status": _msg.status})
-    except Exception as _e:
-        return jsonify({"success": False, "status": "failed", "error": str(_e)})
-
-
 @app.route("/api/twilio-status/<sid>", methods=["GET"])
 def api_twilio_status(sid):
     """Look up a Twilio message SID and return its current delivery status."""
@@ -12552,6 +12704,7 @@ def api_twilio_status(sid):
 # ---- Scheduler: cache warming + email delivery ----
 _scheduler_started = False
 _scheduler = None          # global ref so health endpoint can inspect jobs
+
 _job_last_fired = {}       # job_id -> ISO timestamp of last successful fire
 _COOLDOWN_FILE = "/tmp/fub_email_fired.json"  # persists across process restarts
 
@@ -15354,6 +15507,7 @@ def start_scheduler():
                        CronTrigger(minute="*/30", timezone=ET),
                        id="calls_cache_sync", name="Calls cache sync (every 30 min)",
                        max_instances=1, misfire_grace_time=120)
+
 
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
