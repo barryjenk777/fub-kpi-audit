@@ -14328,31 +14328,85 @@ def scheduled_friday_command_sheet():
         _db.release_job_lock("friday_command_sheet")
 
 
+_command_sheet_jobs = {}   # job_id -> status/summary dict (leadstream pattern)
+
+
 @app.route("/api/admin/command-sheet/run", methods=["POST"])
 def api_command_sheet_run():
     """Build the Friday Command Sheet now. Body:
       {"dry_run": true|false, "email_to_barry": true|false}
-    dry_run defaults TRUE (QA path: returns {ok, subject, html}, sends
-    nothing). With dry_run false AND email_to_barry true, the sheet is
-    emailed to Barry. This endpoint can never text anyone — the module has
-    no SMS path.
+    dry_run defaults TRUE (QA path: sends nothing). With dry_run false AND
+    email_to_barry true, the sheet is emailed to Barry. This endpoint can
+    never text anyone — the module has no SMS path.
 
-    Synchronous on purpose, same reasoning as the Phoenix endpoint: gunicorn
-    runs with --timeout 300 so the build finishes inside the worker timeout."""
+    A full build takes 2-4 minutes and the Railway edge kills requests at
+    ~120s, so the build runs in a background thread (same pattern as
+    /api/leadstream/run): this returns {ok, job_id, status_url} immediately
+    and the status endpoint returns the full {ok, subject, html} summary
+    once the build completes. The finished summary is also persisted to
+    app_state 'command_sheet_last' so it survives a restart."""
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
+    import threading, uuid
     body = request.get_json(silent=True) or {}
     dry_run = body.get("dry_run")
     if dry_run is None:
         dry_run = True
-    try:
-        return jsonify(run_friday_command_sheet(
-            dry_run=bool(dry_run),
-            email_to_barry=bool(body.get("email_to_barry")),
-        ))
-    except Exception as e:
-        logger.error("[COMMAND SHEET] manual run failed: %s", e, exc_info=True)
-        return jsonify({"ok": False, "error": str(e)[:400]}), 500
+    dry_run = bool(dry_run)
+    email_to_barry = bool(body.get("email_to_barry"))
+
+    job_id = str(uuid.uuid4())[:8]
+    _command_sheet_jobs[job_id] = {
+        "ok": True, "status": "running", "dry_run": dry_run,
+        "started": datetime.now(timezone.utc).isoformat(),
+    }
+
+    def _bg():
+        try:
+            summary = run_friday_command_sheet(dry_run=dry_run,
+                                               email_to_barry=email_to_barry)
+            summary["status"] = "complete"
+            _command_sheet_jobs[job_id] = summary
+            try:
+                _db.set_app_state("command_sheet_last", json.dumps(summary, default=str))
+            except Exception as _pe:
+                logger.warning("[COMMAND SHEET] result persist failed: %s", _pe)
+        except Exception as e:
+            logger.error("[COMMAND SHEET] manual run failed: %s", e, exc_info=True)
+            import traceback as _tb
+            _command_sheet_jobs[job_id] = {
+                "ok": False, "status": "error", "error": str(e)[:600],
+                "traceback": _tb.format_exc()[-2000:],
+            }
+
+    threading.Thread(target=_bg, daemon=True,
+                     name=f"command_sheet_{job_id}").start()
+    return jsonify({"ok": True, "job_id": job_id, "status": "running",
+                    "status_url": f"/api/admin/command-sheet/status/{job_id}"})
+
+
+@app.route("/api/admin/command-sheet/status/<job_id>", methods=["GET"])
+def api_command_sheet_status(job_id):
+    """Poll a command-sheet build. While running: {status: running}. When
+    done: the full summary including subject + html. job_id 'last' returns
+    the most recent persisted summary (survives restarts)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    if job_id == "last":
+        val, updated = _db.get_app_state("command_sheet_last")
+        if not val:
+            return jsonify({"error": "no persisted command sheet yet"}), 404
+        try:
+            out = json.loads(val)
+        except Exception:
+            return jsonify({"error": "persisted summary unreadable"}), 500
+        out["persisted_at"] = updated
+        return jsonify(out)
+    job = _command_sheet_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "job not found (worker may have restarted, "
+                                 "try job_id 'last')"}), 404
+    return jsonify(job)
 
 
 def scheduled_send_appointment_email():
