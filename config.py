@@ -63,6 +63,15 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
     "Ana Pena",        # transaction manager, was still getting agent texts (bug, Sep 2026)
 }
 
+# Agents on Android phones. iMessage from Barry's personal cell does not reach
+# them, so anything queued for the Mac iMessage poller (coaching texts, Phoenix
+# alerts, Save-Bot script prompts) is delivered to their email on file instead.
+# db.queue_agent_imessage handles the reroute; rows land with status 'sent_email'.
+EMAIL_DELIVERY_AGENTS = {
+    "Mack Lancaster",
+    "Christopher August",
+}
+
 # Key the Fast Track onboarding course (Vercel) uses to look up an agent's
 # personal goal-setup link by email. Call it server-side, not from the browser.
 # Reads from the COURSE_API_KEY Railway env var so it can be rotated without a

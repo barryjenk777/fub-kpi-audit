@@ -4465,6 +4465,20 @@ def _system_status():
                 "pond_tagged": (rec.get("pond") or {}).get("tagged"),
                 "agents_scored": len(rec.get("agents") or {}),
             })
+        # Surface the last persisted scoring-thread crash. Red if it is newer
+        # than the last completed run (means runs are currently dying).
+        try:
+            err_raw = _db.get_app_state("leadstream_last_run_error")
+            if err_raw:
+                err = json.loads(err_raw)
+                err_at = err.get("at") or ""
+                if not last_pond or err_at > (last_pond or ""):
+                    dot = "red"
+                    bits.append("Last run CRASHED: %s" % (err.get("error") or "?")[:160])
+                detail.insert(0, {"run": _mc_fmt(err_at), "mode": "CRASH",
+                                  "error": (err.get("error") or "")[:300]})
+        except Exception:
+            pass
         return {"dot": dot, "summary": " ".join(bits), "detail_rows": detail}
     add(LEAD, "LeadStream scoring", _leadstream)
 
@@ -7887,6 +7901,21 @@ def api_leadstream_run():
             _run_jobs[job_id]["status"] = "error"
             _run_jobs[job_id]["error"] = str(e)
             _run_jobs[job_id]["traceback"] = tb
+            # Persist the failure so it survives restarts and shows in Mission
+            # Control — in-memory _run_jobs was the only record, so ~11 straight
+            # scheduled pond runs failed invisibly (Sep 2026).
+            try:
+                _db.set_app_state("leadstream_last_run_error", json.dumps({
+                    "job_id": job_id, "error": str(e),
+                    "traceback": tb[-3000:],
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }))
+            except Exception:
+                pass
+            try:
+                _alert_on_job_failure("LeadStream scoring thread", str(e))
+            except Exception:
+                pass
             # Bust cache even on error so next dashboard load is fresh
             _ls_dashboard_cache["data"] = None
             _ls_dashboard_cache["time"] = None

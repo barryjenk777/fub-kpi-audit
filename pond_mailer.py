@@ -23,6 +23,9 @@ Requirements:
 import argparse
 import logging
 import os
+import random  # used by subject-line choice at generate_email; missing since
+               # commit 0e50cd7 (May 2026) — every live email generation raised
+               # NameError and was logged as skipped_generation_error
 import sys
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, parse_qs

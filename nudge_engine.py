@@ -39,6 +39,16 @@ AGENT_EMAIL_OVERRIDES = {
 }
 
 
+def _is_excluded(name):
+    """True if this person should never receive agent nudges.
+    Covers non-agents (Ana, transaction manager) and paused agents (Julz).
+    Bug fix Sep 2026: only run_morning_nudges checked this, so Ana got a
+    closing-milestone email for a deal that was actually Julz's closing."""
+    import config as _cfg
+    return (name in getattr(_cfg, "COACHING_TEXT_EXCLUDED_AGENTS", set())
+            or name in getattr(_cfg, "EXCLUDED_USERS", []))
+
+
 # ---------------------------------------------------------------------------
 # Email send
 # ---------------------------------------------------------------------------
@@ -594,6 +604,8 @@ def run_closing_milestones(dry_run=False):
 
     for profile in profiles:
         name  = profile["agent_name"]
+        if _is_excluded(name):
+            continue
         email = AGENT_EMAIL_OVERRIDES.get(name) or profile.get("email")
         if not email:
             continue
@@ -1651,6 +1663,8 @@ def run_afternoon_push(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
+        if _is_excluded(name):
+            continue
         email = AGENT_EMAIL_OVERRIDES.get(p["agent_name"]) or p.get("email")
         if not email:
             continue
@@ -1670,6 +1684,8 @@ def run_streak_break_check(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
+        if _is_excluded(name):
+            continue
         email = AGENT_EMAIL_OVERRIDES.get(p["agent_name"]) or p.get("email")
         if not email:
             continue
@@ -1695,6 +1711,8 @@ def run_weekly_summary(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
+        if _is_excluded(name):
+            continue
         email = AGENT_EMAIL_OVERRIDES.get(p["agent_name"]) or p.get("email")
         if not email:
             continue
@@ -1787,6 +1805,8 @@ def run_plateau_check(dry_run: bool = False):
     sent = 0
     for p in profiles:
         name  = p["agent_name"]
+        if _is_excluded(name):
+            continue
         email = AGENT_EMAIL_OVERRIDES.get(p["agent_name"]) or p.get("email")
         if not email:
             continue
@@ -1829,6 +1849,8 @@ def run_post_closing_followups(dry_run: bool = False):
     sent = 0
     for item in due:
         name   = item["agent_name"]
+        if _is_excluded(name):
+            continue
         email  = AGENT_EMAIL_OVERRIDES.get(name) or (profiles.get(name) or {}).get("email")
         client = item["client_name"] or "your recent client"
         for days in item["due_days"]:

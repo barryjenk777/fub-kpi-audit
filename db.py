@@ -6589,11 +6589,85 @@ def ensure_agent_imessage_queue_table():
         logger.warning("ensure_agent_imessage_queue_table failed: %s", e)
 
 
+def _email_agent_message(agent_name, fub_user_id, phone, message,
+                         week_day=None, kpi_snapshot=None):
+    """Deliver an agent message by email instead of iMessage (Android agents).
+    Sends via Postmark using the agent_profiles email, then records the row in
+    agent_imessage_queue with status 'sent_email' so Mission Control and the
+    audit trail see it alongside regular texts. Returns row id or None.
+    On any failure, falls back to queuing as a normal pending iMessage so the
+    message is never silently dropped."""
+    email = None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT email FROM agent_profiles
+                    WHERE agent_name = %s AND email IS NOT NULL AND email != ''
+                    LIMIT 1
+                """, (agent_name,))
+                row = cur.fetchone()
+                email = row[0] if row else None
+    except Exception as e:
+        logger.warning("_email_agent_message lookup failed for %s: %s", agent_name, e)
+
+    status, error = "sent_email", None
+    if not email:
+        status, error = "pending", "no email on file, fell back to iMessage queue"
+        logger.warning("[EMAIL DELIVERY] no email for %s, queuing iMessage instead", agent_name)
+    else:
+        subjects = {"phoenix": "A lead of yours just came back"}
+        subject = subjects.get(week_day) or ("Appointment prep" if week_day is None
+                                             else "Quick coaching note")
+        html = ("<div style='font-family:-apple-system,Segoe UI,sans-serif;"
+                "font-size:16px;line-height:1.5;color:#1a1a1a;white-space:pre-wrap'>"
+                + message + "</div>")
+        try:
+            import postmark_client as _pm
+            import config as _cfg
+            _pm.send(to=email, from_email=getattr(_cfg, "EMAIL_FROM",
+                     "barry@yourfriendlyagent.net"),
+                     subject=subject, html=html, text=message)
+            logger.info("[EMAIL DELIVERY] emailed %s (%s): %r",
+                        agent_name, email, message[:80])
+        except Exception as e:
+            status, error = "pending", "email send failed: %s" % e
+            logger.error("[EMAIL DELIVERY] send failed for %s (%s): %s — queued as iMessage",
+                         agent_name, email, e)
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO agent_imessage_queue
+                        (agent_name, fub_user_id, phone, message, week_day,
+                         kpi_snapshot, status, error, sent_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
+                            CASE WHEN %s = 'sent_email' THEN NOW() ELSE NULL END)
+                    RETURNING id
+                """, (agent_name, fub_user_id, phone, message, week_day,
+                      json.dumps(kpi_snapshot) if kpi_snapshot else None,
+                      status, error, status))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("_email_agent_message log failed for %s: %s", agent_name, e)
+        return None
+
+
 def queue_agent_imessage(agent_name, fub_user_id, phone, message,
                          week_day=None, kpi_snapshot=None):
-    """Add a coaching text to the pending queue. Returns new row id or None."""
+    """Add a coaching text to the pending queue. Returns new row id or None.
+    Android agents (config.EMAIL_DELIVERY_AGENTS) are rerouted to email —
+    iMessage from Barry's cell never reaches them."""
     if not is_available():
         return None
+    try:
+        import config as _cfg
+        if agent_name in getattr(_cfg, "EMAIL_DELIVERY_AGENTS", set()):
+            return _email_agent_message(agent_name, fub_user_id, phone, message,
+                                        week_day, kpi_snapshot)
+    except Exception as e:
+        logger.warning("EMAIL_DELIVERY_AGENTS check failed for %s: %s", agent_name, e)
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -7336,7 +7410,7 @@ def agent_imessage_queue_status(recent_limit=10):
                     SELECT
                         COUNT(*) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date
                                              = (NOW() AT TIME ZONE 'America/New_York')::date),
-                        COUNT(*) FILTER (WHERE status = 'sent'
+                        COUNT(*) FILTER (WHERE status IN ('sent', 'sent_email')
                                            AND (sent_at AT TIME ZONE 'America/New_York')::date
                                              = (NOW() AT TIME ZONE 'America/New_York')::date),
                         COUNT(*) FILTER (WHERE status = 'failed'
