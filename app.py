@@ -12705,6 +12705,51 @@ def api_twilio_status(sid):
 _scheduler_started = False
 _scheduler = None          # global ref so health endpoint can inspect jobs
 
+# Per-job cooldown for failure alert emails: job_id -> last alert epoch seconds.
+# In-memory is fine — single gunicorn worker, and a restart resetting the
+# cooldown just means one extra email.
+_job_error_email_times = {}
+_JOB_ERROR_EMAIL_COOLDOWN_SECS = 6 * 3600
+
+
+def _on_scheduler_job_error(event):
+    """
+    APScheduler EVENT_JOB_ERROR listener. Before this existed, job failures
+    were silent — 30 of 41 jobs could die and nobody would know. Now every
+    failure is logged and Barry gets an email, at most once per job per 6h.
+    """
+    job_id = getattr(event, "job_id", None) or "unknown"
+    exc = getattr(event, "exception", None)
+    logger.error("Scheduled job FAILED: %s | %s: %s", job_id, type(exc).__name__ if exc else "?", exc)
+
+    now = time.time()
+    if now - _job_error_email_times.get(job_id, 0) < _JOB_ERROR_EMAIL_COOLDOWN_SECS:
+        return
+    _job_error_email_times[job_id] = now
+
+    try:
+        import postmark_client
+        tb = getattr(event, "traceback", None) or ""
+        tb_html = (
+            f"<pre style='background:#f1f5f9;padding:12px;border-radius:8px;"
+            f"font-size:12px;overflow-x:auto'>{tb}</pre>" if tb else ""
+        )
+        html = (
+            f"<p>Heads up. The scheduled job <b>{job_id}</b> just failed.</p>"
+            f"<p><b>Error:</b> {exc}</p>"
+            f"{tb_html}"
+            f"<p>To keep your inbox sane, you will not get another email about this "
+            f"job for 6 hours even if it keeps failing. The /api/health endpoint "
+            f"has the full scheduler picture any time you want it.</p>"
+        )
+        postmark_client.send(
+            to=config.BARRY_EMAIL,
+            from_email=config.EMAIL_FROM,
+            subject=f"⚠️ Scheduled job failed: {job_id}",
+            html=html,
+        )
+    except Exception as mail_err:
+        logger.error("Could not email job-failure alert for %s: %s", job_id, mail_err)
 _job_last_fired = {}       # job_id -> ISO timestamp of last successful fire
 _COOLDOWN_FILE = "/tmp/fub_email_fired.json"  # persists across process restarts
 
@@ -15217,6 +15262,136 @@ def _run_morning_jobs():
         logger.error("run_closing_milestones crashed: %s", e)
 
 
+def scheduled_system_self_audit():
+    """
+    Weekly data-consistency self audit (Fri 7am ET). Runs six checks and
+    emails Barry ONLY what it finds. Clean week = no email = inbox stays quiet.
+    """
+    from datetime import date as _date
+    today = _date.today()
+    findings = {}  # section title -> list of finding strings
+
+    def _add(section, msg):
+        findings.setdefault(section, []).append(msg)
+
+    def _q(sql, params=None):
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params or ())
+                return cur.fetchall()
+
+    # (a) deal_log rows missing agent_name, or closings missing close_date
+    try:
+        n_agent = _q("SELECT COUNT(*) FROM deal_log WHERE agent_name IS NULL")[0][0]
+        n_close = _q("SELECT COUNT(*) FROM deal_log WHERE close_date IS NULL AND stage = 'closing'")[0][0]
+        if n_agent:
+            _add("Deal log", f"{n_agent} deal(s) have no agent_name. They count toward nobody's scorecard.")
+        if n_close:
+            _add("Deal log", f"{n_close} closing(s) have no close_date. YTD numbers may be off.")
+    except Exception as e:
+        logger.warning("self-audit deal_log check failed: %s", e)
+
+    # (b) weekly_kpi_snapshots missing for the last completed week
+    try:
+        last_monday = today - timedelta(days=today.weekday() + 7)
+        rows = _q("SELECT COUNT(*) FROM weekly_kpi_snapshots WHERE week_start = %s", (last_monday,))
+        if not rows or rows[0][0] == 0:
+            _add("Weekly KPI snapshots",
+                 f"No snapshot saved for the week starting {last_monday.strftime('%b %d')}. "
+                 f"Trend charts will have a hole.")
+    except Exception as e:
+        logger.warning("self-audit snapshot check failed: %s", e)
+
+    # (c) active agents with no goal row for this year
+    try:
+        rows = _q("""
+            SELECT p.agent_name FROM agent_profiles p
+            LEFT JOIN goals g ON g.agent_name = p.agent_name AND g.year = %s
+            WHERE p.is_active = TRUE AND g.id IS NULL
+            ORDER BY p.agent_name
+        """, (today.year,))
+        for (name,) in rows:
+            _add("Missing goals", f"{name} is active but has no {today.year} goal on file.")
+    except Exception as e:
+        logger.warning("self-audit goals check failed: %s", e)
+
+    # (d) weekdays in the last 7 days with zero morning nudges
+    try:
+        rows = _q("""
+            SELECT DATE(sent_at AT TIME ZONE 'US/Eastern') AS d, COUNT(*)
+            FROM nudge_log
+            WHERE nudge_type = 'morning' AND sent_at > NOW() - INTERVAL '8 days'
+            GROUP BY 1
+        """)
+        days_with_nudges = {r[0] for r in rows}
+        for i in range(1, 8):
+            day = today - timedelta(days=i)
+            if day.weekday() < 5 and day not in days_with_nudges:
+                _add("Morning nudges",
+                     f"No morning nudges went out on {day.strftime('%A %b %d')}. "
+                     f"The engine may have skipped a day.")
+    except Exception as e:
+        logger.warning("self-audit nudge check failed: %s", e)
+
+    # (e) em/en dashes in recent nudge copy (house style says never)
+    try:
+        rows = _q("""
+            SELECT id, agent_name, message_content FROM nudge_log
+            WHERE message_content IS NOT NULL
+            ORDER BY sent_at DESC LIMIT 20
+        """)
+        bad = [r for r in rows if ("—" in (r[2] or "")) or ("–" in (r[2] or ""))]
+        if bad:
+            names = ", ".join(sorted({r[1] for r in bad}))
+            _add("Copy style",
+                 f"{len(bad)} of the last 20 nudge texts contain an em dash or en dash "
+                 f"(sent to: {names}). House style says no dashes.")
+    except Exception as e:
+        logger.warning("self-audit dash check failed: %s", e)
+
+    # (f) scheduled jobs that will never fire again
+    try:
+        if _scheduler is not None:
+            for job in _scheduler.get_jobs():
+                if job.next_run_time is None:
+                    _add("Scheduler", f"Job {job.id} ({job.name}) has no next run time. It is effectively dead.")
+    except Exception as e:
+        logger.warning("self-audit scheduler check failed: %s", e)
+
+    if not findings:
+        logger.info("System self audit: clean, no email sent")
+        return {"findings": 0, "sent": False}
+
+    total = sum(len(v) for v in findings.values())
+    sections_html = ""
+    for section, items in findings.items():
+        lis = "".join(f"<li style='margin:4px 0'>{item}</li>" for item in items)
+        sections_html += (
+            f"<h3 style='color:#0f172a;margin:18px 0 6px;font-size:15px'>{section}</h3>"
+            f"<ul style='margin:0;padding-left:20px;color:#334155'>{lis}</ul>"
+        )
+    html = (
+        "<div style='font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:640px'>"
+        "<p style='font-size:15px;color:#0f172a'>Your system checked itself. Here's what it found.</p>"
+        f"{sections_html}"
+        "<p style='font-size:13px;color:#64748b;margin-top:20px'>"
+        "This audit runs every Friday morning. Weeks where everything checks out, you get no email at all.</p>"
+        "</div>"
+    )
+    try:
+        import postmark_client
+        postmark_client.send(
+            to=config.BARRY_EMAIL,
+            from_email=config.EMAIL_FROM,
+            subject=f"System self audit: {total} finding{'s' if total != 1 else ''}",
+            html=html,
+        )
+        logger.info("System self audit: %d findings emailed", total)
+    except Exception as e:
+        logger.error("System self audit email failed: %s", e)
+    return {"findings": total, "sent": True}
+
+
 def start_scheduler():
     """Start APScheduler with all scheduled jobs."""
     global _scheduler_started, _scheduler
@@ -15233,6 +15408,13 @@ def start_scheduler():
 
     _scheduler = BackgroundScheduler(timezone="US/Eastern")
     ET = "US/Eastern"  # passed explicitly to every CronTrigger so Railway (UTC) honors ET
+
+    # Error listener: log + email Barry on any job failure (6h per-job cooldown)
+    try:
+        from apscheduler.events import EVENT_JOB_ERROR
+        _scheduler.add_listener(_on_scheduler_job_error, EVENT_JOB_ERROR)
+    except Exception as _le:
+        print(f"[SCHEDULER] could not attach error listener: {_le}")
 
     # New lead immediate mailer: every 5 minutes
     # Checks Shark Tank (pond 4) for leads created in the last 45 min,
@@ -15508,6 +15690,11 @@ def start_scheduler():
                        id="calls_cache_sync", name="Calls cache sync (every 30 min)",
                        max_instances=1, misfire_grace_time=120)
 
+    # Weekly self audit: Friday 7am ET — data consistency checks, emails only findings
+    _scheduler.add_job(scheduled_system_self_audit,
+                       CronTrigger(day_of_week="fri", hour=7, minute=0, timezone=ET),
+                       id="system_self_audit", name="System self audit (Fri 7am)",
+                       max_instances=1, coalesce=True)
 
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
