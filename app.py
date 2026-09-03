@@ -4086,6 +4086,54 @@ def api_admin_roi():
                               / max(len(txs), 1)) if txs else 0)})
 
 
+_MINIMIZED_KEY = "minimized_agents"
+
+
+@app.route("/api/admin/minimized-agents", methods=["GET", "POST"])
+def api_minimized_agents():
+    """Agents Barry has collapsed out of the way. Several people on the roster
+    are not working leads right now, and their zero rows drown out the ones who
+    are. Stored in app_state so the choice survives deploys and follows him to
+    any device, not just the browser he set it in.
+
+    GET  -> {"minimized": ["Name", ...]}
+    POST {"agent": "Name", "minimized": true|false}   toggle one
+    POST {"minimized_list": [...]}                    replace the whole list
+    """
+    import json as _json
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    def _read():
+        raw, _ = _db.get_app_state(_MINIMIZED_KEY)
+        if not raw:
+            return []
+        try:
+            v = _json.loads(raw)
+            return [str(x) for x in v] if isinstance(v, list) else []
+        except Exception:
+            return []
+
+    if request.method == "GET":
+        return jsonify({"ok": True, "minimized": _read()})
+
+    body = request.get_json(silent=True) or {}
+    if isinstance(body.get("minimized_list"), list):
+        current = [str(x) for x in body["minimized_list"]]
+    else:
+        agent = (body.get("agent") or "").strip()
+        if not agent:
+            return jsonify({"ok": False, "error": "agent required"}), 400
+        current = _read()
+        if body.get("minimized"):
+            if agent not in current:
+                current.append(agent)
+        else:
+            current = [a for a in current if a != agent]
+    _db.set_app_state(_MINIMIZED_KEY, _json.dumps(current))
+    return jsonify({"ok": True, "minimized": current})
+
+
 @app.route("/team/onboarding")
 def team_onboarding_page():
     """Barry's Fast Track onboarding board. Leadership only."""

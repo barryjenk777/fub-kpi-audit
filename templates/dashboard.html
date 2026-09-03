@@ -1083,6 +1083,7 @@ async function loadGoals(_attempt){
   _attempt=_attempt||1;
   const container=document.getElementById('goals-cards');
   if(_attempt===1)container.innerHTML='<div class="loading-pane"><span class="spinner"></span> Loading scorecard…</div>';
+  if(_attempt===1) await loadMinimized();   // so hidden agents never flash in
   try{
     const r=await fetch('/api/goals/scorecard',{signal:AbortSignal.timeout(60000)});
     // 503 = Railway restarting — auto-retry up to 5x with 6s delay
@@ -1131,8 +1132,14 @@ function renderGoalCards(rows){
   const container=document.getElementById('goals-cards');
   if(!rows.length){container.innerHTML='<div style="padding:3rem;text-align:center;color:var(--muted)">No agents found. Send setup emails to get started.</div>';return}
 
-  const withGoal=rows.filter(r=>r.goal&&parseFloat(r.goal.gci_goal)>0);
-  const noGoal=rows.filter(r=>!r.goal||!(parseFloat(r.goal.gci_goal)>0));
+  // Agents Barry has minimized are pulled out of the main grid so the people
+  // actually working leads are not buried. The list lives server-side.
+  const hiddenSet=new Set(_minimizedAgents||[]);
+  const shownRows=rows.filter(r=>!hiddenSet.has(r.agent_name));
+  const hiddenRows=rows.filter(r=>hiddenSet.has(r.agent_name));
+
+  const withGoal=shownRows.filter(r=>r.goal&&parseFloat(r.goal.gci_goal)>0);
+  const noGoal=shownRows.filter(r=>!r.goal||!(parseFloat(r.goal.gci_goal)>0));
 
   // Build streak lookup from data (populated via scorecard API)
   const streakMap=(_goalsData&&_goalsData.streaks)||{};
@@ -1196,6 +1203,7 @@ function renderGoalCards(rows){
         <button class="btn btn-ghost btn-sm" style="flex:1;font-size:.68rem" onclick="openNudgeModal('${agent_name}');event.stopPropagation()">📱 Send Nudge</button>
         <button class="btn btn-ghost btn-sm" style="flex:1;font-size:.68rem" onclick="copyOneLink('${agent_name}');event.stopPropagation()">🔗 Copy Link</button>
         ${viewHtml}
+        <button class="btn btn-ghost btn-sm" title="Minimize this agent" style="font-size:.68rem;padding-left:.5rem;padding-right:.5rem" onclick="toggleMinimize('${agent_name}',true);event.stopPropagation()">&minus;</button>
       </div>
     </div>`;
   });
@@ -1214,12 +1222,58 @@ function renderGoalCards(rows){
       <div style="display:flex;gap:.3rem">
         <button class="btn btn-ghost btn-sm" onclick="openNudgeModal('${row.agent_name}');event.stopPropagation()">📱</button>
         <button class="btn btn-ghost btn-sm" onclick="copyOneLink('${row.agent_name}');event.stopPropagation()">Send Link</button>
+        <button class="btn btn-ghost btn-sm" title="Minimize this agent" onclick="toggleMinimize('${row.agent_name}',true);event.stopPropagation()">&minus;</button>
         ${ngUrl?`<button class="btn btn-ghost btn-sm" onclick="window.open('${ngUrl}','_blank');event.stopPropagation()">👤</button>`:''}
       </div>
     </div>`;
   });
 
+  if(hiddenRows.length){
+    html+=`<div style="grid-column:1/-1;margin-top:.4rem;padding:.7rem .9rem;background:var(--surface2,#161e2e);
+      border:1px dashed var(--border,#243050);border-radius:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap">
+        <span style="font-size:.72rem;color:var(--muted)">Minimized (${hiddenRows.length}): ${
+          hiddenRows.map(r=>r.agent_name).join(', ')}</span>
+        <button class="btn btn-ghost btn-sm" style="font-size:.68rem" onclick="_showMinimized=!_showMinimized;loadGoals()">
+          ${_showMinimized?'Hide again':'Show them'}</button>
+      </div></div>`;
+    if(_showMinimized){
+      hiddenRows.forEach(r=>{
+        html+=`<div class="no-goal-card" style="opacity:.75">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem">
+            <strong style="font-size:.85rem">${r.agent_name}</strong>
+            <button class="btn btn-ghost btn-sm" style="font-size:.64rem"
+              onclick="toggleMinimize('${r.agent_name.replace(/'/g,"\\'")}',false);event.stopPropagation()">Restore</button>
+          </div>
+          <div style="font-size:.66rem;color:var(--muted);margin-top:.3rem">Minimized. Not counted in the cards above.</div>
+        </div>`;
+      });
+    }
+  }
+
   container.innerHTML=html;
+}
+
+// Persisted per-team (app_state), so it follows Barry to any device.
+let _minimizedAgents=[];
+let _showMinimized=false;
+
+async function loadMinimized(){
+  try{
+    const r=await fetch('/api/admin/minimized-agents?key=lht-perp-2026');
+    const d=await r.json();
+    if(d.ok) _minimizedAgents=d.minimized||[];
+  }catch(e){ /* non-fatal: worst case nothing is hidden */ }
+}
+
+async function toggleMinimize(agent,hide){
+  try{
+    const r=await fetch('/api/admin/minimized-agents?key=lht-perp-2026',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({agent:agent,minimized:!!hide})});
+    const d=await r.json();
+    if(d.ok){ _minimizedAgents=d.minimized||[]; loadGoals(); }
+  }catch(e){ showToast&&showToast('Could not save that','err'); }
 }
 
 function _daysAgoLabel(dateStr){
