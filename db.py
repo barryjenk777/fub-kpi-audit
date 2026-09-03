@@ -5923,6 +5923,74 @@ def upsert_appointment(fub_appt_id, person_id=None, person_name=None,
         return False
 
 
+def get_appointment_lane_counts(days=180):
+    """
+    Merit scorecard input: appointments grouped by agent + lead source over
+    the trailing window. appts_met counts rows whose outcome or status says
+    the client showed. Returns [{agent_name, source, appts_set, appts_met}].
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COALESCE(source, ''),
+                           COUNT(*) AS appts_set,
+                           COUNT(*) FILTER (
+                               WHERE outcome = 'showed' OR status = 'showed'
+                           ) AS appts_met
+                    FROM   appointments
+                    WHERE  start_time >= NOW() - (%s * INTERVAL '1 day')
+                      AND  agent_name IS NOT NULL
+                    GROUP  BY agent_name, COALESCE(source, '')
+                """, (int(days),))
+                rows = cur.fetchall()
+        return [{"agent_name": r[0], "source": r[1],
+                 "appts_set": int(r[2] or 0), "appts_met": int(r[3] or 0)}
+                for r in rows]
+    except Exception as e:
+        logger.warning("get_appointment_lane_counts failed: %s", e)
+        return []
+
+
+def get_transfer_merit_counts(days=180):
+    """
+    Merit scorecard input for the transfer lane. Per agent over the trailing
+    window: total real ISA transfers (no_answer excluded) and how many of
+    those leads later got an appointment (local appointments table, logged
+    after the transfer date). The ISA_TRANSFER_SUCCESSFUL tag is not stored
+    per row here, so appointment follow-through is the conversion signal.
+    Returns [{agent_name, transfers, with_appt}].
+    """
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT t.agent_name,
+                           COUNT(*) AS transfers,
+                           COUNT(*) FILTER (WHERE EXISTS (
+                               SELECT 1 FROM appointments a
+                               WHERE  a.person_id::text = t.person_id
+                                 AND  a.start_time >= t.transfer_date
+                           )) AS with_appt
+                    FROM   isa_transfers t
+                    WHERE  t.transfer_date >= NOW() - (%s * INTERVAL '1 day')
+                      AND  t.agent_name IS NOT NULL
+                      AND  COALESCE(t.transfer_type, 'unknown') <> 'no_answer'
+                    GROUP  BY t.agent_name
+                """, (int(days),))
+                rows = cur.fetchall()
+        return [{"agent_name": r[0], "transfers": int(r[1] or 0),
+                 "with_appt": int(r[2] or 0)} for r in rows]
+    except Exception as e:
+        logger.warning("get_transfer_merit_counts failed: %s", e)
+        return []
+
+
 def get_appointment_stats(days=30):
     """
     Aggregate appointment metrics for the owner brief.
@@ -6870,14 +6938,21 @@ def ensure_phoenix_log_table():
                     );
                     CREATE INDEX IF NOT EXISTS idx_phoenix_person
                     ON phoenix_log (person_id, created_at DESC);
+                    -- route_path: how a bonus assignment picked its agent —
+                    -- 'merit' (lane scorecard ordering) or 'round_robin'
+                    -- (fallback when the lane lacks sufficient data).
+                    ALTER TABLE phoenix_log
+                        ADD COLUMN IF NOT EXISTS route_path TEXT;
                 """)
     except Exception as e:
         logger.warning("ensure_phoenix_log_table failed: %s", e)
 
 
 def log_phoenix(person_id, lead_name, owner_before, assigned_to, dormant_days,
-                came_back, activity_type, status, run_date=None):
-    """Insert one phoenix_log row. Returns new row id or None."""
+                came_back, activity_type, status, run_date=None, route_path=None):
+    """Insert one phoenix_log row. Returns new row id or None.
+    route_path ('merit' | 'round_robin' | None) records how a bonus
+    assignment picked its agent."""
     if not is_available():
         return None
     try:
@@ -6886,11 +6961,13 @@ def log_phoenix(person_id, lead_name, owner_before, assigned_to, dormant_days,
                 cur.execute("""
                     INSERT INTO phoenix_log
                         (person_id, lead_name, owner_before, assigned_to,
-                         dormant_days, came_back, activity_type, status, run_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_DATE))
+                         dormant_days, came_back, activity_type, status, run_date,
+                         route_path)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, CURRENT_DATE), %s)
                     RETURNING id
                 """, (str(person_id), lead_name, owner_before, assigned_to,
-                      dormant_days, came_back, activity_type, status, run_date))
+                      dormant_days, came_back, activity_type, status, run_date,
+                      route_path))
                 return cur.fetchone()[0]
     except Exception as e:
         logger.warning("log_phoenix failed for %s: %s", person_id, e)
@@ -6935,7 +7012,7 @@ def get_phoenix_log(limit=100):
                 cur.execute("""
                     SELECT id, person_id, lead_name, owner_before, assigned_to,
                            dormant_days, came_back, activity_type, status,
-                           run_date, created_at
+                           run_date, created_at, route_path
                     FROM phoenix_log
                     ORDER BY created_at DESC
                     LIMIT %s
@@ -6953,6 +7030,7 @@ def get_phoenix_log(limit=100):
             "status":        r[8],
             "run_date":      r[9].isoformat() if r[9] else None,
             "created_at":    r[10].isoformat() if r[10] else None,
+            "route_path":    r[11],
         } for r in rows]
     except Exception as e:
         logger.warning("get_phoenix_log failed: %s", e)
