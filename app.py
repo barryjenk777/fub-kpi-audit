@@ -14277,6 +14277,84 @@ def api_savebot_log():
     })
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FRIDAY COMMAND SHEET — Barry's one meeting email (see command_sheet.py)
+# Emails Barry ONLY (config.BARRY_EMAIL). Never texts anyone, never emails an
+# agent — the module has no SMS path by design, so no dry-run config flag is
+# needed. The admin endpoint below is the QA path: dry_run true returns the
+# built subject + html without sending anything.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _command_sheet_audit():
+    """Cheapest correct audit source: today's warmed cache first (the 6am
+    cache_warm runs before the 6:30am Friday job), live run_audit_data only
+    when the cache is cold."""
+    data = cache_get("audit")
+    if data and data.get("agents"):
+        return data
+    return run_audit_data()
+
+
+def run_friday_command_sheet(dry_run=False, email_to_barry=True):
+    """Build (and optionally send) the Friday Command Sheet. Returns the
+    summary dict including subject + html."""
+    import command_sheet as _cs
+    return _cs.run_command_sheet(
+        dry_run=dry_run,
+        email_to_barry=email_to_barry,
+        audit_fn=_command_sheet_audit,
+        phoenix_fn=_phoenix_qualified_agents,
+        manifest_fn=_load_leadstream_manifest,
+    )
+
+
+def scheduled_friday_command_sheet():
+    """Friday 6:30am ET — build and email Barry the Friday Command Sheet."""
+    if _already_fired_recently("friday_command_sheet", within_hours=20):
+        print("[SCHEDULER] Command sheet: skipped — already sent within 20h")
+        return
+    if not _db.try_acquire_job_lock("friday_command_sheet"):
+        return
+    try:
+        summary = run_friday_command_sheet(dry_run=False, email_to_barry=True)
+        print(f"[SCHEDULER] Command sheet: lever={((summary.get('lever') or {}).get('key'))}, "
+              f"{summary.get('agents', 0)} agent cards, emailed={summary.get('emailed')}")
+        _record_fired("friday_command_sheet")
+    except Exception as e:
+        _alert_on_job_failure("friday_command_sheet", str(e))
+        print(f"[SCHEDULER] Command sheet error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("friday_command_sheet")
+
+
+@app.route("/api/admin/command-sheet/run", methods=["POST"])
+def api_command_sheet_run():
+    """Build the Friday Command Sheet now. Body:
+      {"dry_run": true|false, "email_to_barry": true|false}
+    dry_run defaults TRUE (QA path: returns {ok, subject, html}, sends
+    nothing). With dry_run false AND email_to_barry true, the sheet is
+    emailed to Barry. This endpoint can never text anyone — the module has
+    no SMS path.
+
+    Synchronous on purpose, same reasoning as the Phoenix endpoint: gunicorn
+    runs with --timeout 300 so the build finishes inside the worker timeout."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    dry_run = body.get("dry_run")
+    if dry_run is None:
+        dry_run = True
+    try:
+        return jsonify(run_friday_command_sheet(
+            dry_run=bool(dry_run),
+            email_to_barry=bool(body.get("email_to_barry")),
+        ))
+    except Exception as e:
+        logger.error("[COMMAND SHEET] manual run failed: %s", e, exc_info=True)
+        return jsonify({"ok": False, "error": str(e)[:400]}), 500
+
+
 def scheduled_send_appointment_email():
     """Tuesday 9am ET — send appointment accountability email."""
     if _already_fired_recently("appt_email", within_hours=20):
@@ -16325,6 +16403,13 @@ def start_scheduler():
     _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET),
                        id="audit_email", name="Monday KPI audit email",
                        max_instances=1, coalesce=True)
+
+    # Friday Command Sheet: Friday 6:30am ET — Barry's one meeting email.
+    # Runs after the 6am cache warm so the audit read is a cache hit.
+    # Emails Barry only; the module has no agent-facing send path.
+    _scheduler.add_job(scheduled_friday_command_sheet, CronTrigger(day_of_week="fri", hour=6, minute=30, timezone=ET),
+                       id="friday_command_sheet", name="Friday Command Sheet (Fri 6:30am)",
+                       max_instances=1, coalesce=True, misfire_grace_time=3600)
 
     # Fast Track onboarding digest: daily 8am ET, only when there's something to say
     _scheduler.add_job(scheduled_onboarding_digest, CronTrigger(hour=8, minute=0, timezone=ET),

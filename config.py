@@ -736,6 +736,23 @@ LEAD_MEMORY_DRY_RUN_SAMPLES = 5
 
 
 # =============================================================================
+# FRIDAY COMMAND SHEET — Barry's one Friday meeting email (see command_sheet.py)
+# Emails Barry ONLY, never agents, so it needs no dry-run env flag. The one
+# lever pick is deterministic in code; Claude narrates the computed numbers
+# and every generation failure degrades to a deterministic line.
+# =============================================================================
+
+# Model for the narrative lines. Haiku: this is narration over computed
+# numbers, not open copywriting — the same verified id lead_memory.py uses.
+COMMAND_SHEET_MODEL = "claude-haiku-4-5"
+COMMAND_SHEET_TEMPERATURE = 0.4
+
+# LLM budget: max per-agent line generations per run. Agents beyond the cap
+# get the deterministic lines (never a missing or invented card).
+COMMAND_SHEET_MAX_AGENT_GENERATIONS = 15
+
+
+# =============================================================================
 # APPOINTMENT SAVE-BOT — Stage 1 (agent-facing ONLY, see savebot.py)
 # Morning script prompts: 7:45am ET, each agent with a FUB appointment today
 # or tomorrow gets ONE bundled iMessage with a ready-to-send value-touch text
