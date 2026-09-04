@@ -245,6 +245,7 @@ _SYSTEM = """You write the CALL OPENER note on one real estate lead: the script 
 
 HARD RULES (breaking any of these ruins the note):
 - Use ONLY facts present in the supplied data. If something is unknown, it is unknown. NEVER invent a name, date, price, area, timeline, or intent.
+- NEVER write "today", "tomorrow", "tonight", "yesterday", or a bare weekday as if relative to now. The note may be read days from now, and data mentioning "tomorrow" was written in the past. Use real dates from the data ("your Sep 3 walkthrough") or timeless phrasing ("your scheduled walkthrough"). BOOK's two-option close uses day names as OFFERS ("Thursday evening or Saturday morning"), which is fine; claiming an existing commitment "tomorrow" is not.
 - NEVER use em dashes or en dashes. Periods and commas only.
 - Quick-glance formatting: every line short. Bullets use "•". No paragraphs, no filler, no cheerleading, no restating what FUB already summarizes.
 - SAY is spoken words in quotes, 35 words max, grounded in ONE real detail from the data. NEVER script the caller's own name or identity ("this is Chris" is banned): prior calls may have been an AI assistant under a different name, and any agent on the team may make this call. Open with the lead's name only. Permission-based, disarming, teach do not push. For not-ready leads (6-12 months out), the signature reframe: acknowledge they are not ready yet, then offer the one thing they need to know NOW so they do not make an expensive mistake later.
