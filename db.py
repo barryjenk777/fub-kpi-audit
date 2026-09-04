@@ -7540,3 +7540,83 @@ def pond_sms_status(recent_limit=10):
     except Exception as e:
         logger.warning("pond_sms_status failed: %s", e)
         return empty
+
+
+# ── Market Pulse (hyperlocal market pages) ──────────────────────────────────
+
+def ensure_market_tables():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS market_snapshots (
+                        city_slug   TEXT PRIMARY KEY,
+                        data        JSONB NOT NULL,
+                        fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE TABLE IF NOT EXISTS market_page_views (
+                        id          SERIAL PRIMARY KEY,
+                        city_slug   TEXT NOT NULL,
+                        audience    TEXT,
+                        token       TEXT,
+                        person_id   TEXT,
+                        viewed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_mpv_token
+                        ON market_page_views (token, viewed_at DESC);
+                """)
+    except Exception as e:
+        logger.warning("ensure_market_tables failed: %s", e)
+
+
+def save_market_snapshot(city_slug, data):
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO market_snapshots (city_slug, data, fetched_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (city_slug)
+                    DO UPDATE SET data = EXCLUDED.data, fetched_at = NOW()
+                """, (city_slug, json.dumps(data)))
+        return True
+    except Exception as e:
+        logger.warning("save_market_snapshot failed for %s: %s", city_slug, e)
+        return False
+
+
+def get_market_snapshot(city_slug):
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT data, fetched_at FROM market_snapshots WHERE city_slug = %s",
+                            (city_slug,))
+                row = cur.fetchone()
+        if not row:
+            return None
+        data = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        data["stored_at"] = row[1].isoformat() if row[1] else None
+        return data
+    except Exception as e:
+        logger.warning("get_market_snapshot failed for %s: %s", city_slug, e)
+        return None
+
+
+def log_market_page_view(city_slug, audience, token=None, person_id=None):
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO market_page_views (city_slug, audience, token, person_id)
+                    VALUES (%s, %s, %s, %s)
+                """, (city_slug, audience, token, person_id))
+    except Exception as e:
+        logger.warning("log_market_page_view failed: %s", e)

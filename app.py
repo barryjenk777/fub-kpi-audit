@@ -91,6 +91,8 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         # Lead-facing video and short-link surfaces. These URLs are texted and
         # emailed to real leads, and Twilio fetches MMS media unauthenticated.
         "/v/", "/vp/", "/go/", "/mthumb/", "/audio/",
+        # Market Pulse pages: texted/emailed to leads, must be public
+        "/market",
         # Vercel course endpoints check COURSE_API_KEY internally
         "/api/course/",
         # TM portal APIs check TM_PORTAL_KEY internally
@@ -1106,6 +1108,222 @@ def api_pulse():
             out["stale"] = True
             return jsonify(out)
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+
+# ── Market Pulse: public hyperlocal market pages ────────────────────────────
+
+def _mp_money(v):
+    return "$%s" % format(int(round(v)), ",") if v is not None else None
+
+
+def _mp_yy(v):
+    """Format a Realtor yy fraction (0.1078) or None as a signed % string."""
+    if v is None:
+        return None, "flat"
+    pct = v * 100 if abs(v) < 1.5 else v  # file stores fractions
+    d = "up" if pct > 0.5 else "down" if pct < -0.5 else "flat"
+    return "%s%.1f%% vs a year ago" % ("+" if pct > 0 else "", pct), d
+
+
+def _mp_month(snapshot):
+    rm = (snapshot.get("realtor") or {}).get("month")
+    if rm and len(str(rm)) == 6:
+        try:
+            return datetime.strptime(str(rm), "%Y%m").strftime("%B %Y")
+        except ValueError:
+            pass
+    for m in (snapshot.get("zillow") or {}).values():
+        if m.get("month"):
+            try:
+                return datetime.strptime(m["month"][:7], "%Y-%m").strftime("%B %Y")
+            except ValueError:
+                continue
+    return "the latest month"
+
+
+def _market_page_context(slug, audience):
+    """Compose the page: stat tiles + counselor-voice meaning, only from real
+    feed numbers. Never fabricates; any missing metric is simply omitted."""
+    import market_pulse as _mp
+    snap = _mp.get_snapshot(slug)
+    if not snap:
+        return None
+    city = snap.get("city") or _mp.CITIES[slug][0]
+    r = snap.get("realtor") or {}
+    z = snap.get("zillow") or {}
+
+    def zval(metric):
+        return (z.get(metric) or {}).get("latest")
+
+    stats, meaning = [], []
+    above = zval("pct_sold_above_list")
+    cuts = zval("pct_price_cut") or r.get("price_reduced_share")
+    pend_days = zval("days_to_pending")
+    dom = r.get("median_dom")
+    speed = pend_days or dom
+
+    if audience == "sellers":
+        if r.get("median_list_price"):
+            chg, d = _mp_yy(r.get("median_list_price_yy"))
+            stats.append({"label": "Median asking price", "value": _mp_money(r["median_list_price"]),
+                          "change": chg, "dir": d,
+                          "note": "What sellers in %s are asking right now." % city})
+        if above is not None:
+            stats.append({"label": "Sold above asking", "value": "%.0f%%" % (above * 100),
+                          "change": None, "dir": "flat",
+                          "note": "Share of recent sales that closed over list price."})
+        if speed:
+            stats.append({"label": "Days to a buyer", "value": "%d days" % speed,
+                          "change": None, "dir": "flat",
+                          "note": "Typical time from listing to going pending."})
+        if cuts is not None:
+            stats.append({"label": "Listings cutting price", "value": "%.0f%%" % (cuts * 100),
+                          "change": None, "dir": "flat",
+                          "note": "Sellers who overpriced and had to walk it back."})
+        if r.get("active_listings"):
+            chg, d = _mp_yy(r.get("active_listings_yy"))
+            stats.append({"label": "Homes you compete with", "value": "%d" % r["active_listings"],
+                          "change": chg, "dir": d,
+                          "note": "Active listings in %s right now." % city})
+
+        lede = ("Thinking about selling in %s? Here is what the market is actually "
+                "doing, not what the headlines say." % city)
+        if above is not None and above >= 0.4:
+            meaning.append("%.0f%% of homes here sold above asking. Priced right on day "
+                           "one, you are the one holding the leverage." % (above * 100))
+        if cuts is not None and cuts >= 0.15:
+            meaning.append("At the same time, %.0f%% of listings had to cut their price. "
+                           "This market rewards correct pricing and punishes guessing. "
+                           "The difference is the strategy you start with." % (cuts * 100))
+        if speed:
+            meaning.append("Homes are finding their buyer in about %d days. That is fast "
+                           "enough that you want your next move figured out before the "
+                           "sign goes in the yard, not after." % speed)
+        meaning.append("Here is what needs to happen next: we sit down, price your home "
+                       "against what actually sold around you, and map the timing. That "
+                       "conversation costs you nothing and usually changes the plan.")
+        cta_head = "Want to know what YOUR home would do in this market?"
+        cta_body = ("City numbers are the weather. Your street is the forecast that "
+                    "matters. Text me and I will put real comps in your hands.")
+    else:
+        if zval("median_sale_price"):
+            stats.append({"label": "Median sale price", "value": _mp_money(zval("median_sale_price")),
+                          "change": None, "dir": "flat",
+                          "note": "What buyers actually paid, not asking prices."})
+        elif r.get("median_list_price"):
+            chg, d = _mp_yy(r.get("median_list_price_yy"))
+            stats.append({"label": "Median asking price", "value": _mp_money(r["median_list_price"]),
+                          "change": chg, "dir": d, "note": "What sellers are asking."})
+        if above is not None:
+            stats.append({"label": "Sold above asking", "value": "%.0f%%" % (above * 100),
+                          "change": None, "dir": "flat",
+                          "note": "How often buyers had to beat list price to win."})
+        if speed:
+            stats.append({"label": "Time to act", "value": "%d days" % speed,
+                          "change": None, "dir": "flat",
+                          "note": "Typical days before a good home goes pending."})
+        if cuts is not None:
+            stats.append({"label": "Sellers cutting price", "value": "%.0f%%" % (cuts * 100),
+                          "change": None, "dir": "flat",
+                          "note": "Overpriced listings walking prices back. Negotiation room."})
+        if r.get("active_listings"):
+            chg, d = _mp_yy(r.get("active_listings_yy"))
+            stats.append({"label": "Homes to choose from", "value": "%d" % r["active_listings"],
+                          "change": chg, "dir": d,
+                          "note": "Active listings in %s right now." % city})
+
+        lede = ("Buying in %s? Here is what you are actually walking into, with real "
+                "numbers instead of guesses." % city)
+        if above is not None and above >= 0.4:
+            meaning.append("%.0f%% of recent sales closed above asking. That does not mean "
+                           "you overpay. It means you walk in with a strategy instead of "
+                           "just a number." % (above * 100))
+        if cuts is not None and cuts >= 0.15:
+            meaning.append("Meanwhile %.0f%% of sellers cut their price. There are "
+                           "negotiable deals sitting in plain sight if you know which "
+                           "listings have run out of patience." % (cuts * 100))
+        if speed:
+            meaning.append("The good ones go pending in about %d days. Being pre-approved "
+                           "and clear on your must-haves before you shop is the whole "
+                           "difference between winning and watching." % speed)
+        meaning.append("The right move is a short sit down where we build your plan: "
+                       "budget, neighborhoods, and how to win without overpaying.")
+        cta_head = "Want to shop like you have an unfair advantage?"
+        cta_body = ("I will show you which %s neighborhoods fit your budget and where "
+                    "the leverage is this month. No pressure, just the map." % city)
+
+    return {
+        "city": city, "audience": audience, "data_month": _mp_month(snap),
+        "lede": lede, "stats": stats, "meaning": meaning,
+        "cta_head": cta_head, "cta_body": cta_body,
+    }
+
+
+@app.route("/market")
+def market_index():
+    import market_pulse as _mp
+    links = "".join(
+        f'<li style="margin:.35rem 0"><b>{name}</b>: '
+        f'<a href="/market/{slug}/sellers" style="color:#b97a12">sellers</a> · '
+        f'<a href="/market/{slug}/buyers" style="color:#b97a12">buyers</a></li>'
+        for slug, (name, _, _) in _mp.CITIES.items())
+    return (f"<div style='font-family:sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem'>"
+            f"<h2>Hampton Roads Market Pages</h2><ul style='list-style:none;padding:0'>{links}</ul></div>")
+
+
+@app.route("/market/<slug>/<audience>")
+def market_page(slug, audience):
+    if audience not in ("buyers", "sellers"):
+        return "Not found", 404
+    ctx = _market_page_context(slug, audience)
+    if ctx is None:
+        return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
+                "This page is being refreshed with the latest numbers. "
+                "Check back in a few minutes.</div>"), 503
+    token = request.args.get("t")
+    try:
+        _db.log_market_page_view(slug, audience, token=token)
+    except Exception:
+        pass
+    return render_template("market_page.html", **ctx)
+
+
+@app.route("/api/admin/market-pulse/refresh", methods=["POST"])
+def api_market_pulse_refresh():
+    """Kick a background refresh of all 7 city snapshots (~25MB of CSV pulls)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    def _bg():
+        try:
+            import market_pulse as _mp
+            results = _mp.refresh_all()
+            logger.info("market pulse refresh: %s", results)
+        except Exception as e:
+            logger.error("market pulse refresh failed: %s", e, exc_info=True)
+
+    threading.Thread(target=_bg, daemon=True).start()
+    return jsonify({"ok": True, "status": "refreshing in background",
+                    "check": "/market/virginia-beach/sellers"})
+
+
+def scheduled_market_pulse_refresh():
+    """1st + 15th, 5:10am ET — refresh the 7 city market snapshots."""
+    if not _db.try_acquire_job_lock("market_pulse"):
+        return
+    try:
+        import market_pulse as _mp
+        results = _mp.refresh_all()
+        ok = sum(1 for v in results.values() if v)
+        print(f"[SCHEDULER] market pulse refresh: {ok}/{len(results)} cities OK")
+        if ok == 0:
+            raise RuntimeError("market pulse refresh: 0 cities updated")
+        _record_fired("market_pulse")
+    except Exception as e:
+        _alert_on_job_failure("market_pulse", str(e))
+        raise
+    finally:
+        _db.release_job_lock("market_pulse")
 
 
 @app.route("/")
@@ -17244,6 +17462,10 @@ def start_scheduler():
                        CronTrigger(hour=4, minute=50, timezone=ET),
                        id="appt_db_sync", name="FUB appointments DB mirror (4:50am)",
                        max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_market_pulse_refresh,
+                       CronTrigger(day="1,15", hour=5, minute=10, timezone=ET),
+                       id="market_pulse", name="Market Pulse city data refresh (1st + 15th)",
+                       max_instances=1, coalesce=True)
 
     # Onboarding escalation: daily 8am ET (Day 3 + Day 7 follow-ups)
     _scheduler.add_job(scheduled_onboarding_escalation,
@@ -18286,3 +18508,5 @@ else:
     _db.ensure_phoenix_log_table()
     # Ensure Save-Bot log table exists (agent script-prompt dedupe)
     _db.ensure_savebot_log_table()
+    # Ensure Market Pulse tables exist (city snapshots + page view log)
+    _db.ensure_market_tables()

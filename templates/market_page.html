@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ city }} Home Market Update for {{ 'Buyers' if audience == 'buyers' else 'Sellers' }}</title>
+<meta name="description" content="What the {{ city }} market is actually doing right now, with real numbers, updated twice a month.">
+<style>
+:root{--ink:#1a2233;--muted:#5b6779;--subtle:#93a0b4;--line:#e6eaf1;--gold:#b97a12;--gold-bg:#fdf6ea;--green:#0e7c58;--red:#b3382c;--bg:#ffffff;--card:#f8fafc}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.55}
+.wrap{max-width:680px;margin:0 auto;padding:1.4rem 1.1rem 3rem}
+.kicker{font-size:.72rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--gold)}
+h1{font-size:1.7rem;line-height:1.2;margin:.3rem 0 .4rem}
+.lede{color:var(--muted);font-size:.95rem;margin-bottom:1.4rem}
+.datemark{display:inline-block;background:var(--gold-bg);color:var(--gold);font-size:.72rem;font-weight:600;padding:.15rem .6rem;border-radius:99px;margin-bottom:1rem}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:1.6rem}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:.9rem 1rem}
+.stat .lbl{font-size:.7rem;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--subtle)}
+.stat .val{font-size:1.45rem;font-weight:700;margin:.1rem 0}
+.stat .chg{font-size:.74rem;font-weight:600}
+.chg.up{color:var(--green)} .chg.down{color:var(--red)} .chg.flat{color:var(--subtle)}
+.stat .note{font-size:.74rem;color:var(--muted);margin-top:.25rem;line-height:1.4}
+h2{font-size:1.05rem;margin:1.5rem 0 .5rem}
+.means p{font-size:.92rem;color:var(--ink);margin-bottom:.7rem}
+.cta{background:var(--gold-bg);border:1px solid #f0dfc0;border-radius:14px;padding:1.1rem 1.2rem;margin-top:1.8rem}
+.cta .h{font-weight:700;font-size:1rem;margin-bottom:.3rem}
+.cta p{font-size:.9rem;color:var(--muted);margin-bottom:.7rem}
+.cta a{display:inline-block;background:var(--gold);color:#fff;font-weight:650;font-size:.95rem;padding:.6rem 1.2rem;border-radius:10px;text-decoration:none}
+.foot{margin-top:2.2rem;padding-top:1rem;border-top:1px solid var(--line);font-size:.68rem;color:var(--subtle);line-height:1.6}
+@media(max-width:420px){.stats{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">Legacy Home Team · Hampton Roads</div>
+  <h1>{{ city }} market update for {{ 'buyers' if audience == 'buyers' else 'sellers' }}</h1>
+  <div class="datemark">Real numbers through {{ data_month }}</div>
+  <p class="lede">{{ lede }}</p>
+
+  <div class="stats">
+    {% for s in stats %}
+    <div class="stat">
+      <div class="lbl">{{ s.label }}</div>
+      <div class="val">{{ s.value }}</div>
+      {% if s.change %}<div class="chg {{ s.dir }}">{{ s.change }}</div>{% endif %}
+      <div class="note">{{ s.note }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <h2>What this means for you</h2>
+  <div class="means">
+    {% for p in meaning %}<p>{{ p }}</p>{% endfor %}
+  </div>
+
+  <div class="cta">
+    <div class="h">{{ cta_head }}</div>
+    <p>{{ cta_body }}</p>
+    <a href="sms:+17578164037">Text Barry: (757) 816-4037</a>
+  </div>
+
+  <div class="foot">
+    Listing data: Realtor.com&reg; Economic Research. Sale data from Zillow Research
+    (zillow.com/research/data/), &copy; Zillow, Inc. Zillow does not endorse this page.
+    Figures are city level and update about twice a month. Your street and your house
+    are their own market, which is exactly what we would walk you through in person.<br>
+    Barry Jenkins &middot; Legacy Home Team &middot; Hampton Roads, VA
+  </div>
+</div>
+</body>
+</html>
