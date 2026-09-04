@@ -247,7 +247,7 @@ HARD RULES (breaking any of these ruins the note):
 - Use ONLY facts present in the supplied data. If something is unknown, it is unknown. NEVER invent a name, date, price, area, timeline, or intent.
 - NEVER use em dashes or en dashes. Periods and commas only.
 - Quick-glance formatting: every line short. Bullets use "•". No paragraphs, no filler, no cheerleading, no restating what FUB already summarizes.
-- SAY is spoken words in quotes, 35 words max, grounded in ONE real detail from the data. Permission-based, disarming, teach do not push. For not-ready leads (6-12 months out), the signature reframe: acknowledge they are not ready yet, then offer the one thing they need to know NOW so they do not make an expensive mistake later.
+- SAY is spoken words in quotes, 35 words max, grounded in ONE real detail from the data. NEVER script the caller's own name or identity ("this is Chris" is banned): prior calls may have been an AI assistant under a different name, and any agent on the team may make this call. Open with the lead's name only. Permission-based, disarming, teach do not push. For not-ready leads (6-12 months out), the signature reframe: acknowledge they are not ready yet, then offer the one thing they need to know NOW so they do not make an expensive mistake later.
 - BOOK is spoken words in quotes, 25 words max. PRESCRIBE the face to face like a trusted counselor, never ask permission. Banned: "worth 20 minutes?", "maybe we could", "if you want", "no pressure but". Required register: "Here is what needs to happen next" / "The right move for you is". Close assumptively with two options: "Thursday evening or Saturday morning, whichever works" or "I am holding Thursday at 6 for you unless Saturday is better". Certainty, never pressure or fake urgency. If a meeting is already on the books, BOOK protects or advances it instead.
 - GET: 2-3 bullets, the missing answers this call must extract, from the Motivation / Timeframe / Location rubric plus financing and target number. Only what is actually unknown.
 - EDGE: 1-3 bullets, ONLY facts that change how the agent plays the call (contact preferences, a hook they mentioned, a property they keep returning to, decision makers). Not a biography. If nothing qualifies, output "EDGE: • none on file".
@@ -275,10 +275,12 @@ _MP_CITIES = {
 }
 
 
-def _market_line(data):
+def _market_line(data, side_hint=""):
     """One line of real market stats for the lead's city + the shareable page
     link. Pure data injection from market_snapshots; returns None when the
-    lead's city is not one of the 7 or no snapshot exists."""
+    lead's city is not one of the 7 or no snapshot exists. side_hint comes
+    from the model's SIDE read of the conversation (tags alone misfiled Joy,
+    a seller, as a buyer)."""
     try:
         blob = " ".join(data.get("person", {}).get("addresses") or []).lower()
         slug = next((s for c, s in _MP_CITIES.items() if c in blob), None)
@@ -287,9 +289,14 @@ def _market_line(data):
         snap = _db.get_market_snapshot(slug)
         if not snap:
             return None
-        probe = (" ".join(data.get("person", {}).get("tags") or [])
-                 + " " + str(data.get("person", {}).get("stage") or "")).lower()
-        side = "sellers" if "sell" in probe else "buyers"
+        if side_hint in ("seller", "sellers"):
+            side = "sellers"
+        elif side_hint in ("buyer", "buyers"):
+            side = "buyers"
+        else:
+            probe = (" ".join(data.get("person", {}).get("tags") or [])
+                     + " " + str(data.get("person", {}).get("stage") or "")).lower()
+            side = "sellers" if "sell" in probe else "buyers"
         r = snap.get("realtor") or {}
         z = snap.get("zillow") or {}
         bits = []
@@ -327,8 +334,11 @@ def _generate_brief(client, data, tier, errs=None):
 THE ONLY DATA YOU MAY USE (anything not in here is unknown):
 {json.dumps(data, indent=1, default=str)[:14000]}
 
-OUTPUT exactly these five lines, plain text, nothing before or after
-(GET and EDGE hold their bullets on the same line, separated by " • "):
+OUTPUT exactly these six lines, plain text, nothing before or after
+(GET and EDGE hold their bullets on the same line, separated by " • ").
+SIDE is your read of whether this lead is selling or buying, from the
+conversation and behavior: exactly one word, seller or buyer or unknown.
+SIDE: seller
 SAY: "..."
 BOOK: "..."
 GET: • ... • ... • ...
@@ -354,7 +364,7 @@ Under 550 characters combined. No em dashes or en dashes anywhere. Never invent 
             errs.append(f"generation: {str(e)[:200]}")
         return None
 
-    labels = ("SAY:", "BOOK:", "GET:", "EDGE:", "SOURCE:")
+    labels = ("SIDE:", "SAY:", "BOOK:", "GET:", "EDGE:", "SOURCE:")
     lines = {}
     current = None
     for line in raw.splitlines():
@@ -378,7 +388,9 @@ Under 550 characters combined. No em dashes or en dashes anywhere. Never invent 
 
     ordered = ["SAY:", "BOOK:", "GET:", "EDGE:"]
     body_lines = [f"{l} {lines[l]}" for l in ordered]
-    market = _market_line(data)
+    # SIDE steers the market page (seller vs buyer) and is not shown in the note
+    side_hint = (lines.get("SIDE:") or "").strip().lower()
+    market = _market_line(data, side_hint)
     if market:
         body_lines.append(market)
     body_lines.append(f"SOURCE: {lines['SOURCE:']}")
