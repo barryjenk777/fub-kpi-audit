@@ -5113,6 +5113,36 @@ def _system_status():
             "next_run": _mc_fmt(j.next_run_time.isoformat()) if j.next_run_time else "NEVER",
         } for j in jobs]
         return {"dot": dot, "summary": summary, "detail_rows": detail}
+    def _fub_webhooks():
+        raw, _ts = _db.get_app_state("fub_webhook_stats")
+        stats = json.loads(raw or "{}")
+        counts = stats.get("counts") or {}
+        real = {k: v for k, v in counts.items()
+                if k in ("appointmentsCreated", "appointmentsUpdated",
+                         "appointmentsDeleted", "callsCreated", "textMessagesCreated")}
+        rejected = int(counts.get("_sig_rejected", 0))
+        total_real = sum(real.values())
+        last_at = stats.get("last_at")
+        if rejected and rejected >= max(total_real, 1):
+            dot = "red"
+            summary = ("FUB deliveries are being REJECTED by signature verification "
+                       "(%d rejected vs %d accepted). FUB disables webhooks after "
+                       "48h of failures — fix urgently." % (rejected, total_real))
+        elif total_real == 0:
+            dot = "amber"
+            summary = ("Registered and armed (5 events), no real FUB event received "
+                       "yet. Expect callsCreated with the first morning dials.")
+        else:
+            dot = "green"
+            age = ""
+            if last_at:
+                summary = "%d events received. " % total_real
+            else:
+                summary = ""
+            summary += "Realtime: appointments mirror, speed-to-transfer, instant tag clearing."
+        detail = [{"event": k, "received": v} for k, v in sorted(counts.items())]
+        return {"dot": dot, "summary": summary, "detail_rows": detail}
+    add(HEALTH, "FUB webhooks (realtime)", _fub_webhooks)
     add(HEALTH, "Scheduled jobs", _jobs)
 
     def _self_audit():
@@ -7786,6 +7816,60 @@ def _fub_outbound_touch(person_id, is_call):
         logger.warning("FUB webhook tag removal failed for %s: %s", person_id, e)
 
 
+def _fub_instant_prep(appt):
+    """Same-day appointment booked AFTER the 7:45am Save-Bot run: send the
+    agent one prep script prompt immediately instead of waiting until
+    tomorrow. Uses the approved deterministic Save-Bot fallback style and the
+    same delivery queue (Android agents get email automatically).
+    claim_once guards against webhook retries double-sending."""
+    appt_id = appt.get("id")
+    start_str = appt.get("start") or ""
+    if not appt_id or not start_str:
+        return
+    try:
+        start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return
+    _et_h = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+    _ET = timezone(timedelta(hours=_et_h))
+    now_et = datetime.now(_ET)
+    start_et = start_dt.astimezone(_ET)
+    # Only same-day future appointments, booked after the morning batch ran
+    if start_et.date() != now_et.date() or start_et <= now_et or now_et.hour < 8:
+        return
+    invitees = appt.get("invitees", [])
+    agent_name = next((i.get("name") for i in invitees
+                       if i.get("userId") and not i.get("personId")), None)
+    person_name = next((i.get("name") for i in invitees if i.get("personId")), None)
+    if not agent_name:
+        return
+    if (agent_name in getattr(config, "EXCLUDED_USERS", [])
+            or agent_name in getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set())):
+        return
+    if not _db.claim_once(f"savebot_instant_{appt_id}"):
+        return
+    profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
+                    if p.get("agent_name") == agent_name), None)
+    phone = (profile or {}).get("phone")
+    if not phone:
+        logger.info("instant prep: no phone for %s, skipping", agent_name)
+        return
+    when = start_et.strftime("%I:%M%p").lstrip("0").lower()
+    first = (agent_name.split() or ["there"])[0]
+    who = person_name or "your client"
+    message = (f"{first}, new appointment just landed: {when} today with {who}. "
+               f"Send this now so you walk in warm: \"I am putting together your "
+               f"file for our meeting at {when}. Anything change on your end "
+               f"since we talked?\"")
+    rid = _db.queue_agent_imessage(agent_name, (profile or {}).get("fub_user_id"),
+                                  phone, message)
+    if rid:
+        from datetime import date as _date
+        _db.log_savebot(_date.today().isoformat(), "instant", agent_name, 1,
+                        message[:500], "queued")
+        logger.info("instant prep queued for %s (appt %s)", agent_name, appt_id)
+
+
 def _fub_process_webhook(event, uri, resource_ids):
     """Background processor: fetch what changed, apply it. Never trusts the
     payload beyond (event name, resource ids); data comes from the FUB API."""
@@ -7796,6 +7880,11 @@ def _fub_process_webhook(event, uri, resource_ids):
             else:
                 for appt in _fub_fetch_webhook_resources(uri):
                     _fub_upsert_appt_resource(appt, event)
+                    if event == "appointmentsCreated":
+                        try:
+                            _fub_instant_prep(appt)
+                        except Exception as e:
+                            logger.warning("instant prep failed: %s", e)
         elif event in ("callsCreated", "textMessagesCreated"):
             seen = set()
             for r in _fub_fetch_webhook_resources(uri):
@@ -7851,6 +7940,19 @@ def webhook_fub():
     """
     raw = request.get_data()
     if not _fub_webhook_signature_ok(raw):
+        # Count rejections so "no events" and "events being rejected" are
+        # distinguishable in /api/admin/webhook-stats (FUB auto-disables
+        # webhooks failing >50% over 48h — we must see this happening).
+        try:
+            _raw_stats, _ = _db.get_app_state("fub_webhook_stats")
+            stats = json.loads(_raw_stats or "{}")
+            counts = stats.get("counts") or {}
+            counts["_sig_rejected"] = int(counts.get("_sig_rejected", 0)) + 1
+            stats.update(counts=counts,
+                         last_reject_at=datetime.now(timezone.utc).isoformat())
+            _db.set_app_state("fub_webhook_stats", json.dumps(stats))
+        except Exception:
+            pass
         return jsonify({"error": "bad signature"}), 401
 
     payload = request.get_json(force=True, silent=True) or {}

@@ -265,18 +265,22 @@ def _agent_themes(cur, funnel):
 
 def _isa_themes(cur):
     doing, not_doing = [], []
+    # Speed-to-transfer is stamped by the FUB call webhook, wired 2026-09-04.
+    # Transfers before that date can never have first_call_at, so the 24h
+    # metric only counts transfers made since wiring (fair from day one).
     rows = _q(cur, """
         SELECT COUNT(*) FILTER (WHERE transfer_date >= CURRENT_DATE - 30),
                COUNT(*) FILTER (WHERE transfer_date <  CURRENT_DATE - 30
                                   AND transfer_date >= CURRENT_DATE - 60),
-               COUNT(*) FILTER (WHERE transfer_date >= CURRENT_DATE - 30
+               COUNT(*) FILTER (WHERE transfer_date >= '2026-09-04'
                                   AND first_call_at IS NOT NULL),
-               COUNT(*) FILTER (WHERE transfer_date >= CURRENT_DATE - 30
+               COUNT(*) FILTER (WHERE transfer_date >= '2026-09-04'
                                   AND first_call_at IS NOT NULL
-                                  AND first_call_at - transfer_date <= INTERVAL '24 hours')
+                                  AND first_call_at - transfer_date <= INTERVAL '24 hours'),
+               COUNT(*) FILTER (WHERE transfer_date >= '2026-09-04')
         FROM isa_transfers
     """)
-    t30, tprev, called, called24 = [int(x or 0) for x in rows[0]]
+    t30, tprev, called, called24, tracked = [int(x or 0) for x in rows[0]]
 
     d = _pct_delta(t30, tprev)
     line = "%d transfers in the last 30 days" % t30
@@ -284,22 +288,21 @@ def _isa_themes(cur):
         line += " (%s%d%% vs the month before)" % ("+" if d >= 0 else "", d)
     (doing if (d or 0) >= 0 else not_doing).append(line + ".")
 
-    if t30:
-        pct = round(called / t30 * 100)
-        pct24 = round(called24 / t30 * 100)
-        if called == 0 and t30 >= 20:
-            # first_call_at is stamped by the FUB call webhook. Zero across a
-            # month of transfers means the tracking is not wired (no webhooks
-            # registered in FUB, found Sep 2026), not that no agent ever calls.
-            not_doing.append("Transfer follow-up is untracked right now (FUB call "
-                             "webhook not wired), so speed-to-transfer is a blind "
-                             "spot. Fix is queued.")
-        elif pct24 >= 60:
-            doing.append("%d%% of transfers get an agent call within 24 hours." % pct24)
+    if tracked < 3:
+        doing.append("Speed-to-transfer tracking is live as of Sep 4. Every new "
+                     "transfer now records how fast the agent calls it; the "
+                     "picture builds with each transfer.")
+    else:
+        pct = round(called / tracked * 100)
+        pct24 = round(called24 / tracked * 100)
+        if pct24 >= 60:
+            doing.append("%d%% of the last %d transfers got an agent call within "
+                         "24 hours." % (pct24, tracked))
         else:
-            not_doing.append("Only %d%% of transfers get an agent call within 24 "
-                             "hours (%d%% ever get one). Fhalen's transfers cool "
-                             "fast; same-day follow-up is the whole game." % (pct24, pct))
+            not_doing.append("Only %d%% of the last %d transfers got an agent call "
+                             "within 24 hours (%d%% ever did). Fhalen's transfers "
+                             "cool fast; same-day follow-up is the whole game."
+                             % (pct24, tracked, pct))
 
     # Transfer type mix
     rows = _q(cur, """
