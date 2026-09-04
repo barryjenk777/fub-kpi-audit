@@ -15328,7 +15328,7 @@ def api_lead_memory_run():
         dry_run = bool(getattr(config, "LEAD_MEMORY_DRY_RUN", True))
     try:
         import lead_memory as _lm
-        return jsonify(_lm.run_lead_memory_refresh(
+        kwargs = dict(
             dry_run=bool(dry_run),
             # Preview knobs (dry run only): include the brief texts in the
             # JSON, and optionally skip the sample email to Barry.
@@ -15337,10 +15337,37 @@ def api_lead_memory_run():
             # force=1 regenerates every brief regardless of activity change
             # (one-time format migrations)
             force=bool(body.get("force")),
-        ))
+        )
+        if body.get("async"):
+            # Long runs (force migrations) outlive Railway's ~120s edge kill;
+            # run in a daemon thread, summary lands in app_state.
+            def _bg():
+                try:
+                    s = _lm.run_lead_memory_refresh(**kwargs)
+                    _db.set_app_state("lead_memory_last_manual_run", json.dumps(s, default=str))
+                except Exception as e:
+                    logger.error("[CALL OPENER] async run failed: %s", e, exc_info=True)
+                    _db.set_app_state("lead_memory_last_manual_run",
+                                      json.dumps({"error": str(e)[:400]}))
+            threading.Thread(target=_bg, daemon=True).start()
+            return jsonify({"ok": True, "status": "running in background",
+                            "check": "/api/admin/lead-memory/last-manual-run"})
+        return jsonify(_lm.run_lead_memory_refresh(**kwargs))
     except Exception as e:
         logger.error("[LEAD MEMORY] manual run failed: %s", e)
         return jsonify({"ok": False, "error": str(e)[:400]}), 500
+
+
+@app.route("/api/admin/lead-memory/last-manual-run", methods=["GET"])
+def api_lead_memory_last_manual_run():
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    raw, ts = _db.get_app_state("lead_memory_last_manual_run")
+    try:
+        summary = json.loads(raw) if raw else None
+    except Exception:
+        summary = {"raw": (raw or "")[:400]}
+    return jsonify({"ok": True, "at": ts, "summary": summary})
 
 
 @app.route("/api/admin/lead-memory/status", methods=["GET"])
