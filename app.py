@@ -6325,6 +6325,32 @@ def api_goals_sync_deals():
             else:
                 agent_raw = fallback
 
+        deal_name  = deal.get("name") or deal.get("address") or f"Deal #{fub_deal_id}"
+
+        # ATTRIBUTION FIX (Sep 2026): Dotloop deals land assigned to whoever
+        # manages the file (Ana, the TM, or Barry) — NOT the closing agent —
+        # which zeroed out per-agent GCI everywhere (Money Board, goal pace,
+        # closing milestones) and once congratulated Ana on Julz's closing.
+        # But Dotloop embeds the actual agent in the deal NAME
+        # ("3633 Britt Ter, Virginia Beach - Julz Gatlabayan"), so when the
+        # assigned user is a non-agent, recover the agent from the name.
+        _non_agents = set(getattr(config, "EXCLUDED_USERS", []))
+        if (not agent_raw or agent_raw in _non_agents):
+            try:
+                _roster = [p.get("agent_name") for p in
+                           (_db.get_agent_profiles(active_only=False) or [])
+                           if p.get("agent_name") and p["agent_name"] not in _non_agents]
+                _dn = deal_name.lower()
+                for _cand in _roster:
+                    _parts = _cand.lower().split()
+                    # full name in deal name, or unambiguous first-name match
+                    if _cand.lower() in _dn or (
+                            len(_parts) > 1 and _parts[0] in _dn and _parts[-1] in _dn):
+                        agent_raw = _cand
+                        break
+            except Exception as _attr_e:
+                logger.warning("deal name attribution failed: %s", _attr_e)
+
         sale_price = deal.get("price") or deal.get("salePrice") or 0
         deal_name  = deal.get("name") or deal.get("address") or f"Deal #{fub_deal_id}"
 
