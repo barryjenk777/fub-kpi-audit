@@ -7620,3 +7620,22 @@ def log_market_page_view(city_slug, audience, token=None, person_id=None):
                 """, (city_slug, audience, token, person_id))
     except Exception as e:
         logger.warning("log_market_page_view failed: %s", e)
+
+
+def mark_appointments_canceled(fub_appt_ids):
+    """Webhook appointmentsDeleted: the resource is gone from FUB, so mark
+    our mirror rows canceled (rows are kept for history, never deleted)."""
+    if not is_available() or not fub_appt_ids:
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE appointments
+                       SET status = 'canceled', updated_at = NOW()
+                     WHERE fub_appt_id = ANY(%s)
+                """, ([int(i) for i in fub_appt_ids if str(i).isdigit()],))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("mark_appointments_canceled failed: %s", e)
+        return 0

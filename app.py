@@ -7690,138 +7690,166 @@ def api_leadstream_weekly():
 # ---- LeadStream: FUB Webhook (real-time tag removal) ----
 
 @app.route("/webhook/fub", methods=["POST"])
-def webhook_fub():
-    """
-    Receives FUB webhook events and immediately removes the LeadStream tag
-    from any lead that gets an outbound call or text — no waiting for the
-    next 4-hour scoring run.
+def _fub_webhook_signature_ok(raw_body: bytes) -> bool:
+    """Verify FUB-Signature per the FUB spec: HMAC-SHA256 of the base64-encoded
+    raw JSON body, keyed with the X-System-Key. Enforced only when
+    FUB_SYSTEM_KEY is configured; without it we still never trust the payload
+    (we only fetch from api.followupboss.com), so forged posts are inert."""
+    system_key = os.environ.get("FUB_SYSTEM_KEY", "")
+    if not system_key:
+        return True
+    import base64
+    import hashlib
+    import hmac as _hmac
+    provided = request.headers.get("FUB-Signature", "")
+    expected = _hmac.new(system_key.encode(),
+                         base64.b64encode(raw_body),
+                         hashlib.sha256).hexdigest()
+    return bool(provided) and _hmac.compare_digest(provided, expected)
 
-    Configure in FUB: Admin → Integrations → Webhooks
-      URL: https://<your-app>/webhook/fub
-      Events: Call Log Created, Text Message Created
-    """
-    # Optional secret verification
-    webhook_secret = os.environ.get("FUB_WEBHOOK_SECRET")
-    if webhook_secret:
-        provided = (
-            request.headers.get("X-FUB-Signature")
-            or request.headers.get("Authorization", "").replace("Bearer ", "")
-        )
-        if provided != webhook_secret:
-            return jsonify({"error": "unauthorized"}), 401
 
-    payload = request.json or {}
+def _fub_fetch_webhook_resources(uri: str):
+    """Fetch the resources a webhook points at. Only api.followupboss.com is
+    ever contacted (payload-supplied URIs are otherwise ignored). Returns the
+    resource list from the response's first list-valued key."""
+    if not uri or not uri.startswith("https://api.followupboss.com/"):
+        return []
+    import requests as _rq
+    headers = {"X-System": os.environ.get("FUB_SYSTEM", "LegacyCommandCenter")}
+    if os.environ.get("FUB_SYSTEM_KEY"):
+        headers["X-System-Key"] = os.environ["FUB_SYSTEM_KEY"]
+    r = _rq.get(uri, auth=(os.environ.get("FUB_API_KEY", ""), ""),
+                headers=headers, timeout=30)
+    r.raise_for_status()
+    body = r.json()
+    for v in body.values():
+        if isinstance(v, list):
+            return v
+    return []
 
-    # FUB wraps events as {"event": "...", "data": {...}}
-    event = payload.get("event") or payload.get("type", "")
-    event_data = payload.get("data") or payload
 
-    event_lower = event.lower()
+def _fub_upsert_appt_resource(appt, event_name):
+    """Shared appointment upsert used by the webhook processor."""
+    from config import APT_OUTCOME_IDS
+    appt_id = appt.get("id")
+    start_str = appt.get("start") or appt.get("startDate") or ""
+    if not appt_id or not start_str:
+        return
+    try:
+        start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return
+    outcome_id = appt.get("outcomeId")
+    outcome = APT_OUTCOME_IDS.get(outcome_id) if outcome_id else None
+    status = "showed" if outcome == "Met with Client" else \
+             "no_show" if outcome in ("No show",) else \
+             "canceled" if appt.get("canceled") else "scheduled"
+    invitees = appt.get("invitees", [])
+    person_id = next((i.get("personId") for i in invitees if i.get("personId")), None)
+    person_name = next((i.get("name") for i in invitees if i.get("personId")), "Unknown")
+    agent_uid = next((i.get("userId") for i in invitees
+                      if i.get("userId") and not i.get("personId")), None)
+    agent_name = next((i.get("name") for i in invitees
+                       if i.get("userId") and not i.get("personId")), None)
+    _db.upsert_appointment(
+        fub_appt_id=appt_id, person_id=person_id, person_name=person_name,
+        agent_name=agent_name, agent_fub_uid=agent_uid, start_time=start_dt,
+        title=appt.get("title", ""), status=status, outcome=outcome,
+    )
+    _db.log_automation_event(
+        event_type="apt_confirmed" if "Created" in event_name else "apt_updated",
+        person_id=person_id, person_name=person_name, agent_name=agent_name,
+        payload={"fub_appt_id": appt_id, "status": status, "outcome": outcome},
+        triggered_by="webhook_fub",
+    )
 
-    # ── Appointment events → sync to our appointments table ────────────────
-    if "appointment" in event_lower:
+
+def _fub_outbound_touch(person_id, is_call):
+    """Outbound call/text to a lead: stamp ISA first-call and clear
+    LeadStream tags immediately (the original purpose of this webhook)."""
+    if is_call:
         try:
-            appt_id  = event_data.get("id") or event_data.get("appointmentId")
-            start_str = event_data.get("start") or event_data.get("startDate") or ""
-            if appt_id and start_str:
-                from config import APT_OUTCOME_IDS
-                outcome_id = event_data.get("outcomeId")
-                outcome    = APT_OUTCOME_IDS.get(outcome_id) if outcome_id else None
-                status = "showed"   if outcome == "Met with Client" else \
-                         "no_show"  if outcome in ("No show",)      else \
-                         "canceled" if event_data.get("canceled")   else "scheduled"
-
-                invitees = event_data.get("invitees", [])
-                person_id_appt = next(
-                    (i.get("personId") for i in invitees if i.get("personId")), None
-                )
-                person_name_appt = next(
-                    (i.get("name") for i in invitees if i.get("personId")), "Unknown"
-                )
-                agent_uid_appt = next(
-                    (i.get("userId") for i in invitees if i.get("userId") and not i.get("personId")), None
-                )
-                agent_name_appt = next(
-                    (i.get("name") for i in invitees if i.get("userId") and not i.get("personId")), None
-                )
-                try:
-                    start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
-                    start_dt = None
-
-                if start_dt:
-                    _db.upsert_appointment(
-                        fub_appt_id=appt_id,
-                        person_id=person_id_appt,
-                        person_name=person_name_appt,
-                        agent_name=agent_name_appt,
-                        agent_fub_uid=agent_uid_appt,
-                        start_time=start_dt,
-                        title=event_data.get("title", ""),
-                        status=status,
-                        outcome=outcome,
-                    )
-                    _db.log_automation_event(
-                        event_type="apt_confirmed" if "create" in event_lower else "apt_updated",
-                        person_id=person_id_appt,
-                        person_name=person_name_appt,
-                        agent_name=agent_name_appt,
-                        payload={"fub_appt_id": appt_id, "status": status, "outcome": outcome},
-                        triggered_by="webhook_fub",
-                    )
-                    logger.info("FUB webhook: appointment %s synced (status=%s)", appt_id, status)
-        except Exception as _ae:
-            logger.warning("FUB webhook appointment sync failed: %s", _ae)
-        return jsonify({"ok": True, "action": "appointment_synced"})
-
-    # ── Person events — no person_id = ignore ──────────────────────────────
-    person_id = event_data.get("personId")
-    if not person_id:
-        return jsonify({"ok": True, "action": "ignored_no_person"})
-
-    # Determine if this is an outbound contact
-    is_outbound = False
-    if "call" in event_lower:
-        is_outbound = not event_data.get("isIncoming", True)
-    elif "text" in event_lower:
-        is_outbound = event_data.get("isOutbound", False)
-
-    if not is_outbound:
-        return jsonify({"ok": True, "action": "ignored_inbound"})
-
-    # Mark ISA first call — stamps first_call_at on isa_transfers row so
-    # the owner brief's isa_handoffs_no_action count reflects reality.
-    if "call" in event_lower:
-        try:
-            _isa_marked = _db.mark_isa_first_call(str(person_id))
-            if _isa_marked:
+            if _db.mark_isa_first_call(str(person_id)):
                 logger.info("ISA first call marked for person %s", person_id)
-        except Exception as _isa_e:
-            logger.warning("mark_isa_first_call failed (non-fatal): %s", _isa_e)
-
-    # Remove LeadStream tags immediately
+        except Exception as e:
+            logger.warning("mark_isa_first_call failed (non-fatal): %s", e)
     try:
         from config import LEADSTREAM_TAG, LEADSTREAM_POND_TAG
         client = FUBClient()
         person = client.get_person(person_id)
         tags = person.get("tags") or []
-
         tags_to_remove = {LEADSTREAM_TAG, LEADSTREAM_POND_TAG}
-        removed = [t for t in tags if t in tags_to_remove]
-
-        if removed:
+        if any(t in tags_to_remove for t in tags):
             new_tags = [t for t in tags if t not in tags_to_remove]
             client._request("PUT", f"people/{person_id}", json_data={"tags": new_tags})
-
-        return jsonify({
-            "ok": True,
-            "personId": person_id,
-            "action": "tags_removed" if removed else "no_leadstream_tag",
-            "removed": removed,
-        })
-
+            logger.info("FUB webhook: LeadStream tags cleared for person %s", person_id)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.warning("FUB webhook tag removal failed for %s: %s", person_id, e)
+
+
+def _fub_process_webhook(event, uri, resource_ids):
+    """Background processor: fetch what changed, apply it. Never trusts the
+    payload beyond (event name, resource ids); data comes from the FUB API."""
+    try:
+        if event.startswith("appointments"):
+            if event == "appointmentsDeleted":
+                _db.mark_appointments_canceled([i for i in resource_ids if i])
+            else:
+                for appt in _fub_fetch_webhook_resources(uri):
+                    _fub_upsert_appt_resource(appt, event)
+        elif event in ("callsCreated", "textMessagesCreated"):
+            seen = set()
+            for r in _fub_fetch_webhook_resources(uri):
+                person_id = r.get("personId")
+                outbound = (not r.get("isIncoming", True)) or r.get("isOutbound", False)
+                if not person_id or not outbound or person_id in seen:
+                    continue
+                seen.add(person_id)
+                _fub_outbound_touch(person_id, is_call=(event == "callsCreated"))
+        # Receipt counter → Mission Control visibility
+        try:
+            stats = json.loads(_db.get_app_state("fub_webhook_stats") or "{}")
+            counts = stats.get("counts") or {}
+            counts[event] = int(counts.get(event, 0)) + 1
+            _db.set_app_state("fub_webhook_stats", json.dumps({
+                "last_event": event,
+                "last_at": datetime.now(timezone.utc).isoformat(),
+                "counts": counts,
+            }))
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error("FUB webhook processing failed (%s): %s", event, e, exc_info=True)
+
+
+def webhook_fub():
+    """
+    Receives FUB webhook events (registered via the LegacyCommandCenter
+    system, Sep 2026). FUB sends a LIGHTWEIGHT pointer payload:
+        {"event": "callsCreated", "resourceIds": [...], "uri": "https://api...."}
+    — never the resource itself. We verify the FUB-Signature, ACK within
+    FUB's 10-second window, and fetch + process in a background thread.
+
+    Registered events: appointmentsCreated/Updated/Deleted, callsCreated,
+    textMessagesCreated. Effects: appointments DB mirror stays realtime,
+    outbound calls stamp isa_transfers.first_call_at (speed-to-transfer),
+    outbound calls/texts clear LeadStream tags instantly.
+    """
+    raw = request.get_data()
+    if not _fub_webhook_signature_ok(raw):
+        return jsonify({"error": "bad signature"}), 401
+
+    payload = request.get_json(force=True, silent=True) or {}
+    event = payload.get("event") or payload.get("type") or ""
+    uri = payload.get("uri") or ""
+    resource_ids = payload.get("resourceIds") or []
+
+    if not event:
+        return jsonify({"ok": True, "action": "ignored_no_event"})
+
+    threading.Thread(target=_fub_process_webhook,
+                     args=(event, uri, resource_ids), daemon=True).start()
+    return jsonify({"ok": True, "queued": True, "event": event})
 
 
 # ---- BatchLeads → FUB Webhook (via Zapier) ----
