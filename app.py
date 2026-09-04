@@ -7689,7 +7689,6 @@ def api_leadstream_weekly():
 
 # ---- LeadStream: FUB Webhook (real-time tag removal) ----
 
-@app.route("/webhook/fub", methods=["POST"])
 def _fub_webhook_signature_ok(raw_body: bytes) -> bool:
     """Verify FUB-Signature per the FUB spec: HMAC-SHA256 of the base64-encoded
     raw JSON body, keyed with the X-System-Key. Enforced only when
@@ -7822,6 +7821,19 @@ def _fub_process_webhook(event, uri, resource_ids):
         logger.error("FUB webhook processing failed (%s): %s", event, e, exc_info=True)
 
 
+@app.route("/api/admin/webhook-stats")
+def api_webhook_stats():
+    """Receipt counters for the FUB webhooks (event counts, last seen)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        stats = json.loads(_db.get_app_state("fub_webhook_stats") or "{}")
+    except Exception:
+        stats = {}
+    return jsonify({"ok": True, "stats": stats or {"note": "no events received yet"}})
+
+
+@app.route("/webhook/fub", methods=["POST"])
 def webhook_fub():
     """
     Receives FUB webhook events (registered via the LegacyCommandCenter
