@@ -7913,9 +7913,13 @@ def _fub_process_webhook(event, uri, resource_ids):
 
 @app.route("/api/admin/webhook-stats")
 def api_webhook_stats():
-    """Receipt counters for the FUB webhooks (event counts, last seen)."""
+    """Receipt counters for the FUB webhooks (event counts, last seen).
+    ?reset=1 clears the counters (e.g. to zero out synthetic test events)."""
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
+    if request.args.get("reset") == "1":
+        _db.set_app_state("fub_webhook_stats", "{}")
+        return jsonify({"ok": True, "stats": {}, "reset": True})
     try:
         _raw_stats, _ = _db.get_app_state("fub_webhook_stats")
         stats = json.loads(_raw_stats or "{}")
