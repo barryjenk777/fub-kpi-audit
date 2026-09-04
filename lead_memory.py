@@ -53,7 +53,10 @@ logger = logging.getLogger("lead_memory")
 
 _ET = zoneinfo.ZoneInfo("America/New_York")
 
-NOTE_SUBJECT = getattr(config, "LEAD_MEMORY_NOTE_SUBJECT", "LEAD MEMORY (auto)")
+NOTE_SUBJECT = getattr(config, "LEAD_MEMORY_NOTE_SUBJECT", "CALL OPENER (auto)")
+# Both current and legacy subjects count as "ours": old notes update in place
+# (no duplicates) and are never fed back in as model input.
+OUR_SUBJECTS = {NOTE_SUBJECT} | set(getattr(config, "LEAD_MEMORY_LEGACY_SUBJECTS", set()))
 
 # Event types that count as "meaningful" for the minimum-data floor.
 # Visited Website alone does not count — everyone trips that.
@@ -168,7 +171,7 @@ def _assemble_lead_data(fub, person):
     memory_note = None
     convo_notes, other_notes = [], []
     for n in notes:
-        if (n.get("subject") or "").strip() == NOTE_SUBJECT:
+        if (n.get("subject") or "").strip() in OUR_SUBJECTS:
             if memory_note is None:
                 memory_note = n
             continue  # never feed our own brief back into the next brief
@@ -238,34 +241,77 @@ def _assemble_lead_data(fub, person):
 # Generation
 # ---------------------------------------------------------------------------
 
-_SYSTEM = """You compile a short prep note ("Lead Memory") on one real estate lead so the agent can prep a call in 30 seconds instead of 3 minutes of timeline scrolling.
+_SYSTEM = """You write the CALL OPENER note on one real estate lead: the script for the agent's NEXT FIVE MINUTES on the phone. Follow Up Boss already shows the agent a past-facing summary of this lead, so NEVER write a recap. Your job is what FUB cannot do: the exact words to open with, the exact words to book the meeting, what to extract, and the one or two facts that create an edge.
 
 HARD RULES (breaking any of these ruins the note):
-- Use ONLY facts present in the supplied data. If something is unknown, say it is unknown. NEVER invent a name, date, price, area, timeline, or intent. NEVER soften "unknown" into a guess.
+- Use ONLY facts present in the supplied data. If something is unknown, it is unknown. NEVER invent a name, date, price, area, timeline, or intent.
 - NEVER use em dashes or en dashes. Periods and commas only.
-- Punchy telegraphic utility copy. Fragments over sentences. No filler, no coaching, no cheerleading, no restating the obvious.
-- MISSING grades against the Motivation / Timeframe / Location rubric (what MaverickRE grades calls on), plus financing when unknown. Name only what is actually missing.
-- NEXT MOVE is one specific opening question grounded in a real detail that appears in KNOW, followed by the bridge toward a face to face meeting (see NEXT MOVE DOCTRINE).
-- SOURCE names only data sources actually supplied and used. Text messages were NOT supplied, never cite texts.
-
-NEXT MOVE DOCTRINE (Barry Jenkins, "Too Nice for Sales"):
-The goal of every call is a face to face meeting, not information gathering. Most of these leads think they do not need an agent yet. Many are 6 to 12 months out. The team's proven accelerator: get the not-ready lead to see the value of education NOW, because early conversations prevent expensive mistakes later and quietly win the relationship before any competitor exists.
-So NEXT MOVE has two beats, written as one short flow:
-1. The opener: a permission-based, disarming question grounded in a real detail from KNOW. Teach, do not push. The signature reframe for not-ready leads, adapt it to their situation, never verbatim every time: acknowledging they are not ready yet, then offering the one or two things they need to know so they do not make a mistake when they are ready.
-2. The bridge: PRESCRIBE the meeting like a trusted counselor, never ask permission for it. Banned hedge phrasings: "worth 20 minutes?", "maybe we could", "if you want", "no pressure but". Required register: "Here is what needs to happen next", "The right move for you is", "My advice is", "You need to see X before you decide Y". Anchor the meeting to THEIR best interest (avoiding the expensive mistake, knowing their number, protecting their equity), then close assumptively with two options: "Thursday evening or Saturday morning, whichever works for you" or the stronger "I am holding Thursday at 6 for you unless Saturday is better". Strength comes from certainty about the process, never from pressure or fake urgency.
-Rules for the doctrine: never fake urgency, never pressure, never make the meeting about the agent's need. The meeting is framed as the lead getting clarity earlier than everyone else. If the lead already has a meeting on the books, NEXT MOVE protects or advances that meeting instead."""
+- Quick-glance formatting: every line short. Bullets use "•". No paragraphs, no filler, no cheerleading, no restating what FUB already summarizes.
+- SAY is spoken words in quotes, 35 words max, grounded in ONE real detail from the data. Permission-based, disarming, teach do not push. For not-ready leads (6-12 months out), the signature reframe: acknowledge they are not ready yet, then offer the one thing they need to know NOW so they do not make an expensive mistake later.
+- BOOK is spoken words in quotes, 25 words max. PRESCRIBE the face to face like a trusted counselor, never ask permission. Banned: "worth 20 minutes?", "maybe we could", "if you want", "no pressure but". Required register: "Here is what needs to happen next" / "The right move for you is". Close assumptively with two options: "Thursday evening or Saturday morning, whichever works" or "I am holding Thursday at 6 for you unless Saturday is better". Certainty, never pressure or fake urgency. If a meeting is already on the books, BOOK protects or advances it instead.
+- GET: 2-3 bullets, the missing answers this call must extract, from the Motivation / Timeframe / Location rubric plus financing and target number. Only what is actually unknown.
+- EDGE: 1-3 bullets, ONLY facts that change how the agent plays the call (contact preferences, a hook they mentioned, a property they keep returning to, decision makers). Not a biography. If nothing qualifies, output "EDGE: • none on file".
+- SOURCE: one line naming only data actually supplied and used. Text messages were NOT supplied, never cite texts."""
 
 _TIER_STEER = {
-    "talked": """This lead HAS a conversation record (AI call transcript in the notes). Full brief:
-- KNOW: facts from the transcript and CRM fields. Timeline, motivation, price band, area, financing, decision makers, personal details, last real touch. The transcript is the richest source, mine it.
-- NEXT MOVE: one opening question that picks up a real thread from the conversation, then the face to face bridge per the doctrine.
+    "talked": """This lead HAS a conversation record (AI call transcript in the notes). Mine the transcript:
+- SAY picks up a real thread from that conversation, so the lead feels remembered.
+- GET lists what the conversation FAILED to lock down.
 - SOURCE: cite "AI transcript" with the note's real date, plus "site activity" if events were used.""",
-    "behavioral": """This lead has NEVER been reached. No conversation exists. Behavioral brief:
-- KNOW: open with exactly "Never reached, no conversation yet." Then summarize BEHAVIOR from the site activity: property types viewed, price band (and whether it drifted), areas, view and save counts with recency, time-of-day pattern only if clearly evident, plus source and lead age from CRM fields.
-- MISSING: state plainly that everything conversational is unknown, then the rubric items.
-- NEXT MOVE: a behavioral opener referencing a specific property or pattern from the events, with its real street or area (the home they keep returning to), then the face to face bridge per the doctrine, for example offering to get them inside that specific house.
+    "behavioral": """This lead has NEVER been reached. No conversation exists, never imply one:
+- SAY opens from their BEHAVIOR: the specific property or area they keep returning to, with its real street or area from the events. Offering to get them inside that specific house is the proven play.
+- GET: everything conversational is unknown. Pick the 3 that matter most.
+- EDGE: viewing patterns only if clearly evident (price band drift, save counts, recency).
 - SOURCE: "site activity" plus "CRM fields". No transcript exists, never claim one.""",
 }
+
+# ── Market ammo (deterministic, injected after generation, never from the LLM)
+
+_MP_CITIES = {
+    "virginia beach": "virginia-beach", "norfolk": "norfolk",
+    "chesapeake": "chesapeake", "suffolk": "suffolk",
+    "portsmouth": "portsmouth", "hampton": "hampton",
+    "newport news": "newport-news",
+}
+
+
+def _market_line(data):
+    """One line of real market stats for the lead's city + the shareable page
+    link. Pure data injection from market_snapshots; returns None when the
+    lead's city is not one of the 7 or no snapshot exists."""
+    try:
+        blob = " ".join(data.get("person", {}).get("addresses") or []).lower()
+        slug = next((s for c, s in _MP_CITIES.items() if c in blob), None)
+        if not slug:
+            return None
+        snap = _db.get_market_snapshot(slug)
+        if not snap:
+            return None
+        probe = (" ".join(data.get("person", {}).get("tags") or [])
+                 + " " + str(data.get("person", {}).get("stage") or "")).lower()
+        side = "sellers" if "sell" in probe else "buyers"
+        r = snap.get("realtor") or {}
+        z = snap.get("zillow") or {}
+        bits = []
+        if r.get("median_list_price"):
+            yy = r.get("median_list_price_yy")
+            yy_txt = " (%s%.0f%% yr)" % ("+" if yy and yy > 0 else "", yy * 100) if yy else ""
+            bits.append("ask $%s%s" % (format(int(r["median_list_price"]), ","), yy_txt))
+        above = (z.get("pct_sold_above_list") or {}).get("latest")
+        if above:
+            bits.append("%d%% sold over ask" % round(above * 100))
+        speed = (z.get("days_to_pending") or {}).get("latest") or r.get("median_dom")
+        if speed:
+            bits.append("%d days to a buyer" % speed)
+        if not bits:
+            return None
+        base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+        city = snap.get("city") or slug
+        return ("MARKET: %s %s: %s. Share: %s/market/%s/%s"
+                % (city, side, ", ".join(bits), base, slug, side))
+    except Exception as e:
+        logger.warning("[CALL OPENER] market line failed: %s", e)
+        return None
 
 
 def _generate_brief(client, data, tier, errs=None):
@@ -274,20 +320,22 @@ def _generate_brief(client, data, tier, errs=None):
     list) is passed, failure detail is appended so the run summary can show
     WHY briefs failed instead of a bare error count."""
     today_label = datetime.now(_ET).strftime("%b %d")
-    prompt = f"""Compile the Lead Memory note for this lead.
+    prompt = f"""Write the CALL OPENER note for this lead.
 
 {_TIER_STEER[tier]}
 
 THE ONLY DATA YOU MAY USE (anything not in here is unknown):
 {json.dumps(data, indent=1, default=str)[:14000]}
 
-OUTPUT exactly these four lines, plain text, nothing before or after:
-KNOW: ...
-MISSING: ...
-NEXT MOVE: ...
+OUTPUT exactly these five lines, plain text, nothing before or after
+(GET and EDGE hold their bullets on the same line, separated by " • "):
+SAY: "..."
+BOOK: "..."
+GET: • ... • ... • ...
+EDGE: • ... • ...
 SOURCE: ...
 
-Keep the four lines under 600 characters combined. No em dashes or en dashes anywhere. Never invent a name, date, price, or intent."""
+Under 550 characters combined. No em dashes or en dashes anywhere. Never invent a name, date, price, or intent."""
     try:
         resp = client.messages.create(
             model=getattr(config, "LEAD_MEMORY_MODEL", "claude-haiku-4-5"),
@@ -306,12 +354,13 @@ Keep the four lines under 600 characters combined. No em dashes or en dashes any
             errs.append(f"generation: {str(e)[:200]}")
         return None
 
+    labels = ("SAY:", "BOOK:", "GET:", "EDGE:", "SOURCE:")
     lines = {}
     current = None
     for line in raw.splitlines():
         stripped = line.strip()
         matched = False
-        for label in ("KNOW:", "MISSING:", "NEXT MOVE:", "SOURCE:"):
+        for label in labels:
             if stripped.upper().startswith(label):
                 current = label
                 lines[label] = stripped[len(label):].strip()
@@ -319,18 +368,24 @@ Keep the four lines under 600 characters combined. No em dashes or en dashes any
                 break
         if not matched and current and stripped:
             lines[current] += " " + stripped  # wrapped continuation
-    if any(not lines.get(l) for l in ("KNOW:", "MISSING:", "NEXT MOVE:", "SOURCE:")):
-        logger.warning("lead_memory: weak output, dropping. raw=%r", raw[:160])
+    # SAY, BOOK, GET, SOURCE are mandatory; EDGE may honestly be empty
+    if any(not lines.get(l) for l in ("SAY:", "BOOK:", "GET:", "SOURCE:")):
+        logger.warning("call opener: weak output, dropping. raw=%r", raw[:160])
         if errs is not None:
             errs.append(f"weak output: {raw[:120]}")
         return None
+    lines.setdefault("EDGE:", "• none on file")
 
-    body = "\n".join(f"{l} {lines[l]}" for l in
-                     ("KNOW:", "MISSING:", "NEXT MOVE:", "SOURCE:"))
-    body = _strip_dashes(body)
-    if len(body) > 900:
-        body = body[:900].rsplit(" ", 1)[0]
-    header = f"LEAD MEMORY (auto) . updated {today_label}"
+    ordered = ["SAY:", "BOOK:", "GET:", "EDGE:"]
+    body_lines = [f"{l} {lines[l]}" for l in ordered]
+    market = _market_line(data)
+    if market:
+        body_lines.append(market)
+    body_lines.append(f"SOURCE: {lines['SOURCE:']}")
+    body = _strip_dashes("\n".join(body_lines))
+    if len(body) > 1100:
+        body = body[:1100].rsplit(" ", 1)[0]
+    header = f"{NOTE_SUBJECT} . updated {today_label}"
     return f"{header}\n{body}"
 
 
@@ -428,7 +483,8 @@ def _pick_samples(samples, cap):
 # The run
 # ---------------------------------------------------------------------------
 
-def run_lead_memory_refresh(dry_run=None, include_briefs=False, send_email=True):
+def run_lead_memory_refresh(dry_run=None, include_briefs=False, send_email=True,
+                            force=False):
     """Compile/update Lead Memory briefs. Returns a JSON-safe summary dict.
 
     dry_run=None reads config.LEAD_MEMORY_DRY_RUN (defaults ON). Dry run:
@@ -467,7 +523,9 @@ def run_lead_memory_refresh(dry_run=None, include_briefs=False, send_email=True)
         pid = str(person.get("id"))
         marker = _activity_marker(person)
         row = stored.get(pid)
-        if row and marker and row.get("last_activity_seen") == marker:
+        # force=True regenerates everything regardless of activity (used for
+        # one-time format migrations, e.g. LEAD MEMORY -> CALL OPENER)
+        if not force and row and marker and row.get("last_activity_seen") == marker:
             summary["skipped_unchanged"] += 1
             continue
         changed.append(person)

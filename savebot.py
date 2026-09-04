@@ -41,7 +41,8 @@ logger = logging.getLogger("savebot")
 
 _ET = zoneinfo.ZoneInfo("America/New_York")
 
-_MEMORY_NOTE_SUBJECT = getattr(config, "LEAD_MEMORY_NOTE_SUBJECT", "LEAD MEMORY (auto)")
+_MEMORY_NOTE_SUBJECTS = ({getattr(config, "LEAD_MEMORY_NOTE_SUBJECT", "CALL OPENER (auto)")}
+                         | set(getattr(config, "LEAD_MEMORY_LEGACY_SUBJECTS", set())))
 
 # Same loose conversation markers lead_memory.py uses to spot AI transcripts.
 _CONVERSATION_MARKERS = (
@@ -187,7 +188,7 @@ def _assemble_lead_data(fub, person_id, lead_name):
     memory_note, convo_notes, other_notes = None, [], []
     for n in notes:
         subject = (n.get("subject") or "").strip()
-        if subject == _MEMORY_NOTE_SUBJECT:
+        if subject in _MEMORY_NOTE_SUBJECTS:
             if memory_note is None:
                 memory_note = n
             continue

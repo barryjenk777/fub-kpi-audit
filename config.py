@@ -740,7 +740,13 @@ LEAD_MEMORY_MODEL = "claude-haiku-4-5"
 LEAD_MEMORY_TEMPERATURE = 0.3
 
 # Subject on the FUB note. One note per lead, updated in place — never a pile.
-LEAD_MEMORY_NOTE_SUBJECT = "LEAD MEMORY (auto)"
+# Renamed Sep 2026: FUB shipped its own "Smart Summary" (a past-facing recap),
+# so our note pivoted to what FUB cannot do: the script for the next call
+# (opener, assumptive close, market ammo). "CALL OPENER" says what it is.
+LEAD_MEMORY_NOTE_SUBJECT = "CALL OPENER (auto)"
+# Old subject still recognized so existing notes update in place instead of
+# duplicating, and so old notes are never fed back in as input.
+LEAD_MEMORY_LEGACY_SUBJECTS = {"LEAD MEMORY (auto)"}
 
 # Scope cap: max priority leads considered per run (union of all source tags).
 LEAD_MEMORY_MAX_LEADS = 250

@@ -452,9 +452,9 @@ def _engines(cur):
         WHERE created_at >= CURRENT_DATE - 7 AND status != 'dry_run'
     """, lambda a, p: "%d revived leads routed, %d in bonus pool (7d)" % (a, p))
 
-    chip("Lead Memory", """
+    chip("Call Opener", """
         SELECT COUNT(*) FROM lead_briefs WHERE updated_at >= CURRENT_DATE - 7
-    """, lambda n: "%d lead briefs refreshed (7d)" % n)
+    """, lambda n: "%d call opener notes refreshed (7d)" % n)
 
     chip("Save-Bot", """
         SELECT COUNT(*) FROM savebot_log

@@ -4923,7 +4923,7 @@ def _system_status():
             "updated": _mc_fmt(b.get("updated_at")),
         } for b in (_db.get_recent_lead_briefs(10) or [])]
         return {"dot": dot, "summary": summary, "detail_rows": detail}
-    add(COACH, "Lead Memory briefs", _lead_memory)
+    add(COACH, "Call Opener notes (was Lead Memory)", _lead_memory)
 
     def _savebot():
         logs = _db.get_savebot_log(limit=100) or []
@@ -15334,6 +15334,9 @@ def api_lead_memory_run():
             # JSON, and optionally skip the sample email to Barry.
             include_briefs=bool(body.get("include_briefs")),
             send_email=body.get("send_email", True) is not False,
+            # force=1 regenerates every brief regardless of activity change
+            # (one-time format migrations)
+            force=bool(body.get("force")),
         ))
     except Exception as e:
         logger.error("[LEAD MEMORY] manual run failed: %s", e)

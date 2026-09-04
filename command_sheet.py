@@ -456,21 +456,25 @@ def _fallback_teach_line(week, streak):
 # Pipeline picks (2 to 3 leads per agent to review publicly)
 # ---------------------------------------------------------------------------
 
-_LEAD_MEMORY_SUBJECT = getattr(config, "LEAD_MEMORY_NOTE_SUBJECT", "LEAD MEMORY (auto)")
+_LEAD_MEMORY_SUBJECTS = ({getattr(config, "LEAD_MEMORY_NOTE_SUBJECT", "CALL OPENER (auto)")}
+                         | set(getattr(config, "LEAD_MEMORY_LEGACY_SUBJECTS", set())))
 
 
 def _lead_memory_next_move(fub, person_id):
-    """NEXT MOVE line from the lead's LEAD MEMORY note, or None."""
+    """The scripted move from the lead's CALL OPENER note (SAY line; legacy
+    notes carry NEXT MOVE instead), or None."""
     try:
         notes = fub.get_person_notes(person_id, limit=40)
     except Exception:
         return None
     for n in notes or []:
-        if (n.get("subject") or "").strip() == _LEAD_MEMORY_SUBJECT:
+        if (n.get("subject") or "").strip() in _LEAD_MEMORY_SUBJECTS:
             for line in (n.get("body") or "").splitlines():
-                if line.strip().upper().startswith("NEXT MOVE:"):
-                    move = line.strip()[10:].strip()
-                    return move[:240] if move else None
+                s = line.strip()
+                if s.upper().startswith("SAY:"):
+                    return s[4:].strip()[:240] or None
+                if s.upper().startswith("NEXT MOVE:"):
+                    return s[10:].strip()[:240] or None
             return None
     return None
 
