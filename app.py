@@ -3272,6 +3272,24 @@ def leadstream_dashboard():
     return render_template("leadstream.html")
 
 
+@app.route("/api/leadstream/insight")
+def api_leadstream_insight():
+    """The intelligence layer behind the LeadStream v2 page: leaks, agent
+    follow-up scoreboard, source quality, pond health. Reuses the (cached)
+    dashboard tag data plus direct Postgres."""
+    try:
+        resp = api_leadstream_dashboard()
+        ls = resp.get_json() if hasattr(resp, "get_json") else {}
+        if not isinstance(ls, dict) or ls.get("error"):
+            ls = {}
+        import leadstream_insight as _lsi
+        return jsonify(_lsi.build_insight(ls))
+    except Exception as e:
+        import traceback
+        logger.error("leadstream insight failed: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+
 @app.route("/api/leadstream/dashboard")
 def api_leadstream_dashboard():
     """Return LeadStream status, current tagged leads, and activity since last run.

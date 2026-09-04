@@ -314,6 +314,15 @@ SOURCE_ECONOMICS = {
 }
 TEAM_ADMIN_FEE_PER_CLOSING = 400   # Legacy's client-paid admin fee per closing
 
+# Hard monthly spend per source (dollars/month). Sources not listed either
+# cost referral-at-closing (see SOURCE_ECONOMICS referral pct) or are free.
+# Used by the LeadStream insight page for cost-per-appointment math.
+SOURCE_MONTHLY_SPEND = {
+    "zbuyer": 4500,          # cash-offer leads
+    # $5,000/mo listing-appointment source: add its exact FUB source name here
+    # once Barry confirms what it lands as (deliberately not guessed).
+}
+
 TM_LEAD_SOURCES = [
     "Ylopo PPC", "Ylopo Seller", "Ylopo Prospecting", "Google PPC", "Facebook",
     "zbuyer", "Probate", "Qazzoo", "Sphere / Past Client", "Referral",
