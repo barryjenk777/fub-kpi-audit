@@ -315,8 +315,20 @@ def _market_line(data, side_hint=""):
             return None
         base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
         city = snap.get("city") or slug
-        return ("MARKET: %s %s: %s. Share: %s/market/%s/%s"
+        line = ("MARKET: %s %s: %s. Share: %s/market/%s/%s"
                 % (city, side, ", ".join(bits), base, slug, side))
+        # Ready-to-send nurture text from the city's script bank (rotates by
+        # day so consecutive regenerations do not repeat), personalized with
+        # the lead's first name. This is the agent's value-first touch.
+        try:
+            texts = ((snap.get("nurture") or {}).get(side) or {}).get("texts") or []
+            if texts:
+                first = ((data.get("person", {}).get("name") or "").split() or [""])[0]
+                pick = texts[datetime.now(_ET).day % len(texts)]
+                line += "\nTEXT THEM: %s" % pick.replace("{first}", first or "there")
+        except Exception:
+            pass
+        return line
     except Exception as e:
         logger.warning("[CALL OPENER] market line failed: %s", e)
         return None
@@ -396,8 +408,8 @@ Under 550 characters combined. No em dashes or en dashes anywhere. Never invent 
         body_lines.append(market)
     body_lines.append(f"SOURCE: {lines['SOURCE:']}")
     body = _strip_dashes("\n".join(body_lines))
-    if len(body) > 1100:
-        body = body[:1100].rsplit(" ", 1)[0]
+    if len(body) > 1500:
+        body = body[:1500].rsplit(" ", 1)[0]
     header = f"{NOTE_SUBJECT} . updated {today_label}"
     return f"{header}\n{body}"
 

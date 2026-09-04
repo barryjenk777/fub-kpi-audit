@@ -1268,7 +1268,65 @@ def market_index():
         f'<a href="/market/{slug}/buyers" style="color:#b97a12">buyers</a></li>'
         for slug, (name, _, _) in _mp.CITIES.items())
     return (f"<div style='font-family:sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem'>"
-            f"<h2>Hampton Roads Market Pages</h2><ul style='list-style:none;padding:0'>{links}</ul></div>")
+            f"<h2>Hampton Roads Market Pages</h2>"
+            f"<p><a href='/market/ammo' style='color:#b97a12;font-weight:600'>🎯 Agent Nurture Ammo (scripts)</a></p>"
+            f"<ul style='list-style:none;padding:0'>{links}</ul></div>")
+
+
+@app.route("/market/ammo")
+def market_ammo():
+    """Agent-facing nurture ammo: per city and side, the data hooks plus
+    ready-to-send text scripts and a call track. Public path (no PII), so
+    agents can bookmark it on their phones. Scripts regenerate with every
+    data refresh (1st + 15th)."""
+    import market_pulse as _mp
+    sections = []
+    for slug, (name, _, _) in _mp.CITIES.items():
+        snap = _mp.get_snapshot(slug) or {}
+        nurture = snap.get("nurture") or {}
+        if not nurture:
+            continue
+        side_html = ""
+        for side in ("sellers", "buyers"):
+            n = nurture.get(side)
+            if not n:
+                continue
+            texts = "".join(
+                f"<div class='script'><div class='s-label'>Text option {i+1}</div>"
+                f"<div class='s-body'>{t}</div>"
+                f"<button onclick=\"navigator.clipboard.writeText(this.parentNode.querySelector('.s-body').innerText);this.textContent='Copied';setTimeout(()=>this.textContent='Copy',1200)\">Copy</button></div>"
+                for i, t in enumerate(n.get("texts") or []))
+            hooks = "".join(f"<li>{h}</li>" for h in (n.get("hooks") or []))
+            call = n.get("call_track") or ""
+            side_html += f"""
+              <div class='side'>
+                <h3>{'🏠 Seller leads' if side == 'sellers' else '🔑 Buyer leads'}</h3>
+                {f"<ul class='hooks'>{hooks}</ul>" if hooks else ""}
+                {texts}
+                {f"<div class='script'><div class='s-label'>Call opener</div><div class='s-body'>{call}</div></div>" if call else ""}
+              </div>"""
+        if side_html:
+            sections.append(f"<details class='city'><summary>{name}</summary>{side_html}</details>")
+    body = "".join(sections) or "<p>Scripts are generating. Check back after the next data refresh.</p>"
+    return f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Nurture Ammo</title><style>
+body{{font-family:-apple-system,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:1.2rem 1rem 3rem;color:#1a2233;line-height:1.5}}
+h1{{font-size:1.4rem}} .sub{{color:#5b6779;font-size:.85rem;margin-bottom:1.2rem}}
+.city{{border:1px solid #e6eaf1;border-radius:12px;margin:.6rem 0;padding:.2rem .9rem}}
+.city summary{{font-weight:700;font-size:1.05rem;padding:.6rem 0;cursor:pointer}}
+.side h3{{font-size:.9rem;margin:.8rem 0 .4rem}}
+.hooks{{margin:0 0 .6rem 1.1rem;padding:0;font-size:.82rem;color:#5b6779}}
+.script{{background:#f8fafc;border:1px solid #e6eaf1;border-radius:10px;padding:.7rem .8rem;margin:.5rem 0;position:relative}}
+.s-label{{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#b97a12;margin-bottom:.25rem}}
+.s-body{{font-size:.88rem;white-space:pre-wrap}}
+.script button{{position:absolute;top:.5rem;right:.6rem;font-size:.7rem;border:1px solid #e6eaf1;background:#fff;border-radius:7px;padding:.2rem .55rem;cursor:pointer}}
+</style></head><body>
+<h1>🎯 Nurture Ammo</h1>
+<div class='sub'>Real market data turned into ready-to-send touches. Swap {{first}} for their name.
+Scripts refresh with new data on the 1st and 15th. Value first, no pressure, one number per text.</div>
+{body}
+</body></html>"""
 
 
 @app.route("/market/<slug>/<audience>")
