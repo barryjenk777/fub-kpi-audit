@@ -1861,7 +1861,7 @@ def api_send_manager_email():
         # Get manager data
         import json as _json
         with app.test_client() as tc:
-            resp = tc.get("/api/manager")
+            resp = tc.get(f"/api/manager?key={_internal_key()}")
             mgr_data = _json.loads(resp.data)
 
         if "error" in mgr_data:
@@ -1884,7 +1884,7 @@ def api_send_isa_email():
         from email_report import send_isa_email
         import json as _json
         with app.test_client() as tc:
-            resp = tc.get("/api/isa")
+            resp = tc.get(f"/api/isa?key={_internal_key()}")
             isa_data = _json.loads(resp.data)
         if "error" in isa_data:
             return jsonify({"error": isa_data["error"]}), 500
@@ -8494,6 +8494,14 @@ def api_debug_calls():
 # The owner_brief cache serves sub-300ms — no middleware needed.
 # ---------------------------------------------------------------------------
 
+def _internal_key() -> str:
+    """Owner key for scheduler self-calls through test_client. The Sep 2026
+    auth lockdown gated every endpoint, which silently 401'd all internal
+    unauthenticated calls (LeadStream runs, pond mailer, weekly emails, tag
+    sync) — each printed success anyway. Every tc.get/tc.post must carry this."""
+    return os.environ.get("PERPLEXITY_API_KEY", "")
+
+
 def _perplexity_auth() -> bool:
     """Owner-level auth: the correct owner key, or a logged-in owner session."""
     expected = os.environ.get("PERPLEXITY_API_KEY", "").strip()
@@ -13741,13 +13749,13 @@ def warmup_cache():
         try:
             with app.test_client() as tc:
                 print("[WARMUP] Pre-loading audit data...")
-                tc.get("/api/audit")
+                tc.get(f"/api/audit?key={_internal_key()}")
                 print("[WARMUP] Audit cached ✓")
-                tc.get("/api/manager")
+                tc.get(f"/api/manager?key={_internal_key()}")
                 print("[WARMUP] Manager cached ✓")
-                tc.get("/api/isa")
+                tc.get(f"/api/isa?key={_internal_key()}")
                 print("[WARMUP] ISA cached ✓")
-                tc.get("/api/appointments")
+                tc.get(f"/api/appointments?key={_internal_key()}")
                 print("[WARMUP] Appointments cached ✓")
         except Exception as e:
             print(f"[WARMUP] Error: {e}")
@@ -13954,7 +13962,7 @@ def scheduled_run_leadstream():
     try:
         print(f"[SCHEDULER] LeadStream scoring started at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
         with app.test_client() as tc:
-            resp = tc.post("/api/leadstream/run", json={"apply": True})
+            resp = tc.post(f"/api/leadstream/run?key={_internal_key()}", json={"apply": True})
             result = resp.get_json() or {}
             print(f"[SCHEDULER] LeadStream: {result.get('status','done')} — "
                   f"{result.get('agent_leads_tagged',0)} agent leads, "
@@ -13973,7 +13981,7 @@ def scheduled_run_leadstream_pond():
     print(f"[SCHEDULER] LeadStream pond refresh at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
-            resp = tc.post("/api/leadstream/run", json={"apply": True, "pond_only": True})
+            resp = tc.post(f"/api/leadstream/run?key={_internal_key()}", json={"apply": True, "pond_only": True})
             result = resp.get_json() or {}
             print(f"[SCHEDULER] Pond refresh: {result.get('pond_leads_tagged',0)} pond leads tagged")
         _record_fired("leadstream_pond")
@@ -13988,7 +13996,7 @@ def scheduled_leadstream_nightly_cleanup():
     try:
         print(f"[SCHEDULER] LeadStream nightly cleanup at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
         with app.test_client() as tc:
-            resp = tc.post("/api/leadstream/deep-cleanup")
+            resp = tc.post(f"/api/leadstream/deep-cleanup?key={_internal_key()}")
             result = resp.get_json() or {}
             print(f"[SCHEDULER] Nightly cleanup: {result.get('removed',0)} tags removed")
         _record_fired("leadstream_cleanup")
@@ -14008,7 +14016,7 @@ def scheduled_send_audit_email():
     print(f"[SCHEDULER] Sending audit email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
-            resp = tc.post("/api/send-email", json={})
+            resp = tc.post(f"/api/send-email?key={_internal_key()}", json={})
             print(f"[SCHEDULER] Audit email: {resp.data.decode()}")
         _record_fired("audit_email")
     except Exception as e:
@@ -14023,7 +14031,7 @@ def scheduled_send_manager_email():
     print(f"[SCHEDULER] Sending manager email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
-            resp = tc.post("/api/send-manager-email")
+            resp = tc.post(f"/api/send-manager-email?key={_internal_key()}")
             print(f"[SCHEDULER] Manager email: {resp.data.decode()}")
         _record_fired("manager_email")
     except Exception as e:
@@ -14044,7 +14052,7 @@ def scheduled_send_hype_email():
     try:
         counts = _count_weekly_transfers()
         with app.test_client() as tc:
-            resp = tc.post("/api/send-hype-email", json={
+            resp = tc.post(f"/api/send-hype-email?key={_internal_key()}", json={
                 "ai_text":  counts["ai_text"],
                 "ai_voice": counts["ai_voice"],
                 # human_isa omitted → endpoint auto-detects Fhalen's appts
@@ -14308,7 +14316,7 @@ def scheduled_run_pond_mailer(daily_cap=45):
     print(f"[SCHEDULER] Pond mailer slot firing at {slot} (daily_cap={daily_cap})")
     try:
         with app.test_client() as tc:
-            resp = tc.post("/api/pond-mailer/run", json={"dry_run": False, "daily_cap": daily_cap})
+            resp = tc.post(f"/api/pond-mailer/run?key={_internal_key()}", json={"dry_run": False, "daily_cap": daily_cap})
             result = resp.get_json() or {}
             job_id = result.get("job_id", "unknown")
             print(f"[SCHEDULER] Pond mailer started — job_id: {job_id}")
@@ -14324,7 +14332,7 @@ def scheduled_sync_appointment_tags():
     try:
         print(f"[SCHEDULER] Syncing appointment tags at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
         with app.test_client() as tc:
-            resp = tc.post("/api/appointments/sync-tags")
+            resp = tc.post(f"/api/appointments/sync-tags?key={_internal_key()}")
             print(f"[SCHEDULER] Appointment tag sync: {resp.data.decode()}")
         _record_fired("appt_tag_sync")
     except Exception as e:
@@ -15394,7 +15402,7 @@ def scheduled_send_appointment_email():
     print(f"[SCHEDULER] Sending appointment email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
-            resp = tc.post("/api/send-appointment-email")
+            resp = tc.post(f"/api/send-appointment-email?key={_internal_key()}")
             print(f"[SCHEDULER] Appointment email: {resp.data.decode()}")
         _record_fired("appt_email")
     except Exception as e:
@@ -15409,7 +15417,7 @@ def scheduled_send_isa_email():
     print(f"[SCHEDULER] Sending ISA email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
         with app.test_client() as tc:
-            resp = tc.post("/api/send-isa-email")
+            resp = tc.post(f"/api/send-isa-email?key={_internal_key()}")
             print(f"[SCHEDULER] ISA email: {resp.data.decode()}")
         _record_fired("isa_email")
     except Exception as e:
