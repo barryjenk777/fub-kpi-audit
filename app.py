@@ -6764,6 +6764,132 @@ def api_goals_log_closing():
 
 # ---- Scorecard API (manager view) ----
 
+def _money_lever(pace):
+    """Earliest weakest funnel stage = the one thing to coach. Deterministic,
+    same philosophy as the Friday Command Sheet's team lever."""
+    stages = [
+        ("calls", "Volume: not enough dials going out"),
+        ("convos", "Reach: dials not turning into conversations"),
+        ("appointments", "The ask: conversations not becoming appointments"),
+        ("closings", "The table: appointments not becoming contracts"),
+    ]
+    worst = None
+    for key, label in stages:
+        p = (pace.get(key) or {}).get("pct")
+        if p is None:
+            continue
+        if worst is None or p < worst[0]:
+            worst = (p, label)
+    return worst[1] if worst else "No goal on file"
+
+
+@app.route("/api/agents/money")
+def api_agents_money():
+    """The Money Board: per agent, where their next dollar is.
+    Goal vs projected GCI, dollar gap, closings still needed, weekly
+    appointments that math requires (using THEIR goal-setting rates), the
+    one lever to coach, and both earned statuses (transfers + Phoenix).
+    Sorted by dollar gap so the most expensive conversation is on top."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        import math as _math
+        resp = api_goals_scorecard()
+        sc = resp.get_json() if hasattr(resp, "get_json") else {}
+        agents = sc.get("scorecard") or []
+        year = datetime.now(timezone.utc).year
+        jan1 = datetime(year, 1, 1, tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        elapsed = max((now - jan1).days / 365.0, 0.05)
+        weeks_left = max(round((365 - (now - jan1).days) / 7), 1)
+
+        audit = cache_get("audit") or {}
+        kpi_pass = {a.get("name") for a in audit.get("agents", [])
+                    if (a.get("evaluation") or {}).get("overall_pass")}
+
+        # Phoenix qualification from daily_activity (same rule as the sweep:
+        # last completed Mon-Fri, personal daily dial target hit 4+ days)
+        _et_h = -4 if 3 <= now.month <= 10 else -5
+        today_et = datetime.now(timezone(timedelta(hours=_et_h))).date()
+        last_mon = today_et - timedelta(days=today_et.weekday() + 7)
+        week_days = [last_mon + timedelta(days=i) for i in range(5)]
+        day_calls = {}
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT agent_name, activity_date, calls_logged
+                        FROM daily_activity
+                        WHERE activity_date BETWEEN %s AND %s
+                    """, (week_days[0], week_days[-1]))
+                    for n, d, c in cur.fetchall():
+                        day_calls.setdefault(n, {})[d] = int(c or 0)
+        except Exception as e:
+            logger.warning("money board phoenix calc failed: %s", e)
+
+        paused = getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set())
+        rows = []
+        for a in agents:
+            name = a.get("agent_name")
+            if not name or name in config.EXCLUDED_USERS:
+                continue
+            goal = a.get("goal") or {}
+            gci_goal = float(goal.get("gci_goal") or 0)
+            if gci_goal <= 0:
+                continue
+            pace = a.get("pace") or {}
+            ds = _db.get_deal_summary(name, year=year) or {}
+            ytd = float(ds.get("gci_est") or 0)
+            closings = int(ds.get("closings") or 0)
+            projected = ytd / elapsed
+            pace_pct = round(projected / gci_goal * 100)
+            gap = max(gci_goal - projected, 0)
+            gci_per = (ytd / closings) if closings else \
+                float(goal.get("avg_sale_price") or 400000) * float(goal.get("commission_pct") or 0.025)
+            need_gci = max(gci_goal - ytd, 0)
+            closings_to_go = _math.ceil(need_gci / gci_per) if gci_per > 0 else None
+            a2c = float(goal.get("appt_to_contract_rate") or 0.3)
+            c2c = float(goal.get("contract_to_close_rate") or 0.8)
+            conv_rate = float(goal.get("call_to_appt_rate") or 0.10)
+            appts_wk = round((closings_to_go / max(a2c * c2c, 0.05)) / weeks_left, 1) \
+                if closings_to_go else 0
+            convos_wk = round(appts_wk / max(conv_rate, 0.02)) if appts_wk else 0
+
+            dials_target_day = 0
+            try:
+                dials_target_day = round(_db.compute_targets(goal)["dials_per_week"] / 5)
+            except Exception:
+                pass
+            days_met = sum(1 for d in week_days
+                           if day_calls.get(name, {}).get(d, 0) >= dials_target_day > 0)
+
+            rows.append({
+                "agent": name,
+                "paused": name in paused,
+                "is_new": bool(pace.get("is_new_agent")),
+                "gci_goal": round(gci_goal),
+                "gci_ytd": round(ytd),
+                "closings_ytd": closings,
+                "on_pace_for": round(projected),
+                "pace_pct": pace_pct,
+                "gap": round(gap),
+                "closings_to_go": closings_to_go,
+                "appts_needed_wk": appts_wk,
+                "convos_needed_wk": convos_wk,
+                "lever": _money_lever(pace),
+                "earned_transfers": name in kpi_pass,
+                "phoenix_qualified": days_met >= getattr(config, "PHOENIX_QUALIFY_DAYS_REQUIRED", 4),
+                "phoenix_days_met": days_met,
+            })
+        rows.sort(key=lambda r: -r["gap"])
+        return jsonify({"ok": True, "as_of": now.isoformat(),
+                        "weeks_left": weeks_left, "agents": rows})
+    except Exception as e:
+        import traceback
+        logger.error("agents/money failed: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+
 @app.route("/api/goals/scorecard")
 def api_goals_scorecard():
     """

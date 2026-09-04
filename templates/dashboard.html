@@ -758,6 +758,18 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
     </div>
 
     <div class="tab-pane" id="tab-goals">
+      <!-- ══ MONEY BOARD (v2): where each agent's next dollar is ══ -->
+      <div style="margin-bottom:1.2rem">
+        <div style="font-size:.95rem;font-weight:700">💵 Money Board</div>
+        <div style="font-size:.74rem;color:var(--muted);margin-top:.1rem;max-width:760px">
+          Per agent: what they are on pace to earn vs their goal, the dollar gap, what the rest
+          of the year requires using their own goal-sheet math, and the one thing to coach.
+          Biggest gap on top. Earned chips: T = transfer rotation (team minimum), P = Phoenix
+          bonus leads (personal dial target 4 of 5 days).
+        </div>
+        <div id="money-board-wrap" style="margin-top:.7rem"><div class="loading-pane" style="padding:1.5rem"><span class="spinner"></span></div></div>
+      </div>
+
       <!-- Summary row -->
       <div class="stat-row" id="goals-summary">
         <div class="stat-card"><div class="stat-label">Agents with Goals</div><div class="stat-value c-gold" id="g-with">—</div><div class="stat-sub" id="g-total">of — agents</div></div>
@@ -1161,7 +1173,7 @@ document.querySelectorAll('.modal-overlay').forEach(el=>el.addEventListener('cli
 async function loadGoals(_attempt){
   _attempt=_attempt||1;
   const container=document.getElementById('goals-cards');
-  if(_attempt===1)container.innerHTML='<div class="loading-pane"><span class="spinner"></span> Loading scorecard…</div>';
+  if(_attempt===1){container.innerHTML='<div class="loading-pane"><span class="spinner"></span> Loading scorecard…</div>';loadMoneyBoard();}
   if(_attempt===1) await loadMinimized();   // so hidden agents never flash in
   try{
     const r=await fetch('/api/goals/scorecard',{signal:AbortSignal.timeout(60000)});
@@ -2828,6 +2840,42 @@ async function syncBounces(){
     showToast('Bounce sync failed: '+e.message,'err');
   }finally{
     if(btn){btn.disabled=false;btn.textContent='🚫 Sync Bounces → FUB';}
+  }
+}
+
+/* ════════════════════════════════════════════════
+   MONEY BOARD — goals tab v2 header
+════════════════════════════════════════════════ */
+async function loadMoneyBoard(){
+  const el=document.getElementById('money-board-wrap');
+  try{
+    const r=await fetch('/api/agents/money',{signal:AbortSignal.timeout(60000)});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    const money=n=>'$'+Math.round(n).toLocaleString();
+    const paceColor=p=>p>=90?'var(--green)':p>=70?'var(--yellow)':'var(--red)';
+    const chip=(ok,letter,title)=>`<span title="${title}" style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:6px;font-size:.68rem;font-weight:700;margin-right:.25rem;background:${ok?'var(--green-bg)':'var(--surface2)'};color:${ok?'var(--green)':'var(--subtle)'}">${letter}</span>`;
+    if(!(d.agents||[]).length){el.innerHTML='<div style="color:var(--muted);font-size:.8rem">No agents with goals on file yet.</div>';return;}
+    el.innerHTML=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.82rem;min-width:860px">
+      <thead><tr style="color:var(--muted);font-size:.66rem;text-transform:uppercase;letter-spacing:.05em;text-align:left">
+        <th style="padding:.4rem .6rem">Agent</th><th style="padding:.4rem .6rem">Goal</th>
+        <th style="padding:.4rem .6rem">On pace for</th><th style="padding:.4rem .6rem">Gap</th>
+        <th style="padding:.4rem .6rem">Closings to go</th><th style="padding:.4rem .6rem">Appts / wk needed</th>
+        <th style="padding:.4rem .6rem">The lever</th><th style="padding:.4rem .6rem">Earned</th></tr></thead>
+      <tbody>`+d.agents.map(a=>`
+        <tr style="border-top:1px solid var(--border)">
+          <td style="padding:.5rem .6rem;font-weight:600">${a.agent}${a.paused?' <span style="font-size:.62rem;color:var(--subtle)">(coaching paused)</span>':''}${a.is_new?' <span style="font-size:.62rem;color:var(--blue)">(new)</span>':''}</td>
+          <td style="padding:.5rem .6rem">${money(a.gci_goal)}</td>
+          <td style="padding:.5rem .6rem;font-weight:700;color:${paceColor(a.pace_pct)}">${money(a.on_pace_for)} <span style="font-size:.68rem;font-weight:500">(${a.pace_pct}%)</span></td>
+          <td style="padding:.5rem .6rem;font-weight:700;color:${a.gap>0?'var(--red)':'var(--green)'}">${a.gap>0?money(a.gap):'ahead'}</td>
+          <td style="padding:.5rem .6rem">${a.closings_to_go??'–'}</td>
+          <td style="padding:.5rem .6rem">${a.appts_needed_wk||'–'}${a.convos_needed_wk?` <span style="color:var(--subtle);font-size:.7rem">(~${a.convos_needed_wk} convos)</span>`:''}</td>
+          <td style="padding:.5rem .6rem;color:var(--muted);max-width:230px">${a.lever}</td>
+          <td style="padding:.5rem .6rem;white-space:nowrap">${chip(a.earned_transfers,'T','Transfer rotation: team minimum KPI')}${chip(a.phoenix_qualified,'P',`Phoenix bonus leads: hit personal dial target ${a.phoenix_days_met} of 5 weekdays last week`)}</td>
+        </tr>`).join('')+`</tbody></table></div>
+      <div style="font-size:.68rem;color:var(--subtle);margin-top:.4rem">"On pace for" annualizes GCI logged so far. ${d.weeks_left} weeks left in the year. Appointments-per-week uses each agent's own goal-sheet conversion rates.</div>`;
+  }catch(e){
+    el.innerHTML=`<div style="color:var(--red);font-size:.8rem">Money Board failed: ${e.message} <button class="btn btn-ghost btn-sm" onclick="loadMoneyBoard()">↻ Retry</button></div>`;
   }
 }
 
