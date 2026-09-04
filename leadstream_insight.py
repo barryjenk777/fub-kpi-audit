@@ -176,9 +176,17 @@ def build_sources(cur):
         a = appts.get(src, {"set": 0, "held": 0})
         d = deals.get(src, {"contracts": 0, "closings": 0, "gci": 0})
         row = {"source": src, **a, **d}
-        monthly = next((v for k, v in spend.items() if _canon(k) == _canon(src)), None)
-        ref = next((v.get("referral") for k, v in econ.items()
-                    if _canon(k) == _canon(src)), None)
+        cs = _canon(src)
+
+        def _match(k):
+            ck = _canon(k)
+            return cs == ck or cs.startswith(ck) or ck.startswith(cs)
+
+        monthly = next((v for k, v in spend.items() if _match(k)), None)
+        ref = next((v.get("referral") for k, v in econ.items() if _match(k)), None)
+        # Every Ylopo flavor carries the 40% referral (per Barry, Aug 2026)
+        if ref is None and cs.startswith("ylopo"):
+            ref = 0.40
         if monthly:
             row["cost_note"] = "$%s/mo" % format(monthly, ",")
             two_months = monthly * 2
