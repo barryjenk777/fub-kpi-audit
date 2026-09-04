@@ -4748,7 +4748,7 @@ def _system_status():
         # Surface the last persisted scoring-thread crash. Red if it is newer
         # than the last completed run (means runs are currently dying).
         try:
-            err_raw = _db.get_app_state("leadstream_last_run_error")
+            err_raw, _err_at = _db.get_app_state("leadstream_last_run_error")
             if err_raw:
                 err = json.loads(err_raw)
                 err_at = err.get("at") or ""
@@ -7807,7 +7807,8 @@ def _fub_process_webhook(event, uri, resource_ids):
                 _fub_outbound_touch(person_id, is_call=(event == "callsCreated"))
         # Receipt counter → Mission Control visibility
         try:
-            stats = json.loads(_db.get_app_state("fub_webhook_stats") or "{}")
+            _raw_stats, _ = _db.get_app_state("fub_webhook_stats")
+            stats = json.loads(_raw_stats or "{}")
             counts = stats.get("counts") or {}
             counts[event] = int(counts.get(event, 0)) + 1
             _db.set_app_state("fub_webhook_stats", json.dumps({
@@ -7827,7 +7828,8 @@ def api_webhook_stats():
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
     try:
-        stats = json.loads(_db.get_app_state("fub_webhook_stats") or "{}")
+        _raw_stats, _ = _db.get_app_state("fub_webhook_stats")
+        stats = json.loads(_raw_stats or "{}")
     except Exception:
         stats = {}
     return jsonify({"ok": True, "stats": stats or {"note": "no events received yet"}})
