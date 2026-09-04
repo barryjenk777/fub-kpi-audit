@@ -207,6 +207,7 @@ VOICE (Barry Jenkins, "Too Nice for Sales"):
 - ONE number per text. A text with three statistics reads like a newsletter and gets ignored.
 - End light: a soft question or a no-rush close. Never a meeting ask, never fake urgency.
 - Use {first} where the lead's first name goes. Use the city name naturally.
+- {first} is the ONLY placeholder that exists. NEVER write [Agent Name], [Brokerage], or any bracketed placeholder, and NEVER script the caller introducing themselves by name. Any agent on the team may send these.
 - Texts under 280 characters each. No emojis in more than one of them. NEVER use em dashes or en dashes.
 - Never invent numbers. Use ONLY the data supplied. Round naturally the way a human talks ("about three weeks", "just over 40%").
 
@@ -261,6 +262,22 @@ def _nurture_fallback(city, side, hooks):
             "hooks": hooks[:2]}
 
 
+def _sanitize_script(text):
+    """Enforce the hard rules the model sometimes ignores: no em/en dashes
+    (Barry's rule), and no invented bracket placeholders like [Agent Name]
+    (the only allowed placeholder is {first}). Sentences containing brackets
+    are dropped whole."""
+    if not text:
+        return text
+    for dash in ("—", "–", "‒", "―", " - ", "--"):
+        text = text.replace(dash, ", ")
+    if "[" in text:
+        kept = [s for s in text.replace("! ", "!| ").replace("? ", "?| ")
+                .replace(". ", ".| ").split("| ") if "[" not in s]
+        text = " ".join(kept).strip()
+    return " ".join(text.split())
+
+
 def generate_nurture_scripts(snapshot, side):
     """LLM pass: turn the data hooks into Barry-voice scripts. Falls back to
     deterministic templates. Returns the nurture dict."""
@@ -289,8 +306,12 @@ def generate_nurture_scripts(snapshot, side):
                 raw = raw.strip("`").lstrip("json").strip()
             out = json.loads(raw)
             if out.get("texts") and out.get("call_track"):
-                out["generated"] = "llm"
-                return out
+                out["texts"] = [_sanitize_script(t) for t in out["texts"] if _sanitize_script(t)]
+                out["call_track"] = _sanitize_script(out["call_track"])
+                out["hooks"] = [_sanitize_script(h) for h in (out.get("hooks") or [])]
+                if out["texts"] and out["call_track"]:
+                    out["generated"] = "llm"
+                    return out
         except Exception as e:
             logger.warning("nurture scripts LLM failed for %s/%s: %s", city, side, e)
     out = _nurture_fallback(city, side, hooks)
