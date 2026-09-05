@@ -620,6 +620,9 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
   white-space: pre-wrap;
   display: none;
 }
+/* ── Agents lens pills ───────────────────────────────────────── */
+.lens-pill{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:99px;padding:.35rem .9rem;font-size:.78rem;font-weight:600;cursor:pointer}
+.lens-pill.active{background:var(--gold-bg);border-color:var(--gold);color:var(--gold)}
 /* ── Pulse (v2 home) ─────────────────────────────────────────── */
 .pulse-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.8rem;margin-bottom:1rem}
 .pulse-tile{background:var(--surface);border:1px solid var(--border-sub);border-radius:var(--r);padding:.9rem 1rem .7rem}
@@ -690,10 +693,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
     </button>
     <div class="nav-section">Performance</div>
     <button class="nav-item" data-tab="goals" onclick="switchTab('goals')">
-      <span class="nav-icon">🎯</span> Goals
-    </button>
-    <button class="nav-item" data-tab="kpi" onclick="switchTab('kpi')">
-      <span class="nav-icon">📊</span> Team KPIs
+      <span class="nav-icon">🧑‍💼</span> Agents
     </button>
     <div class="nav-section">Operations</div>
     <button class="nav-item" data-tab="appointments" onclick="switchTab('appointments')">
@@ -758,6 +758,11 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
     </div>
 
     <div class="tab-pane" id="tab-goals">
+      <!-- Lens switcher: one Agents view, two lenses -->
+      <div class="agents-lens" style="display:flex;gap:.4rem;margin-bottom:1rem">
+        <button class="btn btn-sm lens-pill active" onclick="agentsLens('goals')">💵 Goals &amp; Money</button>
+        <button class="btn btn-sm lens-pill" onclick="agentsLens('kpi')">📊 Weekly KPIs (transfer gate)</button>
+      </div>
       <!-- ══ MONEY BOARD (v2): where each agent's next dollar is ══ -->
       <div style="margin-bottom:1.2rem">
         <div style="font-size:.95rem;font-weight:700">💵 Money Board</div>
@@ -816,8 +821,12 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
       </div>
     </div><!-- /goals -->
 
-    <!-- ══════════════════════════════════════ KPI TAB -->
+    <!-- ══════════════════════════════════════ KPI TAB (Agents lens 2) -->
     <div class="tab-pane" id="tab-kpi">
+      <div class="agents-lens" style="display:flex;gap:.4rem;margin-bottom:1rem">
+        <button class="btn btn-sm lens-pill" onclick="agentsLens('goals')">💵 Goals &amp; Money</button>
+        <button class="btn btn-sm lens-pill active" onclick="agentsLens('kpi')">📊 Weekly KPIs (transfer gate)</button>
+      </div>
       <!-- Settings bar -->
       <div class="controls-bar">
         <div class="ctrl-field"><label>Min Calls</label><input type="number" id="minCalls" value="30" min="0"></div>
@@ -968,7 +977,19 @@ const MEDALS=['🥇','🥈','🥉'];
 })();
 
 // ── TAB SWITCH ──
+function agentsLens(which){
+  document.querySelectorAll('.tab-pane').forEach(el=>el.classList.remove('active'));
+  document.getElementById(which==='kpi'?'tab-kpi':'tab-goals').classList.add('active');
+  document.querySelectorAll('.nav-item[data-tab]').forEach(el=>el.classList.remove('active'));
+  const btn=document.querySelector('.nav-item[data-tab="goals"]');
+  if(btn)btn.classList.add('active');
+  document.querySelectorAll('.lens-pill').forEach(p=>p.classList.toggle('active',p.getAttribute('onclick').includes("'"+which+"'")));
+  document.getElementById('topbar-title').textContent=which==='kpi'?'🧑‍💼 Agents — Weekly KPIs':'🧑‍💼 Agents — Goals & Money';
+  if(which==='kpi'&&!_loaded.kpi){_loaded.kpi=true;loadAgents();}
+  if(which==='goals'&&!_loaded.goals){_loaded.goals=true;loadGoals();}
+}
 function switchTab(name){
+  if(name==='kpi'){agentsLens('kpi');return;}  // KPIs are a lens of Agents now
   document.querySelectorAll('.tab-pane').forEach(el=>el.classList.remove('active'));
   document.querySelectorAll('.nav-item[data-tab]').forEach(el=>el.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
@@ -978,7 +999,7 @@ function switchTab(name){
      every click made nav sections visibly slide out of view ("menus disappear
      and reappear"), reported as a bug Sep 2026. */
 
-  const titles={pulse:'📈 Pulse — 60/90 day themes',cc:'🧠 Command Center',goals:'🎯 Goals — '+new Date().getFullYear(),kpi:'📊 Team KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
+  const titles={pulse:'📈 Pulse — 60/90 day themes',cc:'🧠 Command Center',goals:'🧑‍💼 Agents — Goals & Money',kpi:'🧑‍💼 Agents — Weekly KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
   document.getElementById('topbar-title').textContent=titles[name]||name;
 
   if(!_loaded[name]){

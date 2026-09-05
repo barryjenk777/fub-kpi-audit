@@ -15562,6 +15562,45 @@ def scheduled_savebot_scripts():
         _db.release_job_lock("savebot_scripts")
 
 
+def scheduled_hot_sheets():
+    """Weekday 8:15am ET — 'your 3 for today' text per agent. Runs after
+    Phoenix (7:30) and Save-Bot (7:45); claim_once inside dedupes per day."""
+    if _already_fired_recently("hot_sheets", within_hours=20):
+        print("[SCHEDULER] Hot sheets: skipped — already ran within 20h")
+        return
+    if not _db.try_acquire_job_lock("hot_sheets"):
+        return
+    try:
+        import hotsheet as _hs
+        summary = _hs.run_hot_sheets(dry_run=False)
+        print(f"[SCHEDULER] Hot sheets: {summary.get('queued', 0)} queued, "
+              f"{summary.get('skipped_no_leads', 0)} agents had no priority leads")
+        _record_fired("hot_sheets")
+    except Exception as e:
+        _alert_on_job_failure("hot_sheets", str(e))
+        print(f"[SCHEDULER] Hot sheets error: {e}")
+        raise
+    finally:
+        _db.release_job_lock("hot_sheets")
+
+
+@app.route("/api/admin/hotsheet/run", methods=["POST"])
+def api_hotsheet_run():
+    """Run the morning hot sheets now. Body {"dry_run": true} previews the
+    exact texts without queuing anything."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    try:
+        import hotsheet as _hs
+        summary = _hs.run_hot_sheets(dry_run=bool(body.get("dry_run")))
+        return jsonify({"ok": True, **summary})
+    except Exception as e:
+        import traceback
+        logger.error("hotsheet run failed: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/admin/savebot/run", methods=["POST"])
 def api_savebot_run():
     """Run the Save-Bot now. Body {"kind": "scripts", "dry_run": true|false};
@@ -18041,6 +18080,10 @@ def start_scheduler():
     _scheduler.add_job(scheduled_savebot_scripts,
                        CronTrigger(hour=7, minute=45, timezone=ET),
                        id="savebot_scripts", name="Save-Bot script prompts (daily 7:45am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_hot_sheets,
+                       CronTrigger(day_of_week="mon-fri", hour=8, minute=15, timezone=ET),
+                       id="hot_sheets", name="Morning hot sheets (weekdays 8:15am)",
                        max_instances=1, coalesce=True)
 
     _scheduler.start()
