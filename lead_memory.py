@@ -508,6 +508,25 @@ def _pick_samples(samples, cap):
 # The run
 # ---------------------------------------------------------------------------
 
+_MARKET_FIELD = os.environ.get("MARKET_REPORT_CUSTOM_FIELD", "").strip()
+
+
+def _set_market_field(fub, pid, brief):
+    """Write the lead's market page link into the FUB custom field, parsed
+    straight from the note's own MARKET line so field and note always agree.
+    Disabled until MARKET_REPORT_CUSTOM_FIELD names the field (e.g.
+    customMarketReportUrl)."""
+    if not _MARKET_FIELD or not brief:
+        return
+    link = None
+    for line in brief.splitlines():
+        if line.startswith("MARKET:") and "Share: " in line:
+            link = line.split("Share: ", 1)[1].strip()
+            break
+    if link:
+        fub._request("PUT", f"people/{pid}", json_data={_MARKET_FIELD: link})
+
+
 def run_lead_memory_refresh(dry_run=None, include_briefs=False, send_email=True,
                             force=False):
     """Compile/update Lead Memory briefs. Returns a JSON-safe summary dict.
@@ -627,6 +646,14 @@ def run_lead_memory_refresh(dry_run=None, include_briefs=False, send_email=True,
         summary["written"] += 1
         if row is None:
             summary["new"] += 1
+
+        # Market Report URL custom field: give FUB automations and agents a
+        # merge-field link to the lead's city market page. No-op until the
+        # field exists in FUB and MARKET_REPORT_CUSTOM_FIELD is set on Railway.
+        try:
+            _set_market_field(fub, pid, brief)
+        except Exception as e:
+            logger.warning("[CALL OPENER] market field write failed for %s: %s", pid, e)
 
         # Re-read the marker AFTER our write so our own note's ripple on the
         # person record can't make tomorrow's delta check see a phantom change.
