@@ -769,18 +769,20 @@ class FUBClient:
         return person
 
     def remove_tag(self, person_id, tag):
-        """Remove a tag from a person."""
+        """Remove a tag from a person. Case-insensitive: FUB canonicalizes tag
+        casing account-wide, so the stored casing may differ from ours (the
+        PHOENIX expiry no-op'd for days because the tag lived as 'Phoenix')."""
         person = self.get_person(person_id)
         tags = person.get("tags", []) or []
-        if tag in tags:
-            tags.remove(tag)
-            return self._request("PUT", f"people/{person_id}", json_data={"tags": tags})
+        kept = [t for t in tags if t.lower() != tag.lower()]
+        if len(kept) != len(tags):
+            return self._request("PUT", f"people/{person_id}", json_data={"tags": kept})
         return person
 
     def add_tag_fast(self, person_id, tag, existing_tags, extra_fields=None):
         """Add a tag without fetching the person first (caller provides current tags).
         extra_fields: optional dict merged into the PUT payload (e.g. custom fields)."""
-        if tag not in existing_tags:
+        if tag.lower() not in {t.lower() for t in existing_tags}:
             tags = list(existing_tags) + [tag]
             payload = {"tags": tags}
             if extra_fields:
@@ -794,8 +796,8 @@ class FUBClient:
     def remove_tag_fast(self, person_id, tag, existing_tags, extra_fields=None):
         """Remove a tag without fetching the person first (caller provides current tags).
         extra_fields: optional dict merged into the PUT payload (e.g. custom fields)."""
-        if tag in existing_tags:
-            tags = [t for t in existing_tags if t != tag]
+        if tag.lower() in {t.lower() for t in existing_tags}:
+            tags = [t for t in existing_tags if t.lower() != tag.lower()]
             payload = {"tags": tags}
             if extra_fields:
                 payload.update(extra_fields)

@@ -711,7 +711,10 @@ PHOENIX_EVENT_TYPES = [
 PHOENIX_DEDUPE_DAYS = 30
 
 # Tag applied to bonus-pool leads on assignment (scored in LEADSTREAM_SIGNAL_TAGS)
-PHOENIX_TAG = "PHOENIX"
+# "Phoenix" (not "PHOENIX"): FUB canonicalizes tag names account-wide and an
+# older tag owns this casing — writing "PHOENIX" lands as "Phoenix" anyway,
+# and every exact-match comparison against "PHOENIX" silently failed (Sep 2026).
+PHOENIX_TAG = "Phoenix"
 
 # Weekdays (of last week's Mon-Fri) an agent must hit their personal daily
 # dial target to earn Phoenix status for this week's bonus pool

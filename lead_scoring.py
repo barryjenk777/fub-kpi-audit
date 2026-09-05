@@ -152,9 +152,14 @@ class LeadScorer:
         # made, outcome unknown or brief) or 0 if the call was a real conversation
         # (2+ min). This prevents a 2-month-old AI signal from overriding contact
         # history and keeps worked leads from dominating the queue.
+        # Case-insensitive: FUB canonicalizes tag casing account-wide, so the
+        # tag we WRITE is not always the tag we READ back ("PHOENIX" became
+        # "Phoenix" because an older tag owned that name — which silently
+        # disabled the Phoenix 96-point boost, Sep 2026).
         signal_scores = []
+        tags_lower = {t.lower() for t in tags}
         for tag, points in LEADSTREAM_SIGNAL_TAGS.items():
-            if tag in tags:
+            if tag.lower() in tags_lower:
                 signal_scores.append((tag, points))
 
         if signal_scores:
