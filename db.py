@@ -7639,3 +7639,104 @@ def mark_appointments_canceled(fub_appt_ids):
     except Exception as e:
         logger.warning("mark_appointments_canceled failed: %s", e)
         return 0
+
+
+# ── Hot sheet log: the accountability loop ──────────────────────────────────
+
+def ensure_hotsheet_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS hotsheet_log (
+                        id          SERIAL PRIMARY KEY,
+                        sheet_date  DATE NOT NULL,
+                        agent_name  TEXT NOT NULL,
+                        person_id   TEXT NOT NULL,
+                        lead_name   TEXT,
+                        reason      TEXT,
+                        called      BOOLEAN,          -- NULL until next-day check
+                        checked_at  TIMESTAMPTZ,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        UNIQUE (sheet_date, agent_name, person_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_hs_agent_date
+                        ON hotsheet_log (agent_name, sheet_date DESC);
+                """)
+    except Exception as e:
+        logger.warning("ensure_hotsheet_table failed: %s", e)
+
+
+def log_hotsheet_pick(sheet_date, agent_name, person_id, lead_name, reason):
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO hotsheet_log (sheet_date, agent_name, person_id,
+                                              lead_name, reason)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (sheet_date, agent_name, person_id) DO NOTHING
+                """, (sheet_date, agent_name, str(person_id), lead_name, reason))
+    except Exception as e:
+        logger.warning("log_hotsheet_pick failed: %s", e)
+
+
+def get_unchecked_hotsheet_picks(before_date):
+    """Picks from sheets before `before_date` not yet verified against calls."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, sheet_date, agent_name, person_id, lead_name, reason
+                    FROM hotsheet_log
+                    WHERE called IS NULL AND sheet_date < %s
+                      AND sheet_date >= %s - INTERVAL '5 days'
+                """, (before_date, before_date))
+                return [{"id": r[0], "sheet_date": r[1], "agent_name": r[2],
+                         "person_id": r[3], "lead_name": r[4], "reason": r[5]}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_unchecked_hotsheet_picks failed: %s", e)
+        return []
+
+
+def mark_hotsheet_pick(pick_id, called):
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE hotsheet_log SET called = %s, checked_at = NOW()
+                    WHERE id = %s
+                """, (bool(called), pick_id))
+    except Exception as e:
+        logger.warning("mark_hotsheet_pick failed: %s", e)
+
+
+def hotsheet_scoreboard(days=7):
+    """Worked-rate per agent over recent checked picks."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COUNT(*) FILTER (WHERE called),
+                           COUNT(*) FILTER (WHERE called IS NOT NULL)
+                    FROM hotsheet_log
+                    WHERE sheet_date >= CURRENT_DATE - %s
+                    GROUP BY agent_name
+                """, (int(days),))
+                return [{"agent": r[0], "called": int(r[1] or 0),
+                         "checked": int(r[2] or 0)} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("hotsheet_scoreboard failed: %s", e)
+        return []

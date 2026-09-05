@@ -477,7 +477,11 @@ def run_morning_nudges(dry_run: bool = False):
 
         try:
             ctx          = _ctx(name)
-            leads        = _db.get_leadstream_top_leads(name, limit=3)
+            # Channel split (Sep 2026): the 8:15am hot-sheet TEXT owns "who to
+            # call today" with reasons and a next-day accountability check.
+            # The email owns goals and motivation. Duplicating the lead list
+            # here read as system spam and demonstrably was not driving action.
+            leads        = []
             isa_transfers = _db.get_agent_isa_transfers(name)
             goal_ctx     = _build_goal_ctx(name, all_goals, ytd_cache, agent["calls"])
 

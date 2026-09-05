@@ -241,6 +241,23 @@ def _agent_themes(cur, funnel):
         not_doing.append("%s: zero calls logged in 14 days. Silence spreads."
                          % " and ".join(_first(n) for n in silent[:3]))
 
+    # Hot sheet worked-rate (only once enough verified checks exist)
+    rows = _q(cur, """
+        SELECT COUNT(*) FILTER (WHERE called),
+               COUNT(*) FILTER (WHERE called IS NOT NULL)
+        FROM hotsheet_log WHERE sheet_date >= CURRENT_DATE - 14
+    """)
+    if rows and int(rows[0][1] or 0) >= 5:
+        called, checked = int(rows[0][0]), int(rows[0][1])
+        pct = round(called / checked * 100)
+        if pct >= 70:
+            doing.append("%d%% of morning hot-sheet leads got called the same "
+                         "day (verified against call logs)." % pct)
+        else:
+            not_doing.append("Only %d%% of morning hot-sheet leads got called "
+                             "the same day. The list is being read and ignored."
+                             % pct)
+
     # Outcome logging discipline
     rows = _q(cur, """
         SELECT COUNT(*) FILTER (WHERE outcome IS NULL AND status NOT IN ('canceled','showed')),

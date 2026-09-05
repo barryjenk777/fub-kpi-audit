@@ -104,12 +104,52 @@ def _compose(agent_first, picks):
     return body
 
 
+def _verify_yesterday(client, uid_by_agent, today):
+    """The accountability loop: check every unverified pick from prior sheets
+    against actual FUB call logs. Returns (scoreboard, uncalled) where
+    scoreboard = {agent: (called, total)} for the most recent prior sheet and
+    uncalled = {agent: [(person_id, lead_name), ...]} for escalation."""
+    scoreboard, uncalled = {}, {}
+    for pick in _db.get_unchecked_hotsheet_picks(today):
+        agent = pick["agent_name"]
+        uid = uid_by_agent.get(agent)
+        called = False
+        if uid:
+            try:
+                since = datetime.combine(pick["sheet_date"], datetime.min.time(),
+                                         tzinfo=timezone.utc)
+                calls = client.get_calls(person_id=pick["person_id"], since=since) or []
+                called = any(not c.get("isIncoming", True) and c.get("userId") == uid
+                             for c in calls)
+            except Exception as e:
+                logger.warning("[HOT SHEET] call check failed for %s: %s",
+                               pick["person_id"], e)
+        _db.mark_hotsheet_pick(pick["id"], called)
+        c, t = scoreboard.get(agent, (0, 0))
+        scoreboard[agent] = (c + (1 if called else 0), t + 1)
+        if not called:
+            uncalled.setdefault(agent, []).append((pick["person_id"], pick["lead_name"]))
+    return scoreboard, uncalled
+
+
+def _scoreboard_line(agent_first, score):
+    called, total = score
+    if total == 0:
+        return ""
+    if called == total:
+        return ("You called all %d from yesterday's sheet. That is the standard. "
+                % total)
+    if called == 0:
+        return "Yesterday's %d went uncalled. They are back on your list. " % total
+    return "Yesterday's %d: you called %d. " % (total, called)
+
+
 def run_hot_sheets(dry_run=False):
     """Build and queue the morning sheet for every eligible agent."""
     client = FUBClient()
     today = date.today()
     summary = {"queued": 0, "skipped_no_leads": 0, "skipped_claimed": 0,
-               "skipped_no_phone": 0, "messages": []}
+               "skipped_no_phone": 0, "verified_yesterday": 0, "messages": []}
 
     # Leads Phoenix already texted about this morning
     phoenix_pids = set()
@@ -145,6 +185,14 @@ def run_hot_sheets(dry_run=False):
         logger.warning("[HOT SHEET] isa read failed: %s", e)
 
     profiles = _db.get_agent_profiles(active_only=True) or []
+    uid_by_agent = {p.get("agent_name"): p.get("fub_user_id") for p in profiles}
+
+    # The loop: verify prior sheets against real call logs (skip in dry runs
+    # so previews never consume the one-shot verification marks)
+    scoreboard, uncalled = ({}, {}) if dry_run else _verify_yesterday(
+        client, uid_by_agent, today)
+    summary["verified_yesterday"] = sum(t for _, t in scoreboard.values())
+
     for profile in profiles:
         agent = profile.get("agent_name")
         uid = profile.get("fub_user_id")
@@ -153,11 +201,23 @@ def run_hot_sheets(dry_run=False):
 
         picks, used_pids = [], set()
 
-        # 1. ISA transfers first (max 2)
-        for t in (isa_by_agent.get(agent) or [])[:2]:
-            if t["person_id"] in phoenix_pids or not _usable_name(t.get("name")):
+        # 0. Escalations first: yesterday's uncalled picks come back on top
+        for pid, lead_name in (uncalled.get(agent) or [])[:2]:
+            if str(pid) in phoenix_pids or not _usable_name(lead_name):
                 continue
-            picks.append((_first(t["name"]), _lead_reason(client, {}, isa_days=t["days"])))
+            picks.append((str(pid), _first(lead_name),
+                          "second day on your sheet, still no call"))
+            used_pids.add(str(pid))
+
+        # 1. ISA transfers next (max 2)
+        for t in (isa_by_agent.get(agent) or [])[:2]:
+            if len(picks) >= 3:
+                break
+            if t["person_id"] in phoenix_pids or t["person_id"] in used_pids \
+                    or not _usable_name(t.get("name")):
+                continue
+            picks.append((t["person_id"], _first(t["name"]),
+                          _lead_reason(client, {}, isa_days=t["days"])))
             used_pids.add(t["person_id"])
 
         # 2. LeadStream list by score
@@ -177,14 +237,15 @@ def run_hot_sheets(dry_run=False):
                 pid = str(p.get("id"))
                 if pid in used_pids or pid in phoenix_pids or not _usable_name(p.get("name")):
                     continue
-                picks.append((_first(p.get("name")), _lead_reason(client, p)))
+                picks.append((pid, _first(p.get("name")), _lead_reason(client, p)))
                 used_pids.add(pid)
 
         if not picks:
             summary["skipped_no_leads"] += 1
             continue
 
-        message = _compose(_first(agent), picks)
+        message = (_scoreboard_line(_first(agent), scoreboard.get(agent, (0, 0)))
+                   + _compose(_first(agent), [(n, r) for _, n, r in picks]))
         summary["messages"].append({"agent": agent, "message": message})
 
         if dry_run:
@@ -200,6 +261,8 @@ def run_hot_sheets(dry_run=False):
                                        week_day="hotsheet")
         if rid:
             summary["queued"] += 1
+            for pid, lead_name, reason in picks:
+                _db.log_hotsheet_pick(today, agent, pid, lead_name, reason)
             try:
                 _db.log_savebot(today.isoformat(), "hotsheet", agent,
                                 len(picks), message[:500], "queued")

@@ -15601,6 +15601,17 @@ def api_hotsheet_run():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/admin/hotsheet/scoreboard")
+def api_hotsheet_scoreboard():
+    """Worked-rate per agent on their morning hot sheets (verified against
+    real FUB call logs). Feeds Pulse and coaching conversations."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = request.args.get("days", 7, type=int)
+    return jsonify({"ok": True, "days": days,
+                    "agents": _db.hotsheet_scoreboard(days=days)})
+
+
 @app.route("/api/admin/savebot/run", methods=["POST"])
 def api_savebot_run():
     """Run the Save-Bot now. Body {"kind": "scripts", "dry_run": true|false};
@@ -19057,3 +19068,5 @@ else:
     _db.ensure_savebot_log_table()
     # Ensure Market Pulse tables exist (city snapshots + page view log)
     _db.ensure_market_tables()
+    # Ensure hot-sheet accountability log exists
+    _db.ensure_hotsheet_table()
