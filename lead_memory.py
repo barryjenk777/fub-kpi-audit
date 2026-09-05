@@ -225,6 +225,9 @@ def _assemble_lead_data(fub, person):
             "has_phone": bool(person.get("phones")),
             "created": (person.get("created") or "")[:10],
             "last_communication": person.get("lastCommunication") or None,
+            # assigned agent, used to attribute market-page CTAs to the
+            # agent who owns the lead (not shown to the model as coaching data)
+            "assigned_to": person.get("assignedTo") or None,
         },
         "appointment_tags": apt_tags,
         # Transcripts first and biggest — they are the richest source we have.
@@ -320,8 +323,14 @@ def _market_line(data, side_hint=""):
                 or os.environ.get("BASE_URL",
                                   "https://web-production-3363cc.up.railway.app")).rstrip("/")
         city = snap.get("city") or slug
-        line = ("MARKET: %s %s: %s. Share: %s/market/%s/%s"
-                % (city, side, ", ".join(bits), base, slug, side))
+        # Attribute the page to the lead's own agent: ?a=<agent-slug> makes
+        # the page CTA show THAT agent's name and number instead of Barry's.
+        agent_q = ""
+        assigned = data.get("person", {}).get("assigned_to") or ""
+        if assigned:
+            agent_q = "?a=" + "-".join(assigned.lower().split())
+        line = ("MARKET: %s %s: %s. Share: %s/market/%s/%s%s"
+                % (city, side, ", ".join(bits), base, slug, side, agent_q))
         # Ready-to-send nurture text from the city's script bank (rotates by
         # day so consecutive regenerations do not repeat), personalized with
         # the lead's first name. This is the agent's value-first touch.

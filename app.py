@@ -1367,6 +1367,24 @@ def market_page(slug, audience):
         return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
                 "This page is being refreshed with the latest numbers. "
                 "Check back in a few minutes.</div>"), 503
+    # ?a=<agent-slug> attributes the CTA to the agent who sent the link —
+    # their lead should text THEM, not Barry. Barry is the fallback.
+    cta_name, cta_phone = "Barry", "+17578164037"
+    a_slug = request.args.get("a", "").replace("-", " ").strip().lower()
+    if a_slug:
+        try:
+            for p in (_db.get_agent_profiles(active_only=True) or []):
+                if (p.get("agent_name") or "").lower() == a_slug and p.get("phone"):
+                    cta_name = p["agent_name"].split()[0]
+                    cta_phone = p["phone"]
+                    break
+        except Exception:
+            pass
+    digits = "".join(c for c in cta_phone if c.isdigit())[-10:]
+    ctx["cta_name"] = cta_name
+    ctx["cta_phone"] = cta_phone
+    ctx["cta_pretty"] = ("(%s) %s-%s" % (digits[:3], digits[3:6], digits[6:])
+                         if len(digits) == 10 else cta_phone)
     token = request.args.get("t")
     try:
         _db.log_market_page_view(slug, audience, token=token)
