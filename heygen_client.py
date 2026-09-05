@@ -49,7 +49,8 @@ DEFAULT_VOICE       = "b37262521af24a0e9245308e4045ac3f"  # Barry Jenkins — He
 # Background endpoint hosted on Railway — generates branded background on-demand
 # HeyGen fetches this URL during rendering. No external storage needed.
 # Format: {RAILWAY_URL}/api/heygen-bg?type=seller&address=123+Oak+St&city=Chesapeake
-RAILWAY_BASE_URL = os.environ.get("RAILWAY_URL", "https://web-production-3363cc.up.railway.app")
+RAILWAY_BASE_URL = (os.environ.get("BASE_URL") or os.environ.get("RAILWAY_URL")
+                    or "https://web-production-3363cc.up.railway.app")
 
 
 def _headers():

@@ -194,7 +194,7 @@ def _email_suppression_tags(tags):
     return [t for t in (tags or []) if t in block_set]
 
 
-LOGO_URL = "https://web-production-3363cc.up.railway.app/static/logo-blue.png"
+LOGO_URL = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app") + "/static/logo-blue.png"
 PHYSICAL_ADDRESS = "LPT Realty · 1545 Crossways Blvd Chesapeake, VA 23320"
 FROM_EMAIL = "barry@yourfriendlyagent.net"
 FROM_NAME  = "Barry Jenkins | Legacy Home Team"

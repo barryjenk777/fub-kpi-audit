@@ -1076,7 +1076,7 @@ def send_isa_email(isa_data):
 
 FUB_PERSON_URL = "https://yourfriendlyagent.followupboss.com/2/people/view/{person_id}"
 
-LOGO_WHITE_URL = "https://web-production-3363cc.up.railway.app/static/logo-white.png"
+LOGO_WHITE_URL = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app") + "/static/logo-white.png"
 LOGO_HEADER_IMG = f'<img src="{LOGO_WHITE_URL}" alt="Legacy Home Team" width="140" style="display:block;margin:0 auto 10px;width:140px;height:auto">'
 
 # Inline style constants — using inline styles on every element so formatting

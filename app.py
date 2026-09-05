@@ -6047,7 +6047,7 @@ def api_goals_send_emails():
     <!-- Header bar -->
     <tr>
       <td style="background:#0d1117;border-radius:12px 12px 0 0;padding:24px 32px;text-align:center">
-        <img src="https://web-production-3363cc.up.railway.app/static/logo-white.png"
+        <img src="{os.environ.get('BASE_URL', 'https://web-production-3363cc.up.railway.app')}/static/logo-white.png"
              alt="Legacy Home Team" width="160" style="display:block;margin:0 auto 10px;width:160px;height:auto">
         <p style="margin:0;font-size:20px;font-weight:800;color:#ffffff">{year} Income Goal Setting</p>
       </td>
@@ -6285,7 +6285,7 @@ def api_goals_announce_time_block():
   <!-- Header -->
   <div style="background:linear-gradient(135deg,#0d1117,#131d30);padding:28px 32px;
               text-align:center;border-radius:12px 12px 0 0">
-    <img src="https://web-production-3363cc.up.railway.app/static/logo-white.png"
+    <img src="{os.environ.get('BASE_URL', 'https://web-production-3363cc.up.railway.app')}/static/logo-white.png"
          alt="Legacy Home Team" width="150" style="display:block;margin:0 auto 10px;height:auto">
     <div style="font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;
                 color:#f5a623;margin-bottom:6px">New Feature Drop</div>
@@ -17394,8 +17394,8 @@ def scheduled_owner_daily_brief():
         lines += [
             "",
             "─" * 52,
-            f"Full brief: https://web-production-3363cc.up.railway.app/api/owner/daily-brief",
-            f"Lead issues: https://web-production-3363cc.up.railway.app/api/owner/lead-issues",
+            f"Full brief: {os.environ.get('BASE_URL', 'https://web-production-3363cc.up.railway.app')}/api/owner/daily-brief",
+            f"Lead issues: {os.environ.get('BASE_URL', 'https://web-production-3363cc.up.railway.app')}/api/owner/lead-issues",
             "— Legacy Home Team AI System",
         ]
         plain = "\n".join(lines)
@@ -17467,9 +17467,9 @@ def scheduled_owner_daily_brief():
 <ol style='margin:0;padding-left:20px'>{action_html}</ol>
 
 <p style='margin:24px 0 4px;font-size:12px;color:#aaa'>
-  <a href='https://web-production-3363cc.up.railway.app/api/owner/daily-brief'>Full JSON brief</a> ·
-  <a href='https://web-production-3363cc.up.railway.app/api/owner/lead-issues'>Lead issues</a> ·
-  <a href='https://web-production-3363cc.up.railway.app/'>Dashboard</a>
+  <a href='{os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app")}/api/owner/daily-brief'>Full JSON brief</a> ·
+  <a href='{os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app")}/api/owner/lead-issues'>Lead issues</a> ·
+  <a href='{os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app")}/'>Dashboard</a>
 </p>
 </div>"""
 
