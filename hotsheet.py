@@ -33,8 +33,20 @@ _EXCLUDED = set(getattr(config, "EXCLUDED_USERS", [])) \
 _PEOPLE_FIELDS = "id,name,assignedUserId,tags,stage,lastCommunication,customLeadStreamScore"
 
 
+_JUNK_NAMES = {"no", "yes", "unknown", "test", "n/a", "na", "none", "null",
+               "lead", "buyer", "seller", "new"}
+
+
 def _first(name):
     return (name or "").split()[0] if name else "there"
+
+
+def _usable_name(name):
+    """A lead we can name in a text. Kills junk FUB records (a lead literally
+    named 'No' produced 'Start with No.' in the first dry run)."""
+    f = _first(name)
+    return (len(f) >= 2 and f.lower() not in _JUNK_NAMES
+            and not f.isdigit() and f.replace("-", "").isalpha())
 
 
 def _lead_reason(client, person, isa_days=None):
@@ -63,14 +75,32 @@ def _lead_reason(client, person, isa_days=None):
 
 
 def _compose(agent_first, picks):
-    """picks: [(lead_first, reason), ...] 1-3 entries. Barry voice, no dashes."""
-    parts = ["%s (%s)" % (n, r) for n, r in picks]
+    """picks: [(lead_first, reason), ...] 1-3 entries. Barry voice, no dashes.
+    Repeated identical reasons collapse so the text reads human, not robotic
+    ('Jessica (top score), Edward (top score), Matthew (top score)' becomes
+    'Jessica, Edward and Matthew, the top scores on your list')."""
     if len(picks) == 1:
-        body = ("Morning %s. One lead needs you today: %s. "
-                "Make that call before the day gets loud." % (agent_first, parts[0]))
+        n, r = picks[0]
+        return ("Morning %s. One lead needs you today: %s (%s). "
+                "Make that call before the day gets loud." % (agent_first, n, r))
+
+    reasons = [r for _, r in picks]
+    names = [n for n, _ in picks]
+    if len(set(reasons)) == 1 and reasons[0].startswith(("top score", "highest priority")):
+        listed = "%s and %s" % (", ".join(names[:-1]), names[-1])
+        body = ("Morning %s. Your %d for today: %s, the top scores on your "
+                "list right now. Start with %s."
+                % (agent_first, len(picks), listed, names[0]))
     else:
+        seen, parts = set(), []
+        for n, r in picks:
+            if r in seen and r.startswith(("top score", "highest priority")):
+                parts.append(n)
+            else:
+                parts.append("%s (%s)" % (n, r))
+                seen.add(r)
         body = ("Morning %s. Your %d for today: %s. Start with %s."
-                % (agent_first, len(picks), ", ".join(parts), picks[0][0]))
+                % (agent_first, len(picks), ", ".join(parts), names[0]))
     return body
 
 
@@ -125,7 +155,7 @@ def run_hot_sheets(dry_run=False):
 
         # 1. ISA transfers first (max 2)
         for t in (isa_by_agent.get(agent) or [])[:2]:
-            if t["person_id"] in phoenix_pids or not t.get("name"):
+            if t["person_id"] in phoenix_pids or not _usable_name(t.get("name")):
                 continue
             picks.append((_first(t["name"]), _lead_reason(client, {}, isa_days=t["days"])))
             used_pids.add(t["person_id"])
@@ -145,7 +175,7 @@ def run_hot_sheets(dry_run=False):
                 if len(picks) >= 3:
                     break
                 pid = str(p.get("id"))
-                if pid in used_pids or pid in phoenix_pids or not p.get("name"):
+                if pid in used_pids or pid in phoenix_pids or not _usable_name(p.get("name")):
                     continue
                 picks.append((_first(p.get("name")), _lead_reason(client, p)))
                 used_pids.add(pid)
