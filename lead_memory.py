@@ -286,13 +286,6 @@ def _market_line(data, side_hint=""):
     from the model's SIDE read of the conversation (tags alone misfiled Joy,
     a seller, as a buyer)."""
     try:
-        blob = " ".join(data.get("person", {}).get("addresses") or []).lower()
-        slug = next((s for c, s in _MP_CITIES.items() if c in blob), None)
-        if not slug:
-            return None
-        snap = _db.get_market_snapshot(slug)
-        if not snap:
-            return None
         if side_hint in ("seller", "sellers"):
             side = "sellers"
         elif side_hint in ("buyer", "buyers"):
@@ -301,6 +294,26 @@ def _market_line(data, side_hint=""):
             probe = (" ".join(data.get("person", {}).get("tags") or [])
                      + " " + str(data.get("person", {}).get("stage") or "")).lower()
             side = "sellers" if "sell" in probe else "buyers"
+
+        # City by INTENT, not just mailing address:
+        #  - sellers: the address on file IS the market in question
+        #  - buyers: where they actually BROWSE (viewed/saved property cities
+        #    from site events) beats their current address, which may be a
+        #    rental or the city they are leaving
+        blob = " ".join(data.get("person", {}).get("addresses") or []).lower()
+        addr_slug = next((s for c, s in _MP_CITIES.items() if c in blob), None)
+        browse_counts = {}
+        for ev in data.get("site_activity_last_30d") or []:
+            ev_city = str((ev.get("property") or {}).get("city") or "").lower()
+            if ev_city in _MP_CITIES:
+                browse_counts[_MP_CITIES[ev_city]] = browse_counts.get(_MP_CITIES[ev_city], 0) + 1
+        browse_slug = max(browse_counts, key=browse_counts.get) if browse_counts else None
+        slug = (addr_slug or browse_slug) if side == "sellers" else (browse_slug or addr_slug)
+        if not slug:
+            return None
+        snap = _db.get_market_snapshot(slug)
+        if not snap:
+            return None
         r = snap.get("realtor") or {}
         z = snap.get("zillow") or {}
         bits = []

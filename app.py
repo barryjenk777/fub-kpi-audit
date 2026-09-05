@@ -4895,6 +4895,44 @@ def _system_status():
         return {"dot": dot, "summary": " ".join(bits), "detail_rows": detail}
     add(LEAD, "LeadStream scoring", _leadstream)
 
+    def _market_pulse_row():
+        import market_pulse as _mp
+        now = datetime.now(timezone.utc)
+        fresh, stale, missing, no_scripts = [], [], [], []
+        for slug, (name, _, _) in _mp.CITIES.items():
+            snap = _db.get_market_snapshot(slug)
+            if not snap:
+                missing.append(name)
+                continue
+            try:
+                age = (now - datetime.fromisoformat(
+                    (snap.get("fetched_at") or "").replace("Z", "+00:00"))).days
+            except (ValueError, AttributeError):
+                age = 999
+            (stale if age > 20 else fresh).append(name)
+            if not snap.get("nurture"):
+                no_scripts.append(name)
+        if missing and not fresh:
+            dot = "red"
+        elif stale or missing or no_scripts:
+            dot = "amber"
+        else:
+            dot = "green"
+        bits = ["%d of 7 cities fresh (under 20 days old)." % len(fresh)]
+        if stale:
+            bits.append("STALE (feeds may have changed): %s." % ", ".join(stale))
+        if missing:
+            bits.append("Missing: %s." % ", ".join(missing))
+        if no_scripts:
+            bits.append("No nurture scripts: %s." % ", ".join(no_scripts))
+        if dot == "green":
+            bits.append("Pages, tiles, and nurture scripts all current.")
+        return {"dot": dot, "summary": " ".join(bits),
+                "detail_rows": [{"city": n, "status": "fresh"} for n in fresh]
+                             + [{"city": n, "status": "STALE"} for n in stale]
+                             + [{"city": n, "status": "MISSING"} for n in missing]}
+    add(LEAD, "Market Pulse (city data)", _market_pulse_row)
+
     def _phoenix():
         logs = _db.get_phoenix_log(limit=300) or []
         today = [r for r in logs if r.get("run_date") == today_iso]
