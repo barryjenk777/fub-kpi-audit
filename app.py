@@ -5052,11 +5052,6 @@ def _system_status():
         return {"dot": "green", "summary": summary, "detail_rows": detail}
     add(LEAD, "ISA transfers", _isa)
 
-    add(LEAD, "Market Pulse", lambda: {
-        "dot": "gray",
-        "summary": "Not built yet. Pages and lead-record links land next.",
-        "detail_rows": []})
-
     # -- AGENT COACHING -----------------------------------------------------
 
     def _lead_memory():
