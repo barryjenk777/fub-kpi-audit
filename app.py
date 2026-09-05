@@ -1286,7 +1286,31 @@ def market_ammo():
         nurture = snap.get("nurture") or {}
         if not nurture:
             continue
-        side_html = ""
+        # The sexy numbers up top: agents see the data first, scripts under it
+        r = snap.get("realtor") or {}
+        z = snap.get("zillow") or {}
+        tiles = []
+        above = (z.get("pct_sold_above_list") or {}).get("latest")
+        if above:
+            tiles.append(("%d%%" % round(above * 100), "sold OVER asking", "last month"))
+        speed = (z.get("days_to_pending") or {}).get("latest") or r.get("median_dom")
+        if speed:
+            tiles.append(("%d days" % speed, "to find a buyer", "typical, priced right"))
+        if r.get("median_list_price"):
+            yy = r.get("median_list_price_yy")
+            tiles.append(("$%s" % format(int(r["median_list_price"]), ","), "median asking",
+                          ("%s%.0f%% vs a year ago" % ("+" if yy > 0 else "", yy * 100)) if yy else ""))
+        cuts = (z.get("pct_price_cut") or {}).get("latest") or r.get("price_reduced_share")
+        if cuts:
+            tiles.append(("%d%%" % round(cuts * 100), "cutting their price", "overpricing punished"))
+        sale = (z.get("median_sale_price") or {})
+        if sale.get("latest") and sale.get("year_ago") and sale["latest"] > sale["year_ago"]:
+            tiles.append(("+$%s" % format(int(sale["latest"] - sale["year_ago"]), ","),
+                          "typical sale price gain", "last 12 months"))
+        tiles_html = ("<div class='tiles'>" + "".join(
+            f"<div class='tile'><div class='t-val'>{v}</div><div class='t-lbl'>{l}</div>"
+            f"<div class='t-sub'>{s}</div></div>" for v, l, s in tiles) + "</div>") if tiles else ""
+        side_html = tiles_html
         for side in ("sellers", "buyers"):
             n = nurture.get(side)
             if not n:
@@ -1318,6 +1342,11 @@ h1{{font-size:1.4rem}} .sub{{color:#5b6779;font-size:.85rem;margin-bottom:1.2rem
 .side h3{{font-size:.9rem;margin:.8rem 0 .4rem}}
 .hooks{{margin:0 0 .6rem 1.1rem;padding:0;font-size:.82rem;color:#5b6779}}
 .script{{background:#f8fafc;border:1px solid #e6eaf1;border-radius:10px;padding:.7rem .8rem;margin:.5rem 0;position:relative}}
+.tiles{{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.5rem;margin:.5rem 0 .9rem}}
+.tile{{background:#fdf6ea;border:1px solid #f0dfc0;border-radius:10px;padding:.6rem .7rem}}
+.t-val{{font-size:1.35rem;font-weight:750;color:#b97a12;line-height:1.1}}
+.t-lbl{{font-size:.74rem;font-weight:650;margin-top:.1rem}}
+.t-sub{{font-size:.66rem;color:#5b6779}}
 .s-label{{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#b97a12;margin-bottom:.25rem}}
 .s-body{{font-size:.88rem;white-space:pre-wrap}}
 .script button{{position:absolute;top:.5rem;right:.6rem;font-size:.7rem;border:1px solid #e6eaf1;background:#fff;border-radius:7px;padding:.2rem .55rem;cursor:pointer}}
