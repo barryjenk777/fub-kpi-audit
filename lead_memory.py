@@ -313,7 +313,12 @@ def _market_line(data, side_hint=""):
             bits.append("%d days to a buyer" % speed)
         if not bits:
             return None
-        base = os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app").rstrip("/")
+        # MARKET_BASE_URL lets lead-facing market links live on the clean
+        # domain (legacycommandcenter.com) while the rest of Command Center
+        # stays on the Railway URL until the full migration.
+        base = (os.environ.get("MARKET_BASE_URL")
+                or os.environ.get("BASE_URL",
+                                  "https://web-production-3363cc.up.railway.app")).rstrip("/")
         city = snap.get("city") or slug
         line = ("MARKET: %s %s: %s. Share: %s/market/%s/%s"
                 % (city, side, ", ".join(bits), base, slug, side))
