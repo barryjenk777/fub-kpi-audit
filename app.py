@@ -1252,8 +1252,15 @@ def _market_page_context(slug, audience):
         cta_body = ("I will show you which %s neighborhoods fit your budget and where "
                     "the leverage is this month. No pressure, just the map." % city)
 
+    compiled = ""
+    try:
+        compiled = datetime.fromisoformat(
+            (snap.get("fetched_at") or "").replace("Z", "+00:00")).strftime("%b %d, %Y").replace(" 0", " ")
+    except (ValueError, AttributeError):
+        pass
     return {
         "city": city, "audience": audience, "data_month": _mp_month(snap),
+        "compiled": compiled,
         "lede": lede, "stats": stats, "meaning": meaning,
         "cta_head": cta_head, "cta_body": cta_body,
     }
@@ -1367,9 +1374,11 @@ def market_page(slug, audience):
         return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
                 "This page is being refreshed with the latest numbers. "
                 "Check back in a few minutes.</div>"), 503
-    # ?a=<agent-slug> attributes the CTA to the agent who sent the link —
-    # their lead should text THEM, not Barry. Barry is the fallback.
-    cta_name, cta_phone = "Barry", "+17578164037"
+    # ?a=<agent-slug> attributes the CTA to the agent who sent the link.
+    # No attribution (organic visit, stripped param, unknown slug) = no phone
+    # number at all: the lead is pointed back to whoever contacted them.
+    # Agents are the only funnel; nobody's lead gets routed to Barry.
+    cta_name = cta_phone = cta_pretty = None
     a_slug = request.args.get("a", "").replace("-", " ").strip().lower()
     if a_slug:
         try:
@@ -1377,14 +1386,15 @@ def market_page(slug, audience):
                 if (p.get("agent_name") or "").lower() == a_slug and p.get("phone"):
                     cta_name = p["agent_name"].split()[0]
                     cta_phone = p["phone"]
+                    digits = "".join(c for c in cta_phone if c.isdigit())[-10:]
+                    cta_pretty = ("(%s) %s-%s" % (digits[:3], digits[3:6], digits[6:])
+                                  if len(digits) == 10 else cta_phone)
                     break
         except Exception:
             pass
-    digits = "".join(c for c in cta_phone if c.isdigit())[-10:]
     ctx["cta_name"] = cta_name
     ctx["cta_phone"] = cta_phone
-    ctx["cta_pretty"] = ("(%s) %s-%s" % (digits[:3], digits[3:6], digits[6:])
-                         if len(digits) == 10 else cta_phone)
+    ctx["cta_pretty"] = cta_pretty
     token = request.args.get("t")
     try:
         _db.log_market_page_view(slug, audience, token=token)

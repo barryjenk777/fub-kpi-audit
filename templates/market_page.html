@@ -35,7 +35,7 @@ h2{font-size:1.05rem;margin:1.5rem 0 .5rem}
 <div class="wrap">
   <div class="kicker">Legacy Home Team · Hampton Roads</div>
   <h1>{{ city }} market update for {{ 'buyers' if audience == 'buyers' else 'sellers' }}</h1>
-  <div class="datemark">Real numbers through {{ data_month }}</div>
+  <div class="datemark">Real numbers through {{ data_month }}{% if compiled %} · compiled {{ compiled }}{% endif %}</div>
   <p class="lede">{{ lede }}</p>
 
   <div class="stats">
@@ -57,7 +57,12 @@ h2{font-size:1.05rem;margin:1.5rem 0 .5rem}
   <div class="cta">
     <div class="h">{{ cta_head }}</div>
     <p>{{ cta_body }}</p>
+    {% if cta_phone %}
     <a href="sms:{{ cta_phone }}">Text {{ cta_name }}: {{ cta_pretty }}</a>
+    {% else %}
+    <p style="font-weight:650;color:var(--ink);margin-bottom:0">Reply to the message
+    that brought you here and your agent will pull the numbers for your exact address.</p>
+    {% endif %}
   </div>
 
   <div class="foot">
