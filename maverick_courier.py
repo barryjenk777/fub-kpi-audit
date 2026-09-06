@@ -113,18 +113,13 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 
-def run(debug=False):
-    cfg = _load_config()
-    url = cfg.get("call_log_url")
-    if not url:
-        print("No config. Run: python3 maverick_courier.py --setup")
-        sys.exit(1)
+def _harvest(url, headless, debug=False):
+    """One browser pass. Returns (final_url, body_text, chunks)."""
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
-        # user_agent override: headless Chrome advertises itself and some
-        # apps bounce it to login; present as normal Chrome.
         ctx = pw.chromium.launch_persistent_context(
-            PROFILE_DIR, headless=not debug, user_agent=_UA)
+            PROFILE_DIR, headless=headless, user_agent=_UA,
+            args=["--disable-blink-features=AutomationControlled"])
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(9000)  # SPAs render slowly; give tables time
@@ -144,9 +139,7 @@ def run(debug=False):
             print("FIRST 400 CHARS:\n", (txt or "")[:400])
             input("\n(debug) browser is visible — press Enter to close... ")
             ctx.close()
-            return
-
-        # Generic extraction: structured rows first, full text as safety net.
+            return page.url, txt, []
         chunks = []
         try:
             rows = page.eval_on_selector_all(
@@ -162,6 +155,27 @@ def run(debug=False):
             body_text = ""
         final_url = page.url
         ctx.close()
+    return final_url, body_text, chunks
+
+
+def run(debug=False):
+    cfg = _load_config()
+    url = cfg.get("call_log_url")
+    if not url:
+        print("No config. Run: python3 maverick_courier.py --setup")
+        sys.exit(1)
+    if debug:
+        _harvest(url, headless=False, debug=True)
+        return
+
+    # Maverick fingerprints headless browsers (headed works, headless bounces
+    # to login with the same profile). Try stealth-headless first; on a
+    # bounce, retry HEADED — this Mac is always on and logged in, so a brief
+    # visible window at harvest time is fine.
+    final_url, body_text, chunks = _harvest(url, headless=True)
+    if _looks_logged_out(final_url, body_text):
+        print("headless bounced; retrying with a visible window...")
+        final_url, body_text, chunks = _harvest(url, headless=False)
 
     if _looks_logged_out(final_url, body_text):
         _post("LOGIN_NEEDED: Maverick courier session expired on the always-on "
