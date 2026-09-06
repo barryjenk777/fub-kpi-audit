@@ -144,25 +144,39 @@ def _scoreboard_line(agent_first, score):
     return "Yesterday's %d: you called %d. " % (total, called)
 
 
-def run_hot_sheets(dry_run=False):
-    """Build and queue the morning sheet for every eligible agent."""
+def run_hot_sheets(dry_run=False, coaching=None, prep=None):
+    """Build and queue the ONE morning text per agent (the digest):
+    [coaching line M/W/F] + [scoreboard] + [your 3, phoenix folded in] +
+    [appointment prep]. coaching/prep: {agent: message} collected by the
+    orchestrator; either may be None."""
+    coaching = coaching or {}
+    prep = prep or {}
     client = FUBClient()
     today = date.today()
     summary = {"queued": 0, "skipped_no_leads": 0, "skipped_claimed": 0,
                "skipped_no_phone": 0, "verified_yesterday": 0, "messages": []}
 
-    # Leads Phoenix already texted about this morning
+    # Phoenix today: owner-alerted leads fold IN as top picks (their separate
+    # 7:30 text is retired); 'assigned' bonus leads got their own reward text
+    # and stay excluded from picks.
     phoenix_pids = set()
+    phoenix_by_agent = {}
     try:
         with _db.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT person_id FROM phoenix_log
+                    SELECT person_id, lead_name, owner_before, dormant_days, status
+                    FROM phoenix_log
                     WHERE run_date = %s AND status IN ('owner_alerted', 'assigned')
                 """, (today,))
-                phoenix_pids = {str(r[0]) for r in cur.fetchall()}
+                for pid, lead_name, owner, dormant, status in cur.fetchall():
+                    phoenix_pids.add(str(pid))
+                    if status == "owner_alerted" and owner and lead_name:
+                        phoenix_by_agent.setdefault(owner, []).append(
+                            {"person_id": str(pid), "name": lead_name,
+                             "dormant": int(dormant or 0)})
     except Exception as e:
-        logger.warning("[HOT SHEET] phoenix dedupe read failed: %s", e)
+        logger.warning("[HOT SHEET] phoenix read failed: %s", e)
 
     # Fresh unworked ISA transfers, grouped by agent
     isa_by_agent = {}
@@ -209,6 +223,16 @@ def run_hot_sheets(dry_run=False):
                           "second day on your sheet, still no call"))
             used_pids.add(str(pid))
 
+        # 0.5 Phoenix resurrections (was their own 7:30 text, now folded in)
+        for ph in (phoenix_by_agent.get(agent) or []):
+            if len(picks) >= 3:
+                break
+            if ph["person_id"] in used_pids or not _usable_name(ph["name"]):
+                continue
+            picks.append((ph["person_id"], _first(ph["name"]),
+                          "back after %d days quiet, browsing again" % ph["dormant"]))
+            used_pids.add(ph["person_id"])
+
         # 1. ISA transfers next (max 2)
         for t in (isa_by_agent.get(agent) or [])[:2]:
             if len(picks) >= 3:
@@ -240,12 +264,29 @@ def run_hot_sheets(dry_run=False):
                 picks.append((pid, _first(p.get("name")), _lead_reason(client, p)))
                 used_pids.add(pid)
 
-        if not picks:
+        coach_msg = coaching.get(agent) or ""
+        prep_msg = prep.get(agent) or ""
+        if not picks and not coach_msg and not prep_msg:
             summary["skipped_no_leads"] += 1
             continue
 
-        message = (_scoreboard_line(_first(agent), scoreboard.get(agent, (0, 0)))
-                   + _compose(_first(agent), [(n, r) for _, n, r in picks]))
+        # The ONE morning text: coaching + scoreboard + picks + appt prep
+        sections = []
+        if coach_msg:
+            sections.append(coach_msg.strip())
+        if picks:
+            sections.append(
+                _scoreboard_line(_first(agent), scoreboard.get(agent, (0, 0)))
+                + _compose(_first(agent), [(n, r) for _, n, r in picks]))
+        elif scoreboard.get(agent, (0, 0))[1]:
+            sections.append(_scoreboard_line(_first(agent), scoreboard[agent]).strip())
+        if prep_msg:
+            body = prep_msg.strip()
+            first_prefix = "%s, " % _first(agent)
+            if body.startswith(first_prefix):
+                body = body[len(first_prefix):]
+            sections.append(body)
+        message = "\n\n".join(s for s in sections if s)
         summary["messages"].append({"agent": agent, "message": message})
 
         if dry_run:

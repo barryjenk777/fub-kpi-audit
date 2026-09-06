@@ -359,8 +359,10 @@ def _email_dry_run(messages, summary):
 # The run
 # ---------------------------------------------------------------------------
 
-def run_scripts(dry_run=None):
-    """Morning script prompts. Returns the summary dict."""
+def run_scripts(dry_run=None, collect=None):
+    """Morning script prompts. Returns the summary dict.
+    collect: when a dict is supplied (One Morning Text doctrine), messages are
+    stored there per agent instead of queued — the 8:15 digest appends them."""
     if dry_run is None:
         dry_run = bool(getattr(config, "SAVEBOT_DRY_RUN", True))
     dry_run = bool(dry_run)
@@ -454,6 +456,12 @@ def run_scripts(dry_run=None):
                             message[:500], "dry_run")
             continue
 
+        if collect is not None:
+            collect[agent_name] = message
+            _db.log_savebot(run_date, "scripts", agent_name, len(entries),
+                            message[:500], "digest")
+            summary["queued"] += 1
+            continue
         if not phone:
             summary["skipped"]["no_phone"] += 1
             continue

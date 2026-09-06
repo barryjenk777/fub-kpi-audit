@@ -15092,7 +15092,13 @@ def run_phoenix_sweep(dry_run=None):
                 names = ", ".join(ld["lead_name"] for ld in leads)
                 msg = (f"{first}, {len(leads)} of your quiet leads came back this week: "
                        f"{names}. All noted in FUB. Call them before they wander off.")
-            _phoenix_queue_text(owner, msg)
+            # One Morning Text doctrine (Sep 2026): owner alerts no longer send
+            # their own 7:30 text — the 8:15 digest folds these leads in as top
+            # picks (hot sheet reads today's owner_alerted phoenix_log rows).
+            # The earned bonus-lead text below stays instant: rewards are rare
+            # and immediate by design. msg kept for the log only.
+            logger.info("[PHOENIX] owner alert folded into digest for %s: %r",
+                        owner, msg[:100])
 
     # ── e2. UNOWNED strong-intent: bonus pool, merit-ordered assignment ───
     # DOCTRINE (sacred): Phoenix qualification is BINARY and earned weekly.
@@ -15572,9 +15578,25 @@ def scheduled_hot_sheets():
         return
     try:
         import hotsheet as _hs
-        summary = _hs.run_hot_sheets(dry_run=False)
-        print(f"[SCHEDULER] Hot sheets: {summary.get('queued', 0)} queued, "
-              f"{summary.get('skipped_no_leads', 0)} agents had no priority leads")
+        # One Morning Text doctrine: this job is the single 8:15 sender.
+        # Coaching (M/W/F) and Save-Bot prep are collected, not queued, and
+        # folded into one digest per agent.
+        coaching, prep = {}, {}
+        from datetime import date as _d
+        if _d.today().strftime("%A").lower() in ("monday", "wednesday", "friday"):
+            try:
+                scheduled_agent_coaching_texts(collect=coaching)
+            except Exception as e:
+                logger.error("digest coaching collect failed: %s", e)
+        try:
+            import savebot as _sb
+            _sb.run_scripts(dry_run=False, collect=prep)
+        except Exception as e:
+            logger.error("digest savebot collect failed: %s", e)
+        summary = _hs.run_hot_sheets(dry_run=False, coaching=coaching, prep=prep)
+        print(f"[SCHEDULER] Morning digest: {summary.get('queued', 0)} queued "
+              f"(coaching={len(coaching)}, prep={len(prep)}), "
+              f"{summary.get('skipped_no_leads', 0)} agents had nothing today")
         _record_fired("hot_sheets")
     except Exception as e:
         _alert_on_job_failure("hot_sheets", str(e))
@@ -15586,14 +15608,27 @@ def scheduled_hot_sheets():
 
 @app.route("/api/admin/hotsheet/run", methods=["POST"])
 def api_hotsheet_run():
-    """Run the morning hot sheets now. Body {"dry_run": true} previews the
-    exact texts without queuing anything."""
+    """Run the morning digest now. Body {"dry_run": true} previews the exact
+    texts without queuing; add "full": true to also collect the coaching and
+    Save-Bot sections exactly as the 8:15 job would."""
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(silent=True) or {}
     try:
         import hotsheet as _hs
-        summary = _hs.run_hot_sheets(dry_run=bool(body.get("dry_run")))
+        coaching, prep = {}, {}
+        if body.get("full"):
+            try:
+                scheduled_agent_coaching_texts(collect=coaching)
+            except Exception as e:
+                logger.error("preview coaching collect failed: %s", e)
+            try:
+                import savebot as _sb
+                _sb.run_scripts(dry_run=True, collect=prep)
+            except Exception as e:
+                logger.error("preview savebot collect failed: %s", e)
+        summary = _hs.run_hot_sheets(dry_run=bool(body.get("dry_run")),
+                                     coaching=coaching, prep=prep)
         return jsonify({"ok": True, **summary})
     except Exception as e:
         import traceback
@@ -18084,10 +18119,8 @@ def start_scheduler():
     # Agent coaching texts via Mac iMessage: Mon/Wed/Fri at 8:15am ET
     # Generates personalized KPI-based coaching texts in Barry's voice,
     # queues them in DB, fires immediately via Mac webhook if configured.
-    _scheduler.add_job(scheduled_agent_coaching_texts,
-                       CronTrigger(day_of_week="mon,wed,fri", hour=8, minute=15, timezone=ET),
-                       id="agent_coaching_texts", name="Agent coaching iMessages (Mon/Wed/Fri 8:15am)",
-                       max_instances=1, coalesce=True)
+    # Agent coaching texts: no longer a standalone job — collected into the
+    # 8:15 morning digest by scheduled_hot_sheets (One Morning Text doctrine).
 
     # Owner daily brief: every morning at 7am ET
     # Builds the JSON brief, warms the Perplexity cache, and emails Barry.
@@ -18121,9 +18154,11 @@ def start_scheduler():
     # per agent with appointments today/tomorrow, containing ready-to-send
     # value-touch texts for each lead. Agents only. Dry-run by default
     # (SAVEBOT_DRY_RUN): emails Barry the would-be texts, queues nothing.
+    # Weekdays: Save-Bot prep rides inside the 8:15 morning digest.
+    # Weekends: no digest, so the classic standalone text still goes out.
     _scheduler.add_job(scheduled_savebot_scripts,
-                       CronTrigger(hour=7, minute=45, timezone=ET),
-                       id="savebot_scripts", name="Save-Bot script prompts (daily 7:45am)",
+                       CronTrigger(day_of_week="sat,sun", hour=7, minute=45, timezone=ET),
+                       id="savebot_scripts", name="Save-Bot script prompts (weekends 7:45am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_hot_sheets,
                        CronTrigger(day_of_week="mon-fri", hour=8, minute=15, timezone=ET),
@@ -18641,11 +18676,13 @@ def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
     return [_generate_agent_coaching_text(agent_first, kpi, week_day)], kpi
 
 
-def scheduled_agent_coaching_texts():
+def scheduled_agent_coaching_texts(collect=None):
     """
-    Generate and queue coaching texts for all active agents.
-    Runs Mon/Wed/Fri at 8:15am ET via APScheduler.
-    Mac poller picks up pending rows every 60s and sends via iMessage.
+    Generate coaching texts for all active agents (Mon/Wed/Fri).
+    collect: when a dict is supplied (One Morning Text doctrine), the FIRST
+    message per agent lands there for the 8:15 digest to prepend; any extra
+    messages (e.g. the Maverick buyer/seller number split) still queue
+    separately. Without collect, the legacy behavior queues everything.
     """
     from datetime import date as _date
     import calendar
@@ -18717,7 +18754,11 @@ def scheduled_agent_coaching_texts():
             call_ranks, active_with_calls, pct_elapsed, today,
         )
 
-        for message in messages:
+        for i, message in enumerate(messages):
+            if collect is not None and i == 0:
+                collect[agent_name] = message
+                queued += 1
+                continue
             try:
                 row_id = _db.queue_agent_imessage(
                     agent_name=agent_name, fub_user_id=fub_user_id,
