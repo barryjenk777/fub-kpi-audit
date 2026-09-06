@@ -18656,24 +18656,47 @@ def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
         "team_size":           active_with_calls,
         "pct_of_year_elapsed": round(pct_elapsed, 3),
     }
-    # Maverick rep: if the agent is calling enough but not converting to
-    # appointments, prescribe a 2-text buyer+seller practice rep instead of the
-    # normal coaching text (text 1 carries the diagnostic). Gated to once a week.
+    # Maverick practice reps — once per agent per ISO week, on WHICHEVER
+    # coaching day the flag first shows (the old Monday-only gate plus the
+    # 10-call floor meant slipping agents almost never saw a rep; Barry
+    # caught it, Sep 2026). Two flavors:
+    #   conversion problem (calling but not booking) -> full 2-text rep
+    #   volume problem (barely dialing)              -> one warm-up line
+    #      appended to the coaching text: a zero-stakes first dial
+    # Compassion stance still skips both: someone 3+ weeks down gets a human
+    # check-in, not homework. The weekly guard is PEEKED here (previews show
+    # truth without consuming it) and CLAIMED by the scheduler at send time
+    # via kpi["maverick_claim"].
     _min_calls   = getattr(config, "AI_COACH_MIN_CALLS_THRESHOLD", 10)
     _appt_thresh = getattr(config, "AI_COACH_APPT_CONVERSION_THRESHOLD", 0.5)
     _appt_goal   = kpi.get("appts_per_week", 0)
     _appts7      = kpi.get("appts_last_7d", 0)
+    _calls7      = kpi.get("calls_last_7d", 0)
     _appt_low    = _appts7 == 0 or (_appt_goal > 0 and _appts7 < _appt_goal * _appt_thresh)
-    _flagged     = kpi.get("calls_last_7d", 0) >= _min_calls and _appt_low
-    _mav_day     = getattr(config, "MAVERICK_PRESCRIBE_WEEKDAY", "monday")
-    # Compassion stance skips the practice-rep prescription: someone 3+ weeks
-    # down gets a human check-in, not homework. Reps resume once they're moving.
-    if _flagged and kpi.get("stance") != "compassion" and (_mav_day is None or week_day == _mav_day):
-        reps = _maverick_rep_texts(agent_first, today.isocalendar()[1])
+    iso_week     = today.isocalendar()[1]
+    _mav_key     = f"mavrep_{today.year}W{iso_week}_{agent_name}"
+    _rep_open    = kpi.get("stance") != "compassion" and not _db.guard_exists(_mav_key)
+
+    if _rep_open and _calls7 >= _min_calls and _appt_low:
+        reps = _maverick_rep_texts(agent_first, iso_week)
         if reps:
+            kpi["maverick_claim"] = _mav_key
             return reps, kpi
 
-    return [_generate_agent_coaching_text(agent_first, kpi, week_day)], kpi
+    coaching = _generate_agent_coaching_text(agent_first, kpi, week_day)
+    if _rep_open and _calls7 < _min_calls:
+        buyers  = getattr(config, "MAVERICK_BUYER_SCENARIOS", []) or []
+        sellers = getattr(config, "MAVERICK_SELLER_SCENARIOS", []) or []
+        pool = buyers if iso_week % 2 == 0 else sellers
+        if pool:
+            sc = pool[(iso_week // 2) % len(pool)]
+            digits = "".join(c for c in sc["phone"] if c.isdigit())[-10:]
+            pretty = "(%s) %s-%s" % (digits[:3], digits[3:6], digits[6:])
+            coaching += ("\n\nWarm up first: call the %s practice line at %s. "
+                         "It's %s. Two minutes on a fake lead makes dial one easy."
+                         % (sc["label"], pretty, sc["context"]))
+            kpi["maverick_claim"] = _mav_key
+    return [coaching], kpi
 
 
 def scheduled_agent_coaching_texts(collect=None):
@@ -18753,6 +18776,14 @@ def scheduled_agent_coaching_texts(collect=None):
             agent_name, profile, goals, ytd, rec, week_day,
             call_ranks, active_with_calls, pct_elapsed, today,
         )
+
+        # Claim the weekly Maverick-rep guard now that this send is real
+        # (previews peek the guard but never claim it)
+        if kpi and kpi.get("maverick_claim"):
+            try:
+                _db.claim_once(kpi["maverick_claim"])
+            except Exception:
+                pass
 
         for i, message in enumerate(messages):
             if collect is not None and i == 0:

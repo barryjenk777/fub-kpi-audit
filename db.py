@@ -7740,3 +7740,19 @@ def hotsheet_scoreboard(days=7):
     except Exception as e:
         logger.warning("hotsheet_scoreboard failed: %s", e)
         return []
+
+
+def guard_exists(guard_key: str) -> bool:
+    """Peek at an idempotency guard without claiming it (lets previews show
+    what WOULD send without consuming the once-only slot)."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM idempotency_guard WHERE guard_key = %s",
+                            (str(guard_key),))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("guard_exists(%s) failed: %s", guard_key, e)
+        return False
