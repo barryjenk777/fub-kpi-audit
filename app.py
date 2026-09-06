@@ -15976,11 +15976,12 @@ def training_board():
             archetype = "THE ALMOST-THERE"
             why = ("Holds conversations (objections %s%%) but asked on only "
                    "%d%% of graded calls. At the team's ask rate that is "
-                   "roughly <b>%d more asks</b> on the same effort, and asks "
+                   "roughly <b>%d more ask%s</b> on the same effort, and asks "
                    "convert to appointments at about 60%% here. This is the "
                    "cheapest money on the team: no new leads, no new calls, "
                    "one habit." % (round(obj) if obj is not None else "?",
-                                   round(ask), gap_asks))
+                                   round(ask), gap_asks,
+                                   "" if gap_asks == 1 else "s"))
             upside = 3 + gap_asks
         elif grade is not None and grade >= 6 and (ask or 0) >= (team_ask or 50):
             archetype = "THE CONVERTER"
