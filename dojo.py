@@ -179,51 +179,150 @@ def build_email(agent_name, diag, mine, team):
     first = _first(agent_name)
     sc = diag["scenarios"][0] or {}
     teach = _teach_line(diag["focus"], diag["reason"])
-    quote_html = ""
+    graded = int(mine.get("calls_graded") or 0)
+
+    subject = "Your training this week, %s" % first
+
+    focus_titles = {
+        "the_ask": "The Ask", "objections": "Objections",
+        "fundamentals": "Fundamentals", "get_on_the_board": "Get On The Board",
+        "sharpen": "Stay Sharp",
+    }
+    focus_title = focus_titles.get(diag["focus"], "Training")
+    base = os.environ.get("BASE_URL",
+                          "https://web-production-3363cc.up.railway.app").rstrip("/")
+
+    # Book quote in the house quote-block style (goal email pattern)
+    quote_block = ""
     try:
         from dojo_teachings import TEACHINGS
         bank = TEACHINGS.get(diag["focus"]) or {}
         if bank.get("quote"):
-            quote_html = ("<div style='border-left:3px solid #b97a12;padding:"
-                          ".4em .9em;margin:.6em 0;color:#5b6779;font-size:14px;"
-                          "font-style:italic'>\"%s\"<div style='font-style:normal;"
-                          "font-size:12px;margin-top:.3em'>Too Nice for Sales, %s"
-                          "</div></div>" % (bank["quote"], bank.get("chapters", "")))
+            quote_block = f"""
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px">
+          <tr>
+            <td style="border-left:4px solid #f5a623;padding:14px 20px;background:#fffbf0;border-radius:0 8px 8px 0">
+              <p style="margin:0;font-size:15px;font-style:italic;color:#555555;line-height:1.6">"{bank['quote']}"</p>
+              <p style="margin:8px 0 0;font-size:12px;font-weight:700;color:#f5a623;letter-spacing:0.5px">TOO NICE FOR SALES, {bank.get('chapters', '').upper()}</p>
+            </td>
+          </tr>
+        </table>"""
     except Exception:
         pass
-    graded = int(mine.get("calls_graded") or 0)
-    stats_bits = []
+
+    # Stat tiles in house palette
+    tiles = []
     if graded:
         if mine.get("avg_grade") is not None:
-            stats_bits.append("Average grade: <b>%.1f / 10</b>" % mine["avg_grade"])
+            tiles.append(("%.1f" % mine["avg_grade"], "AVG CALL GRADE", "of 10"))
         if mine.get("appt_ask") is not None:
-            stats_bits.append("Asked for the appointment: <b>%d%%</b>%s" % (
-                round(mine["appt_ask"]),
-                (" (team %d%%)" % round(team["appt_ask"])) if team.get("appt_ask") else ""))
+            tiles.append(("%d%%" % round(mine["appt_ask"]), "ASKED FOR THE APPT",
+                          ("team %d%%" % round(team["appt_ask"])) if team.get("appt_ask") else ""))
         if mine.get("objection") is not None:
-            stats_bits.append("Objection handling: <b>%d%%</b>" % round(mine["objection"]))
-    stats_html = ("<ul style='margin:.4em 0 0 1.2em;padding:0'>" +
-                  "".join("<li style='margin:.2em 0'>%s</li>" % b for b in stats_bits) +
-                  "</ul>") if stats_bits else ""
+            tiles.append(("%d%%" % round(mine["objection"]), "OBJECTIONS HANDLED", ""))
+    tiles_html = ""
+    if tiles:
+        cells = "".join(f"""
+            <td width="{100 // len(tiles)}%" style="padding:4px">
+              <table width="100%" cellpadding="0" cellspacing="0"
+                     style="background:#fffbf0;border:1px solid #f5e3bb;border-radius:8px">
+                <tr><td style="padding:14px 8px;text-align:center">
+                  <p style="margin:0;font-size:26px;font-weight:800;color:#111111;line-height:1">{v}</p>
+                  <p style="margin:6px 0 0;font-size:10px;font-weight:700;letter-spacing:0.5px;color:#888888">{l}</p>
+                  {f'<p style="margin:2px 0 0;font-size:11px;font-weight:700;color:#f5a623">{s}</p>' if s else ''}
+                </td></tr></table></td>"""
+            for v, l, s in tiles)
+        tiles_html = (f'<table width="100%" cellpadding="0" cellspacing="0" '
+                      f'style="margin:0 0 24px"><tr>{cells}</tr></table>')
 
-    subject = "Your training this week, %s" % first
-    html = f"""
-<div style='font-family:-apple-system,Segoe UI,sans-serif;max-width:560px;margin:0 auto;color:#1a2233;line-height:1.55'>
-<p style='font-size:15px'>Morning {first}. Maverick graded {graded} of your real calls last week. Here is what the tape says:</p>
-<div style='background:#f8fafc;border:1px solid #e6eaf1;border-radius:10px;padding:12px 16px;font-size:14px'>
-{diag['reason']}{stats_html}
-</div>
-<p style='font-size:15px'>{teach}</p>
-{quote_html}
-<div style='background:#fdf6ea;border:1px solid #f0dfc0;border-radius:10px;padding:14px 16px'>
-  <div style='font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#b97a12'>This week's reps</div>
-  <div style='font-size:16px;font-weight:700;margin:.3em 0'>{sc.get('label','Practice call')} · {diag['reps']} calls</div>
-  <div style='font-size:14px'>Call <a href='tel:{sc.get('phone','')}' style='color:#b97a12;font-weight:700'>{_pretty(sc.get('phone',''))}</a>. Who picks up: {sc.get('label','a practice lead')}, {sc.get('context','ready to test you')}.</div>
-  <div style='font-size:13px;color:#5b6779;margin-top:.4em'>A rep counts when Maverick grades it <b>{PASS} or higher</b>. It emails you the score right after each call. Under {PASS}? Read the feedback, call again.</div>
-</div>
-<p style='font-size:14px'>Two minutes a rep. Nobody real on the line, nothing to lose, and next week's tape is how we both know it worked. Danny and I see the board.</p>
-<p style='font-size:14px'>Barry</p>
-</div>"""
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f0;padding:32px 16px">
+  <tr><td align="center">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px">
+
+    <!-- Header bar -->
+    <tr>
+      <td style="background:#0d1117;border-radius:12px 12px 0 0;padding:24px 32px;text-align:center">
+        <img src="{base}/static/logo-white.png"
+             alt="Legacy Home Team" width="160" style="display:block;margin:0 auto 10px;width:160px;height:auto">
+        <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:2px;color:#f5a623">THE DOJO &middot; WEEKLY TRAINING</p>
+        <p style="margin:0;font-size:20px;font-weight:800;color:#ffffff">This Week: {focus_title}</p>
+      </td>
+    </tr>
+
+    <!-- Body -->
+    <tr>
+      <td style="background:#ffffff;padding:36px 32px 28px;border-left:1px solid #e5e5e5;border-right:1px solid #e5e5e5">
+
+        <p style="margin:0 0 20px;font-size:16px;color:#111111">Hey {first},</p>
+
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#333333">
+          Maverick graded <strong style="color:#111111">{graded}</strong> of your real
+          calls last week. Here's what the tape says:</p>
+
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px">
+          <tr>
+            <td style="border-left:4px solid #f5a623;padding:14px 20px;background:#fffbf0;border-radius:0 8px 8px 0">
+              <p style="margin:0;font-size:15px;color:#333333;line-height:1.6">{diag['reason']}</p>
+            </td>
+          </tr>
+        </table>
+
+        {tiles_html}
+
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#333333">{teach}</p>
+
+        {quote_block}
+
+        <!-- Assignment card -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px">
+          <tr>
+            <td style="background:#0d1117;border-radius:12px;padding:24px 28px;text-align:center">
+              <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:2px;color:#f5a623">THIS WEEK'S REPS</p>
+              <p style="margin:0 0 6px;font-size:22px;font-weight:800;color:#ffffff">{sc.get('label','Practice call')} &times; {diag['reps']}</p>
+              <p style="margin:0 0 18px;font-size:13px;color:#aab2c0;line-height:1.5">Who picks up: {sc.get('context','a practice lead ready to test you')}.</p>
+              <a href="tel:{sc.get('phone','')}"
+                 style="display:inline-block;background:#f5a623;color:#0d1117;padding:16px 36px;
+                        border-radius:8px;text-decoration:none;font-weight:800;font-size:16px;
+                        letter-spacing:0.3px">
+                Call the Bot: {_pretty(sc.get('phone',''))} &rarr;
+              </a>
+              <p style="margin:16px 0 0;font-size:12px;color:#aab2c0;line-height:1.6">
+                A rep counts at <strong style="color:#f5a623">{PASS}+</strong>.
+                Maverick emails your score right after each call.<br>
+                Under {PASS}? Read the feedback, call again.</p>
+            </td>
+          </tr>
+        </table>
+
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.65;color:#333333">
+          Two minutes a rep. Nobody real on the line, nothing to lose, and next
+          week's tape is how we both know it worked. Wednesday's text shows your
+          rep count. Danny and I see the board.</p>
+
+        <p style="margin:24px 0 0;font-size:15px;color:#111111">
+          Let's get it,<br>
+          <strong>Barry Jenkins</strong><br>
+          <span style="font-size:13px;color:#888888">Legacy Home Team</span>
+        </p>
+      </td>
+    </tr>
+
+    <!-- Footer -->
+    <tr>
+      <td style="background:#0d1117;border-radius:0 0 12px 12px;padding:16px 32px;text-align:center">
+        <p style="margin:0;font-size:11px;color:#666f7d">Built from your own graded calls &middot; refreshed nightly &middot; Legacy Home Team</p>
+      </td>
+    </tr>
+
+  </table>
+  </td></tr>
+</table>
+</body>
+</html>"""
     return subject, html
 
 
@@ -235,8 +334,11 @@ def run_dojo_monday(dry_run=False):
     stats = _db.get_latest_maverick_stats()
     team = stats.get("Team Average") or {}
     today = date.today()
-    iso_week = today.isocalendar()[1]
-    week_start = today - timedelta(days=today.weekday())
+    # Sent Sunday night for the COMING week: week_start = the next Monday
+    # (or today when run on a Monday), so Wednesday's digest rep-check finds
+    # the right prescription row.
+    week_start = today + timedelta(days=(7 - today.weekday()) % 7)
+    iso_week = week_start.isocalendar()[1]
     summary = {"sent": 0, "skipped": 0, "emails": []}
 
     for profile in (_db.get_agent_profiles(active_only=True) or []):

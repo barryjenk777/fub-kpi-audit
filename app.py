@@ -18437,8 +18437,8 @@ def start_scheduler():
                        id="handoff_scan", name="Instant Handoff Protocol (10-min scan)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_dojo_monday,
-                       CronTrigger(day_of_week="mon", hour=7, minute=30, timezone=ET),
-                       id="dojo_monday", name="Dojo training prescriptions (Mon 7:30am)",
+                       CronTrigger(day_of_week="sun", hour=19, minute=0, timezone=ET),
+                       id="dojo_monday", name="Dojo training prescriptions (Sun 7pm)",
                        max_instances=1, coalesce=True)
 
     _scheduler.start()
