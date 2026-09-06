@@ -326,8 +326,70 @@ def build_email(agent_name, diag, mine, team):
     return subject, html
 
 
+def _compliance_recap(week_start, dry_run=False):
+    """Stamp last week's prescriptions with verified rep counts and email
+    Barry the one-glance recap: who did the work, who didn't, miss streaks.
+    Runs inside the Sunday job, before new prescriptions go out."""
+    import postmark_client as _pm
+    last_week = week_start - timedelta(days=7)
+    rx = _db.get_dojo_prescriptions(week_start=last_week)
+    if not rx:
+        return None
+    rows = []
+    for p in rx:
+        agent = p["agent_name"]
+        prog = _db.get_ai_coach_progress(agent, last_week)
+        done = max((prog["latest_graded"] - prog["baseline_graded"]), 0) if prog else 0
+        need = int(p.get("reps_required") or 0)
+        met = done >= need > 0
+        if not dry_run:
+            _db.stamp_dojo_compliance(last_week, agent, done, met)
+        streak = _db.get_dojo_miss_streak(agent, last_week) + (0 if met else 1)
+        rows.append({"agent": agent, "done": done, "need": need, "met": met,
+                     "streak": 0 if met else streak,
+                     "focus": p.get("focus", ""),
+                     "scenario": p.get("scenario_label") or ""})
+    rows.sort(key=lambda r: (r["met"], -r["streak"]))
+
+    tr = "".join(f"""<tr>
+      <td style="padding:8px 10px;border-top:1px solid #e5e5e5;font-weight:700;color:#111111">{r['agent']}</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e5e5;text-align:center">{'&#9989;' if r['met'] else '&#10060;'}</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e5e5;text-align:center">{r['done']} / {r['need']}</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e5e5;text-align:center;color:{'#c0392b' if r['streak'] >= 2 else '#333333'};font-weight:{'800' if r['streak'] >= 2 else '400'}">{r['streak'] or ''}</td>
+      <td style="padding:8px 10px;border-top:1px solid #e5e5e5;font-size:12px;color:#888888">{r['focus'].replace('_',' ')}</td></tr>"""
+        for r in rows)
+    misses = [r for r in rows if not r["met"]]
+    two_plus = [r["agent"] for r in rows if r["streak"] >= 2]
+    headline = ("%d of %d did their reps." % (len(rows) - len(misses), len(rows)))
+    talk = (("<p style='margin:16px 0 0;font-size:14px;color:#333333'><b>Worth your "
+             "voice this week:</b> " + ", ".join(two_plus) +
+             " (2+ weeks of missed reps). A 30-second personal word from you beats "
+             "ten system nudges.</p>") if two_plus else "")
+    html = f"""<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto">
+<p style="font-size:15px;color:#111111">Dojo compliance, week of {last_week.strftime('%b %d')}: <b>{headline}</b></p>
+<table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;color:#333333">
+<tr><th align="left" style="padding:6px 10px;font-size:11px;color:#888888">AGENT</th>
+<th style="padding:6px 10px;font-size:11px;color:#888888">REPS</th>
+<th style="padding:6px 10px;font-size:11px;color:#888888">DONE</th>
+<th style="padding:6px 10px;font-size:11px;color:#888888">MISS STREAK</th>
+<th align="left" style="padding:6px 10px;font-size:11px;color:#888888">FOCUS</th></tr>{tr}</table>
+{talk}
+<p style="margin:16px 0 0;font-size:12px;color:#888888">Verified against Maverick practice grades. New prescriptions go out tonight. Full board: legacycommandcenter.com/training</p></div>"""
+    if not dry_run:
+        try:
+            _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+                     subject="Dojo compliance: %d/%d did their reps%s" % (
+                         len(rows) - len(misses), len(rows),
+                         (", %d need your voice" % len(two_plus)) if two_plus else ""),
+                     html=html)
+        except Exception as e:
+            logger.error("dojo recap email failed: %s", e)
+    return {"rows": rows, "two_plus": two_plus}
+
+
 def run_dojo_monday(dry_run=False):
-    """Diagnose every agent and send the Monday training email."""
+    """Sunday-night job: recap last week's compliance to Barry, then diagnose
+    every agent and send the training email for the coming week."""
     from nudge_engine import AGENT_EMAIL_OVERRIDES
     import postmark_client as _pm
 
@@ -340,7 +402,18 @@ def run_dojo_monday(dry_run=False):
     # the right prescription row.
     week_start = today + timedelta(days=(7 - today.weekday()) % 7)
     iso_week = week_start.isocalendar()[1]
-    summary = {"sent": 0, "skipped": 0, "emails": []}
+
+    # Step 1: last week's verdict lands in Barry's inbox before the new
+    # assignments land in the agents'
+    try:
+        recap = _compliance_recap(week_start, dry_run=dry_run)
+    except Exception as e:
+        logger.error("dojo compliance recap failed: %s", e)
+        recap = None
+    summary = {"sent": 0, "skipped": 0, "emails": [],
+               "recap": ({"agents": len(recap["rows"]),
+                          "needs_voice": recap["two_plus"]}
+                         if recap else None)}
 
     for profile in (_db.get_agent_profiles(active_only=True) or []):
         agent = profile.get("agent_name")

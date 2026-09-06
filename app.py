@@ -19527,3 +19527,4 @@ else:
     _db.ensure_maverick_stats_table()
     _db.ensure_maverick_dashboard_table()
     _db.ensure_dojo_table()
+    _db.ensure_dojo_compliance_cols()

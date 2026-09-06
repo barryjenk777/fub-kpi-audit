@@ -8123,3 +8123,60 @@ def get_latest_maverick_dashboard():
     except Exception as e:
         logger.warning("get_latest_maverick_dashboard failed: %s", e)
         return None
+
+
+def ensure_dojo_compliance_cols():
+    """reps_done + met stamped onto last week's prescription at recap time,
+    enabling consecutive-miss streaks."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE dojo_prescriptions
+                        ADD COLUMN IF NOT EXISTS reps_done INTEGER,
+                        ADD COLUMN IF NOT EXISTS met BOOLEAN;
+                """)
+    except Exception as e:
+        logger.warning("ensure_dojo_compliance_cols failed: %s", e)
+
+
+def stamp_dojo_compliance(week_start, agent_name, reps_done, met):
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE dojo_prescriptions
+                       SET reps_done = %s, met = %s
+                     WHERE week_start = %s AND agent_name = %s
+                """, (int(reps_done), bool(met), week_start, agent_name))
+    except Exception as e:
+        logger.warning("stamp_dojo_compliance failed: %s", e)
+
+
+def get_dojo_miss_streak(agent_name, before_week):
+    """Consecutive prescription weeks (immediately before before_week) where
+    the agent did not meet their reps."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT met FROM dojo_prescriptions
+                    WHERE agent_name = %s AND week_start < %s
+                      AND met IS NOT NULL
+                    ORDER BY week_start DESC LIMIT 8
+                """, (agent_name, before_week))
+                streak = 0
+                for (met,) in cur.fetchall():
+                    if met:
+                        break
+                    streak += 1
+                return streak
+    except Exception as e:
+        logger.warning("get_dojo_miss_streak failed: %s", e)
+        return 0
