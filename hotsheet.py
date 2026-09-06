@@ -345,11 +345,12 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
             else:
                 d = "".join(c for c in (rx.get("scenario_phone") or "") if c.isdigit())[-10:]
                 pn = "(%s) %s-%s" % (d[:3], d[3:6], d[6:]) if len(d) == 10 else ""
-                sections.append("Dojo check: %d of %d practice reps done. %s%s. "
-                                "Two minutes each, pass is 7+. Your Phoenix bonus "
-                                "leads ride on finishing these."
-                                % (done, need, rx.get("scenario_label") or "Your scenario",
-                                   (" " + pn) if pn else ""))
+                sections.append("Dojo check: %d of %d practice reps done. Call the "
+                                "%s line now%s. Two minutes, pass is 7+. Your "
+                                "Phoenix bonus leads ride on finishing these."
+                                % (done, need,
+                                   rx.get("scenario_label") or "practice",
+                                   (": " + pn) if pn else ""))
         message = "\n\n".join(s for s in sections if s)
         summary["messages"].append({"agent": agent, "message": message})
 
