@@ -168,6 +168,7 @@ def build_insight(days=60):
         touched = _touched_since(client, pid, created)
         if touched is False:
             at_risk.append({"lead": pname, "agent": agent,
+                            "person_id": str(pid),
                             "when": start.isoformat(),
                             "set_days_ago": (now - created).days})
     ghosted = []
@@ -175,6 +176,7 @@ def build_insight(days=60):
         touched = _touched_since(client, pid, start)
         if touched is False:
             ghosted.append({"lead": pname, "agent": agent,
+                            "person_id": str(pid),
                             "held_days_ago": (now - start).days})
     out["at_risk_upcoming"] = at_risk
     out["ghosted_after_held"] = ghosted

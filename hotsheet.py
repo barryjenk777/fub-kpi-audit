@@ -236,6 +236,17 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
     profiles = _db.get_agent_profiles(active_only=True) or []
     uid_by_agent = {p.get("agent_name"): p.get("fub_user_id") for p in profiles}
 
+    # Ghosted-after-held leads from the appointment money layer
+    ghosted_by_agent = {}
+    try:
+        import appt_insight as _ai
+        cached = _ai.get_cached() or {}
+        for g in cached.get("ghosted_after_held") or []:
+            if g.get("agent"):
+                ghosted_by_agent.setdefault(g["agent"], []).append(g)
+    except Exception as e:
+        logger.warning("[HOT SHEET] appt insight read failed: %s", e)
+
     # Wednesday Dojo check: practice reps done vs this week's prescription,
     # verified against Maverick's AI Coach grades from the nightly harvest.
     week_start = today - timedelta(days=today.weekday())
@@ -261,7 +272,7 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
 
         picks, used_pids = [], set()
 
-        # 0. Escalations first: yesterday's uncalled picks come back on top
+        # 0. Escalations: yesterday's uncalled picks come back on top
         for pid, lead_name in (uncalled.get(agent) or [])[:2]:
             if str(pid) in phoenix_pids or not _usable_name(lead_name):
                 continue
@@ -278,6 +289,22 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
             picks.append((ph["person_id"], _first(ph["name"]),
                           "back after %d days quiet, browsing again" % ph["dormant"]))
             used_pids.add(ph["person_id"])
+
+        # 0b. Ghosted-after-held: they MET this person and then went silent.
+        # Warmest names in the pipeline; only repeat escalations outrank them.
+        # (From the nightly appointment money layer, FUB-call-verified at
+        # 6:20am, before this 8:15 sheet.)
+        for g in (ghosted_by_agent.get(agent) or [])[:2]:
+            if len(picks) >= 3:
+                break
+            pid = str(g.get("person_id") or "")
+            if not pid or pid in used_pids or pid in phoenix_pids \
+                    or not _usable_name(g.get("lead")):
+                continue
+            picks.append((pid, _first(g["lead"]),
+                          "you met them %d days ago, silence since. Call before "
+                          "they book with someone else" % int(g.get("held_days_ago") or 0)))
+            used_pids.add(pid)
 
         # 1. ISA transfers next (max 2)
         for t in (isa_by_agent.get(agent) or [])[:2]:
