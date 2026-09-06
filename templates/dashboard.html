@@ -749,6 +749,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
     <div class="topbar-left">
       <div class="topbar-title" id="topbar-title">🎯 Goals — 2026</div>
       <div class="topbar-meta" id="topbar-meta">Loading…</div>
+      <div class="topbar-meta" id="topbar-desc" style="color:var(--subtle);max-width:720px"></div>
     </div>
     <div class="topbar-actions" id="topbar-actions"></div>
   </div>
@@ -1006,6 +1007,10 @@ function agentsLens(which){
   if(btn)btn.classList.add('active');
   document.querySelectorAll('.lens-pill').forEach(p=>p.classList.toggle('active',p.getAttribute('onclick').includes("'"+which+"'")));
   document.getElementById('topbar-title').textContent=which==='kpi'?'🧑‍💼 Agents — Weekly KPIs':'🧑‍💼 Agents — Goals & Money';
+  const _d=document.getElementById('topbar-desc');
+  if(_d)_d.textContent=which==='kpi'
+    ?'The weekly minimum standard (calls, conversations, compliance) that earns an agent transfer leads. Pass/fail, updated weekly.'
+    :'Each agent\'s income goal, what they are actually on pace for, the dollar gap, and the one thing to coach. Biggest gap on top.';
   if(which==='kpi'&&!_loaded.kpi){_loaded.kpi=true;loadAgents();}
   if(which==='goals'&&!_loaded.goals){_loaded.goals=true;loadGoals();}
 }
@@ -1020,6 +1025,18 @@ function switchTab(name){
      every click made nav sections visibly slide out of view ("menus disappear
      and reappear"), reported as a bug Sep 2026. */
 
+  const DESCS={
+    pulse:'The big picture: is the team calling, talking, booking, and closing over the last 60 to 90 days. Green bullets are working; yellow need attention. Start here every visit.',
+    cc:'A daily AI briefing that reads all team data and says what needs attention today, in plain English.',
+    goals:'Each agent\'s income goal, what they are actually on pace for, the dollar gap, and the one thing to coach. Biggest gap on top.',
+    kpi:'The weekly minimum standard (calls, conversations, compliance) that earns an agent transfer leads. Pass/fail, updated weekly.',
+    appointments:'Every appointment plus where appointment money leaks: meetings nobody followed up after, upcoming ones at risk of no-show, and outcomes never logged.',
+    meeting:'1-on-1 prep: pick an agent and get a data brief for the coaching conversation.',
+    isa:'Fhalen\'s live transfers: what she hands to agents and how fast they pick them up.',
+    outreach:'Automated nurture the system sends to pond leads (emails and texts). Runs itself; this is the window into it.',
+    manager:''};
+  const dEl=document.getElementById('topbar-desc');
+  if(dEl)dEl.textContent=DESCS[name]||'';
   const titles={pulse:'📈 Pulse — 60/90 day themes',cc:'🧠 Command Center',goals:'🧑‍💼 Agents — Goals & Money',kpi:'🧑‍💼 Agents — Weekly KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
   document.getElementById('topbar-title').textContent=titles[name]||name;
 
@@ -3125,6 +3142,8 @@ async function loadPulse(force){
 
 // ── INIT ── Pulse is the home tab
 _loaded.pulse=true;
+{const _d0=document.getElementById('topbar-desc');
+ if(_d0)_d0.textContent='The big picture: is the team calling, talking, booking, and closing over the last 60 to 90 days. Green bullets are working; yellow need attention. Start here every visit.';}
 loadPulse();
 </script>
 </body>
