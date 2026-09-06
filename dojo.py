@@ -164,7 +164,7 @@ def _teach_line(focus, reason):
                 extra_body={"temperature": 0.5},
             )
             text = resp.content[0].text.strip()
-            for dash in ("—", "–"):
+            for dash in ("—", "–", " - "):
                 text = text.replace(dash, ", ")
             if 60 < len(text) < 700:
                 return text
