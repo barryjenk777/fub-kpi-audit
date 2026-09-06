@@ -74,23 +74,24 @@ def _lead_reason(client, person, isa_days=None):
     return "highest priority on your list"
 
 
-def _compose(agent_first, picks):
+def _compose(agent_first, picks, greeting=True):
     """picks: [(lead_first, reason), ...] 1-3 entries. Barry voice, no dashes.
     Repeated identical reasons collapse so the text reads human, not robotic
     ('Jessica (top score), Edward (top score), Matthew (top score)' becomes
     'Jessica, Edward and Matthew, the top scores on your list')."""
+    hello = "Morning %s. " % agent_first if greeting else ""
     if len(picks) == 1:
         n, r = picks[0]
-        return ("Morning %s. One lead needs you today: %s (%s). "
-                "Make that call before the day gets loud." % (agent_first, n, r))
+        return ("%sOne lead needs you today: %s (%s). "
+                "Make that call before the day gets loud." % (hello, n, r))
 
     reasons = [r for _, r in picks]
     names = [n for n, _ in picks]
     if len(set(reasons)) == 1 and reasons[0].startswith(("top score", "highest priority")):
         listed = "%s and %s" % (", ".join(names[:-1]), names[-1])
-        body = ("Morning %s. Your %d for today: %s, the top scores on your "
+        body = ("%sYour %d for today: %s, the top scores on your "
                 "list right now. Start with %s."
-                % (agent_first, len(picks), listed, names[0]))
+                % (hello, len(picks), listed, names[0]))
     else:
         seen, parts = set(), []
         for n, r in picks:
@@ -99,8 +100,8 @@ def _compose(agent_first, picks):
             else:
                 parts.append("%s (%s)" % (n, r))
                 seen.add(r)
-        body = ("Morning %s. Your %d for today: %s. Start with %s."
-                % (agent_first, len(picks), ", ".join(parts), names[0]))
+        body = ("%sYour %d for today: %s. Start with %s."
+                % (hello, len(picks), ", ".join(parts), names[0]))
     return body
 
 
@@ -277,7 +278,8 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
         if picks:
             sections.append(
                 _scoreboard_line(_first(agent), scoreboard.get(agent, (0, 0)))
-                + _compose(_first(agent), [(n, r) for _, n, r in picks]))
+                + _compose(_first(agent), [(n, r) for _, n, r in picks],
+                           greeting=not coach_msg))
         elif scoreboard.get(agent, (0, 0))[1]:
             sections.append(_scoreboard_line(_first(agent), scoreboard[agent]).strip())
         if prep_msg:
