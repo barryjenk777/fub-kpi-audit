@@ -132,31 +132,46 @@ _TEACH_FALLBACK = {
 
 
 def _teach_line(focus, reason):
-    """One teaching paragraph in Barry's voice. LLM with hard fallback."""
+    """One teaching paragraph grounded in the Too Nice for Sales manuscript
+    (dojo_teachings bank). LLM composes from Barry's own principles; the
+    verbatim book quote and chapter reference ride along either way."""
+    try:
+        from dojo_teachings import TEACHINGS
+        bank = TEACHINGS.get(focus) or {}
+    except Exception:
+        bank = {}
     api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if api_key:
+    if api_key and bank:
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=api_key)
             resp = client.messages.create(
-                model="claude-haiku-4-5", max_tokens=220,
+                model="claude-haiku-4-5", max_tokens=260,
                 system=("You write ONE short teaching paragraph (3-4 sentences) "
-                        "in Barry Jenkins' voice (book: Too Nice for Sales): warm, "
-                        "conversational, teaching over pushing, never shaming, "
-                        "reframe the skill as service to the client. No em or en "
-                        "dashes. No greeting, no sign-off, just the paragraph."),
+                        "as Barry Jenkins coaching his own agent, drawing ONLY "
+                        "on the supplied principles from his book Too Nice for "
+                        "Sales. Voice: warm, conversational, teaching over "
+                        "pushing, never shaming, the skill reframed as service "
+                        "to the client. You may paraphrase the principles; do "
+                        "not invent new claims, numbers, or stories. No em or "
+                        "en dashes. No greeting or sign-off."),
                 messages=[{"role": "user", "content":
-                           "The agent's diagnosed weakness this week: %s. "
-                           "Context: %s" % (focus.replace('_', ' '), reason)}],
-                extra_body={"temperature": 0.6},
+                           "Weakness this week: %s.\nAgent context: %s\n\n"
+                           "Principles from the book (%s):\n- %s"
+                           % (focus.replace('_', ' '), reason,
+                              bank.get("chapters", ""),
+                              "\n- ".join(bank.get("principles", [])))}],
+                extra_body={"temperature": 0.5},
             )
             text = resp.content[0].text.strip()
             for dash in ("—", "–"):
                 text = text.replace(dash, ", ")
-            if 60 < len(text) < 600:
+            if 60 < len(text) < 700:
                 return text
         except Exception as e:
             logger.warning("dojo teach line LLM failed: %s", e)
+    if bank.get("principles"):
+        return bank["principles"][0]
     return _TEACH_FALLBACK.get(focus, _TEACH_FALLBACK["fundamentals"])
 
 
@@ -164,6 +179,18 @@ def build_email(agent_name, diag, mine, team):
     first = _first(agent_name)
     sc = diag["scenarios"][0] or {}
     teach = _teach_line(diag["focus"], diag["reason"])
+    quote_html = ""
+    try:
+        from dojo_teachings import TEACHINGS
+        bank = TEACHINGS.get(diag["focus"]) or {}
+        if bank.get("quote"):
+            quote_html = ("<div style='border-left:3px solid #b97a12;padding:"
+                          ".4em .9em;margin:.6em 0;color:#5b6779;font-size:14px;"
+                          "font-style:italic'>\"%s\"<div style='font-style:normal;"
+                          "font-size:12px;margin-top:.3em'>Too Nice for Sales, %s"
+                          "</div></div>" % (bank["quote"], bank.get("chapters", "")))
+    except Exception:
+        pass
     graded = int(mine.get("calls_graded") or 0)
     stats_bits = []
     if graded:
@@ -187,6 +214,7 @@ def build_email(agent_name, diag, mine, team):
 {diag['reason']}{stats_html}
 </div>
 <p style='font-size:15px'>{teach}</p>
+{quote_html}
 <div style='background:#fdf6ea;border:1px solid #f0dfc0;border-radius:10px;padding:14px 16px'>
   <div style='font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#b97a12'>This week's reps</div>
   <div style='font-size:16px;font-weight:700;margin:.3em 0'>{sc.get('label','Practice call')} · {diag['reps']} calls</div>

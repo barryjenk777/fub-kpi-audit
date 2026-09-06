@@ -7854,11 +7854,25 @@ def ensure_maverick_stats_table():
                         UNIQUE (snapshot_date, agent_name)
                     );
                 """)
+                # call_type: 'crm' (real calls) vs 'ai_coach' (practice reps)
+                cur.execute("""
+                    ALTER TABLE maverick_agent_stats
+                        ADD COLUMN IF NOT EXISTS call_type TEXT NOT NULL DEFAULT 'crm';
+                """)
+                cur.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_mav_stats
+                        ON maverick_agent_stats (snapshot_date, agent_name, call_type);
+                """)
+                cur.execute("""
+                    ALTER TABLE maverick_agent_stats
+                        DROP CONSTRAINT IF EXISTS
+                        maverick_agent_stats_snapshot_date_agent_name_key;
+                """)
     except Exception as e:
         logger.warning("ensure_maverick_stats_table failed: %s", e)
 
 
-def upsert_maverick_stats(snapshot_date, agent_name, vals):
+def upsert_maverick_stats(snapshot_date, agent_name, vals, call_type="crm"):
     """vals: 11 numbers in overview column order (or None)."""
     if not is_available():
         return False
@@ -7870,11 +7884,11 @@ def upsert_maverick_stats(snapshot_date, agent_name, vals):
             with conn.cursor() as cur:
                 cur.execute(f"""
                     INSERT INTO maverick_agent_stats
-                        (snapshot_date, agent_name, {', '.join(cols)})
-                    VALUES (%s, %s, {', '.join(['%s'] * len(cols))})
-                    ON CONFLICT (snapshot_date, agent_name) DO UPDATE SET
+                        (snapshot_date, agent_name, call_type, {', '.join(cols)})
+                    VALUES (%s, %s, %s, {', '.join(['%s'] * len(cols))})
+                    ON CONFLICT (snapshot_date, agent_name, call_type) DO UPDATE SET
                         {', '.join(f'{c} = EXCLUDED.{c}' for c in cols)}
-                """, (snapshot_date, agent_name, *vals))
+                """, (snapshot_date, agent_name, call_type, *vals))
         return True
     except Exception as e:
         logger.warning("upsert_maverick_stats failed for %s: %s", agent_name, e)
@@ -7893,8 +7907,10 @@ def get_latest_maverick_stats():
                            calls_graded, avg_grade, question_fill, appt_ask,
                            appt_set, talk_time, followups, objection, snapshot_date
                     FROM maverick_agent_stats
-                    WHERE snapshot_date = (SELECT MAX(snapshot_date)
-                                           FROM maverick_agent_stats)
+                    WHERE call_type = 'crm'
+                      AND snapshot_date = (SELECT MAX(snapshot_date)
+                                           FROM maverick_agent_stats
+                                           WHERE call_type = 'crm')
                 """)
                 out = {}
                 for r in cur.fetchall():
@@ -8015,3 +8031,37 @@ def get_maverick_stats_trend(agent_name, weeks=8):
     except Exception as e:
         logger.warning("get_maverick_stats_trend failed: %s", e)
         return []
+
+
+def get_ai_coach_progress(agent_name, since_date):
+    """Practice-rep progress: latest ai_coach calls_graded and avg grade,
+    plus the baseline snapshot at/just before since_date, so weekly rep
+    counts = latest - baseline. Returns dict or None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT calls_graded, avg_grade, snapshot_date
+                    FROM maverick_agent_stats
+                    WHERE agent_name = %s AND call_type = 'ai_coach'
+                    ORDER BY snapshot_date DESC LIMIT 1
+                """, (agent_name,))
+                latest = cur.fetchone()
+                if not latest:
+                    return None
+                cur.execute("""
+                    SELECT calls_graded FROM maverick_agent_stats
+                    WHERE agent_name = %s AND call_type = 'ai_coach'
+                      AND snapshot_date < %s
+                    ORDER BY snapshot_date DESC LIMIT 1
+                """, (agent_name, since_date))
+                base = cur.fetchone()
+                return {"latest_graded": int(latest[0] or 0),
+                        "avg_grade": float(latest[1]) if latest[1] is not None else None,
+                        "as_of": str(latest[2]),
+                        "baseline_graded": int(base[0] or 0) if base else 0}
+    except Exception as e:
+        logger.warning("get_ai_coach_progress failed: %s", e)
+        return None

@@ -15707,7 +15707,13 @@ def _maverick_parse_overview(raw):
     from datetime import date as _date
     today = _date.today()
     upserted = 0
+    call_type = "crm"
     for line in raw.splitlines():
+        # The harvest carries two tables; the AI COACH header flips the type
+        # (practice reps) for every row that follows it.
+        if "MAVERICK AI COACH ROWS" in line:
+            call_type = "ai_coach"
+            continue
         tokens = [t.strip() for t in line.split("|") if t.strip()]
         if len(tokens) < 8 or tokens[0] == "Agent Name":
             continue
@@ -15721,7 +15727,7 @@ def _maverick_parse_overview(raw):
                               and not any(c.isalpha() for c in name)):
             continue
         vals = nums[:11]
-        if _db.upsert_maverick_stats(today, name, vals):
+        if _db.upsert_maverick_stats(today, name, vals, call_type=call_type):
             upserted += 1
     return upserted
 

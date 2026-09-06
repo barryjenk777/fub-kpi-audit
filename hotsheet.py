@@ -236,6 +236,17 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
     profiles = _db.get_agent_profiles(active_only=True) or []
     uid_by_agent = {p.get("agent_name"): p.get("fub_user_id") for p in profiles}
 
+    # Wednesday Dojo check: practice reps done vs this week's prescription,
+    # verified against Maverick's AI Coach grades from the nightly harvest.
+    week_start = today - timedelta(days=today.weekday())
+    dojo_rx = {}
+    if today.weekday() == 2:
+        try:
+            dojo_rx = {p["agent_name"]: p for p in
+                       _db.get_dojo_prescriptions(week_start=week_start)}
+        except Exception as e:
+            logger.warning("[HOT SHEET] dojo rx read failed: %s", e)
+
     # The loop: verify prior sheets against real call logs (skip in dry runs
     # so previews never consume the one-shot verification marks)
     scoreboard, uncalled = ({}, {}) if dry_run else _verify_yesterday(
@@ -322,6 +333,22 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
             if body.startswith(first_prefix):
                 body = body[len(first_prefix):]
             sections.append(body)
+
+        rx = dojo_rx.get(agent)
+        if rx and rx.get("reps_required"):
+            prog = _db.get_ai_coach_progress(agent, week_start)
+            done = max((prog["latest_graded"] - prog["baseline_graded"]), 0) if prog else 0
+            need = int(rx["reps_required"])
+            if done >= need:
+                sections.append("Dojo: all %d practice reps in. That is how "
+                                "Monday's email becomes Friday's paycheck." % need)
+            else:
+                d = "".join(c for c in (rx.get("scenario_phone") or "") if c.isdigit())[-10:]
+                pn = "(%s) %s-%s" % (d[:3], d[3:6], d[6:]) if len(d) == 10 else ""
+                sections.append("Dojo check: %d of %d practice reps done. %s%s. "
+                                "Two minutes each, pass is 7+."
+                                % (done, need, rx.get("scenario_label") or "Your scenario",
+                                   (" " + pn) if pn else ""))
         message = "\n\n".join(s for s in sections if s)
         summary["messages"].append({"agent": agent, "message": message})
 

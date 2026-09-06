@@ -153,6 +153,27 @@ def _harvest(url, headless, debug=False):
             body_text = page.inner_text("body")
         except Exception:
             body_text = ""
+
+        # Second harvest: flip Calls Type to "AI Coach" (practice reps).
+        # The filter lives in a modal and the URL does not change. Every step
+        # is best-effort; on failure we still deliver the CRM harvest and a
+        # marker so the flow can be tuned from real behavior.
+        try:
+            page.click("text=Filters", timeout=8000)
+            page.wait_for_timeout(1500)
+            page.click("text=/^CRM$/", timeout=5000)     # open the dropdown
+            page.wait_for_timeout(800)
+            page.click("text=AI Coach", timeout=5000)
+            page.click("text=Apply Filters", timeout=5000)
+            page.wait_for_timeout(8000)
+            rows2 = page.eval_on_selector_all(
+                "table tr, [role='row']",
+                "els => els.map(e => e.innerText.replace(/\\n/g, ' | '))")
+            if rows2 and len(rows2) > 1:
+                chunks.append("MAVERICK AI COACH ROWS\n" + "\n".join(rows2))
+        except Exception as e:
+            chunks.append("AI_COACH_HARVEST_FAILED: %s" % str(e)[:200])
+
         final_url = page.url
         ctx.close()
     return final_url, body_text, chunks
