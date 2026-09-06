@@ -8124,10 +8124,17 @@ def _fub_upsert_appt_resource(appt, event_name):
                       if i.get("userId") and not i.get("personId")), None)
     agent_name = next((i.get("name") for i in invitees
                        if i.get("userId") and not i.get("personId")), None)
+    created_dt = None
+    try:
+        created_dt = datetime.fromisoformat(
+            (appt.get("created") or "").replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        pass
     _db.upsert_appointment(
         fub_appt_id=appt_id, person_id=person_id, person_name=person_name,
         agent_name=agent_name, agent_fub_uid=agent_uid, start_time=start_dt,
         title=appt.get("title", ""), status=status, outcome=outcome,
+        fub_created_at=created_dt,
     )
     _db.log_automation_event(
         event_type="apt_confirmed" if "Created" in event_name else "apt_updated",
@@ -9949,6 +9956,12 @@ def api_owner_sync_appointments():
                      "no_show" if outcome in ("No show",) else \
                      "canceled" if appt.get("canceled") else "scheduled"
 
+            created_dt = None
+            try:
+                created_dt = datetime.fromisoformat(
+                    (appt.get("created") or "").replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
             _db.upsert_appointment(
                 fub_appt_id=appt_id,
                 person_id=person_id,
@@ -9963,6 +9976,7 @@ def api_owner_sync_appointments():
                 apt_set_tag=apt_set,
                 outcome_needed_tag=onn_tag,
                 stale_tag=stale,
+                fub_created_at=created_dt,
             )
             synced += 1
 
@@ -16001,6 +16015,43 @@ def api_maverick_ingest():
                     "stats_rows": stats_rows, "dashboard_saved": dashboard_saved})
 
 
+@app.route("/api/appointments/insight")
+def api_appointments_insight():
+    """The appointments money layer: leak lists with names, agent/source/
+    slot segments, dollars-left-on-table. Serves the nightly cache;
+    ?refresh=1 rebuilds now (bounded FUB touch checks, ~30-60s)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import appt_insight as _ai
+    try:
+        if request.args.get("refresh") == "1":
+            return jsonify({"ok": True, **_ai.refresh_cache()})
+        cached = _ai.get_cached()
+        if cached:
+            return jsonify({"ok": True, **cached})
+        return jsonify({"ok": True, **_ai.refresh_cache()})
+    except Exception as e:
+        import traceback
+        logger.error("appt insight failed: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+def scheduled_appt_insight():
+    """Daily 6:20am ET — rebuild the appointments money layer."""
+    if not _db.try_acquire_job_lock("appt_insight"):
+        return
+    try:
+        import appt_insight as _ai
+        d = _ai.refresh_cache()
+        print(f"[SCHEDULER] appt insight: {d['totals']} | at_risk={len(d['at_risk_upcoming'])} ghosted={len(d['ghosted_after_held'])}")
+        _record_fired("appt_insight")
+    except Exception as e:
+        _alert_on_job_failure("appt_insight", str(e))
+        raise
+    finally:
+        _db.release_job_lock("appt_insight")
+
+
 @app.route("/api/admin/hotsheet/scoreboard")
 def api_hotsheet_scoreboard():
     """Worked-rate per agent on their morning hot sheets (verified against
@@ -18500,6 +18551,10 @@ def start_scheduler():
                        CronTrigger(minute="*/10", hour="8-19", timezone=ET),
                        id="handoff_scan", name="Instant Handoff Protocol (10-min scan)",
                        max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_appt_insight,
+                       CronTrigger(hour=6, minute=20, timezone=ET),
+                       id="appt_insight", name="Appointments money layer (6:20am)",
+                       max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_dojo_monday,
                        CronTrigger(day_of_week="sun", hour=19, minute=0, timezone=ET),
                        id="dojo_monday", name="Dojo training prescriptions (Sun 7pm)",
@@ -19537,3 +19592,4 @@ else:
     _db.ensure_maverick_dashboard_table()
     _db.ensure_dojo_table()
     _db.ensure_dojo_compliance_cols()
+    _db.ensure_appointment_created_col()

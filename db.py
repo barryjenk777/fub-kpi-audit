@@ -5881,7 +5881,7 @@ def upsert_appointment(fub_appt_id, person_id=None, person_name=None,
                        start_time=None, end_time=None, title=None,
                        status="scheduled", outcome=None,
                        apt_set_tag=False, outcome_needed_tag=False,
-                       stale_tag=False):
+                       stale_tag=False, fub_created_at=None):
     """Insert or update one appointment record from FUB data. Non-fatal."""
     if not is_available():
         return False
@@ -5893,8 +5893,8 @@ def upsert_appointment(fub_appt_id, person_id=None, person_name=None,
                         (fub_appt_id, person_id, person_name, agent_name,
                          agent_fub_uid, source, start_time, end_time, title,
                          status, outcome, apt_set_tag, outcome_needed_tag,
-                         stale_tag, fub_synced_at, updated_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                         stale_tag, fub_created_at, fub_synced_at, updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
                     ON CONFLICT (fub_appt_id) DO UPDATE SET
                         person_id           = EXCLUDED.person_id,
                         person_name         = EXCLUDED.person_name,
@@ -5909,13 +5909,15 @@ def upsert_appointment(fub_appt_id, person_id=None, person_name=None,
                         apt_set_tag         = EXCLUDED.apt_set_tag,
                         outcome_needed_tag  = EXCLUDED.outcome_needed_tag,
                         stale_tag           = EXCLUDED.stale_tag,
+                        fub_created_at      = COALESCE(EXCLUDED.fub_created_at,
+                                                       appointments.fub_created_at),
                         fub_synced_at       = NOW(),
                         updated_at          = NOW()
                 """, (
                     fub_appt_id, person_id, person_name, agent_name,
                     agent_fub_uid, source, start_time, end_time, title,
                     status, outcome, apt_set_tag, outcome_needed_tag,
-                    stale_tag,
+                    stale_tag, fub_created_at,
                 ))
         return True
     except Exception as e:
@@ -8200,3 +8202,19 @@ def get_dojo_met_for_week(agent_name, week_start):
     except Exception as e:
         logger.warning("get_dojo_met_for_week failed: %s", e)
         return None
+
+
+def ensure_appointment_created_col():
+    """fub_created_at = when the appointment was SET in FUB. Unlocks
+    speed-to-appointment and confirmation-gap analysis."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE appointments
+                        ADD COLUMN IF NOT EXISTS fub_created_at TIMESTAMPTZ;
+                """)
+    except Exception as e:
+        logger.warning("ensure_appointment_created_col failed: %s", e)
