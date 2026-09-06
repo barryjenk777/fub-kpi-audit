@@ -436,6 +436,10 @@ LEADSTREAM_SIGNAL_TAGS = {
     # --- Explicit call requests (Direct Connect / dynamic registration) ---
     "call_now=yes":                              120,  # Wants a call within the hour — top signal
     # --- AI Voice call-outcome tags ---
+    "ISA_TRANSFER_FRESH":                        115,  # Fhalen COMPLETED a handoff — hottest human
+                                                       # in the building until the agent calls
+                                                       # (signal aging discounts it once worked;
+                                                       #  gap found by Barry, Sep 2026)
     "ISA_TRANSFER_UNSUCCESSFUL":                 110,  # Engaged, agreed, hung up on hold
     "Y_REQUESTED_TOUR":                          108,  # Submitted a tour request on a listing
     "ISA_ATTEMPTED_TRANSFER_REALTOR_UNAVAILABLE":105,  # Ready to talk, no realtor picked up
