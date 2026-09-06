@@ -159,8 +159,11 @@ def _harvest(url, headless, debug=False):
         # is best-effort; on failure we still deliver the CRM harvest and a
         # marker so the flow can be tuned from real behavior.
         try:
-            page.click("text=Filters", timeout=8000)
-            page.wait_for_timeout(1500)
+            try:
+                page.get_by_role("button", name="Filters").first.click(timeout=6000)
+            except Exception:
+                page.click("text=Filters", timeout=6000)
+            page.wait_for_timeout(2500)
             picked = False
             # Tactic 1: a real <select> whose options include "AI Coach"
             try:
@@ -177,7 +180,8 @@ def _harvest(url, headless, debug=False):
             # Tactic 2: custom dropdown — click just below the CALLS TYPE
             # label to open it, then click the "AI Coach" option
             if not picked:
-                box = page.get_by_text("CALLS TYPE", exact=False).first.bounding_box()
+                box = page.get_by_text("CALLS TYPE", exact=False).first.bounding_box(
+                    timeout=6000)
                 if box:
                     page.mouse.click(box["x"] + box["width"] / 2,
                                      box["y"] + box["height"] + 28)
@@ -198,7 +202,32 @@ def _harvest(url, headless, debug=False):
             if rows2 and len(rows2) > 1:
                 chunks.append("MAVERICK AI COACH ROWS\n" + "\n".join(rows2))
         except Exception as e:
-            chunks.append("AI_COACH_HARVEST_FAILED: %s" % str(e)[:200])
+            # Diagnose instead of guessing: what does the page actually look
+            # like after the Filters click?
+            diag = []
+            try:
+                html_src = page.content()
+                btxt = ""
+                try:
+                    btxt = page.inner_text("body")
+                except Exception:
+                    pass
+                diag.append("dialogs=%d" % len(page.query_selector_all(
+                    "[role='dialog'], [class*='modal'], [class*='Modal'], "
+                    "[class*='drawer'], [class*='Drawer']")))
+                diag.append("iframes=%d" % len(page.query_selector_all("iframe")))
+                diag.append("html_has_CALLS_TYPE=%s" % ("CALLS TYPE" in html_src.upper()))
+                diag.append("html_has_AI_Coach=%s" % ("AI COACH" in html_src.upper()))
+                diag.append("text_has_Filters=%s" % ("FILTERS" in btxt.upper()))
+                i = btxt.upper().find("FILTER")
+                if i >= 0:
+                    diag.append("around_filters=%r" % btxt[max(0, i - 120):i + 300])
+                selects = page.query_selector_all("select")
+                diag.append("selects=%d" % len(selects))
+            except Exception as de:
+                diag.append("diag_error=%s" % str(de)[:100])
+            chunks.append("AI_COACH_HARVEST_FAILED: %s || DIAG: %s"
+                          % (str(e)[:200], " | ".join(diag)[:2200]))
 
         final_url = page.url
         ctx.close()
