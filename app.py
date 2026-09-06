@@ -15762,6 +15762,21 @@ def maverick_drop():
     </div>"""
 
 
+@app.route("/api/admin/courier-script")
+def api_courier_script():
+    """Serve maverick_courier.py so the always-on Mac (which has no repo
+    clone) can fetch it with one curl. Owner key required."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "maverick_courier.py")
+        with open(path) as f:
+            return f.read(), 200, {"Content-Type": "text/x-python"}
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/admin/maverick/ingest", methods=["POST"])
 def api_maverick_ingest():
     """Programmatic ingest (the always-on Mac courier, or a future email
