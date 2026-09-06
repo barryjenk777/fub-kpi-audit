@@ -15743,6 +15743,15 @@ def api_maverick_ingest():
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(silent=True) or {}
+    if body.get("delete_id"):
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM maverick_reports WHERE id = %s",
+                                (int(body["delete_id"]),))
+                    return jsonify({"ok": True, "deleted": cur.rowcount})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
     raw = (body.get("raw") or "").strip()
     if len(raw) < 40:
         return jsonify({"error": "raw too short"}), 400
