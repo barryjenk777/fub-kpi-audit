@@ -345,7 +345,12 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 /* ── MEDALS ── */
 .medal-1{color:#f5a623;font-size:1rem} .medal-2{color:#a0aec0;font-size:1rem} .medal-3{color:#c05621;font-size:1rem}
 
+.menu-btn{display:none;position:fixed;top:.7rem;left:.7rem;z-index:30;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:.4rem .65rem;color:var(--text);font-size:1.15rem;line-height:1}
+.scrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:15}
+.scrim.show{display:block}
 @media(max-width:768px){
+  .menu-btn{display:block}
+  .topbar{padding-left:3.4rem}
   .sidebar{transform:translateX(-100%);transition:transform .25s}
   .sidebar.open{transform:none}
   .main{margin-left:0}
@@ -676,6 +681,8 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 <div class="app">
 
 <!-- ══ SIDEBAR ══ -->
+<button class="menu-btn" id="menu-btn" onclick="toggleSidebar()" aria-label="Menu">☰</button>
+<div class="scrim" id="scrim" onclick="toggleSidebar(false)"></div>
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-brand">
     <img src="/static/logo-white.png" alt="Legacy Home Team" style="height:42px;width:auto;object-fit:contain;flex-shrink:0">
@@ -981,6 +988,16 @@ const MEDALS=['🥇','🥈','🥉'];
 })();
 
 // ── TAB SWITCH ──
+function toggleSidebar(force){
+  const sb=document.getElementById('sidebar'),sc=document.getElementById('scrim');
+  const open=force===undefined?!sb.classList.contains('open'):!!force;
+  sb.classList.toggle('open',open);sc.classList.toggle('show',open);
+}
+// Any nav choice closes the mobile menu
+document.addEventListener('DOMContentLoaded',()=>{
+  const sb=document.getElementById('sidebar');
+  if(sb)sb.addEventListener('click',e=>{if(e.target.closest('.nav-item'))toggleSidebar(false);});
+});
 function agentsLens(which){
   document.querySelectorAll('.tab-pane').forEach(el=>el.classList.remove('active'));
   document.getElementById(which==='kpi'?'tab-kpi':'tab-goals').classList.add('active');

@@ -229,6 +229,24 @@ def _harvest(url, headless, debug=False):
             chunks.append("AI_COACH_HARVEST_FAILED: %s || DIAG: %s"
                           % (str(e)[:200], " | ".join(diag)[:2200]))
 
+        # Third capture: the AI Grading Dashboard (objection breakdowns and
+        # trend cards). Generic text harvest; server parses once we see the
+        # real structure.
+        try:
+            dash_url = url.replace("agents-overview", "ai-grading-dashboard")
+            if dash_url != url:
+                page.goto(dash_url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(9000)
+                dtxt = ""
+                try:
+                    dtxt = page.inner_text("body")
+                except Exception:
+                    pass
+                if len(dtxt.strip()) > 400 and "BOOK A DEMO" not in dtxt.upper():
+                    chunks.append("MAVERICK GRADING DASHBOARD\n" + dtxt)
+        except Exception as e:
+            chunks.append("DASHBOARD_HARVEST_FAILED: %s" % str(e)[:200])
+
         final_url = page.url
         ctx.close()
     return final_url, body_text, chunks
