@@ -49,8 +49,38 @@ def _usable_name(name):
             and not f.isdigit() and f.replace("-", "").isalpha())
 
 
+def _answer_window(events):
+    """When does this lead actually pick up their phone? Their site-activity
+    hours are the best proxy we have: an evening browser answers in the
+    evening. Needs 3+ timestamped events with 60%+ in one bucket."""
+    buckets = {"morning": 0, "midday": 0, "evening": 0}
+    for e in events:
+        ts = e.get("created") or ""
+        try:
+            h = (datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                 .astimezone(timezone(timedelta(hours=-4)))).hour
+        except (ValueError, AttributeError):
+            continue
+        if 5 <= h < 11:
+            buckets["morning"] += 1
+        elif 11 <= h < 16:
+            buckets["midday"] += 1
+        elif 16 <= h < 23:
+            buckets["evening"] += 1
+    total = sum(buckets.values())
+    if total < 3:
+        return None
+    best, n = max(buckets.items(), key=lambda kv: kv[1])
+    if n / total < 0.6:
+        return None
+    return {"morning": "a morning browser, call before 11",
+            "midday": "online middays, call at lunch",
+            "evening": "an evening browser, call after 6"}[best]
+
+
 def _lead_reason(client, person, isa_days=None):
-    """One provable reason this lead is on today's sheet."""
+    """One provable reason this lead is on today's sheet, plus their answer
+    window when their activity pattern shows one."""
     if isa_days is not None:
         if isa_days <= 1:
             return "Fhalen handed them to you yesterday, no call logged yet"
@@ -62,16 +92,20 @@ def _lead_reason(client, person, isa_days=None):
         events = []
     views = sum(1 for e in events if "Viewed" in (e.get("type") or ""))
     saves = sum(1 for e in events if "Saved" in (e.get("type") or ""))
+    window = _answer_window(events)
     if saves:
-        return "saved %d propert%s this week" % (saves, "ies" if saves > 1 else "y")
-    if views >= 3:
-        return "viewed %d homes this week" % views
-    if views:
-        return "back on the site this week"
-    score = person.get("customLeadStreamScore")
-    if score:
-        return "top score on your list (%s)" % int(score)
-    return "highest priority on your list"
+        reason = "saved %d propert%s this week" % (saves, "ies" if saves > 1 else "y")
+    elif views >= 3:
+        reason = "viewed %d homes this week" % views
+    elif views:
+        reason = "back on the site this week"
+    else:
+        score = person.get("customLeadStreamScore")
+        reason = ("top score on your list (%s)" % int(score)) if score \
+            else "highest priority on your list"
+    if window:
+        reason += ", " + window
+    return reason
 
 
 def _compose(agent_first, picks, greeting=True):
