@@ -5309,6 +5309,32 @@ def _system_status():
         detail = [{"event": k, "received": v} for k, v in sorted(counts.items())]
         return {"dot": dot, "summary": summary, "detail_rows": detail}
     add(HEALTH, "FUB webhooks (realtime)", _fub_webhooks)
+
+    def _maverick_feed():
+        reports = _db.get_maverick_reports(days=7, limit=10)
+        if not reports:
+            return {"dot": "amber",
+                    "summary": ("No Maverick call-grade data in 7 days. Courier not "
+                                "set up yet, or Maverick had nothing new. Setup: run "
+                                "maverick_courier.py --setup on the always-on Mac."),
+                    "detail_rows": []}
+        latest = reports[0]
+        if (latest.get("raw") or "").startswith("LOGIN_NEEDED"):
+            return {"dot": "red",
+                    "summary": ("Maverick courier is LOGGED OUT. Rerun "
+                                "'python3 maverick_courier.py --setup' on the "
+                                "always-on Mac to restore the nightly harvest."),
+                    "detail_rows": []}
+        graded = [r for r in reports if r.get("grade")]
+        return {"dot": "green",
+                "summary": ("%d Maverick reports in 7 days (%d with grades). "
+                            "Latest %s." % (len(reports), len(graded),
+                                            latest["created_at"][:10])),
+                "detail_rows": [{"when": r["created_at"][:10],
+                                 "agent": r.get("agent_name") or "?",
+                                 "grade": r.get("grade") or "?"}
+                                for r in reports[:5]]}
+    add(HEALTH, "Maverick call grades", _maverick_feed)
     add(HEALTH, "Scheduled jobs", _jobs)
 
     def _self_audit():
