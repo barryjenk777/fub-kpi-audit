@@ -109,7 +109,11 @@ def _looks_logged_out(final_url, text):
             or len((text or "").strip()) < 200)
 
 
-def run():
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+
+
+def run(debug=False):
     cfg = _load_config()
     url = cfg.get("call_log_url")
     if not url:
@@ -117,10 +121,30 @@ def run():
         sys.exit(1)
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
-        ctx = pw.chromium.launch_persistent_context(PROFILE_DIR, headless=True)
+        # user_agent override: headless Chrome advertises itself and some
+        # apps bounce it to login; present as normal Chrome.
+        ctx = pw.chromium.launch_persistent_context(
+            PROFILE_DIR, headless=not debug, user_agent=_UA)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.goto(url, wait_until="networkidle", timeout=60000)
-        page.wait_for_timeout(4000)  # let client-side tables render
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(9000)  # SPAs render slowly; give tables time
+        try:
+            if len((page.inner_text("body") or "").strip()) < 200:
+                page.wait_for_timeout(9000)  # one more chance before judging
+        except Exception:
+            pass
+        if debug:
+            txt = ""
+            try:
+                txt = page.inner_text("body")
+            except Exception:
+                pass
+            print("FINAL URL:", page.url)
+            print("TEXT LENGTH:", len(txt or ""))
+            print("FIRST 400 CHARS:\n", (txt or "")[:400])
+            input("\n(debug) browser is visible — press Enter to close... ")
+            ctx.close()
+            return
 
         # Generic extraction: structured rows first, full text as safety net.
         chunks = []
@@ -163,9 +187,13 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--setup", action="store_true", help="one-time login + page pick")
     ap.add_argument("--run", action="store_true", help="harvest and post")
+    ap.add_argument("--debug", action="store_true",
+                    help="visible browser, prints what the harvest sees, posts nothing")
     args = ap.parse_args()
     if args.setup:
         setup()
+    elif args.debug:
+        run(debug=True)
     elif args.run:
         run()
     else:
