@@ -161,11 +161,37 @@ def _harvest(url, headless, debug=False):
         try:
             page.click("text=Filters", timeout=8000)
             page.wait_for_timeout(1500)
-            page.click("text=/^CRM$/", timeout=5000)     # open the dropdown
-            page.wait_for_timeout(800)
-            page.click("text=AI Coach", timeout=5000)
-            page.click("text=Apply Filters", timeout=5000)
-            page.wait_for_timeout(8000)
+            picked = False
+            # Tactic 1: a real <select> whose options include "AI Coach"
+            try:
+                for sel in page.query_selector_all("select"):
+                    opts = [o.inner_text().strip() for o in
+                            sel.query_selector_all("option")]
+                    if any("AI Coach" in o for o in opts):
+                        sel.select_option(label=[o for o in opts
+                                                 if "AI Coach" in o][0])
+                        picked = True
+                        break
+            except Exception:
+                pass
+            # Tactic 2: custom dropdown — click just below the CALLS TYPE
+            # label to open it, then click the "AI Coach" option
+            if not picked:
+                box = page.get_by_text("CALLS TYPE", exact=False).first.bounding_box()
+                if box:
+                    page.mouse.click(box["x"] + box["width"] / 2,
+                                     box["y"] + box["height"] + 28)
+                    page.wait_for_timeout(900)
+                    page.click("text=AI Coach", timeout=5000)
+                    picked = True
+            if not picked:
+                raise RuntimeError("no dropdown tactic worked")
+            page.wait_for_timeout(600)
+            try:
+                page.click("text=Apply Filters", timeout=5000)
+            except Exception:
+                page.click("button:has-text('Apply')", timeout=5000)
+            page.wait_for_timeout(9000)
             rows2 = page.eval_on_selector_all(
                 "table tr, [role='row']",
                 "els => els.map(e => e.innerText.replace(/\\n/g, ' | '))")
