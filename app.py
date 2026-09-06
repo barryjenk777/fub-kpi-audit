@@ -15762,6 +15762,16 @@ def maverick_drop():
     </div>"""
 
 
+@app.route("/api/admin/maverick/reports")
+def api_maverick_reports():
+    """Recent Maverick reports incl. raw payloads (for extraction tuning)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = request.args.get("days", 14, type=int)
+    return jsonify({"ok": True,
+                    "reports": _db.get_maverick_reports(days=days, limit=20)})
+
+
 @app.route("/api/admin/courier-script")
 def api_courier_script():
     """Serve maverick_courier.py so the always-on Mac (which has no repo
