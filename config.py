@@ -125,6 +125,33 @@ MAVERICK_SELLER_SCENARIOS = [
      "context": "lukewarm on selling, you have to find the motivation"},
 ]
 
+MAVERICK_SELLER_BUYER_SCENARIOS = [
+    {"label": "Standard Seller-Buyer",      "phone": "+12395101235",
+     "context": "selling one home and buying the next, juggling both sides"},
+    {"label": "Irate Seller-Buyer",         "phone": "+12094413888",
+     "context": "stressed about timing both deals, short fuse"},
+    {"label": "Confused Seller-Buyer",      "phone": "+12093067100",
+     "context": "lost on how sell-then-buy works, needs the roadmap"},
+    {"label": "Disinterested Seller-Buyer", "phone": "+12092655888",
+     "context": "says they will figure it out themselves, prove otherwise"},
+]
+MAVERICK_CASH_OFFER_SCENARIOS = [
+    {"label": "The Speed Seeker",           "phone": "+13322304375",
+     "context": "wants to close yesterday, sell the certainty"},
+    {"label": "The Financial Pressure Case", "phone": "+12793000949",
+     "context": "under real money stress, lead with empathy then options"},
+    {"label": "The Naive Cash Believer",    "phone": "+13865169553",
+     "context": "thinks cash offers are magic, educate without deflating"},
+    {"label": "The Comparison Shopper",     "phone": "+13213402946",
+     "context": "collecting cash offers, differentiate or die"},
+    {"label": "The Cash Only Believer",     "phone": "+12096466713",
+     "context": "refuses to hear about listing, open their mind gently"},
+]
+
+# The Dojo (training + accountability): weekly rep prescriptions built from
+# Maverick call grades. Passing grade on a practice call (Maverick's 1-10):
+DOJO_PASSING_GRADE = 7
+
 # Only prescribe the Maverick rep on this weekday (keeps it to once a week, not
 # every coaching text). Set to None to prescribe on any flagged coaching day.
 MAVERICK_PRESCRIBE_WEEKDAY = "monday"

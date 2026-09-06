@@ -15793,6 +15793,87 @@ def maverick_drop():
     </div>"""
 
 
+@app.route("/api/admin/dojo/run", methods=["POST"])
+def api_dojo_run():
+    """Run the Monday Dojo now. {"dry_run": true} previews the emails."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    try:
+        import dojo as _dojo
+        s = _dojo.run_dojo_monday(dry_run=bool(body.get("dry_run")))
+        return jsonify({"ok": True, **s})
+    except Exception as e:
+        import traceback
+        logger.error("dojo run failed: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+def scheduled_dojo_monday():
+    """Monday 7:30am ET — weekly training prescriptions from Maverick grades."""
+    if not _db.try_acquire_job_lock("dojo_monday"):
+        return
+    try:
+        import dojo as _dojo
+        s = _dojo.run_dojo_monday(dry_run=False)
+        print(f"[SCHEDULER] Dojo Monday: {s['sent']} training emails sent")
+        _record_fired("dojo_monday")
+    except Exception as e:
+        _alert_on_job_failure("dojo_monday", str(e))
+        raise
+    finally:
+        _db.release_job_lock("dojo_monday")
+
+
+@app.route("/training")
+def training_board():
+    """The Dojo board: this week's prescriptions + each agent's call-quality
+    trend, for Barry and Danny. Coach key sees it read-only like everything."""
+    if not _perplexity_auth():
+        return ("<h3 style='font-family:sans-serif;padding:2rem'>Not authorized. "
+                "Log in first.</h3>"), 403
+    from datetime import date as _date, timedelta as _td
+    week_start = _date.today() - _td(days=_date.today().weekday())
+    rx = {p["agent_name"]: p for p in _db.get_dojo_prescriptions(week_start=week_start)}
+    stats = _db.get_latest_maverick_stats()
+    team = stats.get("Team Average") or {}
+    rows = ""
+    agents = sorted(n for n in set(list(rx) + [k for k in stats if k != "Team Average"])
+                    if n not in getattr(config, "EXCLUDED_USERS", []))
+    for agent in agents:
+        p = rx.get(agent) or {}
+        s = stats.get(agent) or {}
+        trend = _db.get_maverick_stats_trend(agent, weeks=8)
+        arrow = ""
+        asks = [t["appt_ask"] for t in trend if t.get("appt_ask") is not None]
+        if len(asks) >= 2:
+            arrow = " ↑" if asks[-1] > asks[0] else (" ↓" if asks[-1] < asks[0] else " →")
+        rows += f"""<tr>
+          <td><b>{agent}</b></td>
+          <td>{(p.get('focus') or '').replace('_',' ') or '<span class=m>no prescription yet</span>'}</td>
+          <td>{p.get('scenario_label') or ''}{(' × %s reps' % p['reps_required']) if p.get('reps_required') else ''}</td>
+          <td>{('%.1f' % s['avg_grade']) if s.get('avg_grade') is not None else '?'}</td>
+          <td>{('%d%%' % round(s['appt_ask'])) if s.get('appt_ask') is not None else '?'}{arrow}</td>
+          <td>{s.get('calls_graded') if s.get('calls_graded') is not None else '?'}</td>
+          <td class=m>{(p.get('reason') or '')[:120]}</td></tr>"""
+    return f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'><title>The Dojo</title>
+<style>body{{background:#080c14;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;padding:1.4rem;line-height:1.5}}
+h1{{font-size:1.3rem}} .sub{{color:#68789a;font-size:.8rem;margin-bottom:1rem;max-width:760px}}
+table{{width:100%;border-collapse:collapse;font-size:.82rem}}
+th{{text-align:left;color:#68789a;font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;padding:.4rem .6rem}}
+td{{padding:.55rem .6rem;border-top:1px solid #243050;vertical-align:top}}
+.m{{color:#68789a;font-size:.76rem}} a{{color:#f5a623}}</style></head><body>
+<h1>🥋 The Dojo — week of {week_start.strftime('%b %d')}</h1>
+<div class='sub'>Weekly role-play prescriptions built from Maverick's grades of REAL calls.
+Passing rep = {getattr(config, 'DOJO_PASSING_GRADE', 7)}+ on the practice bot. Team ask rate:
+{('%d%%' % round(team['appt_ask'])) if team.get('appt_ask') is not None else '?'}.
+Ask-rate arrow compares the last 8 weeks of harvests. <a href='/'>← Dashboard</a></div>
+<table><tr><th>Agent</th><th>Focus</th><th>This week's reps</th><th>Avg grade</th>
+<th>Ask rate</th><th>Calls graded</th><th>Why</th></tr>{rows}</table>
+</body></html>"""
+
+
 @app.route("/api/admin/maverick/reports")
 def api_maverick_reports():
     """Recent Maverick reports incl. raw payloads (for extraction tuning)."""
@@ -18349,6 +18430,10 @@ def start_scheduler():
                        CronTrigger(minute="*/10", hour="8-19", timezone=ET),
                        id="handoff_scan", name="Instant Handoff Protocol (10-min scan)",
                        max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_dojo_monday,
+                       CronTrigger(day_of_week="mon", hour=7, minute=30, timezone=ET),
+                       id="dojo_monday", name="Dojo training prescriptions (Mon 7:30am)",
+                       max_instances=1, coalesce=True)
 
     _scheduler.start()
     print(f"[SCHEDULER] APScheduler started with {len(_scheduler.get_jobs())} jobs:")
@@ -19379,3 +19464,4 @@ else:
     # Ensure Maverick coach-report store exists
     _db.ensure_maverick_table()
     _db.ensure_maverick_stats_table()
+    _db.ensure_dojo_table()

@@ -7912,3 +7912,106 @@ def get_latest_maverick_stats():
     except Exception as e:
         logger.warning("get_latest_maverick_stats failed: %s", e)
         return {}
+
+
+# ── Dojo prescriptions (weekly role-play training assignments) ──────────────
+
+def ensure_dojo_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS dojo_prescriptions (
+                        id             SERIAL PRIMARY KEY,
+                        week_start     DATE NOT NULL,
+                        agent_name     TEXT NOT NULL,
+                        focus          TEXT NOT NULL,
+                        scenario_label TEXT,
+                        scenario_phone TEXT,
+                        reps_required  INTEGER,
+                        reason         TEXT,
+                        sent_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        UNIQUE (week_start, agent_name)
+                    );
+                """)
+    except Exception as e:
+        logger.warning("ensure_dojo_table failed: %s", e)
+
+
+def save_dojo_prescription(week_start, agent_name, focus, scenario_label,
+                           scenario_phone, reps_required, reason):
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO dojo_prescriptions
+                        (week_start, agent_name, focus, scenario_label,
+                         scenario_phone, reps_required, reason)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (week_start, agent_name) DO UPDATE SET
+                        focus = EXCLUDED.focus,
+                        scenario_label = EXCLUDED.scenario_label,
+                        scenario_phone = EXCLUDED.scenario_phone,
+                        reps_required = EXCLUDED.reps_required,
+                        reason = EXCLUDED.reason
+                """, (week_start, agent_name, focus, scenario_label,
+                      scenario_phone, reps_required, reason))
+    except Exception as e:
+        logger.warning("save_dojo_prescription failed: %s", e)
+
+
+def get_dojo_prescriptions(week_start=None, limit=40):
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if week_start:
+                    cur.execute("""
+                        SELECT week_start, agent_name, focus, scenario_label,
+                               scenario_phone, reps_required, reason, sent_at
+                        FROM dojo_prescriptions WHERE week_start = %s
+                        ORDER BY agent_name
+                    """, (week_start,))
+                else:
+                    cur.execute("""
+                        SELECT week_start, agent_name, focus, scenario_label,
+                               scenario_phone, reps_required, reason, sent_at
+                        FROM dojo_prescriptions
+                        ORDER BY week_start DESC, agent_name LIMIT %s
+                    """, (limit,))
+                return [{"week_start": str(r[0]), "agent_name": r[1],
+                         "focus": r[2], "scenario_label": r[3],
+                         "scenario_phone": r[4], "reps_required": r[5],
+                         "reason": r[6], "sent_at": r[7].isoformat()}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_dojo_prescriptions failed: %s", e)
+        return []
+
+
+def get_maverick_stats_trend(agent_name, weeks=8):
+    """Snapshots over time for the training board trend arrows."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT snapshot_date, avg_grade, appt_ask, calls_graded
+                    FROM maverick_agent_stats
+                    WHERE agent_name = %s
+                      AND snapshot_date >= CURRENT_DATE - %s
+                    ORDER BY snapshot_date
+                """, (agent_name, weeks * 7))
+                return [{"date": str(r[0]),
+                         "avg_grade": float(r[1]) if r[1] is not None else None,
+                         "appt_ask": float(r[2]) if r[2] is not None else None,
+                         "calls_graded": int(r[3] or 0)} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_maverick_stats_trend failed: %s", e)
+        return []
