@@ -15906,51 +15906,140 @@ def scheduled_dojo_monday():
 
 @app.route("/training")
 def training_board():
-    """The Dojo board: this week's prescriptions + each agent's call-quality
-    trend, for Barry and Danny. Coach key sees it read-only like everything."""
+    """The Dojo board, conclusions-first: the team verdict, then each agent
+    diagnosed like a sales leader would (archetype, what the tape proves,
+    the money in fixing it), sorted by coaching upside. For Barry and Danny."""
     if not _perplexity_auth():
         return ("<h3 style='font-family:sans-serif;padding:2rem'>Not authorized. "
                 "Log in first.</h3>"), 403
     from datetime import date as _date, timedelta as _td
     week_start = _date.today() - _td(days=_date.today().weekday())
-    rx = {p["agent_name"]: p for p in _db.get_dojo_prescriptions(week_start=week_start)}
+    rx_rows = (_db.get_dojo_prescriptions(week_start=week_start)
+               or _db.get_dojo_prescriptions(week_start=week_start + _td(days=7)))
+    rx = {p["agent_name"]: p for p in rx_rows}
     stats = _db.get_latest_maverick_stats()
     team = stats.get("Team Average") or {}
-    rows = ""
+    dash = _db.get_latest_maverick_dashboard() or {}
+    team_ask = team.get("appt_ask")
+
+    # The team verdict
+    verdict_bits = []
+    if dash.get("not_asked") and dash.get("calls_graded"):
+        verdict_bits.append(
+            "The team's core problem is <b>the ask</b>: %d of %d graded calls "
+            "never asked for the appointment. Conversations are happening and "
+            "then ending in polite nothing." % (dash["not_asked"], dash["calls_graded"]))
+    qm = (dash.get("questions_missed") or [])
+    if qm:
+        verdict_bits.append(
+            "Second: <b>discovery is shallow</b>. &quot;%s&quot; is skipped on %d%% of "
+            "calls, which is why so many Call Opener notes read MISSING on "
+            "motivation, timeframe, and location. The data gap and the skill "
+            "gap are the same gap." % (qm[0]["question"], round(qm[0]["missed_pct"])))
+    if dash.get("objection_handled_rate"):
+        verdict_bits.append(
+            "The bright spot: <b>objection handling holds at %d%%</b>. When "
+            "agents stay in the conversation, they survive the pushback. The "
+            "problem is what they do not attempt, not what they fumble."
+            % round(dash["objection_handled_rate"]))
+    oc = (dash.get("objection_categories") or [])
+    if oc:
+        verdict_bits.append(
+            "The market is telling you something too: the most common objection "
+            "is &quot;%s&quot; (%d calls), which is exactly what the face-to-face "
+            "doctrine and the Dojo reps train against." % (oc[0]["category"], oc[0]["calls"]))
+    verdict = " ".join(verdict_bits) or ("Not enough graded-call data yet for a "
+                                         "team verdict. The nightly harvest builds it.")
+
+    def diagnose_row(agent):
+        s = stats.get(agent) or {}
+        p = rx.get(agent) or {}
+        graded = int(s.get("calls_graded") or 0)
+        ask, grade, obj = s.get("appt_ask"), s.get("avg_grade"), s.get("objection")
+        trend = _db.get_maverick_stats_trend(agent, weeks=8)
+        asks = [t["appt_ask"] for t in trend if t.get("appt_ask") is not None]
+        arrow = ("improving" if len(asks) >= 2 and asks[-1] > asks[0] else
+                 "slipping" if len(asks) >= 2 and asks[-1] < asks[0] else "flat")
+        ai = _db.get_ai_coach_progress(agent, week_start) or {}
+        reps_ever = ai.get("latest_graded", 0)
+
+        upside, archetype, why = 0, "", ""
+        if graded < 2:
+            archetype, why = "THE INVISIBLE", (
+                "Maverick has almost nothing to grade, which means almost no "
+                "real conversations are reaching two minutes. Before coaching "
+                "quality, there is a quantity problem. Watch the hot sheet "
+                "scoreboard, not this board, for this agent.")
+            upside = 1
+        elif ask is not None and team_ask and ask < team_ask - 15:
+            gap_asks = max(round(graded * (team_ask - ask) / 100), 1)
+            archetype = "THE ALMOST-THERE"
+            why = ("Holds conversations (objections %s%%) but asked on only "
+                   "%d%% of graded calls. At the team's ask rate that is "
+                   "roughly <b>%d more asks</b> on the same effort, and asks "
+                   "convert to appointments at about 60%% here. This is the "
+                   "cheapest money on the team: no new leads, no new calls, "
+                   "one habit." % (round(obj) if obj is not None else "?",
+                                   round(ask), gap_asks))
+            upside = 3 + gap_asks
+        elif grade is not None and grade >= 6 and (ask or 0) >= (team_ask or 50):
+            archetype = "THE CONVERTER"
+            why = ("Above the bar on grade and ask rate. The play is volume "
+                   "and protection: route more at them, keep them off admin, "
+                   "and use their calls as the team's teaching tape.")
+            upside = 2
+        else:
+            archetype = "THE GRINDER"
+            why = ("Real volume, middling quality (%s avg). Small mechanical "
+                   "fixes move many calls at once; their prescription targets "
+                   "the weakest link."
+                   % (("%.1f" % grade) if grade is not None else "?"))
+            upside = 3
+        practice = ("%d practice reps logged ever" % reps_ever) if reps_ever \
+            else "zero practice reps ever, the muscle is unused"
+        return {"agent": agent, "archetype": archetype, "why": why,
+                "upside": upside, "arrow": arrow, "graded": graded,
+                "grade": grade, "ask": ask, "practice": practice,
+                "rx": ("%s x %s" % (p.get("scenario_label"), p.get("reps_required")))
+                      if p.get("scenario_label") else "pending Sunday"}
+
     agents = sorted(n for n in set(list(rx) + [k for k in stats if k != "Team Average"])
                     if n not in getattr(config, "EXCLUDED_USERS", []))
-    for agent in agents:
-        p = rx.get(agent) or {}
-        s = stats.get(agent) or {}
-        trend = _db.get_maverick_stats_trend(agent, weeks=8)
-        arrow = ""
-        asks = [t["appt_ask"] for t in trend if t.get("appt_ask") is not None]
-        if len(asks) >= 2:
-            arrow = " ↑" if asks[-1] > asks[0] else (" ↓" if asks[-1] < asks[0] else " →")
-        rows += f"""<tr>
-          <td><b>{agent}</b></td>
-          <td>{(p.get('focus') or '').replace('_',' ') or '<span class=m>no prescription yet</span>'}</td>
-          <td>{p.get('scenario_label') or ''}{(' × %s reps' % p['reps_required']) if p.get('reps_required') else ''}</td>
-          <td>{('%.1f' % s['avg_grade']) if s.get('avg_grade') is not None else '?'}</td>
-          <td>{('%d%%' % round(s['appt_ask'])) if s.get('appt_ask') is not None else '?'}{arrow}</td>
-          <td>{s.get('calls_graded') if s.get('calls_graded') is not None else '?'}</td>
-          <td class=m>{(p.get('reason') or '')[:120]}</td></tr>"""
-    return f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
+    rows = sorted((diagnose_row(a) for a in agents), key=lambda r: -r["upside"])
+
+    cards = "".join("""
+      <div class='card'>
+        <div class='chead'><span class='who'>%s</span>
+          <span class='arch'>%s</span></div>
+        <div class='nums'>%d calls graded &middot; avg %s &middot; ask %s (%s) &middot; %s</div>
+        <div class='why'>%s</div>
+        <div class='rx'>This week: %s</div>
+      </div>""" % (r['agent'], r['archetype'], r['graded'],
+                   ('%.1f' % r['grade']) if r['grade'] is not None else '?',
+                   ('%d%%' % round(r['ask'])) if r['ask'] is not None else '?',
+                   r['arrow'], r['practice'], r['why'], r['rx'])
+        for r in rows)
+
+    return """<!DOCTYPE html><html><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1'><title>The Dojo</title>
-<style>body{{background:#080c14;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;padding:1.4rem;line-height:1.5}}
-h1{{font-size:1.3rem}} .sub{{color:#68789a;font-size:.8rem;margin-bottom:1rem;max-width:760px}}
-table{{width:100%;border-collapse:collapse;font-size:.82rem}}
-th{{text-align:left;color:#68789a;font-size:.64rem;text-transform:uppercase;letter-spacing:.06em;padding:.4rem .6rem}}
-td{{padding:.55rem .6rem;border-top:1px solid #243050;vertical-align:top}}
-.m{{color:#68789a;font-size:.76rem}} a{{color:#f5a623}}</style></head><body>
-<h1>🥋 The Dojo — week of {week_start.strftime('%b %d')}</h1>
-<div class='sub'>Weekly role-play prescriptions built from Maverick's grades of REAL calls.
-Passing rep = {getattr(config, 'DOJO_PASSING_GRADE', 7)}+ on the practice bot. Team ask rate:
-{('%d%%' % round(team['appt_ask'])) if team.get('appt_ask') is not None else '?'}.
-Ask-rate arrow compares the last 8 weeks of harvests. <a href='/'>← Dashboard</a></div>
-<table><tr><th>Agent</th><th>Focus</th><th>This week's reps</th><th>Avg grade</th>
-<th>Ask rate</th><th>Calls graded</th><th>Why</th></tr>{rows}</table>
-</body></html>"""
+<style>body{background:#080c14;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;padding:1.4rem;line-height:1.55;max-width:860px;margin:0 auto}
+h1{font-size:1.3rem;margin-bottom:.2rem} a{color:#f5a623}
+.verdict{background:#0f1520;border:1px solid #243050;border-left:4px solid #f5a623;border-radius:10px;padding:1rem 1.2rem;font-size:.92rem;margin:1rem 0 1.4rem}
+.card{background:#0f1520;border:1px solid #182030;border-radius:12px;padding:1rem 1.2rem;margin-bottom:.8rem}
+.chead{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:.4rem}
+.who{font-weight:750;font-size:1rem}
+.arch{font-size:.62rem;font-weight:800;letter-spacing:.12em;color:#f5a623;background:rgba(245,166,35,.1);padding:.2rem .6rem;border-radius:99px}
+.nums{color:#68789a;font-size:.76rem;margin:.3rem 0 .45rem}
+.why{font-size:.88rem}
+.rx{margin-top:.5rem;font-size:.76rem;color:#f5a623;font-weight:650}
+.sub{color:#68789a;font-size:.78rem}</style></head><body>
+<h1>&#129355; The Dojo &mdash; week of %s</h1>
+<div class='sub'>Conclusions first, numbers second. Sorted by coaching upside.
+Verified nightly from Maverick call grades. <a href='/'>&larr; Dashboard</a></div>
+<div class='verdict'>%s</div>
+%s
+</body></html>""" % (week_start.strftime('%b %d'), verdict, cards)
+
 
 
 @app.route("/api/admin/maverick/reports")
