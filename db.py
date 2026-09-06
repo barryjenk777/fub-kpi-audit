@@ -8065,3 +8065,61 @@ def get_ai_coach_progress(agent_name, since_date):
     except Exception as e:
         logger.warning("get_ai_coach_progress failed: %s", e)
         return None
+
+
+# ── Maverick grading dashboard snapshots (team-level coaching intel) ────────
+
+def ensure_maverick_dashboard_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS maverick_dashboard (
+                        snapshot_date DATE PRIMARY KEY,
+                        data          JSONB NOT NULL,
+                        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+    except Exception as e:
+        logger.warning("ensure_maverick_dashboard_table failed: %s", e)
+
+
+def save_maverick_dashboard(snapshot_date, data):
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO maverick_dashboard (snapshot_date, data)
+                    VALUES (%s, %s)
+                    ON CONFLICT (snapshot_date)
+                    DO UPDATE SET data = EXCLUDED.data
+                """, (snapshot_date, json.dumps(data)))
+        return True
+    except Exception as e:
+        logger.warning("save_maverick_dashboard failed: %s", e)
+        return False
+
+
+def get_latest_maverick_dashboard():
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT data, snapshot_date FROM maverick_dashboard
+                    ORDER BY snapshot_date DESC LIMIT 1
+                """)
+                row = cur.fetchone()
+        if not row:
+            return None
+        data = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        data["snapshot_date"] = str(row[1])
+        return data
+    except Exception as e:
+        logger.warning("get_latest_maverick_dashboard failed: %s", e)
+        return None

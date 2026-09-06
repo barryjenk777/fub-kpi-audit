@@ -266,6 +266,17 @@ def _agent_themes(cur, funnel):
     except Exception:
         pass
 
+    # Discovery gaps from the Maverick grading dashboard
+    try:
+        dash = _db.get_latest_maverick_dashboard() or {}
+        qm = dash.get("questions_missed") or []
+        if qm and qm[0].get("missed_pct", 0) >= 35:
+            not_doing.append("Maverick: the most-skipped discovery question is "
+                             "\"%s\", missed on %d%% of graded calls."
+                             % (qm[0]["question"], round(qm[0]["missed_pct"])))
+    except Exception:
+        pass
+
     # Hot sheet worked-rate (only once enough verified checks exist)
     rows = _q(cur, """
         SELECT COUNT(*) FILTER (WHERE called),

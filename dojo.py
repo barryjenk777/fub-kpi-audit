@@ -333,6 +333,7 @@ def run_dojo_monday(dry_run=False):
 
     stats = _db.get_latest_maverick_stats()
     team = stats.get("Team Average") or {}
+    dash = _db.get_latest_maverick_dashboard() or {}
     today = date.today()
     # Sent Sunday night for the COMING week: week_start = the next Monday
     # (or today when run on a Monday), so Wednesday's digest rep-check finds
@@ -351,6 +352,20 @@ def run_dojo_monday(dry_run=False):
             continue
         mine = stats.get(agent) or {}
         diag = diagnose(agent, mine, team, iso_week)
+        # Team-level intel from the grading dashboard sharpens the why
+        try:
+            if diag["focus"] == "objections" and dash.get("objection_categories"):
+                top = dash["objection_categories"][0]
+                diag["reason"] += (" The objection walking in the door most "
+                                   "right now is \"%s\" (%d recent calls)."
+                                   % (top["category"], top["calls"]))
+            elif diag["focus"] == "the_ask" and dash.get("not_asked") and dash.get("calls_graded"):
+                diag["reason"] += (" Team-wide, %d of the last %d graded calls "
+                                   "never asked at all. You fixing yours moves "
+                                   "the whole board."
+                                   % (dash["not_asked"], dash["calls_graded"]))
+        except Exception:
+            pass
         sc = diag["scenarios"][0] or {}
         subject, html = build_email(agent, diag, mine, team)
         summary["emails"].append({"agent": agent, "focus": diag["focus"],

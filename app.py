@@ -15732,6 +15732,56 @@ def _maverick_parse_overview(raw):
     return upserted
 
 
+def _maverick_parse_dashboard(raw):
+    """Parse the AI Grading Dashboard text harvest into a team-intel
+    snapshot: the ask funnel, top missed discovery questions, top objection
+    categories, objection-handled rate. Team-level coaching gold."""
+    import re as _re
+    if "MAVERICK GRADING DASHBOARD" not in raw:
+        return False
+    from datetime import date as _date
+    out = {}
+    m = _re.search(r"(\d+)\s*/\s*(\d+) calls graded", raw)
+    if m:
+        out["calls_graded"] = int(m.group(1))
+        out["calls_total"] = int(m.group(2))
+    for key, label in (("appts_set", "Appointments Set"),
+                       ("asked_not_set", "Appointments Asked but Not Set"),
+                       ("not_asked", "Not Asked to Set Appointments")):
+        m = _re.search(_re.escape(label) + r"\s+(\d+) Calls", raw)
+        if m:
+            out[key] = int(m.group(1))
+    m = _re.search(r"Objection Handled Rate\s+([\d.]+)%", raw)
+    if m:
+        out["objection_handled_rate"] = float(m.group(1))
+    m = _re.search(r"([\d.]+)% of (\d+) graded calls had objections", raw)
+    if m:
+        out["objection_call_pct"] = float(m.group(1))
+
+    # TOP QUESTIONS MISSED: "Question text?  47.7%"
+    qsec = raw.split("TOP QUESTIONS MISSED", 1)
+    if len(qsec) == 2:
+        out["questions_missed"] = [
+            {"question": q.strip(), "missed_pct": float(p)}
+            for q, p in _re.findall(r"([A-Z][^\n?]{8,90}\?)\s+([\d.]+)%",
+                                    qsec[1][:1500])][:6]
+
+    # TOP OBJECTION CATEGORIES: "Label\n\n23"
+    osec = raw.split("TOP OBJECTION CATEGORIES", 1)
+    if len(osec) == 2:
+        cats = []
+        for label, n in _re.findall(
+                r"\n\s*([A-Z][A-Za-z0-9 /()+'-]{3,50})\s*\n+\s*(\d{1,4})\s*\n",
+                osec[1][:1600]):
+            if label.strip().lower() not in ("see all agents",):
+                cats.append({"category": label.strip(), "calls": int(n)})
+        out["objection_categories"] = cats[:6]
+
+    if not out:
+        return False
+    return _db.save_maverick_dashboard(_date.today(), out)
+
+
 def _maverick_parse(raw):
     """Best-effort extraction from a pasted/forwarded Maverick coach report:
     agent (roster match), a grade-looking number, a date. Raw is always kept."""
@@ -15929,12 +15979,17 @@ def api_maverick_ingest():
                                    report_date=rdate,
                                    source=body.get("source", "courier"))
     stats_rows = 0
+    dashboard_saved = False
     try:
         stats_rows = _maverick_parse_overview(raw)
     except Exception as e:
         logger.warning("maverick overview parse failed: %s", e)
+    try:
+        dashboard_saved = bool(_maverick_parse_dashboard(raw))
+    except Exception as e:
+        logger.warning("maverick dashboard parse failed: %s", e)
     return jsonify({"ok": True, "id": rid, "agent": agent, "grade": grade,
-                    "stats_rows": stats_rows})
+                    "stats_rows": stats_rows, "dashboard_saved": dashboard_saved})
 
 
 @app.route("/api/admin/hotsheet/scoreboard")
@@ -19470,4 +19525,5 @@ else:
     # Ensure Maverick coach-report store exists
     _db.ensure_maverick_table()
     _db.ensure_maverick_stats_table()
+    _db.ensure_maverick_dashboard_table()
     _db.ensure_dojo_table()
