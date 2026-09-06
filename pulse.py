@@ -391,9 +391,9 @@ def _lead_themes(cur):
                      "month; %d routed straight to their agent, %d waiting in the "
                      "bonus pool." % (routed + pond, routed, pond))
     if pond > routed and pond >= 5:
-        not_doing.append("%d resurrected leads sat unclaimed because no agent hit "
-                         "the personal-dial bar that earns them. Free money on the "
-                         "table." % pond)
+        not_doing.append("%d resurrected leads sat unclaimed because nobody "
+                         "cleared the Phoenix bar (personal dials plus weekly "
+                         "practice reps). Free money on the table." % pond)
 
     # Lead Memory coverage
     rows = _q(cur, """

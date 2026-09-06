@@ -14921,13 +14921,21 @@ def _phoenix_qualified_agents(client):
         if daily_target < 1:
             continue
         days_met = sum(1 for d in weekdays if dials[d].get(uid, 0) >= daily_target)
+        # CANON (Barry, Sep 2026): Phoenix bonus leads are earned TWO ways —
+        # personal dials AND Dojo practice reps. A verified missed week of
+        # reps sits the agent out of the pool; no prescription yet or not yet
+        # verified = grace, never a disqualifier.
+        dojo_met = _db.get_dojo_met_for_week(name, last_monday)
+        dials_ok = days_met >= config.PHOENIX_QUALIFY_DAYS_REQUIRED
         row = {
             "agent_name":   name,
             "fub_user_id":  uid,
             "daily_target": daily_target,
             "days_met":     days_met,
             "dials_by_day": {d.isoformat(): dials[d].get(uid, 0) for d in weekdays},
-            "qualified":    days_met >= config.PHOENIX_QUALIFY_DAYS_REQUIRED,
+            "dojo_met":     dojo_met,
+            "qualified":    dials_ok and dojo_met is not False,
+            "blocked_by_dojo": dials_ok and dojo_met is False,
         }
         evaluated.append(row)
         if row["qualified"]:
@@ -15194,7 +15202,8 @@ def run_phoenix_sweep(dry_run=None):
                         f"{first}, bonus lead earned. {lead['lead_name']} went quiet "
                         f"{lead['dormant_days']} days ago and just came back on the site. "
                         f"Already assigned to you, top of your LeadStream. "
-                        f"You earned this one by hitting your standard last week."))
+                        f"You earned this one two ways: your dials and your reps. "
+                        f"Keep both up and these keep coming."))
             _db.log_phoenix(lead["person_id"], lead["lead_name"],
                             lead["owner_before"], agent, lead["dormant_days"],
                             lead["came_back"], lead["activity_type"], status, run_date,

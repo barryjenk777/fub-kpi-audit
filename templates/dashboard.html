@@ -781,7 +781,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
           Per agent: what they are on pace to earn vs their goal, the dollar gap, what the rest
           of the year requires using their own goal-sheet math, and the one thing to coach.
           Biggest gap on top. Earned chips: T = transfer rotation (team minimum), P = Phoenix
-          bonus leads (personal dial target 4 of 5 days).
+          bonus leads (personal dial target 4 of 5 days AND weekly practice reps).
         </div>
         <div id="money-board-wrap" style="margin-top:.7rem"><div class="loading-pane" style="padding:1.5rem"><span class="spinner"></span></div></div>
       </div>
@@ -2913,7 +2913,7 @@ async function loadMoneyBoard(){
           <td style="padding:.5rem .6rem">${a.closings_to_go??'–'}</td>
           <td style="padding:.5rem .6rem">${a.appts_needed_wk||'–'}${a.convos_needed_wk?` <span style="color:var(--subtle);font-size:.7rem">(~${a.convos_needed_wk} convos)</span>`:''}</td>
           <td style="padding:.5rem .6rem;color:var(--muted);max-width:230px">${a.lever}</td>
-          <td style="padding:.5rem .6rem;white-space:nowrap">${chip(a.earned_transfers,'T','Transfer rotation: team minimum KPI')}${chip(a.phoenix_qualified,'P',`Phoenix bonus leads: hit personal dial target ${a.phoenix_days_met} of 5 weekdays last week`)}</td>
+          <td style="padding:.5rem .6rem;white-space:nowrap">${chip(a.earned_transfers,'T','Transfer rotation: team minimum KPI')}${chip(a.phoenix_qualified,'P',`Phoenix bonus leads, earned two ways: personal dial target (${a.phoenix_days_met} of 5 weekdays last week) AND weekly Dojo practice reps`)}</td>
         </tr>`).join('')+`</tbody></table></div>
       <div style="font-size:.68rem;color:var(--subtle);margin-top:.4rem">"On pace for" annualizes GCI logged so far. ${d.weeks_left} weeks left in the year. Appointments-per-week uses each agent's own goal-sheet conversion rates.</div>`;
   }catch(e){

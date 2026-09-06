@@ -294,6 +294,9 @@ def build_email(agent_name, diag, mine, team):
                 A rep counts at <strong style="color:#f5a623">{PASS}+</strong>.
                 Maverick emails your score right after each call.<br>
                 Under {PASS}? Read the feedback, call again.</p>
+              <p style="margin:12px 0 0;font-size:12px;color:#f5a623;font-weight:700;line-height:1.6">
+                Phoenix bonus leads are earned two ways: your dials and your reps.
+                Miss the week and you sit out the resurrection pool.</p>
             </td>
           </tr>
         </table>
@@ -365,6 +368,10 @@ def _compliance_recap(week_start, dry_run=False):
              "voice this week:</b> " + ", ".join(two_plus) +
              " (2+ weeks of missed reps). A 30-second personal word from you beats "
              "ten system nudges.</p>") if two_plus else "")
+    if misses:
+        talk += ("<p style='margin:10px 0 0;font-size:13px;color:#c0392b'><b>Phoenix "
+                 "impact:</b> " + ", ".join(r["agent"] for r in misses) +
+                 " sit out the bonus pool this week (dials AND reps earn Phoenix).</p>")
     html = f"""<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto">
 <p style="font-size:15px;color:#111111">Dojo compliance, week of {last_week.strftime('%b %d')}: <b>{headline}</b></p>
 <table width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;color:#333333">

@@ -8180,3 +8180,23 @@ def get_dojo_miss_streak(agent_name, before_week):
     except Exception as e:
         logger.warning("get_dojo_miss_streak failed: %s", e)
         return 0
+
+
+def get_dojo_met_for_week(agent_name, week_start):
+    """Phoenix eligibility check: did the agent meet their Dojo reps for the
+    given week? Returns True (met), False (missed), or None (no prescription
+    or not yet verified — treated as grace, never a disqualifier)."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT met FROM dojo_prescriptions
+                    WHERE agent_name = %s AND week_start = %s
+                """, (agent_name, week_start))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("get_dojo_met_for_week failed: %s", e)
+        return None
