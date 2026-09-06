@@ -90,9 +90,30 @@ def run_handoff_scan(dry_run=False):
         if not profile or not lead_name:
             continue
         who = _first(lead_name) if lead_name else "a new lead"
-        msg = ("%s, Fhalen just handed you %s, live and warm. Call in the "
-               "next 10 minutes while their phone is still in their hand. "
-               "Speed is the whole game on these." % (_first(agent), who))
+        first = _first(agent)
+        # Rotating copy: the same sentence every transfer goes invisible in a
+        # week. Variant picked by lead id so it varies per handoff, stays
+        # stable on retries. All Barry voice, all speed-first, no dashes.
+        variants = [
+            ("%s, Fhalen just handed you %s, live and warm. Call in the next "
+             "10 minutes while their phone is still in their hand. Speed is "
+             "the whole game on these."),
+            ("%s, fresh handoff from Fhalen: %s. They said yes to talking "
+             "minutes ago. Call now while yes is still the answer."),
+            ("%s, %s just came off a live call with Fhalen wanting the next "
+             "step. The next step is your voice. Now beats later, every time."),
+            ("Hot one, %s. Fhalen qualified %s and they are expecting a call. "
+             "Every minute you wait, they cool a degree."),
+            ("%s, Fhalen teed one up for you: %s. Leads like this close for "
+             "whoever calls first. Be first."),
+            ("%s, new handoff: %s. They are warm right now and warm has a "
+             "short shelf life. You are two rings from a real conversation."),
+        ]
+        try:
+            idx = int("".join(c for c in pid if c.isdigit()) or 0) % len(variants)
+        except ValueError:
+            idx = 0
+        msg = variants[idx] % (first, who)
         summary["messages"].append({"rung": 1, "agent": agent, "message": msg})
         if dry_run or seeding:
             continue
