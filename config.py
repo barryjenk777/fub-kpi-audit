@@ -370,6 +370,11 @@ LEADSTREAM_POND_TAG = "LeadStream_Pond"
 # how many unanswered call attempts have been made. Our daily cleanup job
 # removes the tag after ISA_TRANSFER_FRESH_DAYS.
 ISA_TRANSFER_FRESH_TAG   = "ISA_TRANSFER_FRESH"
+
+# Instant Handoff Protocol rung 2 (Barry-voice accountability text at T+4h
+# when no call is logged). OFF until Barry signs off the template; flip via
+# env HANDOFF_RUNG2_ENABLED=1. Rung 1 (instant alert) is always on.
+HANDOFF_RUNG2_ENABLED = _os.environ.get("HANDOFF_RUNG2_ENABLED", "0") == "1"
 ISA_TRANSFER_FRESH_DAYS  = 7    # days before the tag is auto-removed
 ISA_TRANSFER_FRESH_FLOOR = 75   # minimum score while tag is present
 ISA_TRANSFER_WARM_STAGE  = "A - Hot 1-3 Months"  # FUB stage applied on ISA transfer (change to "B - Warm 3-6 Months" if preferred)

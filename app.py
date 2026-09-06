@@ -15601,6 +15601,39 @@ def api_hotsheet_run():
         return jsonify({"error": str(e)}), 500
 
 
+def scheduled_handoff_scan():
+    """Every 10 min, 8am-8pm ET — Instant Handoff Protocol (rungs 1 + 2)."""
+    if not _db.try_acquire_job_lock("handoff_scan"):
+        return
+    try:
+        import handoff as _ho
+        s = _ho.run_handoff_scan(dry_run=False)
+        if s.get("new_transfers") or s.get("rung2_sent"):
+            print(f"[SCHEDULER] Handoff scan: {s['new_transfers']} new transfers, "
+                  f"rung1={s['rung1_sent']} rung2={s['rung2_sent']}")
+        _record_fired("handoff_scan")
+    except Exception as e:
+        _alert_on_job_failure("handoff_scan", str(e))
+        raise
+    finally:
+        _db.release_job_lock("handoff_scan")
+
+
+@app.route("/api/admin/handoff/run", methods=["POST"])
+def api_handoff_run():
+    """Run the handoff scan now. {"dry_run": true} previews without sending."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    try:
+        import handoff as _ho
+        return jsonify({"ok": True, **_ho.run_handoff_scan(dry_run=bool(body.get("dry_run")))})
+    except Exception as e:
+        import traceback
+        logger.error("handoff run failed: %s\n%s", e, traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/admin/hotsheet/scoreboard")
 def api_hotsheet_scoreboard():
     """Worked-rate per agent on their morning hot sheets (verified against
@@ -18095,6 +18128,10 @@ def start_scheduler():
     _scheduler.add_job(scheduled_hot_sheets,
                        CronTrigger(day_of_week="mon-fri", hour=8, minute=15, timezone=ET),
                        id="hot_sheets", name="Morning hot sheets (weekdays 8:15am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_handoff_scan,
+                       CronTrigger(minute="*/10", hour="8-19", timezone=ET),
+                       id="handoff_scan", name="Instant Handoff Protocol (10-min scan)",
                        max_instances=1, coalesce=True)
 
     _scheduler.start()
