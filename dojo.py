@@ -456,9 +456,12 @@ def run_dojo_monday(dry_run=False):
             continue
         if not _db.claim_once("dojo_%s_%s" % (week_start.isoformat(), agent)):
             continue
+        # Barry CC'd on the first week of Dojo sends (his request, Sep 6) —
+        # self-expires before the Sep 13 batch, no cleanup needed.
+        _cc = config.EMAIL_FROM if today < date(2026, 9, 13) else None
         try:
             _pm.send(to=email, from_email=config.EMAIL_FROM,
-                     subject=subject, html=html)
+                     subject=subject, html=html, cc=_cc)
             _db.save_dojo_prescription(week_start, agent, diag["focus"],
                                        sc.get("label"), sc.get("phone"),
                                        diag["reps"], diag["reason"])
