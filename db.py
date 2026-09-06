@@ -7756,3 +7756,76 @@ def guard_exists(guard_key: str) -> bool:
     except Exception as e:
         logger.warning("guard_exists(%s) failed: %s", guard_key, e)
         return False
+
+
+# ── Maverick call-coach reports (no API; arrives via forward or paste) ──────
+
+def ensure_maverick_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS maverick_reports (
+                        id          SERIAL PRIMARY KEY,
+                        agent_name  TEXT,
+                        lead_hint   TEXT,
+                        grade       TEXT,
+                        report_date DATE,
+                        source      TEXT NOT NULL DEFAULT 'paste',  -- paste | email
+                        raw         TEXT NOT NULL,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_mvr_agent
+                        ON maverick_reports (agent_name, created_at DESC);
+                """)
+    except Exception as e:
+        logger.warning("ensure_maverick_table failed: %s", e)
+
+
+def save_maverick_report(raw, agent_name=None, lead_hint=None, grade=None,
+                         report_date=None, source="paste"):
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO maverick_reports
+                        (agent_name, lead_hint, grade, report_date, source, raw)
+                    VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+                """, (agent_name, lead_hint, grade, report_date, source, raw[:20000]))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("save_maverick_report failed: %s", e)
+        return None
+
+
+def get_maverick_reports(agent_name=None, days=14, limit=50):
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if agent_name:
+                    cur.execute("""
+                        SELECT id, agent_name, lead_hint, grade, report_date, raw, created_at
+                        FROM maverick_reports
+                        WHERE agent_name = %s AND created_at >= NOW() - make_interval(days => %s)
+                        ORDER BY created_at DESC LIMIT %s
+                    """, (agent_name, days, limit))
+                else:
+                    cur.execute("""
+                        SELECT id, agent_name, lead_hint, grade, report_date, raw, created_at
+                        FROM maverick_reports
+                        WHERE created_at >= NOW() - make_interval(days => %s)
+                        ORDER BY created_at DESC LIMIT %s
+                    """, (days, limit))
+                return [{"id": r[0], "agent_name": r[1], "lead_hint": r[2],
+                         "grade": r[3], "report_date": str(r[4]) if r[4] else None,
+                         "raw": r[5], "created_at": r[6].isoformat()}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_maverick_reports failed: %s", e)
+        return []

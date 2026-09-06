@@ -15669,6 +15669,90 @@ def api_handoff_run():
         return jsonify({"error": str(e)}), 500
 
 
+def _maverick_parse(raw):
+    """Best-effort extraction from a pasted/forwarded Maverick coach report:
+    agent (roster match), a grade-looking number, a date. Raw is always kept."""
+    import re as _re
+    agent = None
+    try:
+        for p in (_db.get_agent_profiles(active_only=True) or []):
+            n = p.get("agent_name") or ""
+            if n and n.lower() in raw.lower():
+                agent = n
+                break
+    except Exception:
+        pass
+    grade = None
+    m = _re.search(r"(?:grade|score)\D{0,10}(\d{1,3})", raw, _re.I)
+    if m and 0 < int(m.group(1)) <= 100:
+        grade = m.group(1)
+    rdate = None
+    m = _re.search(r"(20\d\d-\d\d-\d\d)|(\d{1,2}/\d{1,2}/20\d\d)", raw)
+    if m:
+        try:
+            from datetime import datetime as _dtp
+            rdate = (_dtp.strptime(m.group(1), "%Y-%m-%d").date() if m.group(1)
+                     else _dtp.strptime(m.group(2), "%m/%d/%Y").date())
+        except ValueError:
+            pass
+    return agent, grade, rdate
+
+
+@app.route("/maverick-drop", methods=["GET", "POST"])
+def maverick_drop():
+    """Paste box for Maverick sales-coach reports (Maverick has no API; its
+    coach emails go only to the agent). Barry, Cowork, or an agent pastes a
+    report; it lands in maverick_reports and joins the coaching loop."""
+    if not _perplexity_auth():
+        return ("<h3 style='font-family:sans-serif;padding:2rem'>Not authorized. "
+                "Add ?key= or log in first.</h3>"), 403
+    saved_note = ""
+    if request.method == "POST":
+        raw = (request.form.get("report") or "").strip()
+        if len(raw) > 40:
+            agent, grade, rdate = _maverick_parse(raw)
+            rid = _db.save_maverick_report(raw, agent_name=agent, grade=grade,
+                                           report_date=rdate, source="paste")
+            saved_note = (f"<div style='background:#e8f7ef;border:1px solid #bfe6cf;"
+                          f"border-radius:8px;padding:.7rem 1rem;margin-bottom:1rem'>"
+                          f"Saved #{rid}. Detected: agent = {agent or 'unknown'}, "
+                          f"grade = {grade or 'none found'}. Raw text kept in full.</div>")
+        else:
+            saved_note = "<div style='color:#b3382c'>Too short — paste the whole report.</div>"
+    recent = _db.get_maverick_reports(days=30, limit=10)
+    rows = "".join(f"<li>{r['created_at'][:10]} · {r['agent_name'] or '?'} · "
+                   f"grade {r['grade'] or '?'}</li>" for r in recent)
+    key_q = request.args.get("key", "")
+    return f"""<div style='font-family:sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem'>
+      <h2>Maverick Report Drop</h2>
+      <p style='color:#555'>Paste a Maverick sales-coach email or call-log export below.
+      Everything is kept raw; agent and grade are auto-detected when possible.</p>
+      {saved_note}
+      <form method='POST' action='/maverick-drop?key={key_q}'>
+        <textarea name='report' rows='14' style='width:100%;font-size:.85rem'></textarea>
+        <button type='submit' style='margin-top:.6rem;padding:.5rem 1.2rem'>Save report</button>
+      </form>
+      <h3 style='margin-top:1.5rem'>Last 30 days</h3><ul>{rows or '<li>none yet</li>'}</ul>
+    </div>"""
+
+
+@app.route("/api/admin/maverick/ingest", methods=["POST"])
+def api_maverick_ingest():
+    """Programmatic ingest (the always-on Mac courier, or a future email
+    webhook). Body: {"raw": "...", "source": "email"|"courier"}."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    raw = (body.get("raw") or "").strip()
+    if len(raw) < 40:
+        return jsonify({"error": "raw too short"}), 400
+    agent, grade, rdate = _maverick_parse(raw)
+    rid = _db.save_maverick_report(raw, agent_name=agent, grade=grade,
+                                   report_date=rdate,
+                                   source=body.get("source", "courier"))
+    return jsonify({"ok": True, "id": rid, "agent": agent, "grade": grade})
+
+
 @app.route("/api/admin/hotsheet/scoreboard")
 def api_hotsheet_scoreboard():
     """Worked-rate per agent on their morning hot sheets (verified against
@@ -19179,3 +19263,5 @@ else:
     _db.ensure_market_tables()
     # Ensure hot-sheet accountability log exists
     _db.ensure_hotsheet_table()
+    # Ensure Maverick coach-report store exists
+    _db.ensure_maverick_table()
