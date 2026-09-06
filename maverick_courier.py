@@ -76,16 +76,35 @@ def setup():
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto("https://maverickre.com")
         input("\n>>> Press Enter here once the call log page is on screen... ")
-        url = page.url
+        # Maverick's "Log in" opens the app in a NEW TAB, so the tab we
+        # started on may still be the marketing site. Pick the best tab:
+        # the last one that is neither blank nor the marketing homepage.
+        candidates = []
+        for p in ctx.pages:
+            u = (p.url or "").rstrip("/")
+            if u and u != "about:blank" and u not in (
+                    "https://maverickre.com", "https://www.maverickre.com"):
+                candidates.append(u)
+        url = candidates[-1] if candidates else page.url
+        print("\nOpen tabs found:")
+        for p in ctx.pages:
+            marker = "  <-- SAVED" if (p.url or "").rstrip("/") == url.rstrip("/") else ""
+            print(f"  {p.url}{marker}")
         _save_config({"call_log_url": url, "setup_at": datetime.now().isoformat()})
-        print(f"Saved. Nightly harvest will open: {url}")
+        print(f"\nSaved. Nightly harvest will open: {url}")
+        print("If that is NOT the sales grading page, rerun --setup and make "
+              "sure the grading page is the LAST tab you opened.")
         ctx.close()
 
 
 def _looks_logged_out(final_url, text):
     lowered = (text or "").lower()
     url = (final_url or "").lower()
-    return ("login" in url or "sign-in" in url or "signin" in url
+    # The marketing homepage means we got bounced out of the app (or the
+    # saved URL was wrong) — never post that as data.
+    on_marketing = "book a demo" in lowered and "measure what matters" in lowered
+    return (on_marketing
+            or "login" in url or "sign-in" in url or "signin" in url
             or ("password" in lowered and "log in" in lowered)
             or len((text or "").strip()) < 200)
 
