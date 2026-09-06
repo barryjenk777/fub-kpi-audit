@@ -7829,3 +7829,86 @@ def get_maverick_reports(agent_name=None, days=14, limit=50):
     except Exception as e:
         logger.warning("get_maverick_reports failed: %s", e)
         return []
+
+
+# ── Maverick agent stats (parsed from the agents-overview harvest) ──────────
+
+def ensure_maverick_stats_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS maverick_agent_stats (
+                        id            SERIAL PRIMARY KEY,
+                        snapshot_date DATE NOT NULL,
+                        agent_name    TEXT NOT NULL,
+                        leads_assigned INTEGER, unique_called INTEGER,
+                        total_calls   INTEGER, calls_graded INTEGER,
+                        avg_grade     NUMERIC(4,1),
+                        question_fill NUMERIC(5,1), appt_ask NUMERIC(5,1),
+                        appt_set      NUMERIC(5,1), talk_time NUMERIC(5,1),
+                        followups     NUMERIC(5,1), objection NUMERIC(5,1),
+                        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        UNIQUE (snapshot_date, agent_name)
+                    );
+                """)
+    except Exception as e:
+        logger.warning("ensure_maverick_stats_table failed: %s", e)
+
+
+def upsert_maverick_stats(snapshot_date, agent_name, vals):
+    """vals: 11 numbers in overview column order (or None)."""
+    if not is_available():
+        return False
+    cols = ("leads_assigned", "unique_called", "total_calls", "calls_graded",
+            "avg_grade", "question_fill", "appt_ask", "appt_set", "talk_time",
+            "followups", "objection")
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    INSERT INTO maverick_agent_stats
+                        (snapshot_date, agent_name, {', '.join(cols)})
+                    VALUES (%s, %s, {', '.join(['%s'] * len(cols))})
+                    ON CONFLICT (snapshot_date, agent_name) DO UPDATE SET
+                        {', '.join(f'{c} = EXCLUDED.{c}' for c in cols)}
+                """, (snapshot_date, agent_name, *vals))
+        return True
+    except Exception as e:
+        logger.warning("upsert_maverick_stats failed for %s: %s", agent_name, e)
+        return False
+
+
+def get_latest_maverick_stats():
+    """Most recent snapshot: {agent_name: {col: val}}, incl. 'Team Average'."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, leads_assigned, unique_called, total_calls,
+                           calls_graded, avg_grade, question_fill, appt_ask,
+                           appt_set, talk_time, followups, objection, snapshot_date
+                    FROM maverick_agent_stats
+                    WHERE snapshot_date = (SELECT MAX(snapshot_date)
+                                           FROM maverick_agent_stats)
+                """)
+                out = {}
+                for r in cur.fetchall():
+                    out[r[0]] = {"leads_assigned": r[1], "unique_called": r[2],
+                                 "total_calls": r[3], "calls_graded": r[4],
+                                 "avg_grade": float(r[5]) if r[5] is not None else None,
+                                 "question_fill": float(r[6]) if r[6] is not None else None,
+                                 "appt_ask": float(r[7]) if r[7] is not None else None,
+                                 "appt_set": float(r[8]) if r[8] is not None else None,
+                                 "talk_time": float(r[9]) if r[9] is not None else None,
+                                 "followups": float(r[10]) if r[10] is not None else None,
+                                 "objection": float(r[11]) if r[11] is not None else None,
+                                 "snapshot_date": str(r[12])}
+                return out
+    except Exception as e:
+        logger.warning("get_latest_maverick_stats failed: %s", e)
+        return {}

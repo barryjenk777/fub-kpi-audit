@@ -241,6 +241,31 @@ def _agent_themes(cur, funnel):
         not_doing.append("%s: zero calls logged in 14 days. Silence spreads."
                          % " and ".join(_first(n) for n in silent[:3]))
 
+    # Maverick call quality: the ask rate, the funnel's most expensive habit
+    try:
+        mstats = _db.get_latest_maverick_stats()
+        team = mstats.get("Team Average") or {}
+        if team.get("appt_ask") is not None:
+            ask = round(team["appt_ask"])
+            graded = [(n, s) for n, s in mstats.items()
+                      if n != "Team Average" and (s.get("calls_graded") or 0) >= 3
+                      and n not in _NO_CALLOUT]
+            if ask < 60:
+                line = ("Maverick grades show only %d%% of calls include an "
+                        "appointment ask." % ask)
+                if graded:
+                    worst = min(graded, key=lambda kv: kv[1].get("appt_ask") or 0)
+                    best = max(graded, key=lambda kv: kv[1].get("appt_ask") or 0)
+                    line += (" %s asks %d%% of the time; %s asks %d%%."
+                             % (_first(best[0]), round(best[1]["appt_ask"] or 0),
+                                _first(worst[0]), round(worst[1]["appt_ask"] or 0)))
+                not_doing.append(line)
+            else:
+                doing.append("Maverick grades: %d%% of calls include an "
+                             "appointment ask." % ask)
+    except Exception:
+        pass
+
     # Hot sheet worked-rate (only once enough verified checks exist)
     rows = _q(cur, """
         SELECT COUNT(*) FILTER (WHERE called),

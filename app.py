@@ -15695,6 +15695,37 @@ def api_handoff_run():
         return jsonify({"error": str(e)}), 500
 
 
+def _maverick_parse_overview(raw):
+    """Parse the agents-overview table harvest into per-agent stat rows.
+    Row format (tab/pipe soup): Name | Role | then 11 numbers in column
+    order: leads assigned, unique called, total calls, calls graded,
+    avg grade, question fill %, appt ask %, appt set %, talk time %,
+    follow-ups %, objection handling %. Returns rows upserted."""
+    import re as _re
+    if "Avg Calls Grade" not in raw:
+        return 0
+    from datetime import date as _date
+    today = _date.today()
+    upserted = 0
+    for line in raw.splitlines():
+        tokens = [t.strip() for t in line.split("|") if t.strip()]
+        if len(tokens) < 8 or tokens[0] == "Agent Name":
+            continue
+        name = tokens[0]
+        nums = []
+        for t in tokens[1:]:
+            m = _re.fullmatch(r"(-?\d+(?:\.\d+)?)%?", t)
+            if m:
+                nums.append(float(m.group(1)))
+        if len(nums) < 11 or (name != "Team Average"
+                              and not any(c.isalpha() for c in name)):
+            continue
+        vals = nums[:11]
+        if _db.upsert_maverick_stats(today, name, vals):
+            upserted += 1
+    return upserted
+
+
 def _maverick_parse(raw):
     """Best-effort extraction from a pasted/forwarded Maverick coach report:
     agent (roster match), a grade-looking number, a date. Raw is always kept."""
@@ -15810,7 +15841,13 @@ def api_maverick_ingest():
     rid = _db.save_maverick_report(raw, agent_name=agent, grade=grade,
                                    report_date=rdate,
                                    source=body.get("source", "courier"))
-    return jsonify({"ok": True, "id": rid, "agent": agent, "grade": grade})
+    stats_rows = 0
+    try:
+        stats_rows = _maverick_parse_overview(raw)
+    except Exception as e:
+        logger.warning("maverick overview parse failed: %s", e)
+    return jsonify({"ok": True, "id": rid, "agent": agent, "grade": grade,
+                    "stats_rows": stats_rows})
 
 
 @app.route("/api/admin/hotsheet/scoreboard")
@@ -18828,6 +18865,22 @@ def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
             return reps, kpi
 
     coaching = _generate_agent_coaching_text(agent_first, kpi, week_day)
+    # Maverick call-quality line: their own graded numbers vs team, when the
+    # nightly courier has data and the agent has graded calls to stand on.
+    try:
+        _mstats = _db.get_latest_maverick_stats()
+        _mine = _mstats.get(agent_name) or {}
+        _team = _mstats.get("Team Average") or {}
+        if (_mine.get("calls_graded") or 0) >= 2 and _mine.get("appt_ask") is not None:
+            _line = ("Maverick check: your graded calls average %.1f out of 10, "
+                     "and you ask for the appointment %d%% of the time"
+                     % (_mine.get("avg_grade") or 0, round(_mine["appt_ask"])))
+            if _team.get("appt_ask") is not None:
+                _line += " (team average %d%%)" % round(_team["appt_ask"])
+            _line += ". The ask is where the money is."
+            coaching += "\n\n" + _line
+    except Exception as _me:
+        logger.warning("maverick coaching line failed for %s: %s", agent_name, _me)
     if _rep_open and _calls7 < _min_calls:
         buyers  = getattr(config, "MAVERICK_BUYER_SCENARIOS", []) or []
         sellers = getattr(config, "MAVERICK_SELLER_SCENARIOS", []) or []
@@ -19325,3 +19378,4 @@ else:
     _db.ensure_hotsheet_table()
     # Ensure Maverick coach-report store exists
     _db.ensure_maverick_table()
+    _db.ensure_maverick_stats_table()
