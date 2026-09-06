@@ -190,7 +190,7 @@ def build_email(agent_name, diag, mine, team):
 <div style='background:#fdf6ea;border:1px solid #f0dfc0;border-radius:10px;padding:14px 16px'>
   <div style='font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#b97a12'>This week's reps</div>
   <div style='font-size:16px;font-weight:700;margin:.3em 0'>{sc.get('label','Practice call')} · {diag['reps']} calls</div>
-  <div style='font-size:14px'>Call <a href='tel:{sc.get('phone','')}' style='color:#b97a12;font-weight:700'>{_pretty(sc.get('phone',''))}</a>. You are calling {sc.get('context','a practice lead')}.</div>
+  <div style='font-size:14px'>Call <a href='tel:{sc.get('phone','')}' style='color:#b97a12;font-weight:700'>{_pretty(sc.get('phone',''))}</a>. Who picks up: {sc.get('label','a practice lead')}, {sc.get('context','ready to test you')}.</div>
   <div style='font-size:13px;color:#5b6779;margin-top:.4em'>A rep counts when Maverick grades it <b>{PASS} or higher</b>. It emails you the score right after each call. Under {PASS}? Read the feedback, call again.</div>
 </div>
 <p style='font-size:14px'>Two minutes a rep. Nobody real on the line, nothing to lose, and next week's tape is how we both know it worked. Danny and I see the board.</p>
