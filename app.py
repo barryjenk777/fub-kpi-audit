@@ -8274,7 +8274,7 @@ Write in Barry's voice. Contractions. Short sentences. Teaching, never shaming. 
         ai_client = _anthropic.Anthropic()
         msg = ai_client.messages.create(
             model="claude-sonnet-5",
-            max_tokens=1200,
+            max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )
 
