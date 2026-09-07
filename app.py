@@ -16509,6 +16509,7 @@ h1{font-size:1.3rem;margin-bottom:.2rem} a{color:#f5a623}
 .why{font-size:.88rem}
 .rx{margin-top:.5rem;font-size:.76rem;color:#f5a623;font-weight:650}
 .sub{color:#68789a;font-size:.78rem}</style></head><body>
+<a href="/" style="display:inline-block;margin-bottom:.8rem;font-size:.78rem;font-weight:700;color:#f5a623;text-decoration:none">&larr; Command Center</a>
 <h1>&#129355; The Dojo &mdash; week of %s</h1>
 <div class='sub'>Conclusions first, numbers second. Sorted by coaching upside.
 Verified nightly from Maverick call grades. <a href='/'>&larr; Dashboard</a></div>

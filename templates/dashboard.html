@@ -3297,11 +3297,19 @@ async function loadPulse(force){
   ld.style.display='none';db.style.display='block';
 }
 
-// ── INIT ── Pulse is the home tab
-_loaded.pulse=true;
-{const _d0=document.getElementById('topbar-desc');
- if(_d0)_d0.textContent='The big picture: is the team calling, talking, booking, and closing over the last 60 to 90 days. Green bullets are working; yellow need attention. Start here every visit.';}
-loadPulse();
+// ── INIT ── Pulse is the home tab; ?tab= deep links (used by satellite
+// pages like /leadstream) land directly on the named tab.
+(function(){
+  const want=new URLSearchParams(location.search).get('tab');
+  if(want&&document.querySelector(`.nav-item[data-tab="${want}"]`)){
+    switchTab(want);
+    return;
+  }
+  _loaded.pulse=true;
+  const _d0=document.getElementById('topbar-desc');
+  if(_d0)_d0.textContent='The big picture: is the team calling, talking, booking, and closing over the last 60 to 90 days. Green bullets are working; yellow need attention. Start here every visit.';
+  loadPulse();
+})();
 </script>
 </body>
 </html>
