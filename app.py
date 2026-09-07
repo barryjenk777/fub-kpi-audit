@@ -16616,9 +16616,57 @@ def training_board():
             upside = 3
         practice = ("%d practice reps logged ever" % reps_ever) if reps_ever \
             else "zero practice reps ever, the muscle is unused"
+
+        # The move: one concrete instruction built from THEIR numbers, never
+        # a category label ("mechanical fix" told Barry nothing).
+        qf, t_qf = s.get("question_fill"), team.get("question_fill")
+        t_obj = team.get("objection")
+        if archetype == "THE INVISIBLE":
+            move = ("Only %d call%s reached grading. Fix the dialing first; "
+                    "skill coaching can wait."
+                    % (graded, "" if graded == 1 else "s"))
+        elif archetype == "THE ALMOST-THERE":
+            move = ("Asks on %d%% of calls, team is %d%%. The fix: say "
+                    "&quot;can we set a time&quot; before hanging up, every call."
+                    % (round(ask), round(team_ask)))
+        elif archetype == "THE CONVERTER":
+            move = ("Grade and ask rate both above the bar. Give them more "
+                    "leads and play their calls at the team meeting.")
+        else:
+            # Grinder: name the single weakest skill vs its benchmark
+            gaps = []
+            if qf is not None:
+                gaps.append((qf - (t_qf if t_qf is not None else 50), "discovery", qf))
+            if obj is not None:
+                gaps.append((obj - (t_obj if t_obj is not None else 60), "objections", obj))
+            if ask is not None:
+                gaps.append((ask - (team_ask if team_ask is not None else 50), "ask", ask))
+            gaps.sort()
+            if gaps:
+                _, weak, val = gaps[0]
+                top_obj = ((dash.get("objection_categories") or [{}])[0]).get("category")
+                move = {
+                    "discovery": ("Weakest skill: discovery. Only %d%% of the key "
+                                  "questions get asked (motivation, timeframe, "
+                                  "location). The fix: run the question list on "
+                                  "every call." % round(val)),
+                    "objections": ("Weakest skill: pushback. Survives only %d%% of "
+                                   "objections%s. The fix: drill the comeback until "
+                                   "it is automatic."
+                                   % (round(val),
+                                      (", usually &quot;%s&quot;" % top_obj) if top_obj else "")),
+                    "ask": ("Weakest skill: the ask. %d%% of calls end without "
+                            "asking for the appointment. The fix: ask before "
+                            "hanging up, every call." % round(100 - val)),
+                }[weak]
+            else:
+                move = ("Avg grade %s with nothing sharply broken. The fix: this "
+                        "week's Dojo scenario, done at full effort."
+                        % (("%.1f" % grade) if grade is not None else "?"))
+
         return {"agent": agent, "archetype": archetype, "why": why,
                 "upside": upside, "arrow": arrow, "graded": graded,
-                "grade": grade, "ask": ask, "practice": practice,
+                "grade": grade, "ask": ask, "practice": practice, "move": move,
                 "rx": ("%s x %s" % (p.get("scenario_label"), p.get("reps_required")))
                       if p.get("scenario_label") else "pending Sunday"}
 
@@ -16663,10 +16711,10 @@ def training_board():
                            "calls hit &quot;%s&quot;" % oc_list[0]["category"][:40], "#8ea3c8"))
     tiles_html = "".join(tiles)
 
-    _ARCH = {"THE ALMOST-THERE": ("#f5a623", "Ask. More asks are hiding in the same calls."),
-             "THE CONVERTER":    ("#37c98b", "Feed volume. Teach from their tape."),
-             "THE GRINDER":      ("#5b8def", "One mechanical fix moves every call."),
-             "THE INVISIBLE":    ("#68789a", "Volume problem, not quality. Watch the hot sheet.")}
+    _ARCH = {"THE ALMOST-THERE": ("#f5a623",),
+             "THE CONVERTER":    ("#37c98b",),
+             "THE GRINDER":      ("#5b8def",),
+             "THE INVISIBLE":    ("#68789a",)}
 
     def _bar(pct, team_pct):
         pct = max(0, min(100, round(pct or 0)))
@@ -16697,7 +16745,7 @@ def training_board():
                    r['graded'],
                    _bar(r['ask'], team_ask) if r['ask'] is not None else
                    "<div class='barlbl'>no graded asks yet</div>",
-                   _ARCH[r['archetype']][1],
+                   r['move'],
                    'repok' if 'zero practice' not in r['practice'] else 'repbad',
                    ('&#10003; ' + r['practice']) if 'zero practice' not in r['practice']
                    else '&#10007; zero practice reps ever',
