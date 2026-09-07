@@ -2112,7 +2112,7 @@ function renderIsaInsight(ins){
   if(sp.transfers){
     const seg=(n,label)=>`<div style="flex:1;min-width:110px;text-align:center;padding:.4rem"><div style="font-size:1.6rem;font-weight:800">${n}</div><div style="font-size:.68rem;color:var(--muted);margin-top:.15rem">${label}</div></div>`;
     h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem;margin-bottom:1rem">`;
-    h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem">Speed to first call, last 60 days (verified against FUB call logs)</div>`;
+    h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem">Speed to first call (verified against FUB call logs; measured since Sep 4 when call tracking went live)</div>`;
     h+=`<div style="display:flex;flex-wrap:wrap;gap:.2rem">`;
     h+=seg(sp.transfers,'transfers');
     h+=seg(Math.round((sp.within_1h||0)/sp.transfers*100)+'%','called within 1h');
@@ -2124,7 +2124,7 @@ function renderIsaInsight(ins){
   const agents=(ins.by_agent||[]);
   if(agents.length){
     h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1rem">`;
-    h+=`<div style="padding:.75rem 1.2rem;border-bottom:1px solid var(--border);font-weight:700;font-size:.82rem">Who honors the handoff (60 days)</div>`;
+    h+=`<div style="padding:.75rem 1.2rem;border-bottom:1px solid var(--border);font-weight:700;font-size:.82rem">Who honors the handoff (since Sep 4)</div>`;
     h+='<div class="tbl-wrap"><table><thead><tr><th>Agent</th><th>Handoffs</th><th>Called</th><th>Inside 4h</th><th>Median wait</th></tr></thead><tbody>';
     agents.forEach(a=>{
       const c=a.called_pct>=80?'var(--green)':a.called_pct>=50?'var(--gold)':'var(--red)';

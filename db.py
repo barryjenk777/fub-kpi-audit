@@ -8546,6 +8546,9 @@ def get_isa_insight_data(days=60, excluded=()):
                 out["weekly"] = [{"week": str(w), "transfers": int(n)}
                                  for w, n in cur.fetchall()]
 
+                # first_call_at is stamped by the FUB call webhook, wired
+                # 2026-09-04. Judging older transfers by it would falsely
+                # accuse agents, so speed math starts at that epoch.
                 cur.execute("""
                     SELECT COUNT(*),
                            COUNT(*) FILTER (WHERE first_call_at IS NOT NULL),
@@ -8557,6 +8560,7 @@ def get_isa_insight_data(days=60, excluded=()):
                                FILTER (WHERE first_call_at IS NOT NULL)
                     FROM isa_transfers
                     WHERE transfer_date >= NOW() - INTERVAL '%s days'
+                      AND transfer_date >= '2026-09-04'
                       AND agent_name IS NOT NULL AND agent_name NOT IN %%s
                 """ % days, (excl,))
                 tot, called, h1, h4, h24, med = cur.fetchone()
@@ -8576,6 +8580,7 @@ def get_isa_insight_data(days=60, excluded=()):
                                FILTER (WHERE first_call_at IS NOT NULL)
                     FROM isa_transfers
                     WHERE transfer_date >= NOW() - INTERVAL '%s days'
+                      AND transfer_date >= '2026-09-04'
                       AND agent_name IS NOT NULL AND agent_name NOT IN %%s
                     GROUP BY agent_name ORDER BY 2 DESC
                 """ % days, (excl,))
@@ -8591,6 +8596,7 @@ def get_isa_insight_data(days=60, excluded=()):
                            COUNT(*) FILTER (WHERE first_call_at IS NOT NULL)
                     FROM isa_transfers
                     WHERE transfer_date >= NOW() - INTERVAL '%s days'
+                      AND transfer_date >= '2026-09-04'
                       AND agent_name IS NOT NULL AND agent_name NOT IN %%s
                     GROUP BY 1 ORDER BY 2 DESC
                 """ % days, (excl,))
@@ -8606,6 +8612,7 @@ def get_isa_insight_data(days=60, excluded=()):
                                 AND first_call_at - transfer_date <= INTERVAL '4 hours') AS fast
                         FROM isa_transfers
                         WHERE transfer_date >= NOW() - INTERVAL '%s days'
+                          AND transfer_date >= '2026-09-04'
                           AND agent_name IS NOT NULL AND agent_name NOT IN %%s
                           AND person_id ~ '^[0-9]+$'
                     )
