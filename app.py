@@ -2552,12 +2552,12 @@ def _isa_insight():
         called_pct = round(sp.get("called", 0) / tot * 100)
         h4_pct = round(sp.get("within_4h", 0) / tot * 100)
         if called_pct >= 85:
-            W("%d%% of the last 60 days' transfers got a verified agent call. "
+            W("%d%% of transfers since Sep 4 got a verified agent call. "
               "The handoff ladder is doing its job." % called_pct)
         elif called_pct <= 60:
-            N("Only %d%% of transfers in 60 days have a verified agent call. "
-              "You pay 25 to 40%% referral on every one of these; the "
-              "uncalled ones are donations." % called_pct)
+            N("Only %d%% of transfers since call tracking went live (Sep 4) "
+              "have a verified agent call. You pay 25 to 40%% referral on "
+              "every one of these; the uncalled ones are donations." % called_pct)
         if sp.get("median_hours") is not None and sp["median_hours"] > 8:
             N("Median time to the first call on a transfer is %.0f hours. "
               "These leads said yes to a human minutes before the handoff; "
@@ -2595,7 +2595,7 @@ def _isa_insight():
         never = tot - sp.get("called", 0)
         if never:
             Q({"q": "What did the uncalled transfers cost?",
-               "a": "%d transfers in 60 days never got a call. At a 25 to "
+               "a": "%d transfers since Sep 4 never got a call. At a 25 to "
                     "40%% referral split these were the most expensive leads "
                     "on the team, and the meter was already running when "
                     "Fhalen said goodbye. The hot sheet chases them, but the "
