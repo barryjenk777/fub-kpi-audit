@@ -8368,6 +8368,74 @@ def get_pond_insight_data(days=60):
                     "optout_per_100_prev": round(n_prev / s_prev * 100, 1) if s_prev else None,
                 }
 
+                # Blue Message Nurture (Project Blue iMessage): sends and
+                # reply yield by A/B variant (HeyGen video vs ElevenLabs
+                # voice vs plain text) and by campaign strategy. Replies are
+                # attributed to the latest Blue send before the reply.
+                try:
+                    cur.execute("""
+                        WITH bsends AS (
+                            SELECT person_id, sent_at,
+                                   COALESCE(ab_variant, 'none') AS variant,
+                                   COALESCE(strategy, '(unknown)') AS strategy
+                            FROM pond_sms_log
+                            WHERE NOT dry_run
+                              AND sent_at >= NOW() - INTERVAL '%s days'
+                        ),
+                        breplies AS (
+                            SELECT r.person_id, r.sentiment, r.received_at,
+                                   (SELECT s.variant FROM bsends s
+                                     WHERE s.person_id = r.person_id
+                                       AND s.sent_at <= r.received_at
+                                     ORDER BY s.sent_at DESC LIMIT 1) AS variant,
+                                   (SELECT s.strategy FROM bsends s
+                                     WHERE s.person_id = r.person_id
+                                       AND s.sent_at <= r.received_at
+                                     ORDER BY s.sent_at DESC LIMIT 1) AS strategy
+                            FROM pond_sms_reply_log r
+                            WHERE r.received_at >= NOW() - INTERVAL '%s days'
+                              AND r.person_id IS NOT NULL
+                        )
+                        SELECT 'variant' AS dim, s.variant AS k,
+                               COUNT(*) AS sends,
+                               COUNT(DISTINCT s.person_id) AS leads,
+                               COALESCE(r.replies, 0), COALESCE(r.positive, 0),
+                               COALESCE(r.optouts, 0)
+                        FROM bsends s
+                        LEFT JOIN (
+                            SELECT variant, COUNT(*) AS replies,
+                                   COUNT(*) FILTER (WHERE sentiment = 'positive') AS positive,
+                                   COUNT(*) FILTER (WHERE sentiment = 'negative') AS optouts
+                            FROM breplies WHERE variant IS NOT NULL GROUP BY variant
+                        ) r ON r.variant = s.variant
+                        GROUP BY s.variant, r.replies, r.positive, r.optouts
+                        UNION ALL
+                        SELECT 'strategy', s.strategy, COUNT(*),
+                               COUNT(DISTINCT s.person_id),
+                               COALESCE(r.replies, 0), COALESCE(r.positive, 0),
+                               COALESCE(r.optouts, 0)
+                        FROM bsends s
+                        LEFT JOIN (
+                            SELECT strategy, COUNT(*) AS replies,
+                                   COUNT(*) FILTER (WHERE sentiment = 'positive') AS positive,
+                                   COUNT(*) FILTER (WHERE sentiment = 'negative') AS optouts
+                            FROM breplies WHERE strategy IS NOT NULL GROUP BY strategy
+                        ) r ON r.strategy = s.strategy
+                        GROUP BY s.strategy, r.replies, r.positive, r.optouts
+                    """ % (days, days))
+                    blue = {"by_variant": [], "by_strategy": []}
+                    for dim, k, sends, leads, rep, pos, neg in cur.fetchall():
+                        row = {"key": k, "sends": int(sends), "leads": int(leads),
+                               "replies": int(rep), "positive": int(pos),
+                               "optouts": int(neg)}
+                        blue["by_variant" if dim == "variant" else "by_strategy"].append(row)
+                    blue["by_variant"].sort(key=lambda r: -r["sends"])
+                    blue["by_strategy"].sort(key=lambda r: -r["sends"])
+                    out["blue"] = blue
+                except Exception as e:
+                    logger.warning("blue nurture insight failed: %s", e)
+                    out["blue"] = {}
+
                 # Touch depth: how many sends the average lead has absorbed
                 cur.execute("""
                     SELECT COUNT(*), COUNT(DISTINCT person_id) FROM (
@@ -8383,4 +8451,176 @@ def get_pond_insight_data(days=60):
         return out
     except Exception as e:
         logger.warning("get_pond_insight_data failed: %s", e)
+        return out
+
+
+def get_goals_trend_data(excluded=()):
+    """Trend + Phoenix material for the Goals tab insight layer.
+
+    Returns weekly team dials/convos (last 8 full weeks), per-agent movement
+    (last 4 full weeks vs the 4 before), and 30-day Phoenix outcomes. All
+    Postgres; no live FUB.
+    """
+    if not is_available():
+        return {}
+    excl = tuple(excluded) or ("",)
+    out = {"weekly": [], "movers": [], "phoenix": {}}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT date_trunc('week', activity_date)::date AS wk,
+                           SUM(calls_logged), SUM(convos_logged)
+                    FROM daily_activity
+                    WHERE activity_date >= date_trunc('week', CURRENT_DATE) - INTERVAL '56 days'
+                      AND activity_date < date_trunc('week', CURRENT_DATE)
+                      AND agent_name NOT IN %s
+                    GROUP BY wk ORDER BY wk
+                """, (excl,))
+                out["weekly"] = [{"week": str(w), "calls": int(c or 0),
+                                  "convos": int(v or 0)} for w, c, v in cur.fetchall()]
+
+                cur.execute("""
+                    SELECT agent_name,
+                           SUM(calls_logged) FILTER (
+                               WHERE activity_date >= date_trunc('week', CURRENT_DATE) - INTERVAL '28 days') AS recent,
+                           SUM(calls_logged) FILTER (
+                               WHERE activity_date <  date_trunc('week', CURRENT_DATE) - INTERVAL '28 days') AS prior
+                    FROM daily_activity
+                    WHERE activity_date >= date_trunc('week', CURRENT_DATE) - INTERVAL '56 days'
+                      AND activity_date < date_trunc('week', CURRENT_DATE)
+                      AND agent_name NOT IN %s
+                    GROUP BY agent_name
+                """, (excl,))
+                for name, recent, prior in cur.fetchall():
+                    recent, prior = int(recent or 0), int(prior or 0)
+                    if prior >= 20 or recent >= 20:
+                        pct = round((recent - prior) / prior * 100) if prior else None
+                        out["movers"].append({"agent": name, "recent_4wk": recent,
+                                              "prior_4wk": prior, "pct": pct})
+
+                cur.execute("""
+                    SELECT assigned_to, COUNT(*) FROM phoenix_log
+                    WHERE status = 'assigned'
+                      AND created_at >= NOW() - INTERVAL '30 days'
+                      AND assigned_to IS NOT NULL
+                    GROUP BY assigned_to ORDER BY 2 DESC
+                """)
+                earned = [{"agent": a, "leads": int(n)} for a, n in cur.fetchall()]
+                cur.execute("""
+                    SELECT COUNT(*) FILTER (WHERE status = 'assigned'),
+                           COUNT(*) FILTER (WHERE status = 'owner_alerted'),
+                           COUNT(*) FILTER (WHERE status = 'pond_fallback')
+                    FROM phoenix_log
+                    WHERE created_at >= NOW() - INTERVAL '30 days'
+                """)
+                asn, alerted, fallback = cur.fetchone()
+                out["phoenix"] = {"earned_by": earned,
+                                  "assigned": int(asn or 0),
+                                  "owner_alerted": int(alerted or 0),
+                                  "pond_fallback": int(fallback or 0)}
+        return out
+    except Exception as e:
+        logger.warning("get_goals_trend_data failed: %s", e)
+        return out
+
+
+def get_isa_insight_data(days=60, excluded=()):
+    """Conclusions material for the ISA tab: transfer volume trend, how fast
+    agents work Fhalen's handoffs, per-agent worked rates, voice vs text
+    yield, and whether speed shows up in appointments. Postgres only."""
+    if not is_available():
+        return {}
+    excl = tuple(excluded) or ("",)
+    out = {"weekly": [], "speed": {}, "by_agent": [], "by_type": [],
+           "speed_to_appt": {}}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT date_trunc('week', transfer_date)::date, COUNT(*)
+                    FROM isa_transfers
+                    WHERE transfer_date >= date_trunc('week', NOW()) - INTERVAL '56 days'
+                    GROUP BY 1 ORDER BY 1
+                """)
+                out["weekly"] = [{"week": str(w), "transfers": int(n)}
+                                 for w, n in cur.fetchall()]
+
+                cur.execute("""
+                    SELECT COUNT(*),
+                           COUNT(*) FILTER (WHERE first_call_at IS NOT NULL),
+                           COUNT(*) FILTER (WHERE first_call_at - transfer_date <= INTERVAL '1 hour'),
+                           COUNT(*) FILTER (WHERE first_call_at - transfer_date <= INTERVAL '4 hours'),
+                           COUNT(*) FILTER (WHERE first_call_at - transfer_date <= INTERVAL '24 hours'),
+                           PERCENTILE_CONT(0.5) WITHIN GROUP (
+                               ORDER BY EXTRACT(EPOCH FROM first_call_at - transfer_date) / 3600)
+                               FILTER (WHERE first_call_at IS NOT NULL)
+                    FROM isa_transfers
+                    WHERE transfer_date >= NOW() - INTERVAL '%s days'
+                      AND agent_name IS NOT NULL AND agent_name NOT IN %%s
+                """ % days, (excl,))
+                tot, called, h1, h4, h24, med = cur.fetchone()
+                out["speed"] = {
+                    "transfers": int(tot or 0), "called": int(called or 0),
+                    "within_1h": int(h1 or 0), "within_4h": int(h4 or 0),
+                    "within_24h": int(h24 or 0),
+                    "median_hours": round(float(med), 1) if med is not None else None,
+                }
+
+                cur.execute("""
+                    SELECT agent_name, COUNT(*),
+                           COUNT(*) FILTER (WHERE first_call_at IS NOT NULL),
+                           COUNT(*) FILTER (WHERE first_call_at - transfer_date <= INTERVAL '4 hours'),
+                           PERCENTILE_CONT(0.5) WITHIN GROUP (
+                               ORDER BY EXTRACT(EPOCH FROM first_call_at - transfer_date) / 3600)
+                               FILTER (WHERE first_call_at IS NOT NULL)
+                    FROM isa_transfers
+                    WHERE transfer_date >= NOW() - INTERVAL '%s days'
+                      AND agent_name IS NOT NULL AND agent_name NOT IN %%s
+                    GROUP BY agent_name ORDER BY 2 DESC
+                """ % days, (excl,))
+                out["by_agent"] = [
+                    {"agent": a, "transfers": int(t), "called": int(c),
+                     "called_pct": round(c / t * 100) if t else 0,
+                     "fast_pct": round(f / t * 100) if t else 0,
+                     "median_hours": round(float(m), 1) if m is not None else None}
+                    for a, t, c, f, m in cur.fetchall()]
+
+                cur.execute("""
+                    SELECT COALESCE(transfer_type, 'unknown'), COUNT(*),
+                           COUNT(*) FILTER (WHERE first_call_at IS NOT NULL)
+                    FROM isa_transfers
+                    WHERE transfer_date >= NOW() - INTERVAL '%s days'
+                      AND agent_name IS NOT NULL AND agent_name NOT IN %%s
+                    GROUP BY 1 ORDER BY 2 DESC
+                """ % days, (excl,))
+                out["by_type"] = [{"type": t, "transfers": int(n),
+                                   "called": int(c)} for t, n, c in cur.fetchall()]
+
+                # Does speed matter: appointment rate for transfers called
+                # within 4h vs later/never. person_id is TEXT here, INT there.
+                cur.execute("""
+                    WITH t AS (
+                        SELECT person_id, transfer_date,
+                               (first_call_at IS NOT NULL
+                                AND first_call_at - transfer_date <= INTERVAL '4 hours') AS fast
+                        FROM isa_transfers
+                        WHERE transfer_date >= NOW() - INTERVAL '%s days'
+                          AND agent_name IS NOT NULL AND agent_name NOT IN %%s
+                          AND person_id ~ '^[0-9]+$'
+                    )
+                    SELECT fast, COUNT(*),
+                           COUNT(*) FILTER (WHERE EXISTS (
+                               SELECT 1 FROM appointments a
+                               WHERE a.person_id = t.person_id::int
+                                 AND COALESCE(a.fub_created_at, a.created_at) >= t.transfer_date
+                                 AND a.status NOT IN ('canceled')))
+                    FROM t GROUP BY fast
+                """ % days, (excl,))
+                for fast, n, appt in cur.fetchall():
+                    key = "fast" if fast else "slow"
+                    out["speed_to_appt"][key] = {"transfers": int(n), "appts": int(appt)}
+        return out
+    except Exception as e:
+        logger.warning("get_isa_insight_data failed: %s", e)
         return out

@@ -782,6 +782,8 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
         <button class="btn btn-sm lens-pill active" onclick="agentsLens('goals')">💵 Goals &amp; Money</button>
         <button class="btn btn-sm lens-pill" onclick="agentsLens('kpi')">📊 Weekly KPIs (transfer gate)</button>
       </div>
+      <div id="goals-insight"></div>
+
       <!-- ══ MONEY BOARD (v2): where each agent's next dollar is ══ -->
       <div style="margin-bottom:1.2rem">
         <div style="font-size:.95rem;font-weight:700">💵 Money Board</div>
@@ -804,21 +806,28 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
         <div class="stat-card"><div class="stat-label">Closings YTD</div><div class="stat-value" id="g-closings">—</div><div class="stat-sub">all agents</div></div>
       </div>
 
-      <!-- Agent cards -->
-      <div class="sec-hdr">
-        <div class="sec-title">📋 Agent Scorecard</div>
-        <div class="sec-actions">
-          <span style="font-size:.68rem;color:var(--muted)">Last synced: <span id="g-updated">checking…</span></span>
-          <button class="btn btn-ghost btn-sm" id="btn-force" onclick="forceRefreshGoals()">🔄 Force Refresh</button>
-          <button class="btn btn-ghost btn-sm" id="btn-sync-roster" onclick="syncAgentRoster()">👥 Sync Roster</button>
-          <button class="btn btn-ghost btn-sm" id="btn-tb-nudge" onclick="sendTimeBlockNudge()">⏰ Nudge: Set Time Block</button>
-          <button class="btn btn-ghost btn-sm" onclick="openLogClosing()">+ Log Closing</button>
-          <button class="btn btn-ghost btn-sm" onclick="toggleEmailPanel()">📧 Setup Emails</button>
+      <!-- Agent cards: folded away; the verdict above says who needs you -->
+      <div class="panel" id="scorecard-panel">
+        <div class="panel-hdr" onclick="this.parentElement.classList.toggle('open')">
+          <span class="panel-title">📋 Every agent's card (goal, pace, streak)</span>
+          <span class="panel-chevron">▼</span>
         </div>
-      </div>
-
-      <div class="card-grid" id="goals-cards">
-        <div class="loading-pane"><span class="spinner"></span> Loading scorecard…</div>
+        <div class="panel-body">
+          <div class="sec-hdr">
+            <div class="sec-title"></div>
+            <div class="sec-actions">
+              <span style="font-size:.68rem;color:var(--muted)">Last synced: <span id="g-updated">checking…</span></span>
+              <button class="btn btn-ghost btn-sm" id="btn-force" onclick="forceRefreshGoals()">🔄 Force Refresh</button>
+              <button class="btn btn-ghost btn-sm" id="btn-sync-roster" onclick="syncAgentRoster()">👥 Sync Roster</button>
+              <button class="btn btn-ghost btn-sm" id="btn-tb-nudge" onclick="sendTimeBlockNudge()">⏰ Nudge: Set Time Block</button>
+              <button class="btn btn-ghost btn-sm" onclick="openLogClosing()">+ Log Closing</button>
+              <button class="btn btn-ghost btn-sm" onclick="toggleEmailPanel()">📧 Setup Emails</button>
+            </div>
+          </div>
+          <div class="card-grid" id="goals-cards">
+            <div class="loading-pane"><span class="spinner"></span> Loading scorecard…</div>
+          </div>
+        </div>
       </div>
 
       <!-- Email setup panel -->
@@ -919,6 +928,7 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 
     <!-- ══════════════════════════════════════ ISA TAB -->
     <div class="tab-pane" id="tab-isa">
+      <div id="isa-insight"></div>
       <div id="isa-transfers-panel" style="margin-bottom:12px"></div>
       <div id="loading-isa" class="loading-pane"><span class="spinner"></span> Loading Fhalen's data… (takes ~30s first load)</div>
       <div id="dashboard-isa" style="display:none"></div>
@@ -1034,11 +1044,11 @@ function switchTab(name){
 
   const DESCS={
     pulse:'The big picture: is the team calling, talking, booking, and closing over the last 60 to 90 days. Green bullets are working; yellow need attention. Start here every visit.',
-    goals:'Each agent\'s income goal, what they are actually on pace for, the dollar gap, and the one thing to coach. Biggest gap on top.',
+    goals:'Goals and Phoenix, conclusions first: who is on pace, where the dollar gaps are, month over month trends, and the questions worth a 1-on-1. Individual agent cards are folded below.',
     kpi:'The weekly minimum standard (calls, conversations, compliance) that earns an agent transfer leads. Pass/fail, updated weekly.',
     appointments:'Every appointment plus where appointment money leaks: meetings nobody followed up after, upcoming ones at risk of no-show, and outcomes never logged.',
     meeting:'1-on-1 prep: pick an agent and get a data brief for the coaching conversation.',
-    isa:'Fhalen\'s live transfers: what she hands to agents and how fast they pick them up.',
+    isa:'Fhalen\'s handoffs, judged like an investment: volume trend, verified speed to first call, which agents honor the handoff, and whether speed is paying off in appointments.',
     outreach:'The AI that texts and emails dormant leads for you: what is working, what is not, and what agents do once a lead says yes. Green checks are wins; warnings need your voice.',
     manager:''};
   const dEl=document.getElementById('topbar-desc');
@@ -1143,6 +1153,7 @@ async function loadGoals(_attempt){
     if(d.error)throw new Error(d.error);
     _goalsData=d;
     renderGoalSummary(d.scorecard);
+    renderGoalsInsight(d.insight||{});
     renderGoalCards(d.scorecard);
     const cu=document.getElementById('g-updated');
     if(d.cache_updated){
@@ -1153,6 +1164,64 @@ async function loadGoals(_attempt){
     const msg=e.name==='TimeoutError'?'Request timed out — server may be warming up.':e.message;
     container.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not load scorecard</div><div class="alert-body">${msg}<br><button class="btn btn-ghost btn-sm" onclick="loadGoals()" style="margin-top:.5rem">↻ Retry</button></div></div></div>`;
   }
+}
+
+function renderGoalsInsight(ins){
+  const el=document.getElementById('goals-insight');
+  if(!el)return;
+  const esc=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let h='';
+  const bullet=(t,icon)=>`<div style="display:flex;gap:.55rem;align-items:flex-start;margin-bottom:.55rem"><span style="flex-shrink:0;margin-top:.05rem">${icon}</span><span style="font-size:.82rem;line-height:1.5">${esc(t)}</span></div>`;
+  const working=ins.working||[],notWorking=ins.not_working||[];
+  if(working.length||notWorking.length){
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.1rem 1.3rem;margin-bottom:1.2rem">`;
+    h+=`<div style="font-weight:800;font-size:.95rem;margin-bottom:.8rem">What the goal board is telling you</div>`;
+    working.forEach(t=>h+=bullet(t,'✅'));
+    notWorking.forEach(t=>h+=bullet(t,'⚠️'));
+    h+='</div>';
+  }
+  // 8-week team trend: dials + conversations, side by side
+  const wk=(ins.trend||{}).weekly||[];
+  if(wk.length>=4){
+    const maxC=Math.max(...wk.map(w=>w.calls),1);
+    h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:.7rem;margin-bottom:1.2rem">`;
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem">`;
+    h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.7rem">Team dials by week (last ${wk.length} full weeks)</div>`;
+    h+=`<div style="display:flex;align-items:flex-end;gap:4px;height:60px">`;
+    wk.forEach(w=>{
+      const hh=Math.max(Math.round(w.calls/maxC*54),w.calls>0?4:2);
+      const lbl=new Date(w.week+'T12:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric'});
+      h+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:2px" title="week of ${lbl}: ${w.calls} dials, ${w.convos} conversations">`;
+      h+=`<div style="width:100%;height:${hh}px;background:var(--gold);border-radius:2px 2px 0 0;opacity:.85"></div>`;
+      h+=`<div style="font-size:.52rem;color:var(--subtle)">${lbl}</div></div>`;
+    });
+    h+='</div></div>';
+    // Phoenix payout strip
+    const ph=ins.phoenix||{};
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:var(--r);padding:1rem 1.2rem">`;
+    h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.6rem">Phoenix bonus pool, last 30 days</div>`;
+    if((ph.earned_by||[]).length){
+      h+=`<div style="font-size:1.5rem;font-weight:800;margin-bottom:.3rem">${ph.assigned} lead${ph.assigned!==1?'s':''} paid out</div>`;
+      h+=`<div style="font-size:.76rem;color:var(--muted)">${ph.earned_by.map(e=>esc(e.agent)+' earned '+e.leads).join(' · ')}</div>`;
+    }else{
+      h+=`<div style="font-size:1.5rem;font-weight:800;color:var(--muted);margin-bottom:.3rem">0 paid out</div>`;
+      h+=`<div style="font-size:.76rem;color:var(--muted)">${(ph.owner_alerted||0)+(ph.pond_fallback||0)} resurrected leads found; nobody cleared the bar.</div>`;
+    }
+    h+=`<div style="font-size:.68rem;color:var(--subtle);margin-top:.55rem">Earned two ways: personal dial target 4 of 5 days AND weekly Dojo practice reps. Miss either, sit out the pool.</div>`;
+    h+='</div></div>';
+  }
+  const qs=ins.questions||[];
+  if(qs.length){
+    h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.7rem;margin-bottom:1.2rem">`;
+    qs.forEach(q=>{
+      h+=`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:var(--r);padding:.9rem 1rem">`;
+      h+=`<div style="font-weight:700;font-size:.8rem;margin-bottom:.4rem">${esc(q.q)}</div>`;
+      h+=`<div style="font-size:.76rem;line-height:1.55;color:var(--muted)">${esc(q.a)}</div>`;
+      h+='</div>';
+    });
+    h+='</div>';
+  }
+  el.innerHTML=h;
 }
 
 function renderGoalSummary(rows){
@@ -2018,10 +2087,65 @@ async function loadIsaTransfers(){
   try{
     const r=await fetch('/api/isa-transfers',{signal:AbortSignal.timeout(30000)});
     const d=await r.json();
+    renderIsaInsight(d.insight||{});
     panel.innerHTML=buildIsaTransfers(d);
   }catch(e){
     panel.innerHTML='';
   }
+}
+
+function renderIsaInsight(ins){
+  const el=document.getElementById('isa-insight');
+  if(!el)return;
+  const esc=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let h='';
+  const bullet=(t,icon)=>`<div style="display:flex;gap:.55rem;align-items:flex-start;margin-bottom:.55rem"><span style="flex-shrink:0;margin-top:.05rem">${icon}</span><span style="font-size:.82rem;line-height:1.5">${esc(t)}</span></div>`;
+  const working=ins.working||[],notWorking=ins.not_working||[];
+  if(working.length||notWorking.length){
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.1rem 1.3rem;margin-bottom:1rem">`;
+    h+=`<div style="font-weight:800;font-size:.95rem;margin-bottom:.8rem">What 60 days of transfers are telling you</div>`;
+    working.forEach(t=>h+=bullet(t,'✅'));
+    notWorking.forEach(t=>h+=bullet(t,'⚠️'));
+    h+='</div>';
+  }
+  const sp=ins.speed||{};
+  if(sp.transfers){
+    const seg=(n,label)=>`<div style="flex:1;min-width:110px;text-align:center;padding:.4rem"><div style="font-size:1.6rem;font-weight:800">${n}</div><div style="font-size:.68rem;color:var(--muted);margin-top:.15rem">${label}</div></div>`;
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem;margin-bottom:1rem">`;
+    h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem">Speed to first call, last 60 days (verified against FUB call logs)</div>`;
+    h+=`<div style="display:flex;flex-wrap:wrap;gap:.2rem">`;
+    h+=seg(sp.transfers,'transfers');
+    h+=seg(Math.round((sp.within_1h||0)/sp.transfers*100)+'%','called within 1h');
+    h+=seg(Math.round((sp.within_4h||0)/sp.transfers*100)+'%','within 4h');
+    h+=seg(Math.round((sp.called||0)/sp.transfers*100)+'%','ever called');
+    h+=seg(sp.median_hours!=null?sp.median_hours+'h':'—','median wait');
+    h+='</div></div>';
+  }
+  const agents=(ins.by_agent||[]);
+  if(agents.length){
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1rem">`;
+    h+=`<div style="padding:.75rem 1.2rem;border-bottom:1px solid var(--border);font-weight:700;font-size:.82rem">Who honors the handoff (60 days)</div>`;
+    h+='<div class="tbl-wrap"><table><thead><tr><th>Agent</th><th>Handoffs</th><th>Called</th><th>Inside 4h</th><th>Median wait</th></tr></thead><tbody>';
+    agents.forEach(a=>{
+      const c=a.called_pct>=80?'var(--green)':a.called_pct>=50?'var(--gold)':'var(--red)';
+      h+=`<tr><td style="font-weight:600">${esc(a.agent)}</td><td>${a.transfers}</td>`;
+      h+=`<td><span style="color:${c};font-weight:700">${a.called_pct}%</span></td>`;
+      h+=`<td>${a.fast_pct}%</td><td style="font-size:.75rem;color:var(--muted)">${a.median_hours!=null?a.median_hours+'h':'never called'}</td></tr>`;
+    });
+    h+='</tbody></table></div></div>';
+  }
+  const qs=ins.questions||[];
+  if(qs.length){
+    h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.7rem;margin-bottom:1rem">`;
+    qs.forEach(q=>{
+      h+=`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:var(--r);padding:.9rem 1rem">`;
+      h+=`<div style="font-weight:700;font-size:.8rem;margin-bottom:.4rem">${esc(q.q)}</div>`;
+      h+=`<div style="font-size:.76rem;line-height:1.55;color:var(--muted)">${esc(q.a)}</div>`;
+      h+='</div>';
+    });
+    h+='</div>';
+  }
+  el.innerHTML=h;
 }
 
 function buildIsaTransfers(d){
@@ -2579,6 +2703,37 @@ function buildOutreach(d){
   const oc=ins.outcomes||{};
   let h='';
 
+  // ── BLUE MESSAGE NURTURE: iMessage variants + campaign efficacy ───────
+  const blue=ins.blue||{};
+  const bv=blue.by_variant||[], bs=(blue.by_strategy||[]).filter(r=>r.sends>=5);
+  if(bv.length){
+    const VLABEL={video:'🎬 HeyGen video',voice:'🎙️ Voice memo',none:'💬 Plain text'};
+    h+=`<div style="background:linear-gradient(135deg,var(--surface),rgba(96,165,250,.06));border:1px solid var(--border);border-left:3px solid #60a5fa;border-radius:var(--r);padding:1.1rem 1.3rem;margin-bottom:1.2rem">`;
+    h+=`<div style="font-weight:800;font-size:.95rem;margin-bottom:.15rem">💙 Blue Message Nurture</div>`;
+    h+=`<div style="font-size:.72rem;color:var(--muted);margin-bottom:.9rem">iMessage nurture via Project Blue, last 60 days. Each lead's replies are credited to the last message style they received, so this is a real A/B read.</div>`;
+    h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.7rem">`;
+    bv.forEach(v=>{
+      const rr=v.reply_rate!=null?v.reply_rate:(v.sends?Math.round(v.replies/v.sends*1000)/10:0);
+      h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm,8px);padding:.8rem .9rem">`;
+      h+=`<div style="font-size:.68rem;font-weight:700;margin-bottom:.4rem">${VLABEL[v.key]||esc(v.key)}</div>`;
+      h+=`<div style="font-size:1.5rem;font-weight:800">${rr}%</div>`;
+      h+=`<div style="font-size:.62rem;color:var(--muted)">reply rate · ${v.sends} sends</div>`;
+      h+=`<div style="font-size:.66rem;margin-top:.35rem"><span style="color:var(--green)">${v.positive} interested</span> · <span style="color:${v.optouts>0?'var(--red)':'var(--muted)'}">${v.optouts} opt-outs</span></div>`;
+      h+='</div>';
+    });
+    h+='</div>';
+    if(bs.length){
+      h+=`<div style="margin-top:.9rem"><div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem">By campaign</div>`;
+      h+='<div class="tbl-wrap"><table><thead><tr><th>Campaign</th><th>Sends</th><th>Reply rate</th><th>Interested</th><th>Opt-outs</th></tr></thead><tbody>';
+      bs.forEach(r=>{
+        const rr=r.reply_rate!=null?r.reply_rate:0;
+        h+=`<tr><td style="font-weight:600;font-size:.76rem">${esc(r.key)}</td><td>${r.sends}</td><td><b>${rr}%</b></td><td style="color:var(--green)">${r.positive}</td><td style="color:${r.optouts>0?'var(--red)':'var(--muted)'}">${r.optouts}</td></tr>`;
+      });
+      h+='</tbody></table></div></div>';
+    }
+    h+='</div>';
+  }
+
   // ── THE VERDICT: what is working, what is not ─────────────────────────
   const bullet=(t,color,icon)=>`<div style="display:flex;gap:.55rem;align-items:flex-start;margin-bottom:.55rem"><span style="flex-shrink:0;margin-top:.05rem">${icon}</span><span style="font-size:.82rem;line-height:1.5;color:${color}">${esc(t)}</span></div>`;
   const working=ins.working||[], notWorking=ins.not_working||[];
@@ -3091,7 +3246,7 @@ function buildPulse(d){
   let paceHtml='';
   if(pc&&pc.projected){
     const ok=pc.target?pc.projected>=pc.target:true;
-    let sub=pc.ytd_closings+' closed so far this year.';
+    let sub=pc.ytd_closings+' closed since '+(pc.since?new Date(pc.since+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'tracking began')+(pc.early_read?' (early read, short window)':'')+'.';
     if(pc.target){
       sub+=' A '+pc.n_agents+' agent roster needs about '+pc.target+' closings a year to sustain itself. ';
       sub+=ok?'On track.':('That is '+(pc.target-pc.projected)+' short at this pace. The leaks below are where they come from.');

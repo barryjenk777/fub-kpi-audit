@@ -538,21 +538,32 @@ def _pace(cur):
     """Closings pace vs what the roster needs. YTD closings projected to a
     full year, against ~10 closings per active agent per year (the number a
     team this size must hit to sustain itself)."""
+    # Project from the window the data actually covers: deal_log started
+    # mid-year, so dividing by day-of-year would understate the pace badly.
     rows = _q(cur, """
-        SELECT COUNT(*) FILTER (WHERE close_date >= date_trunc('year', CURRENT_DATE)
-                                AND close_date <= CURRENT_DATE),
-               EXTRACT(doy FROM CURRENT_DATE)::int
-        FROM deal_log WHERE stage = 'closing'
+        SELECT COUNT(*),
+               MIN(close_date),
+               (CURRENT_DATE - GREATEST(MIN(close_date),
+                                        date_trunc('year', CURRENT_DATE)::date) + 1)
+        FROM deal_log
+        WHERE stage = 'closing'
+          AND close_date >= date_trunc('year', CURRENT_DATE)
+          AND close_date <= CURRENT_DATE
     """)
-    ytd, doy = (int(rows[0][0] or 0), int(rows[0][1] or 1)) if rows else (0, 1)
+    ytd, since, window_days = (rows[0] if rows else (0, None, None))
+    ytd = int(ytd or 0)
+    window_days = int(window_days or 1)
     try:
         n_agents = len(_db.get_agent_profiles(active_only=True) or [])
     except Exception:
         n_agents = 0
-    projected = round(ytd / max(doy, 1) * 365) if ytd else 0
+    projected = round(ytd / max(window_days, 1) * 365) if ytd else 0
     target = n_agents * 10 if n_agents else None
     return {"ytd_closings": ytd, "projected": projected,
-            "target": target, "n_agents": n_agents}
+            "target": target, "n_agents": n_agents,
+            "since": str(since) if since else None,
+            "window_days": window_days,
+            "early_read": bool(window_days < 90)}
 
 
 def build_pulse():

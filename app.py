@@ -2514,6 +2514,112 @@ def api_tag_followup():
         return jsonify({"error": str(e)}), 500
 
 
+def _isa_insight():
+    """Conclusions layer for the ISA tab. Deterministic, Postgres only.
+
+    Fhalen's transfers cost 25-40%% referral, so the questions that matter:
+    is her volume holding, do agents move on the handoffs, does speed pay,
+    and who should stop receiving them.
+    """
+    excluded = set(config.EXCLUDED_USERS) \
+        | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+    data = _db.get_isa_insight_data(days=60, excluded=excluded) or {}
+    ins = {"working": [], "not_working": [], "questions": [],
+           "weekly": data.get("weekly", []),
+           "speed": data.get("speed", {}),
+           "by_agent": data.get("by_agent", []),
+           "by_type": data.get("by_type", [])}
+    W, N = ins["working"].append, ins["not_working"].append
+    sp = ins["speed"]
+    tot = sp.get("transfers", 0)
+
+    # Volume trend
+    wk = ins["weekly"]
+    if len(wk) >= 6:
+        recent = sum(w["transfers"] for w in wk[-3:])
+        prior = sum(w["transfers"] for w in wk[-6:-3])
+        if prior and recent >= prior * 1.3:
+            W("Fhalen's transfer volume is up: %d in the last 3 weeks vs %d "
+              "the 3 before. The top of this funnel is healthy."
+              % (recent, prior))
+        elif prior and recent <= prior * 0.6:
+            N("Fhalen's transfers dropped to %d in the last 3 weeks from %d. "
+              "Before coaching agents on speed, find out what changed on her "
+              "side: lead flow, hours, or list quality." % (recent, prior))
+
+    # Worked rate + speed
+    if tot:
+        called_pct = round(sp.get("called", 0) / tot * 100)
+        h4_pct = round(sp.get("within_4h", 0) / tot * 100)
+        if called_pct >= 85:
+            W("%d%% of the last 60 days' transfers got a verified agent call. "
+              "The handoff ladder is doing its job." % called_pct)
+        elif called_pct <= 60:
+            N("Only %d%% of transfers in 60 days have a verified agent call. "
+              "You pay 25 to 40%% referral on every one of these; the "
+              "uncalled ones are donations." % called_pct)
+        if sp.get("median_hours") is not None and sp["median_hours"] > 8:
+            N("Median time to the first call on a transfer is %.0f hours. "
+              "These leads said yes to a human minutes before the handoff; "
+              "%d%% get a call inside 4 hours and that number is the one to "
+              "move." % (sp["median_hours"], h4_pct))
+        elif sp.get("median_hours") is not None and sp["median_hours"] <= 2:
+            W("Median speed to first call is %.1f hours. Speed like that is "
+              "a closing advantage most teams never build." % sp["median_hours"])
+
+    # Speed pays: appointment rate fast vs slow
+    sta = data.get("speed_to_appt", {})
+    fast, slow = sta.get("fast"), sta.get("slow")
+    if fast and slow and fast["transfers"] >= 8 and slow["transfers"] >= 8:
+        f_rate = round(fast["appts"] / fast["transfers"] * 100)
+        s_rate = round(slow["appts"] / slow["transfers"] * 100)
+        if f_rate > s_rate:
+            W("Proof speed pays: transfers called inside 4 hours book "
+              "appointments %d%% of the time vs %d%% when the call comes "
+              "later or never. Show the team this number, not a lecture."
+              % (f_rate, s_rate))
+
+    # Who should stop receiving transfers
+    agents = [a for a in ins["by_agent"] if a["transfers"] >= 3]
+    if agents:
+        worst = min(agents, key=lambda a: a["called_pct"])
+        best = max(agents, key=lambda a: a["called_pct"])
+        if worst["called_pct"] <= 50 and best["called_pct"] >= 80:
+            N("%s works %d%% of transfers; %s works %d%%. Same referral fee, "
+              "different return. Route the next hot handoffs accordingly and "
+              "say why out loud." % (best["agent"], best["called_pct"],
+                                     worst["agent"], worst["called_pct"]))
+
+    Q = ins["questions"].append
+    if tot:
+        never = tot - sp.get("called", 0)
+        if never:
+            Q({"q": "What did the uncalled transfers cost?",
+               "a": "%d transfers in 60 days never got a call. At a 25 to "
+                    "40%% referral split these were the most expensive leads "
+                    "on the team, and the meter was already running when "
+                    "Fhalen said goodbye. The hot sheet chases them, but the "
+                    "real fix is an agent who treats a transfer like a "
+                    "ringing phone." % never})
+    types = [t for t in ins["by_type"] if t["transfers"] >= 5 and t["type"] != "unknown"]
+    if len(types) >= 2:
+        parts = ", ".join("%s: %d%% worked (%d handoffs)"
+                          % (t["type"].replace("_", " "), 
+                             round(t["called"] / t["transfers"] * 100),
+                             t["transfers"]) for t in types)
+        Q({"q": "Do voice and text transfers deserve the same urgency?",
+           "a": parts + ". If one type consistently gets ignored, agents "
+                "have quietly decided it is lower quality. Either prove them "
+                "wrong with outcomes or tell Fhalen to change the mix."})
+    if len(wk) >= 4:
+        Q({"q": "Is Fhalen's pipeline predictable?",
+           "a": "Weekly handoffs over the last %d weeks: %s. A steady line "
+                "means you can staff and coach to it; a spiky one means the "
+                "constraint is upstream lead flow, not her effort."
+                % (len(wk), ", ".join(str(w["transfers"]) for w in wk))})
+    return ins
+
+
 @app.route("/api/isa-transfers")
 def api_isa_transfers():
     """ISA Transfer panel — query FUB directly by ISA_TRANSFER_FRESH tag, use DB for transfer dates."""
@@ -2533,7 +2639,12 @@ def api_isa_transfers():
         return jsonify({"error": str(e), "agents": [], "totals": {"total": 0, "stage_changed": 0, "unchanged": 0}})
 
     if not people:
-        return jsonify({"agents": [], "totals": {"total": 0, "stage_changed": 0, "unchanged": 0}})
+        try:
+            _empty_ins = _isa_insight()
+        except Exception:
+            _empty_ins = {}
+        return jsonify({"agents": [], "insight": _empty_ins,
+                        "totals": {"total": 0, "stage_changed": 0, "unchanged": 0}})
 
     FUB_BASE = "https://yourfriendlyagent.followupboss.com/2/people/view/{}"
     now_utc = _dt.datetime.now(_dt.timezone.utc)
@@ -2604,8 +2715,15 @@ def api_isa_transfers():
 
     total_changed   = sum(a["stage_changed"] for a in agents)
     total_unchanged = sum(a["unchanged"] for a in agents)
+    try:
+        _insight = _isa_insight()
+    except Exception as e:
+        logger.warning("isa insight failed: %s", e)
+        _insight = {}
+
     return jsonify({
         "agents": agents,
+        "insight": _insight,
         "totals": {
             "total":         len(enriched),
             "stage_changed": total_changed,
@@ -7090,6 +7208,157 @@ def api_agents_money():
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
 
+def _goals_insight(scorecard, excluded):
+    """Conclusions layer for the Goals tab. Deterministic, Postgres only.
+
+    Answers what a sales coach would actually ask of a goal board: where the
+    dollar gaps are and which lever closes them, who is trending up or down,
+    whether Phoenix is motivating anyone, and the questions the cards alone
+    never surface.
+    """
+    insight = {"working": [], "not_working": [], "questions": [],
+               "trend": {}, "phoenix": {}, "gaps": []}
+    trend = _db.get_goals_trend_data(excluded=excluded) or {}
+    insight["trend"] = {"weekly": trend.get("weekly", [])}
+    insight["phoenix"] = trend.get("phoenix", {})
+
+    with_goal = [r for r in scorecard
+                 if r.get("goal") and float(r["goal"].get("gci_goal") or 0) > 0]
+    no_goal = [r for r in scorecard if r not in with_goal]
+    green = [r for r in with_goal if r["pace"]["overall_status"] == "green"]
+    red = [r for r in with_goal if r["pace"]["overall_status"] == "red"]
+
+    # Dollar gaps: goal GCI x pace shortfall. The board sorted by money, not color.
+    year_frac = min(datetime.now().timetuple().tm_yday / 365.0, 1.0) or 0.01
+    for r in with_goal:
+        goal_gci = float(r["goal"].get("gci_goal") or 0)
+        gci_ytd = float(r["actuals"].get("gci_ytd") or 0)
+        expected = goal_gci * year_frac
+        gap = max(expected - gci_ytd, 0)
+        pace = r.get("pace") or {}
+        lever = None
+        conv = pace.get("convos") or {}
+        appt = pace.get("appointments") or {}
+        if conv.get("status") == "red":
+            lever = "conversations"
+        elif appt.get("status") == "red":
+            lever = "appointments"
+        elif (r["actuals"].get("appts_ytd") or 0) > 0 and \
+                (r["actuals"].get("closings_ytd") or 0) == 0:
+            lever = "conversion"
+        insight["gaps"].append({
+            "agent": r["agent_name"], "goal_gci": round(goal_gci),
+            "gci_ytd": round(gci_ytd), "gap": round(gap), "lever": lever,
+            "status": pace.get("overall_status"),
+        })
+    insight["gaps"].sort(key=lambda g: -g["gap"])
+    team_gap = sum(g["gap"] for g in insight["gaps"])
+
+    W, N = insight["working"].append, insight["not_working"].append
+    if green:
+        W("%d of %d agents with goals are on pace: %s. Protect whatever they "
+          "are doing; it is working."
+          % (len(green), len(with_goal),
+             ", ".join(r["agent_name"].split()[0] for r in green)))
+    if team_gap > 0:
+        top = insight["gaps"][0]
+        N("The team is $%s behind where the goals say it should be by now. "
+          "$%s of that gap is one person: %s. That is your first 1-on-1."
+          % (f"{round(team_gap):,}", f"{top['gap']:,}", top["agent"]))
+    if no_goal:
+        N("%s never set goals. You cannot coach a number that does not exist; "
+          "send the setup link this week."
+          % " and ".join(r["agent_name"] for r in no_goal))
+
+    # Trend bullets from weekly team dials
+    weekly = trend.get("weekly", [])
+    if len(weekly) >= 8:
+        recent = sum(w["calls"] for w in weekly[-4:])
+        prior = sum(w["calls"] for w in weekly[:4])
+        if prior:
+            pct = round((recent - prior) / prior * 100)
+            if pct <= -20:
+                N("Team dials are down %d%% over the last month (%s vs %s per "
+                  "4 weeks). Goals do not survive a quiet phone."
+                  % (abs(pct), f"{recent:,}", f"{prior:,}"))
+            elif pct >= 20:
+                W("Team dials are up %d%% over the last month (%s vs %s per "
+                  "4 weeks). The activity is there; watch it turn into "
+                  "appointments next." % (pct, f"{recent:,}", f"{prior:,}"))
+    movers = trend.get("movers", [])
+    slipping = sorted((m for m in movers if m["pct"] is not None and m["pct"] <= -35
+                       and m["agent"] not in excluded), key=lambda m: m["pct"])
+    surging = sorted((m for m in movers if m["pct"] is not None and m["pct"] >= 50
+                      and m["agent"] not in excluded), key=lambda m: -m["pct"])
+    if slipping:
+        m = slipping[0]
+        N("%s's dials fell %d%% month over month (%d down to %d). Slides like "
+          "this show up in closings 60 days later; catch it now."
+          % (m["agent"], abs(m["pct"]), m["prior_4wk"], m["recent_4wk"]))
+    if surging:
+        m = surging[0]
+        W("%s's dials are up %d%% month over month (%d to %d). Say it out "
+          "loud at the team meeting; effort that gets noticed repeats."
+          % (m["agent"], m["pct"], m["prior_4wk"], m["recent_4wk"]))
+
+    # Phoenix: is the incentive actually moving anyone?
+    ph = insight["phoenix"]
+    if ph.get("assigned"):
+        names = ", ".join("%s (%d)" % (e["agent"].split()[0], e["leads"])
+                          for e in ph.get("earned_by", [])[:4])
+        W("Phoenix paid out %d resurrected lead%s in 30 days: %s. The bonus "
+          "pool is doing its job; remind the rest it is earned two ways, "
+          "dials plus weekly Dojo reps."
+          % (ph["assigned"], "s" if ph["assigned"] != 1 else "", names))
+    elif ph.get("owner_alerted") or ph.get("pond_fallback"):
+        N("Phoenix found %d resurrected leads in 30 days and not one went to "
+          "an agent; nobody cleared the bar (personal dials plus weekly Dojo "
+          "reps). Free money is sitting in the pond."
+          % ((ph.get("owner_alerted") or 0) + (ph.get("pond_fallback") or 0)))
+
+    # ── Questions a coach should be asking ──────────────────────────────────
+    Q = insight["questions"].append
+    fiction = [g for g in insight["gaps"]
+               if g["goal_gci"] > 0 and g["gci_ytd"] < g["goal_gci"] * year_frac * 0.35
+               and year_frac > 0.4]
+    if fiction:
+        Q({"q": "Whose goal is fiction?",
+           "a": "%s %s pacing below 35%% of goal this deep into the year. A "
+                "goal nobody believes in coaches nobody. Reset it to a real "
+                "number in the next 1-on-1 and rebuild the weekly math from "
+                "there." % (", ".join(g["agent"].split()[0] for g in fiction[:3]),
+                            "is" if len(fiction) == 1 else "are")})
+    levers = [g for g in insight["gaps"] if g["lever"] and g["gap"] > 0][:3]
+    if levers:
+        Q({"q": "Which lever closes each gap?",
+           "a": "; ".join("%s needs %s" % (g["agent"].split()[0],
+                {"conversations": "more conversations, the dials are not "
+                                  "turning into talks",
+                 "appointments": "more asks, the talks are not turning into "
+                                 "appointments",
+                 "conversion": "help closing, appointments are happening but "
+                               "nothing signs"}[g["lever"]]) for g in levers)
+                + ". Three different problems; do not give them the same speech."})
+    if ph.get("earned_by"):
+        Q({"q": "Is Phoenix motivating the middle?",
+           "a": "The same names keep earning the pool. If the top earner is "
+                "also your top producer, the bonus rewards what already "
+                "happens. Watch whether a middle agent changes behavior to "
+                "reach it; that is the incentive actually working."})
+    if len(weekly) >= 4:
+        wk_convos = [w["convos"] for w in weekly[-4:]]
+        wk_calls = [w["calls"] for w in weekly[-4:]]
+        tot_c, tot_v = sum(wk_calls), sum(wk_convos)
+        if tot_c:
+            Q({"q": "Is the phone getting easier or just busier?",
+               "a": "Last 4 weeks the team turned %s dials into %s "
+                    "conversations (%.1f%%). If that rate is flat while dials "
+                    "rise, you have a scripts problem, not an effort problem; "
+                    "that is Dojo material, not a dial quota."
+                    % (f"{tot_c:,}", f"{tot_v:,}", tot_v / tot_c * 100)})
+    return insight
+
+
 @app.route("/api/goals/scorecard")
 def api_goals_scorecard():
     """
@@ -7113,7 +7382,14 @@ def api_goals_scorecard():
 
     all_goals      = _db.get_all_goals(year=year)
     deal_summaries = _db.get_deal_summary(year=year)
-    profiles       = {p["agent_name"]: p for p in _db.get_agent_profiles()}
+    # Active roster only, minus everyone pulled from accountability (Stanley,
+    # Julz, Bobby, the TM, test accounts). Departed agents keep their goals
+    # rows in the DB but no longer appear on the scorecard.
+    _excluded = set(config.EXCLUDED_USERS) \
+        | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+    profiles       = {p["agent_name"]: p
+                      for p in _db.get_agent_profiles(active_only=True)
+                      if p["agent_name"] not in _excluded}
     base_url       = os.environ.get("BASE_URL", "").rstrip("/")
 
     # Read from cache (populated by scheduled job or the force_refresh above)
@@ -7124,7 +7400,7 @@ def api_goals_scorecard():
     # This ensures every agent_profile is visible on the scorecard so Barry can
     # see who still needs to set goals.
     goals_map = {g["agent_name"]: g for g in all_goals}
-    all_agents = sorted(set(goals_map.keys()) | set(profiles.keys()))
+    all_agents = sorted(profiles.keys())
 
     _empty_pace = {
         "overall_status": "gray", "overall_pct": 0,
@@ -7185,9 +7461,16 @@ def api_goals_scorecard():
     # Attach streak data so manager cards can show 🔥 streak + last active
     all_streaks = _db.get_all_streaks()
 
+    try:
+        insight = _goals_insight(scorecard, _excluded)
+    except Exception as e:
+        logger.warning("goals insight failed: %s", e)
+        insight = {}
+
     return jsonify({
         "scorecard":     scorecard,
         "streaks":       all_streaks,
+        "insight":       insight,
         "year":          year,
         "week_num":      datetime.now().isocalendar()[1],
         "cache_updated": cache_updated,
@@ -13592,6 +13875,33 @@ def _pond_outreach_insight(base, enriched):
         elif median_lag >= 24:
             N("Median time from an AI-earned yes to the first agent call is "
               "%.0f hours. Warm goes cold in one." % median_lag)
+
+    # ── Blue Message Nurture: video vs voice vs plain, campaign efficacy ───
+    blue = deep.get("blue") or {}
+    for r in (blue.get("by_variant") or []) + (blue.get("by_strategy") or []):
+        r["reply_rate"] = round(r["replies"] / r["sends"] * 100, 1) if r["sends"] else 0
+    insight["blue"] = blue
+    variants = {r["key"]: r for r in blue.get("by_variant", [])}
+    vid, voice, plain = variants.get("video"), variants.get("voice"), variants.get("none")
+    comparables = [v for v in (vid, voice, plain) if v and v["sends"] >= 10]
+    if len(comparables) >= 2:
+        best_v = max(comparables, key=lambda v: v["reply_rate"])
+        worst_v = min(comparables, key=lambda v: v["reply_rate"])
+        label = {"video": "HeyGen video", "voice": "voice memo",
+                 "none": "plain text"}
+        if best_v["reply_rate"] >= worst_v["reply_rate"] * 1.5 and best_v["replies"] >= 3:
+            W("Blue Messages with a %s outperform %s: %s%% reply rate vs "
+              "%s%%. The production cost is buying real attention."
+              % (label.get(best_v["key"], best_v["key"]),
+                 label.get(worst_v["key"], worst_v["key"]),
+                 best_v["reply_rate"], worst_v["reply_rate"]))
+        elif vid and plain and vid["sends"] >= 10 and \
+                vid["reply_rate"] <= plain["reply_rate"]:
+            N("HeyGen videos are not beating plain text on Blue Messages "
+              "(%s%% vs %s%% reply rate). Every render costs budget and cap "
+              "space; make the video earn its slot or save it for "
+              "post-consent leads only."
+              % (vid["reply_rate"], plain["reply_rate"]))
 
     burn = deep.get("burn") or {}
     b_now, b_prev = burn.get("optout_per_100"), burn.get("optout_per_100_prev")
