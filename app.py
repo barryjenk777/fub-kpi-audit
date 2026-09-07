@@ -15026,6 +15026,20 @@ def scheduled_send_hype_email():
         return
     print(f"[SCHEDULER] Sending hype email at {datetime.now(timezone.utc).strftime('%H:%M UTC')}")
     try:
+        # The decision MUST score the week fresh at 9pm. The cache tier can
+        # serve a build up to 24h old (Sep 6 incident: Saturday's audit,
+        # window Aug 24-30, cost Salma her earned spot), and _kpi_window's
+        # every-Sunday-call-counts promise only holds if FUB is actually
+        # read at decision time.
+        try:
+            fresh = run_audit_data()
+            fresh["cached_at"] = datetime.now(timezone.utc).isoformat()
+            cache_set("audit", fresh)
+            print("[SCHEDULER] Hype email: fresh audit built for the decision "
+                  f"(window {fresh.get('period', {}).get('start')} - "
+                  f"{fresh.get('period', {}).get('end')})")
+        except Exception as _fe:
+            print(f"[SCHEDULER] Hype email: fresh audit FAILED, falling back to cache: {_fe}")
         counts = _count_weekly_transfers()
         with app.test_client() as tc:
             resp = tc.post(f"/api/send-hype-email?key={_internal_key()}", json={
