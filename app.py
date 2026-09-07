@@ -7946,6 +7946,85 @@ def api_set_agent_start_date():
     return jsonify({"ok": ok})
 
 
+def _agent_meeting_intel(agent_name):
+    """Everything the coaching machine knows about one agent, from Postgres
+    only, for the 1-on-1 brief: call tape grades, practice reps, hot sheet
+    follow-through, ISA handoff honor, appointment leaks, Phoenix status,
+    AI-nurture converts. Every section fails soft."""
+    from datetime import date as _date, timedelta as _td
+    intel = {}
+    excluded = set(config.EXCLUDED_USERS) \
+        | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+
+    try:  # Maverick real-call tape (nightly harvest)
+        mav = (_db.get_latest_maverick_stats() or {}).get(agent_name)
+        team = (_db.get_latest_maverick_stats() or {}).get("Team Average")
+        if mav:
+            intel["tape"] = {k: mav.get(k) for k in
+                             ("calls_graded", "avg_grade", "appt_ask",
+                              "objection", "question_fill", "talk_time")}
+            if team:
+                intel["tape"]["team_avg_grade"] = team.get("avg_grade")
+                intel["tape"]["team_appt_ask"] = team.get("appt_ask")
+    except Exception as e:
+        logger.warning("intel tape failed: %s", e)
+
+    try:  # Dojo: this week's prescription + whether reps got done
+        monday = _date.today() - _td(days=_date.today().weekday())
+        rx = next((r for r in (_db.get_dojo_prescriptions(monday) or [])
+                   if r["agent_name"] == agent_name), None)
+        if rx:
+            intel["dojo"] = {"focus": rx["focus"], "scenario": rx["scenario_label"],
+                             "reps_required": rx["reps_required"],
+                             "met_this_week": _db.get_dojo_met_for_week(agent_name, monday)}
+    except Exception as e:
+        logger.warning("intel dojo failed: %s", e)
+
+    try:  # Hot sheet follow-through (verified against FUB calls)
+        row = next((r for r in (_db.hotsheet_scoreboard(days=14) or [])
+                    if r["agent"] == agent_name), None)
+        if row and row["checked"]:
+            intel["hotsheet"] = {"called": row["called"], "checked": row["checked"],
+                                 "worked_pct": round(row["called"] / row["checked"] * 100)}
+    except Exception as e:
+        logger.warning("intel hotsheet failed: %s", e)
+
+    try:  # ISA handoff honor (since call tracking epoch)
+        isa = _db.get_isa_insight_data(days=60, excluded=excluded) or {}
+        row = next((a for a in isa.get("by_agent", [])
+                    if a["agent"] == agent_name), None)
+        if row:
+            intel["isa"] = row
+    except Exception as e:
+        logger.warning("intel isa failed: %s", e)
+
+    try:  # Appointment leaks (nightly appt_insight cache)
+        import appt_insight as _ai
+        cached = _ai.get_cached() or {}
+        row = next((a for a in (cached.get("by_agent") or [])
+                    if a.get("agent") == agent_name), None)
+        if row:
+            intel["appointments"] = row
+        ghosted = [g for g in (cached.get("ghosted_after_held") or [])
+                   if g.get("agent") == agent_name]
+        if ghosted:
+            intel["ghosted"] = [{"lead": g.get("lead"),
+                                 "days": g.get("held_days_ago")}
+                                for g in ghosted[:3]]
+    except Exception as e:
+        logger.warning("intel appts failed: %s", e)
+
+    try:  # Phoenix: earned anything lately?
+        trend = _db.get_goals_trend_data(excluded=excluded) or {}
+        earned = next((e for e in (trend.get("phoenix", {}).get("earned_by") or [])
+                       if e["agent"] == agent_name), None)
+        intel["phoenix_earned_30d"] = earned["leads"] if earned else 0
+    except Exception as e:
+        logger.warning("intel phoenix failed: %s", e)
+
+    return intel
+
+
 @app.route("/api/goals/meeting-brief/<path:agent_name>")
 def api_meeting_brief(agent_name):
     """
@@ -7997,6 +8076,7 @@ def api_meeting_brief(agent_name):
         }
         pace    = _db.compute_pace(goal, targets, actuals, start_date=start_date) if goal else {}
         act_ctx = _db.get_agent_activity_context(agent_name)
+        intel   = _agent_meeting_intel(agent_name)
 
         # ── Team rank for each funnel metric ──────────────────────────────
         # Build a merged YTD snapshot: start with ytd_cache, then fill any
@@ -8053,6 +8133,58 @@ def api_meeting_brief(agent_name):
         who_ben   = why.get("who_benefits", "") if why else ""
         what_hap  = why.get("what_happens", "") if why else ""
 
+        def _fmt_intel(intel):
+            lines = []
+            t = intel.get("tape")
+            if t and t.get("calls_graded"):
+                lines.append(
+                    "Real call tape (Maverick, latest): %s calls graded, avg grade %s"
+                    " (team avg %s), asks for the appointment on %s%% of calls"
+                    " (team %s%%), objection handling %s." % (
+                        t.get("calls_graded"), t.get("avg_grade"),
+                        t.get("team_avg_grade"), t.get("appt_ask"),
+                        t.get("team_appt_ask"), t.get("objection")))
+            dj = intel.get("dojo")
+            if dj:
+                met = dj.get("met_this_week")
+                lines.append(
+                    "Dojo this week: prescribed %s reps on '%s' (%s). Reps done: %s." % (
+                        dj.get("reps_required"), dj.get("focus"), dj.get("scenario"),
+                        "yes, met" if met else ("not yet" if met is False else "unknown")))
+            hs = intel.get("hotsheet")
+            if hs:
+                lines.append(
+                    "Morning hot sheet, last 14 days: called %s of %s named picks"
+                    " (%s%%). These were hand-picked leads with reasons attached." % (
+                        hs["called"], hs["checked"], hs["worked_pct"]))
+            isa = intel.get("isa")
+            if isa:
+                lines.append(
+                    "Fhalen's live transfers (since Sep 4): received %s, called %s%%"
+                    " of them%s. These cost 25-40%% referral." % (
+                        isa.get("transfers"), isa.get("called_pct"),
+                        ", median %sh to first call" % isa["median_hours"]
+                        if isa.get("median_hours") is not None else ""))
+            ap = intel.get("appointments")
+            if ap:
+                lines.append(
+                    "Appointments last 60 days: %s set, %s held (%s%% held rate),"
+                    " %s with no logged outcome." % (
+                        ap.get("set"), ap.get("held"), ap.get("held_rate"),
+                        ap.get("no_outcome")))
+            gh = intel.get("ghosted")
+            if gh:
+                lines.append(
+                    "Ghosted after a held appointment (FUB-verified, no touch since): %s." %
+                    "; ".join("%s (%s days silent)" % (g["lead"], g["days"]) for g in gh))
+            px = intel.get("phoenix_earned_30d")
+            if px:
+                lines.append("Phoenix bonus leads earned in 30 days: %s. The dials-plus-reps bar is working for them." % px)
+            elif px == 0:
+                lines.append("Phoenix bonus leads earned in 30 days: 0. They have not cleared the dials-plus-Dojo-reps bar.")
+            return "\n".join("- " + l for l in lines) or "- (no machine data yet for this agent)"
+        _intel_block = _fmt_intel(intel)
+
         prompt = f"""You are helping Barry Jenkins prepare for a 1-on-1 coaching meeting with one of his agents.
 
 Barry Jenkins background:
@@ -8102,46 +8234,47 @@ Agent's "Why" (Cheplak identity framework):
 - Who benefits: {who_ben or "(not set)"}
 - What happens for them: {what_hap or "(not set)"}
 
-━━━━ GENERATE THE 1-ON-1 MEETING BRIEF ━━━━
+━━━━ THE COACHING MACHINE'S FILE ON {first_name} (new data, use it) ━━━━
+{_intel_block}
 
-Return a JSON object with exactly these 6 keys. Write Barry's voice throughout:
+━━━━ INTERNET LEAD DOCTRINE (ground every play in this) ━━━━
+{first_name} works PPC (Google) and Facebook leads. The realities:
+- These leads convert at 1-3%, over 6-24 months. The agent who wins is the one still there at month 7, not the one who called hardest in week 1.
+- Speed to lead still rules the first 24 hours: answer in 5 minutes or the odds fall off a cliff. After that, the game flips to patient nurture.
+- Facebook leads gave 10 seconds of attention to an ad; they are curious, not committed. Treat them like open-house sign-ins, not referrals. Value first: home values, neighborhood data, "what sold near you."
+- PPC leads searched on purpose; higher intent, faster decay. Saved searches and listing alerts keep them; a browsing-activity spike is the moment to call.
+- Nurture that works: video texts with a face, market updates tied to THEIR search, calling right after site activity. Nurture that fails: "just checking in."
+- The database is the retirement account: every lead marked dead that buys in 14 months with someone else was a commission donated.
+
+━━━━ GENERATE THE 1-ON-1 BRIEF ━━━━
+
+Barry is busy and has decision fatigue. SHORT beats complete. Return JSON with exactly these keys:
 
 {{
-  "situation": "2-3 sentences. Where {first_name} stands right now. Specific numbers, honest read, no spin. What the overall pace says and what the trend in the funnel suggests.",
+  "tldr": "Two sentences max. Sentence one: the honest read on where {first_name} is. Sentence two: the single move that matters this week. This is the whole meeting if Barry reads nothing else.",
 
-  "bottleneck": "1-2 sentences. The single most important thing to address — not a general observation. Identify exactly where {first_name}'s funnel breaks down and what it's costing them in concrete terms (missed appointments, missed GCI, etc).",
+  "open_with_this": {{
+    "stat": "One specific, surprising number about {first_name} from the data above (tape grade vs team, ghosted appointment, handoff speed, a trend). Pick the one they probably do not know about themselves.",
+    "why_it_lands": "One sentence on why opening with this number changes the conversation."
+  }},
 
-  "talking_points": [
-    {{
-      "topic": "3-5 word label",
-      "what_to_say": "2-3 sentences Barry says out loud. Conversational, specific to {first_name}'s numbers, teaching not pushing. Opens with a real observation or relatable situation before the lesson.",
-      "question": "The coaching question Barry asks. Open-ended. Leads {first_name} to see the answer themselves — not yes/no."
-    }},
-    {{
-      "topic": "3-5 word label",
-      "what_to_say": "...",
-      "question": "..."
-    }},
-    {{
-      "topic": "Identity — Atomic Habits",
-      "what_to_say": "The identity reframe. 'You're the kind of agent who...' — tie to who {first_name} is becoming, not just what they need to do differently. Include one tiny, specific habit change that makes the right behavior obvious and easy.",
-      "question": "A question about self-image and identity — not behavior."
-    }}
+  "questions": [
+    "3 open-ended coaching questions, each anchored to a SPECIFIC data point from above. Questions that make {first_name} discover the answer, not defend themselves. No yes/no questions.",
+    "...",
+    "..."
   ],
 
-  "why_connection": "2-3 sentences. Connect {first_name}'s current performance gap to their why. Practical, not preachy. If the why is blank, write about how finding that reason is the first step — and what Barry should ask to surface it.",
+  "nurture_play": "One concrete play for {first_name}'s weakest conversion point, grounded in the internet lead doctrine above and their actual numbers. Name the behavior, the trigger, and the script beat. 2-3 sentences.",
 
-  "team_comparison": "2-3 sentences. {first_name}'s position on the team, framed as a gap to close — not a ranking to shame. Make it motivating. What does closing that gap look like in concrete weekly actions?",
-
-  "commitment": "The single specific commitment {first_name} makes before leaving this meeting. One number, one behavior, one date. Concrete enough that Barry texts them about it next week."
+  "commitment": "The one commitment {first_name} makes before leaving. One number, one behavior, one date. Concrete enough that Barry texts them about it next week."
 }}
 
-Write in Barry's voice. Contractions. Short sentences. No 'feel free to', 'I'd love to', 'don't hesitate'. No bullet points inside the text. Just Barry talking."""
+Write in Barry's voice. Contractions. Short sentences. Teaching, never shaming. No dashes of any kind in the copy; use periods and commas. Total output should read in under 90 seconds."""
 
         ai_client = _anthropic.Anthropic()
         msg = ai_client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1800,
+            model="claude-sonnet-5",
+            max_tokens=1200,
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -8178,6 +8311,7 @@ Write in Barry's voice. Contractions. Short sentences. No 'feel free to', 'I'd l
                     "goal":        goal,
                     "targets":     targets,
                     "act_ctx":     act_ctx,
+                    "intel":       intel,
                 },
             )
         except Exception as _save_err:
@@ -8197,6 +8331,7 @@ Write in Barry's voice. Contractions. Short sentences. No 'feel free to', 'I'd l
             "streak":       streak,
             "brief":        brief,
             "act_ctx":      act_ctx,
+            "intel":        intel,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "ytd_source":   _ytd_source,
         })

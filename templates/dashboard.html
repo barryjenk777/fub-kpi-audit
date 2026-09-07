@@ -1047,7 +1047,7 @@ function switchTab(name){
     goals:'Goals and Phoenix, conclusions first: who is on pace, where the dollar gaps are, month over month trends, and the questions worth a 1-on-1. Individual agent cards are folded below.',
     kpi:'The weekly minimum standard (calls, conversations, compliance) that earns an agent transfer leads. Pass/fail, updated weekly.',
     appointments:'Every appointment plus where appointment money leaks: meetings nobody followed up after, upcoming ones at risk of no-show, and outcomes never logged.',
-    meeting:'1-on-1 prep: pick an agent and get a data brief for the coaching conversation.',
+    meeting:'Pick an agent, get the 90-second brief: a TLDR, one number to open with, three questions to ask, the nurture play for their internet leads, and the commitment to walk out with.',
     isa:'Fhalen\'s handoffs, judged like an investment: volume trend, verified speed to first call, which agents honor the handoff, and whether speed is paying off in appointments.',
     outreach:'The AI that texts and emails dormant leads for you: what is working, what is not, and what agents do once a lead says yes. Green checks are wins; warnings need your voice.',
     manager:''};
@@ -2417,6 +2417,47 @@ function buildMeetingBrief(d){
     </div>
   </div>`;
 
+  // ── TLDR first (new-shape briefs): the whole meeting in two sentences ──
+  if(b.tldr){
+    h+=`<div class="brief-section" style="border-left:3px solid var(--gold);background:linear-gradient(135deg,var(--surface),rgba(245,166,35,.05))">
+      <div class="brief-section-label">⚡ TLDR</div>
+      <div class="brief-body" style="font-size:.95rem;font-weight:600;line-height:1.6">${b.tldr}</div>
+    </div>`;
+  }
+  if(b.open_with_this&&b.open_with_this.stat){
+    h+=`<div class="brief-section">
+      <div class="brief-section-label">🎬 Open with this number</div>
+      <div class="brief-body" style="font-weight:600">${b.open_with_this.stat}</div>
+      ${b.open_with_this.why_it_lands?`<div class="brief-body" style="font-size:.78rem;color:var(--muted);margin-top:.35rem">${b.open_with_this.why_it_lands}</div>`:''}
+    </div>`;
+  }
+  if(b.questions&&b.questions.length){
+    h+=`<div class="brief-section">
+      <div class="brief-section-label">❓ Ask these</div>`;
+    b.questions.forEach((q,i)=>{
+      h+=`<div style="display:flex;gap:.6rem;align-items:flex-start;margin-bottom:.6rem">
+        <span style="font-weight:800;color:var(--gold);flex-shrink:0">${i+1}.</span>
+        <span class="brief-body" style="font-style:italic">"${q}"</span>
+      </div>`;
+    });
+    h+=`</div>`;
+  }
+  if(b.nurture_play){
+    h+=`<div class="brief-section">
+      <div class="brief-section-label">🌱 The nurture play (PPC / Facebook leads)</div>
+      <div class="brief-body">${b.nurture_play}</div>
+    </div>`;
+  }
+  if(b.tldr&&b.commitment){
+    h+=`<div class="brief-section brief-bottleneck">
+      <div class="brief-section-label">🤝 The commitment</div>
+      <div class="brief-body" style="font-weight:600">${b.commitment}</div>
+    </div>`;
+  }
+
+  // ── The numbers, folded: TLDR readers never scroll past a wall of stats ──
+  h+=`<details style="margin:.4rem 0 .8rem"><summary style="cursor:pointer;font-size:.78rem;font-weight:700;color:var(--muted);padding:.4rem 0">📊 The numbers behind it (funnel, activity, trend)</summary>`;
+
   // ── Funnel stats grid ──────────────────────────────────────────────────────
   h+=`<div class="brief-stats-grid">`;
   [['Conversations',fp['Conversations']||0,a.convos_ytd||0],
@@ -2520,8 +2561,9 @@ function buildMeetingBrief(d){
     }
     h+=`</div>`;// close brief-section
   }
+  h+=`</details>`;// close the folded numbers
 
-  // ── Situation ──────────────────────────────────────────────────────────────
+  // ── Situation (legacy archived briefs only) ────────────────────────────────
   if(b.situation) h+=`<div class="brief-section">
     <div class="brief-section-label">📋 The Situation</div>
     <div class="brief-body">${b.situation}</div>
@@ -2573,7 +2615,7 @@ function buildMeetingBrief(d){
   }
 
   // ── Commitment ─────────────────────────────────────────────────────────────
-  if(b.commitment) h+=`<div class="brief-section brief-commit">
+  if(b.commitment&&!b.tldr) h+=`<div class="brief-section brief-commit">
     <div class="brief-section-label">✅ Leave With One Commitment</div>
     <div class="brief-body">${b.commitment}</div>
   </div>`;
