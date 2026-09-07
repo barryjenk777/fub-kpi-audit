@@ -124,7 +124,11 @@ def _auth_role():
     ?key= URLs keep working and then stop needing the key.
     """
     owner_key = (os.environ.get("PERPLEXITY_API_KEY") or "").strip()
-    coach_key = (os.environ.get("COACH_ACCESS_KEY") or "coach-2026").strip()
+    # No default: coach access exists only while COACH_ACCESS_KEY is set in
+    # Railway. Clearing it is the kill switch, and it must also log out
+    # existing coach SESSIONS (cookies live 30 days), so the session check
+    # below re-verifies the key is still configured on every request.
+    coach_key = (os.environ.get("COACH_ACCESS_KEY") or "").strip()
     provided = (
         request.args.get("key", "").strip()
         or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
@@ -151,6 +155,8 @@ def _auth_role():
         role = session.get("role")
     except Exception:
         role = None
+    if role == "coach" and not coach_key:
+        return None  # kill switch pulled: coach sessions are dead too
     return role if role in ("owner", "coach") else None
 
 
@@ -173,7 +179,8 @@ def _global_auth_gate():
     Global opt-OUT auth gate. Runs on every request after the logger.
     Public paths (webhooks, token pages, lead-facing links) pass through;
     everything else needs the owner key, coach key, or a session cookie.
-    Coach access is read-only: any non-GET with a coach role gets 403.
+    Coach (Danny) has full app access per Barry, Sep 2026; the kill switch
+    is clearing COACH_ACCESS_KEY in Railway (see _auth_role).
     """
     if _is_public_path(request.path, request.method):
         return None
@@ -182,8 +189,6 @@ def _global_auth_gate():
         if request.path.startswith("/api/"):
             return jsonify({"error": "Unauthorized"}), 401
         return redirect("/login")
-    if role == "coach" and request.method not in ("GET", "HEAD", "OPTIONS"):
-        return jsonify({"error": "read-only access"}), 403
     return None
 
 
@@ -245,7 +250,7 @@ def login_page():
     if request.method == "POST":
         pw = (request.form.get("password") or "").strip()
         owner_key = (os.environ.get("PERPLEXITY_API_KEY") or "").strip()
-        coach_key = (os.environ.get("COACH_ACCESS_KEY") or "coach-2026").strip()
+        coach_key = (os.environ.get("COACH_ACCESS_KEY") or "").strip()
         if owner_key and pw == owner_key:
             session.permanent = True
             session["role"] = "owner"
@@ -9273,7 +9278,10 @@ def _internal_key() -> str:
 
 
 def _perplexity_auth() -> bool:
-    """Owner-level auth: the correct owner key, or a logged-in owner session."""
+    """App-level auth: the owner key, or any logged-in role. Coach (Danny)
+    has full access per Barry, Sep 2026; shutting him out is done by
+    clearing COACH_ACCESS_KEY in Railway, which _auth_role enforces on
+    every request, sessions included."""
     expected = os.environ.get("PERPLEXITY_API_KEY", "").strip()
     if not expected:
         logger.error("PERPLEXITY_API_KEY not set — refusing access (fail closed). Set it in Railway.")
@@ -9285,10 +9293,7 @@ def _perplexity_auth() -> bool:
     )
     if provided == expected:
         return True
-    try:
-        return session.get("role") == "owner"
-    except Exception:
-        return False
+    return _auth_role() in ("owner", "coach")
 
 
 def _read_auth() -> bool:
