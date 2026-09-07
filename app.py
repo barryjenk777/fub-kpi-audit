@@ -8278,7 +8278,8 @@ Write in Barry's voice. Contractions. Short sentences. Teaching, never shaming. 
             messages=[{"role": "user", "content": prompt}],
         )
 
-        raw = msg.content[0].text.strip()
+        raw = next((blk.text for blk in msg.content
+                    if getattr(blk, "type", "") == "text"), "").strip()
         if raw.startswith("```"):
             parts = raw.split("```")
             raw = parts[1] if len(parts) > 1 else raw
@@ -11522,7 +11523,9 @@ def api_ask_claude():
             system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
         )
-        answer = msg.content[0].text if msg.content else "No response generated."
+        answer = next((blk.text for blk in (msg.content or [])
+                       if getattr(blk, "type", "") == "text"),
+                      "No response generated.")
         return jsonify({"answer": answer})
     except Exception as e:
         logger.error("ask-claude error: %s", e)
