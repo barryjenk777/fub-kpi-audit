@@ -16626,39 +16626,128 @@ def training_board():
                     if n not in getattr(config, "EXCLUDED_USERS", []))
     rows = sorted((diagnose_row(a) for a in agents), key=lambda r: -r["upside"])
 
+    # ── TLDR: the one line, then visuals. Prose folds away. ────────────────
+    tldr = ""
+    if dash.get("not_asked") and dash.get("calls_graded"):
+        tldr = ("%d of %d graded calls never asked for the appointment."
+                % (dash["not_asked"], dash["calls_graded"]))
+    top_upside = next((r for r in rows if r["archetype"] == "THE ALMOST-THERE"), None)
+    tldr2 = (("Cheapest money this week: %s. One habit, no new leads."
+              % top_upside["agent"].split()[0]) if top_upside else
+             "No single standout gap this week. Hold the standard.")
+    if not tldr:
+        tldr = "Not enough graded calls yet. The nightly harvest builds this."
+
+    def _tile(value, label, color="#e8edf8"):
+        return ("<div class='tile'><div class='tv' style='color:%s'>%s</div>"
+                "<div class='tl'>%s</div></div>" % (color, value, label))
+
+    tiles = []
+    if dash.get("calls_graded"):
+        _ask_pct = (round((dash["calls_graded"] - (dash.get("not_asked") or 0))
+                    / dash["calls_graded"] * 100)) if dash.get("calls_graded") else None
+        if _ask_pct is not None:
+            tiles.append(_tile("%d%%" % _ask_pct, "of calls asked for the appointment",
+                               "#e5544b" if _ask_pct < 50 else "#37c98b"))
+    if dash.get("objection_handled_rate"):
+        _ohr = round(dash["objection_handled_rate"])
+        tiles.append(_tile("%d%%" % _ohr, "objections survived",
+                           "#37c98b" if _ohr >= 60 else "#f5a623"))
+    qm_list = (dash.get("questions_missed") or [])
+    if qm_list:
+        tiles.append(_tile("%d%%" % round(qm_list[0]["missed_pct"]),
+                           "skip: &quot;%s&quot;" % qm_list[0]["question"][:44], "#f5a623"))
+    oc_list = (dash.get("objection_categories") or [])
+    if oc_list:
+        tiles.append(_tile(str(oc_list[0]["calls"]),
+                           "calls hit &quot;%s&quot;" % oc_list[0]["category"][:40], "#8ea3c8"))
+    tiles_html = "".join(tiles)
+
+    _ARCH = {"THE ALMOST-THERE": ("#f5a623", "Ask. More asks are hiding in the same calls."),
+             "THE CONVERTER":    ("#37c98b", "Feed volume. Teach from their tape."),
+             "THE GRINDER":      ("#5b8def", "One mechanical fix moves every call."),
+             "THE INVISIBLE":    ("#68789a", "Volume problem, not quality. Watch the hot sheet.")}
+
+    def _bar(pct, team_pct):
+        pct = max(0, min(100, round(pct or 0)))
+        tick = max(0, min(100, round(team_pct or 0)))
+        color = "#37c98b" if team_pct and pct >= team_pct else "#e5544b"
+        return ("<div class='bar'><div class='fill' style='width:%d%%;background:%s'></div>"
+                "<div class='tick' style='left:%d%%'></div></div>"
+                "<div class='barlbl'>ask rate %d%% &middot; team %s%%</div>"
+                % (pct, color, tick, pct, round(team_pct) if team_pct else "?"))
+
     cards = "".join("""
       <div class='card'>
         <div class='chead'><span class='who'>%s</span>
-          <span class='arch'>%s</span></div>
-        <div class='nums'>%d calls graded &middot; avg %s &middot; ask %s (%s) &middot; %s</div>
-        <div class='why'>%s</div>
-        <div class='rx'>This week: %s</div>
-      </div>""" % (r['agent'], r['archetype'], r['graded'],
+          <span class='arch' style='color:%s;background:%s1a'>%s</span></div>
+        <div class='crow'>
+          <div class='big'>%s<span class='bigsub'>avg grade<br>%d calls</span></div>
+          <div class='cmid'>%s
+            <div class='move'>%s</div>
+          </div>
+        </div>
+        <div class='cfoot'><span class='%s'>%s</span>
+          <span class='rx'>%s</span></div>
+        <details class='fold'><summary>the full read</summary><div class='why'>%s</div>
+          <div class='nums'>%s &middot; trend %s</div></details>
+      </div>""" % (r['agent'], _ARCH[r['archetype']][0], _ARCH[r['archetype']][0],
+                   r['archetype'], 
                    ('%.1f' % r['grade']) if r['grade'] is not None else '?',
-                   ('%d%%' % round(r['ask'])) if r['ask'] is not None else '?',
-                   r['arrow'], r['practice'], r['why'], r['rx'])
+                   r['graded'],
+                   _bar(r['ask'], team_ask) if r['ask'] is not None else
+                   "<div class='barlbl'>no graded asks yet</div>",
+                   _ARCH[r['archetype']][1],
+                   'repok' if 'zero practice' not in r['practice'] else 'repbad',
+                   ('&#10003; ' + r['practice']) if 'zero practice' not in r['practice']
+                   else '&#10007; zero practice reps ever',
+                   r['rx'], r['why'], r['practice'], r['arrow'])
         for r in rows)
 
     return """<!DOCTYPE html><html><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1'><title>The Dojo</title>
-<style>body{background:#080c14;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;padding:1.4rem;line-height:1.55;max-width:860px;margin:0 auto}
+<style>body{background:#080c14;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;padding:1.4rem;line-height:1.5;max-width:960px;margin:0 auto}
 h1{font-size:1.3rem;margin-bottom:.2rem} a{color:#f5a623}
-.verdict{background:#0f1520;border:1px solid #243050;border-left:4px solid #f5a623;border-radius:10px;padding:1rem 1.2rem;font-size:.92rem;margin:1rem 0 1.4rem}
-.card{background:#0f1520;border:1px solid #182030;border-radius:12px;padding:1rem 1.2rem;margin-bottom:.8rem}
-.chead{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:.4rem}
-.who{font-weight:750;font-size:1rem}
-.arch{font-size:.62rem;font-weight:800;letter-spacing:.12em;color:#f5a623;background:rgba(245,166,35,.1);padding:.2rem .6rem;border-radius:99px}
-.nums{color:#68789a;font-size:.76rem;margin:.3rem 0 .45rem}
-.why{font-size:.88rem}
-.rx{margin-top:.5rem;font-size:.76rem;color:#f5a623;font-weight:650}
+.tldr{font-size:1.35rem;font-weight:800;line-height:1.35;margin:1rem 0 .3rem}
+.tldr2{font-size:1rem;font-weight:650;color:#f5a623;margin-bottom:1.1rem}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.7rem;margin-bottom:1.4rem}
+.tile{background:#0f1520;border:1px solid #182030;border-radius:12px;padding:.9rem 1rem;text-align:center}
+.tv{font-size:1.9rem;font-weight:850;line-height:1}
+.tl{font-size:.66rem;color:#68789a;margin-top:.35rem;line-height:1.35}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:.8rem}
+.card{background:#0f1520;border:1px solid #182030;border-radius:12px;padding:.9rem 1.1rem}
+.chead{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:.4rem;margin-bottom:.55rem}
+.who{font-weight:750;font-size:.98rem}
+.arch{font-size:.58rem;font-weight:800;letter-spacing:.1em;padding:.2rem .55rem;border-radius:99px}
+.crow{display:flex;gap:1rem;align-items:center}
+.big{font-size:2.1rem;font-weight:850;line-height:1;display:flex;gap:.5rem;align-items:center;flex-shrink:0}
+.bigsub{font-size:.58rem;font-weight:600;color:#68789a;line-height:1.35}
+.cmid{flex:1;min-width:0}
+.bar{position:relative;height:8px;background:#182030;border-radius:99px;overflow:visible;margin-bottom:.25rem}
+.fill{height:100%%;border-radius:99px}
+.tick{position:absolute;top:-3px;width:2px;height:14px;background:#e8edf8;opacity:.6}
+.barlbl{font-size:.64rem;color:#68789a}
+.move{font-size:.8rem;font-weight:650;margin-top:.4rem}
+.cfoot{display:flex;justify-content:space-between;gap:.6rem;flex-wrap:wrap;margin-top:.6rem;align-items:baseline}
+.repok{color:#37c98b;font-size:.7rem;font-weight:650}
+.repbad{color:#e5544b;font-size:.7rem;font-weight:650}
+.rx{font-size:.7rem;color:#f5a623;font-weight:650}
+.fold{margin-top:.55rem}
+.fold summary{cursor:pointer;font-size:.68rem;color:#68789a}
+.why{font-size:.82rem;margin-top:.4rem}
+.nums{color:#68789a;font-size:.72rem;margin-top:.3rem}
+.verdict{background:#0f1520;border:1px solid #243050;border-left:4px solid #f5a623;border-radius:10px;padding:1rem 1.2rem;font-size:.88rem;margin:0 0 1.2rem}
+.vfold summary{cursor:pointer;font-size:.72rem;color:#68789a;margin-bottom:.6rem}
 .sub{color:#68789a;font-size:.78rem}</style></head><body>
 <a href="/" style="display:inline-block;margin-bottom:.8rem;font-size:.78rem;font-weight:700;color:#f5a623;text-decoration:none">&larr; Command Center</a>
 <h1>&#129355; The Dojo &mdash; week of %s</h1>
-<div class='sub'>Conclusions first, numbers second. Sorted by coaching upside.
-Verified nightly from Maverick call grades. <a href='/'>&larr; Dashboard</a></div>
-<div class='verdict'>%s</div>
-%s
-</body></html>""" % (week_start.strftime('%b %d'), verdict, cards)
+<div class='sub'>Verified nightly from Maverick call grades. Tap a card for the full read.</div>
+<div class='tldr'>%s</div>
+<div class='tldr2'>%s</div>
+<div class='tiles'>%s</div>
+<details class='vfold'><summary>the full team read</summary><div class='verdict'>%s</div></details>
+<div class='grid'>%s</div>
+</body></html>""" % (week_start.strftime('%b %d'), tldr, tldr2, tiles_html, verdict, cards)
 
 
 
