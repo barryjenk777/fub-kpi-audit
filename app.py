@@ -1370,6 +1370,127 @@ Scripts refresh with new data on the 1st and 15th. Value first, no pressure, one
 </body></html>"""
 
 
+@app.route("/market/playbook/<slug>/<side>")
+def market_playbook(slug, side):
+    """Agent-facing nurture cheat sheet for ONE lead's city and side: the
+    punchy local numbers, what they mean for this buyer or seller, and 2-3
+    ready-to-send scripts. This is the URL written to each lead's FUB
+    Market Report field: the agent opens it next to the lead, not the lead.
+    Public path (no PII), phone-first."""
+    if side not in ("buyers", "sellers"):
+        return "Not found", 404
+    import market_pulse as _mp
+    snap = _mp.get_snapshot(slug) or {}
+    nurture = (snap.get("nurture") or {}).get(side) or {}
+    if not snap or not nurture:
+        return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
+                "This playbook is being refreshed with the latest numbers. "
+                "Check back in a few minutes.</div>"), 503
+
+    city = snap.get("city") or slug.replace("-", " ").title()
+    r = snap.get("realtor") or {}
+    z = snap.get("zillow") or {}
+    updated = (snap.get("stored_at") or "")[:10]
+
+    tiles = []
+    above = (z.get("pct_sold_above_list") or {}).get("latest")
+    if above:
+        tiles.append(("%d%%" % round(above * 100), "sold OVER asking", "last month", "#37c98b"))
+    speed = (z.get("days_to_pending") or {}).get("latest") or r.get("median_dom")
+    if speed:
+        tiles.append(("%d" % speed, "days to find a buyer", "priced right", "#e8edf8"))
+    if r.get("median_list_price"):
+        yy = r.get("median_list_price_yy")
+        tiles.append(("$%s" % format(int(r["median_list_price"]), ","), "median asking price",
+                      ("%s%.0f%% in a year" % ("up " if yy > 0 else "down ", abs(yy) * 100))
+                      if yy else "", "#f5a623"))
+    cuts = (z.get("pct_price_cut") or {}).get("latest") or r.get("price_reduced_share")
+    if cuts:
+        tiles.append(("%d%%" % round(cuts * 100), "had to cut their price",
+                      "overpricing punished fast", "#e5544b"))
+    sale = z.get("median_sale_price") or {}
+    if sale.get("latest") and sale.get("year_ago") and sale["latest"] > sale["year_ago"]:
+        tiles.append(("+$%s" % format(int(sale["latest"] - sale["year_ago"]), ","),
+                      "typical sale price gain", "last 12 months", "#37c98b"))
+
+    tiles_html = "".join(
+        "<div class='tile'><div class='tv' style='color:%s'>%s</div>"
+        "<div class='tl'>%s</div><div class='ts'>%s</div></div>" % (c, v, l, s)
+        for v, l, s, c in tiles[:4])
+
+    hooks = nurture.get("hooks") or []
+    hooks_html = "".join("<div class='hook'>%s</div>" % h for h in hooks[:2])
+
+    def _script_card(label, body):
+        body_html = body.replace("{first}", "<b class='ph'>{first}</b>")
+        return ("<div class='script'><div class='slab'>%s</div>"
+                "<div class='sbody' data-copy=\"%s\">%s</div>"
+                "<button class='copy' onclick=\"copyScript(this)\">Copy</button></div>"
+                % (label, body.replace('"', "&quot;"), body_html))
+
+    texts_html = "".join(_script_card("Text %d" % (i + 1), t)
+                         for i, t in enumerate((nurture.get("texts") or [])[:3]))
+    call_html = _script_card("Voice opener (20 seconds)", nurture.get("call_track") or "") \
+        if nurture.get("call_track") else ""
+
+    other = "sellers" if side == "buyers" else "buyers"
+    base = (os.environ.get("MARKET_BASE_URL")
+            or os.environ.get("BASE_URL",
+                              "https://web-production-3363cc.up.railway.app")).rstrip("/")
+    lead_url = "%s/market/%s/%s" % (base, slug, side)
+    agent_q = request.args.get("a", "")
+    if agent_q:
+        lead_url += "?a=" + agent_q
+
+    return """<!DOCTYPE html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<meta name='robots' content='noindex'><title>%s %s playbook</title>
+<style>body{margin:0;background:#080c14;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;line-height:1.5}
+.wrap{max-width:560px;margin:0 auto;padding:1.2rem 1.1rem 3rem}
+.kick{font-size:.62rem;font-weight:800;letter-spacing:.18em;color:#f5a623;text-transform:uppercase}
+h1{font-size:1.45rem;font-weight:850;margin:.25rem 0 .1rem}
+.sub{color:#68789a;font-size:.75rem;margin-bottom:1.1rem}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:1.1rem}
+.tile{background:#0f1520;border:1px solid #182030;border-radius:12px;padding:.85rem .9rem}
+.tv{font-size:1.7rem;font-weight:850;line-height:1.05}
+.tl{font-size:.72rem;font-weight:650;margin-top:.3rem}
+.ts{font-size:.62rem;color:#68789a;margin-top:.1rem}
+.sec{font-size:.62rem;font-weight:800;letter-spacing:.14em;color:#f5a623;text-transform:uppercase;margin:1.3rem 0 .55rem}
+.hook{background:#0f1520;border-left:3px solid #f5a623;border-radius:8px;padding:.65rem .85rem;font-size:.86rem;font-weight:600;margin-bottom:.5rem}
+.script{background:#0f1520;border:1px solid #182030;border-radius:12px;padding:.8rem .95rem;margin-bottom:.6rem;position:relative}
+.slab{font-size:.6rem;font-weight:800;letter-spacing:.1em;color:#68789a;text-transform:uppercase;margin-bottom:.35rem}
+.sbody{font-size:.88rem;padding-right:3.4rem}
+.ph{color:#f5a623}
+.copy{position:absolute;top:.7rem;right:.8rem;background:#f5a623;color:#080c14;border:none;border-radius:8px;font-weight:800;font-size:.68rem;padding:.32rem .7rem;cursor:pointer}
+.note{font-size:.68rem;color:#68789a;margin:.2rem 0 0}
+.foot{margin-top:1.6rem;border-top:1px solid #182030;padding-top:.9rem;font-size:.76rem;color:#68789a}
+.foot a{color:#f5a623;text-decoration:none;font-weight:700}
+</style></head><body><div class='wrap'>
+<div class='kick'>Nurture playbook &middot; agents only</div>
+<h1>%s &middot; %s lead</h1>
+<div class='sub'>Real numbers, updated %s. Data refreshes the 1st and 15th, scripts regenerate with it.</div>
+<div class='tiles'>%s</div>
+<div class='sec'>Say it like you own it</div>
+%s
+<div class='sec'>Text them (pick one, swap in their name)</div>
+%s
+<div class='note'>One number per text. Never send two of these in the same week.</div>
+<div class='sec'>Calling instead</div>
+%s
+<div class='foot'>
+Flip this lead: <a href='/market/playbook/%s/%s%s'>%s playbook</a> &middot;
+All cities: <a href='/market/ammo'>full ammo page</a><br><br>
+Want to SEND them something? This is the lead-safe page (no scripts on it):<br>
+<a href='%s'>%s</a>
+</div>
+</div>
+<script>function copyScript(btn){navigator.clipboard.writeText(btn.parentNode.querySelector('.sbody').getAttribute('data-copy'));btn.textContent='Copied';setTimeout(function(){btn.textContent='Copy'},1200)}</script>
+</body></html>""" % (city, side[:-1], city, side[:-1], updated or "this month",
+                     tiles_html, hooks_html, texts_html, call_html,
+                     slug, other, ("?a=" + agent_q) if agent_q else "", other,
+                     lead_url, lead_url)
+
+
 @app.route("/market/<slug>/<audience>")
 def market_page(slug, audience):
     if audience not in ("buyers", "sellers"):
@@ -16218,6 +16339,45 @@ def scheduled_lead_memory_refresh():
         raise
     finally:
         _db.release_job_lock("lead_memory")
+
+
+@app.route("/api/admin/market-field/backfill", methods=["POST"])
+def api_market_field_backfill():
+    """One-time migration: rewrite every lead's FUB Market Report field from
+    the lead-facing page URL to the agent playbook URL. Reads existing
+    briefs; writes only when a MARKET line exists. {"dry_run": true} counts."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    dry = bool(body.get("dry_run"))
+    import lead_memory as _lm
+    if not _lm._MARKET_FIELD:
+        return jsonify({"error": "MARKET_REPORT_CUSTOM_FIELD not configured"}), 400
+    briefs = _db.get_all_lead_briefs() or {}
+    client = FUBClient()
+    done, skipped, failed = 0, 0, 0
+    for pid, b in briefs.items():
+        note_id = b.get("note_id")
+        if not note_id:
+            skipped += 1
+            continue
+        try:
+            note = client._request("GET", "notes/%s" % note_id) or {}
+            link = _lm.market_field_url_from_brief(note.get("body") or "")
+            if not link:
+                skipped += 1
+                continue
+            if dry:
+                done += 1
+                continue
+            client._request("PUT", "people/%s" % pid,
+                            json_data={_lm._MARKET_FIELD: link})
+            done += 1
+        except Exception as e:
+            failed += 1
+            logger.warning("market field backfill failed for %s: %s", pid, e)
+    return jsonify({"ok": True, "dry_run": dry, "rewritten": done,
+                    "skipped": skipped, "failed": failed})
 
 
 @app.route("/api/admin/lead-memory/run", methods=["POST"])

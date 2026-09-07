@@ -538,18 +538,27 @@ def _pick_samples(samples, cap):
 _MARKET_FIELD = os.environ.get("MARKET_REPORT_CUSTOM_FIELD", "").strip()
 
 
-def _set_market_field(fub, pid, brief):
-    """Write the lead's market page link into the FUB custom field, parsed
-    straight from the note's own MARKET line so field and note always agree.
-    Disabled until MARKET_REPORT_CUSTOM_FIELD names the field (e.g.
-    customMarketReportUrl)."""
-    if not _MARKET_FIELD or not brief:
-        return
-    link = None
+def market_field_url_from_brief(brief):
+    """The AGENT playbook URL for this lead, derived from the brief's MARKET
+    line. Barry, Sep 2026: the FUB field is a nurture cheat sheet for the
+    agent (data plus scripts), never a link to hand the lead. The lead-safe
+    share page is linked FROM the playbook."""
+    if not brief:
+        return None
     for line in brief.splitlines():
         if line.startswith("MARKET:") and "Share: " in line:
             link = line.split("Share: ", 1)[1].strip()
-            break
+            return link.replace("/market/", "/market/playbook/", 1)
+    return None
+
+
+def _set_market_field(fub, pid, brief):
+    """Write the agent playbook link into the FUB custom field. Disabled
+    until MARKET_REPORT_CUSTOM_FIELD names the field (e.g.
+    customMarketReport)."""
+    if not _MARKET_FIELD:
+        return
+    link = market_field_url_from_brief(brief)
     if link:
         fub._request("PUT", f"people/{pid}", json_data={_MARKET_FIELD: link})
 
