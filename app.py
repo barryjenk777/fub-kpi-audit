@@ -3289,6 +3289,78 @@ def api_preview_hype_email():
         return f"<pre style='color:red'>Error building preview:\n{e}</pre>", 500
 
 
+@app.route("/api/admin/hype/addendum", methods=["POST"])
+def api_hype_addendum():
+    """Team-wide addendum naming ONE additional transfer qualifier.
+
+    Born Sep 6 2026: the Sunday email scored a stale week and left Salma
+    off the board. Body: {"agent_name": "..."}. Refuses anyone the current
+    audit does not mark as passing, so this can only ever add truth.
+    """
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    agent_name = (body.get("agent_name") or "").strip()
+    if not agent_name:
+        return jsonify({"error": "agent_name required"}), 400
+
+    audit = cache_get("audit") or {}
+    row = next((a for a in audit.get("agents", [])
+                if a.get("name") == agent_name), None)
+    if not row:
+        return jsonify({"error": "agent not in current audit"}), 404
+    if not (row.get("evaluation") or {}).get("overall_pass"):
+        return jsonify({"error": "agent does not pass the current audit; "
+                        "refusing to announce an unearned spot"}), 400
+
+    m = row.get("metrics", {})
+    first = agent_name.split()[0]
+    calls = m.get("outbound_calls", 0)
+    convos = m.get("conversations", 0)
+    period = audit.get("period", {})
+    routing = period.get("routing_week", "next week")
+
+    from fub_client import FUBClient as _FC
+    to_emails = _FC().get_all_user_emails()
+    valid = [(n, e) for n, e in to_emails if e]
+    if not valid:
+        return jsonify({"error": "no recipients"}), 500
+
+    html = """<div style="background:#f4f4f0;padding:28px 0">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;font-family:-apple-system,'Segoe UI',Arial,sans-serif">
+<tr><td style="background:#0d1117;padding:26px 32px">
+  <div style="font-size:11px;font-weight:800;letter-spacing:.2em;color:#f5a623;text-transform:uppercase;margin-bottom:8px">Live Transfer Board</div>
+  <div style="font-size:24px;font-weight:900;color:#ffffff;line-height:1.2">One more name for %s</div>
+</td></tr>
+<tr><td style="height:4px;background:#f5a623;font-size:0">&nbsp;</td></tr>
+<tr><td style="background:#ffffff;padding:26px 32px;font-size:15px;line-height:1.65;color:#1a1f26">
+  Team, the Sunday board missed a name, and it was my system's mistake, not hers.<br><br>
+  <strong>%s earned the live transfer line.</strong> Her week: %d dials, %d real conversations. That is what earning it looks like.<br><br>
+  %s, the line is yours for %s. Everyone else, the bar does not move: hit your dials and conversations this week and next Sunday your name is on the board.
+</td></tr>
+<tr><td style="background:#fffbf0;border-left:4px solid #f5a623;padding:16px 32px;font-size:13px;line-height:1.6;color:#3d4450">
+  When the machine gets it wrong, we fix it out loud. Effort that gets noticed repeats.
+</td></tr>
+<tr><td style="background:#ffffff;padding:20px 32px 26px;font-size:15px;color:#1a1f26">Let's get it,<br><strong>Barry Jenkins</strong></td></tr>
+</table></td></tr></table></div>""" % (routing, agent_name, calls, convos, first, routing)
+
+    from postmark_client import send as _pm_send
+    try:
+        _pm_send(
+            to=", ".join("%s <%s>" % (n, e) for n, e in valid),
+            from_email=config.EMAIL_FROM,
+            subject="One more name on the live transfer board: %s" % first,
+            html=html,
+        )
+    except Exception as e:
+        logger.error("hype addendum send failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+    logger.info("hype addendum sent for %s to %d recipients", agent_name, len(valid))
+    return jsonify({"ok": True, "agent": agent_name, "recipients": len(valid),
+                    "calls": calls, "convos": convos, "routing_week": routing})
+
+
 @app.route("/api/send-hype-email", methods=["POST"])
 def api_send_hype_email():
     """Send the weekly KPI hype email to the full team roster."""
