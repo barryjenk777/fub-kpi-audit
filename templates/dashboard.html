@@ -154,8 +154,6 @@ button{cursor:pointer;border:none;background:none;font-family:inherit;font-size:
 .kc-cw-stats span{font-weight:600}
 .kc-cw-footer{display:flex;justify-content:space-between;align-items:center;margin-top:.3rem;font-size:.68rem;color:var(--muted)}
 /* ── COMMAND CENTER ── */
-.nav-item-cc{background:linear-gradient(135deg,#1a1a3e,#0f2d4a);color:#e2c96e!important;font-weight:700;border-left:3px solid #e2c96e;margin-bottom:.4rem;border-radius:var(--r)}
-.nav-item-cc:hover,.nav-item-cc.active{background:linear-gradient(135deg,#252550,#143860)!important}
 .cc-hero{background:linear-gradient(135deg,#1a1a3e 0%,#0f2d4a 100%);border-radius:var(--r);padding:1.4rem 1.6rem;margin-bottom:1rem;position:relative;overflow:hidden}
 .cc-hero::before{content:'';position:absolute;top:0;left:0;right:0;height:4px;background:var(--gold)}
 .cc-hero.urgency-high::before{background:#ef4444}
@@ -630,6 +628,11 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 .lens-pill.active{background:var(--gold-bg);border-color:var(--gold);color:var(--gold)}
 /* ── Pulse (v2 home) ─────────────────────────────────────────── */
 .pulse-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.8rem;margin-bottom:1rem}
+.pulse-pace{display:flex;align-items:center;gap:1rem;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:var(--r);padding:.9rem 1.1rem;margin-bottom:1.2rem}
+.pulse-pace.warn{border-left-color:var(--yellow)}
+.pulse-pace .pp-num{font-size:1.9rem;font-weight:800;color:var(--text);line-height:1}
+.pulse-pace .pp-title{font-weight:700;font-size:.9rem;color:var(--text)}
+.pulse-pace .pp-sub{font-size:.8rem;color:var(--muted);margin-top:.15rem;line-height:1.45}
 .pulse-tile{background:var(--surface);border:1px solid var(--border-sub);border-radius:var(--r);padding:.9rem 1rem .7rem}
 .pulse-tile .pt-label{font-size:.72rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .pulse-tile .pt-value{font-size:1.9rem;font-weight:650;line-height:1.15;margin:.15rem 0 .1rem}
@@ -695,9 +698,6 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
     <button class="nav-item active" data-tab="pulse" onclick="switchTab('pulse')">
       <span class="nav-icon">📈</span> Pulse
     </button>
-    <button class="nav-item nav-item-cc" data-tab="cc" onclick="switchTab('cc')">
-      <span class="nav-icon">🧠</span> Command Center
-    </button>
     <div class="nav-section">Performance</div>
     <button class="nav-item" data-tab="goals" onclick="switchTab('goals')">
       <span class="nav-icon">🧑‍💼</span> Agents
@@ -734,6 +734,9 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
       <span class="nav-icon">🚀</span> Onboarding
       <span class="nav-ext">↗</span>
     </a>
+    <a class="nav-item" href="/logout">
+      <span class="nav-icon">🚪</span> Log out
+    </a>
   </nav>
   <div class="sidebar-footer">
     <div id="sidebar-date" style="margin-bottom:.2rem"></div>
@@ -756,17 +759,21 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
 
   <div class="content">
 
-    <!-- ══════════════════════════════════════ COMMAND CENTER TAB -->
-    <div class="tab-pane" id="tab-cc">
-      <div id="loading-cc" class="loading-pane"><span class="spinner"></span> Building your briefing…</div>
-      <div id="dashboard-cc" style="display:none"></div>
-    </div>
-
     <!-- ══════════════════════════════════════ GOALS TAB -->
     <!-- ══════════════════════════════════════ PULSE TAB (v2 home) -->
     <div class="tab-pane active" id="tab-pulse">
       <div id="loading-pulse" class="loading-pane"><span class="spinner"></span> Reading the last 90 days…</div>
       <div id="dashboard-pulse" style="display:none"></div>
+      <div class="cc-ask-block">
+        <div class="cc-ask-label">🤖 Ask Claude about the team</div>
+        <textarea id="cc-ask-input" class="cc-ask-textarea"
+          placeholder="e.g. What should I focus on to teach my agents this week? Why is our appointment show rate so low? Who should I have a 1-on-1 with first?"></textarea>
+        <div class="cc-ask-row">
+          <button class="cc-ask-btn" id="cc-ask-btn" onclick="askClaude()">Ask →</button>
+          <span class="cc-ask-hint">Answers from the team's live numbers</span>
+        </div>
+        <div class="cc-ask-answer" id="cc-ask-answer"></div>
+      </div>
     </div>
 
     <div class="tab-pane" id="tab-goals">
@@ -1027,23 +1034,21 @@ function switchTab(name){
 
   const DESCS={
     pulse:'The big picture: is the team calling, talking, booking, and closing over the last 60 to 90 days. Green bullets are working; yellow need attention. Start here every visit.',
-    cc:'A daily AI briefing that reads all team data and says what needs attention today, in plain English.',
     goals:'Each agent\'s income goal, what they are actually on pace for, the dollar gap, and the one thing to coach. Biggest gap on top.',
     kpi:'The weekly minimum standard (calls, conversations, compliance) that earns an agent transfer leads. Pass/fail, updated weekly.',
     appointments:'Every appointment plus where appointment money leaks: meetings nobody followed up after, upcoming ones at risk of no-show, and outcomes never logged.',
     meeting:'1-on-1 prep: pick an agent and get a data brief for the coaching conversation.',
     isa:'Fhalen\'s live transfers: what she hands to agents and how fast they pick them up.',
-    outreach:'Automated nurture the system sends to pond leads (emails and texts). Runs itself; this is the window into it.',
+    outreach:'The AI that texts and emails dormant leads for you: what is working, what is not, and what agents do once a lead says yes. Green checks are wins; warnings need your voice.',
     manager:''};
   const dEl=document.getElementById('topbar-desc');
   if(dEl)dEl.textContent=DESCS[name]||'';
-  const titles={pulse:'📈 Pulse — 60/90 day themes',cc:'🧠 Command Center',goals:'🧑‍💼 Agents — Goals & Money',kpi:'🧑‍💼 Agents — Weekly KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
+  const titles={pulse:'📈 Pulse — 60/90 day themes',goals:'🧑‍💼 Agents — Goals & Money',kpi:'🧑‍💼 Agents — Weekly KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
   document.getElementById('topbar-title').textContent=titles[name]||name;
 
   if(!_loaded[name]){
     _loaded[name]=true;
     if(name==='pulse')       loadPulse();
-    else if(name==='cc')     loadCommandCenter();
     else if(name==='goals')  loadGoals();
     else if(name==='kpi')    loadAgents();
     else if(name==='appointments') loadAppointments();
@@ -1051,115 +1056,6 @@ function switchTab(name){
     else if(name==='isa'){loadIsaTransfers();loadIsa();}
     else if(name==='outreach')    loadOutreach();
   }
-}
-
-/* ════════════════════════════════════════════════
-   COMMAND CENTER
-════════════════════════════════════════════════ */
-async function loadCommandCenter(force){
-  const ld=document.getElementById('loading-cc'),db=document.getElementById('dashboard-cc');
-  ld.style.display='flex';db.style.display='none';
-  try{
-    const url=force?'/api/command-center?force=true':'/api/command-center';
-    const r=await fetch(url,{signal:AbortSignal.timeout(30000)});
-    const d=await r.json();
-    if(d.error)throw new Error(d.error);
-    if(d.warming){
-      // Cold cache: server is building the briefing in the background.
-      // Show a friendly state and poll — never leave Barry on a dead spinner.
-      window._ccPolls=(window._ccPolls||0)+1;
-      if(window._ccPolls<40)setTimeout(()=>loadCommandCenter(),8000);
-      db.innerHTML=`<div class="alert yellow"><span class="alert-icon">🧠</span><div><div class="alert-title">Building your briefing</div><div class="alert-body">First load of the day pulls fresh numbers from Follow Up Boss (about 2 minutes). This page will update itself — no need to refresh.${d.errorText?'<br>'+d.errorText:''}</div></div></div>`;
-      ld.style.display='none';db.style.display='block';
-      return;
-    }
-    window._ccPolls=0;
-    db.innerHTML=buildCommandCenter(d);
-  }catch(e){
-    db.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not build briefing</div><div class="alert-body">${e.message||'Unknown error — check Railway logs'}</div><div style="margin-top:.6rem"><button class="btn btn-ghost btn-sm" onclick="loadCommandCenter(true)">↻ Try Again</button></div></div></div>`;
-    db.style.display='block';
-  }
-  ld.style.display='none';db.style.display='block';
-}
-
-function buildCommandCenter(d){
-  const s=d.stats||{};
-  const kpiCol=s.passed===s.total?'c-green':s.passed>0?'c-yellow':'c-red';
-  const paceCol=s.annual_pace>=s.pace_target?'c-green':s.annual_pace>0?'c-yellow':'c-red';
-  let h='';
-
-  // ── Headline numbers: funnel row ───────────────────────────────────────────
-  const convoCol=s.convos>0?'c-green':'c-yellow';
-  h+=`<div class="cc-stat-row">
-    <div class="cc-stat"><div class="cc-stat-val c-gold">${d.month_in}</div><div class="cc-stat-label">Month</div></div>
-    <div class="cc-stat"><div class="cc-stat-val ${kpiCol}">${s.passed}/${s.total}</div><div class="cc-stat-label">KPI Pass</div></div>
-    <div class="cc-stat"><div class="cc-stat-val">${s.calls||0}</div><div class="cc-stat-label">Dials</div></div>
-    <div class="cc-stat"><div class="cc-stat-val ${convoCol}">${s.convos||0}</div><div class="cc-stat-label">Convos</div></div>
-    <div class="cc-stat"><div class="cc-stat-val">${s.c2v}%</div><div class="cc-stat-label">Dial→Convo</div></div>
-  </div>`;
-  // ── Closings row ────────────────────────────────────────────────────────────
-  h+=`<div class="cc-stat-row" style="margin-top:-.25rem">
-    <div class="cc-stat"><div class="cc-stat-val">${s.appts||0}</div><div class="cc-stat-label">Appts Set</div></div>
-    <div class="cc-stat"><div class="cc-stat-val">${s.v2a||0}%</div><div class="cc-stat-label">Convo→Appt</div></div>
-    <div class="cc-stat"><div class="cc-stat-val ${s.contracts>0?'c-yellow':''}">${s.contracts||0}</div><div class="cc-stat-label">Under Contract</div></div>
-    <div class="cc-stat"><div class="cc-stat-val ${s.closings_ytd>0?'c-green':'c-red'}">${s.closings_ytd}</div><div class="cc-stat-label">Closings YTD</div></div>
-    <div class="cc-stat"><div class="cc-stat-val ${paceCol}">${s.annual_pace||'—'}</div><div class="cc-stat-label">Proj. Closings</div></div>
-  </div>`;
-
-  // ── Briefing ────────────────────────────────────────────────────────────────
-  h+=`<div class="cc-briefing">
-    <div class="cc-section-label">📋 The Briefing &nbsp;<span style="font-weight:400;opacity:.55">${d.period?.start||''} – ${d.period?.end||''}</span></div>
-    <div class="cc-briefing-text">${d.briefing||''}</div>
-  </div>`;
-
-  // ── Guidance ────────────────────────────────────────────────────────────────
-  const g=d.guidance||{};
-  const whoClass=(g.who||'').toLowerCase()==='joe'?'joe':'barry';
-  h+=`<div class="cc-guidance">
-    <div class="cc-section-label">🎯 Your Move This Week</div>
-    <div class="cc-guidance-action">${g.action||''}</div>
-    <div class="cc-guidance-why">${g.why||''}</div>
-    <div style="margin-top:.6rem"><span class="cc-win-who ${whoClass}">→ ${g.who||'Barry'}</span></div>
-  </div>`;
-
-  // ── Projections ─────────────────────────────────────────────────────────────
-  const proj=d.projections||[];
-  if(proj.length){
-    h+=`<div class="cc-block">
-      <div class="cc-section-label">📈 Projections</div>`;
-    proj.forEach(p=>{
-      h+=`<div class="cc-list-item"><span class="cc-bullet">›</span><span>${p}</span></div>`;
-    });
-    h+=`</div>`;
-  }
-
-  // ── Insights ────────────────────────────────────────────────────────────────
-  const ins=d.insights||[];
-  if(ins.length){
-    h+=`<div class="cc-block cc-insights-block">
-      <div class="cc-section-label">💡 Insights</div>`;
-    ins.forEach(i=>{
-      h+=`<div class="cc-list-item"><span class="cc-bullet cc-bullet-gold">›</span><span>${i}</span></div>`;
-    });
-    h+=`</div>`;
-  }
-
-  // ── Ask Claude ──────────────────────────────────────────────────────────────
-  h+=`<div class="cc-ask-block">
-    <div class="cc-ask-label">🤖 Ask Claude about this data</div>
-    <textarea id="cc-ask-input" class="cc-ask-textarea"
-      placeholder="e.g. What should I focus on to teach my agents this week? Why is our appointment show rate so low? Who should I have a 1-on-1 with first?"></textarea>
-    <div class="cc-ask-row">
-      <button class="cc-ask-btn" id="cc-ask-btn" onclick="askClaude()">Ask →</button>
-      <span class="cc-ask-hint">Sends the current briefing data as context</span>
-    </div>
-    <div class="cc-ask-answer" id="cc-ask-answer"></div>
-  </div>`;
-
-  // ── Refresh footer ──────────────────────────────────────────────────────────
-  const ts=d.cached_at?new Date(d.cached_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'';
-  h+=`<div class="cc-refresh">Last updated ${ts} &nbsp;·&nbsp; <a href="#" onclick="loadCommandCenter(true);return false" style="color:var(--gold)">Force Refresh</a></div>`;
-  return h;
 }
 
 /* ════════════════════════════════════════════════
@@ -2679,7 +2575,96 @@ function buildOutreach(d){
   const convRate=totSent>0?+(totRouted/totSent*100).toFixed(1):0;
 
   const maxChart=Math.max(...chart.map(c=>c.count),1);
+  const ins=d.insight||{};
+  const oc=ins.outcomes||{};
   let h='';
+
+  // ── THE VERDICT: what is working, what is not ─────────────────────────
+  const bullet=(t,color,icon)=>`<div style="display:flex;gap:.55rem;align-items:flex-start;margin-bottom:.55rem"><span style="flex-shrink:0;margin-top:.05rem">${icon}</span><span style="font-size:.82rem;line-height:1.5;color:${color}">${esc(t)}</span></div>`;
+  const working=ins.working||[], notWorking=ins.not_working||[];
+  if(working.length||notWorking.length){
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1.1rem 1.3rem;margin-bottom:1.2rem">`;
+    h+=`<div style="font-weight:800;font-size:.95rem;margin-bottom:.8rem">What the last 60 days of AI outreach are telling you</div>`;
+    working.forEach(t=>h+=bullet(t,'var(--text)','✅'));
+    notWorking.forEach(t=>h+=bullet(t,'var(--text)','⚠️'));
+    h+='</div>';
+  }
+
+  // ── AFTER THE YES: routed → called → appointment ──────────────────────
+  if(oc.routed_60d>0||oc.routed>0){
+    const step=(n,label,sub)=>`<div style="flex:1;min-width:120px;text-align:center;padding:.4rem"><div style="font-size:1.7rem;font-weight:800">${n}</div><div style="font-size:.72rem;font-weight:700;margin-top:.1rem">${label}</div>${sub?`<div style="font-size:.62rem;color:var(--muted);margin-top:.15rem">${sub}</div>`:''}</div>`;
+    const arrow=`<div style="align-self:center;color:var(--subtle);font-size:1.1rem">→</div>`;
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem;margin-bottom:1.2rem">`;
+    h+=`<div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.5rem">After the AI converts them (60 days)</div>`;
+    h+=`<div style="display:flex;flex-wrap:wrap;gap:.2rem">`;
+    h+=step(oc.routed_60d??oc.routed??0,'said yes to the AI','replied, routed to an agent');
+    h+=arrow;
+    h+=step(oc.called_pct!=null?oc.called_pct+'%':'?','got an agent call',oc.median_hours_to_call!=null?('median '+oc.median_hours_to_call+'h to first call'):'last 30 days');
+    h+=arrow;
+    h+=step(oc.appts_60d||0,'appointments on the calendar','since the AI woke them');
+    h+='</div>';
+    if((oc.appt_names||[]).length){
+      h+=`<div style="margin-top:.6rem;font-size:.7rem;color:var(--muted)">Proof: ${oc.appt_names.slice(0,5).map(a=>esc(a.person)+' ('+esc(a.agent||'?')+', '+esc(a.date)+')').join(' · ')}</div>`;
+    }
+    if((oc.uncalled||[]).length){
+      h+=`<div style="margin-top:.7rem;padding:.6rem .8rem;background:rgba(239,68,68,.08);border-radius:8px;font-size:.75rem">`;
+      h+=`<b style="color:var(--red)">Still waiting on a human:</b> `;
+      h+=oc.uncalled.map(u=>`${esc(u.person)} (${esc(u.agent||'unassigned')}, ${u.days}d)`).join(' · ');
+      h+='</div>';
+    }
+    h+='</div>';
+  }
+
+  // ── AGENT FOLLOW-THROUGH ──────────────────────────────────────────────
+  const agents=(ins.agents||[]).filter(a=>a.routed>0);
+  if(agents.length){
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1.2rem">`;
+    h+=`<div style="padding:.8rem 1.2rem;border-bottom:1px solid var(--border);font-weight:700;font-size:.85rem">Who works the AI's converts (last 30 days)</div>`;
+    h+='<div class="tbl-wrap"><table><thead><tr><th>Agent</th><th>Handed</th><th>Called</th><th>Speed to first call</th></tr></thead><tbody>';
+    agents.forEach(a=>{
+      const pctColor=a.called_pct>=80?'var(--green)':a.called_pct>=50?'var(--gold)':'var(--red)';
+      h+=`<tr><td style="font-weight:600">${esc(a.agent)}</td><td>${a.routed}</td>`;
+      h+=`<td><span style="color:${pctColor};font-weight:700">${a.called} (${a.called_pct}%)</span></td>`;
+      h+=`<td style="font-size:.75rem;color:var(--muted)">${a.median_hours!=null?('median '+a.median_hours+'h'):'no calls yet'}</td></tr>`;
+    });
+    h+='</tbody></table></div></div>';
+  }
+
+  // ── QUESTIONS YOU ARE NOT ASKING ──────────────────────────────────────
+  const qs=ins.questions||[];
+  if(qs.length){
+    h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.7rem;margin-bottom:1.2rem">`;
+    qs.forEach(q=>{
+      h+=`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:var(--r);padding:.9rem 1rem">`;
+      h+=`<div style="font-weight:700;font-size:.8rem;margin-bottom:.4rem">${esc(q.q)}</div>`;
+      h+=`<div style="font-size:.76rem;line-height:1.55;color:var(--muted)">${esc(q.a)}</div>`;
+      h+='</div>';
+    });
+    h+='</div>';
+  }
+
+  // ── MESSAGE + TIER SCOREBOARDS ────────────────────────────────────────
+  const board=(title,rows)=>{
+    if(!rows||!rows.length)return '';
+    let b=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden">`;
+    b+=`<div style="padding:.7rem 1rem;border-bottom:1px solid var(--border);font-weight:700;font-size:.78rem">${title}</div>`;
+    b+='<div class="tbl-wrap"><table><thead><tr><th></th><th>Sends</th><th>Replies</th><th>Interested</th><th>Opt-outs</th></tr></thead><tbody>';
+    rows.forEach(r=>{
+      b+=`<tr><td style="font-weight:600;font-size:.76rem">${esc(r.key)}</td><td>${r.sends}</td>`;
+      b+=`<td><b>${r.reply_rate}%</b> <span style="color:var(--muted);font-size:.68rem">(${r.replies})</span></td>`;
+      b+=`<td style="color:var(--green)">${r.positive}</td><td style="color:${r.optouts>0?'var(--red)':'var(--muted)'}">${r.optouts}</td></tr>`;
+    });
+    return b+'</tbody></table></div></div>';
+  };
+  const boards=[board('Which message earns replies (60 days)',ins.by_strategy),board('Which lead tiers still have life (60 days)',ins.by_tier)].filter(Boolean);
+  if(boards.length){
+    h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:.7rem;margin-bottom:1.2rem">${boards.join('')}</div>`;
+  }
+
+  // ── RAW NUMBERS (drill-down, collapsed) ───────────────────────────────
+  h+=`<div class="panel"><div class="panel-hdr" onclick="this.parentElement.classList.toggle('open')">`;
+  h+=`<span class="panel-title">🔢 The raw numbers (sends, replies, 14-day activity)</span>`;
+  h+=`<span class="panel-chevron">▼</span></div><div class="panel-body">`;
 
   // ── TOP STATS: 2 channel cards + 2 combined totals ────────────────────
   h+=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.7rem;margin-bottom:1.2rem">`;
@@ -2793,11 +2778,12 @@ function buildOutreach(d){
   }
   h+='</div>';
   h+='</div>'; // end 2-col
+  h+='</div></div>'; // end raw-numbers panel
 
   // ── ROUTED LEADS — agent accountability ───────────────────────────────
-  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1rem">`;
+  h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin:1rem 0">`;
   h+=`<div style="padding:.85rem 1.2rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">`;
-  h+=`<span style="font-weight:700;font-size:.85rem">🎯 Routed Leads — Agent Follow-Up</span>`;
+  h+=`<span style="font-weight:700;font-size:.85rem">🎯 Every routed lead, with receipts</span>`;
   const dropped=leads.filter(l=>l.status==='dropped').length;
   if(dropped>0)h+=`<span style="background:rgba(239,68,68,.15);color:var(--red);font-size:.68rem;font-weight:700;padding:.2rem .6rem;border-radius:99px">${dropped} dropped</span>`;
   h+='</div>';
@@ -3101,6 +3087,21 @@ function buildPulse(d){
     pulseThemeCard('🌱','Leads','New life, resurrections, and nurture','LeadStream',"window.location='/leadstream'",th.leads||{}),
     pulseThemeCard('📅','Appointments','Set, held, and what happens after','Appointments',"switchTab('appointments')",th.appointments||{}),
   ].join('');
+  const pc=d.pace||null;
+  let paceHtml='';
+  if(pc&&pc.projected){
+    const ok=pc.target?pc.projected>=pc.target:true;
+    let sub=pc.ytd_closings+' closed so far this year.';
+    if(pc.target){
+      sub+=' A '+pc.n_agents+' agent roster needs about '+pc.target+' closings a year to sustain itself. ';
+      sub+=ok?'On track.':('That is '+(pc.target-pc.projected)+' short at this pace. The leaks below are where they come from.');
+    }
+    paceHtml=`<div class="pulse-pace ${ok?'':'warn'}">
+      <div class="pp-num">${pc.projected}</div>
+      <div class="pp-body"><div class="pp-title">closings this year at the current pace</div>
+      <div class="pp-sub">${sub}</div></div>
+    </div>`;
+  }
   const chips=(d.engines||[]).map(e=>`<span class="pe-chip"><b>${e.name}</b>${e.stat}</span>`).join('');
   const asof=d.as_of?new Date(d.as_of).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
   return `
@@ -3109,6 +3110,7 @@ function buildPulse(d){
       <div class="ps-sub">Left to right: calls turn into conversations, conversations into appointments, appointments into contracts. Big number = last 30 days. Small line = week by week, last 3 months. Hover any point for that week.</div>
     </div>
     <div class="pulse-tiles">${tileHtml}</div>
+    ${paceHtml}
     <div class="pulse-section-head">
       <div class="ps-title">Where the funnel leaks</div>
       <div class="ps-sub">Each number answers one question about the last 30 days.</div>

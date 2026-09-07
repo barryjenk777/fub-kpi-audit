@@ -4366,7 +4366,7 @@ def _ft_board_data(force=False):
 @app.route("/api/admin/onboarding-board")
 def api_onboarding_board():
     """JSON behind the onboarding board. ?force=1 bypasses the 60s cache."""
-    if not _perplexity_auth():
+    if not _read_auth():
         return jsonify({"error": "Unauthorized"}), 401
     force = request.args.get("force") in ("1", "true", "yes")
     if force:
@@ -4383,7 +4383,7 @@ def api_onboarding_board():
 @app.route("/api/admin/onboarding-board/agent")
 def api_onboarding_agent():
     """Drilldown: one agent's live Fast Track detail. Never cached."""
-    if not _perplexity_auth():
+    if not _read_auth():
         return jsonify({"error": "Unauthorized"}), 401
     email = (request.args.get("email") or "").strip().lower()
     if not email:
@@ -4719,7 +4719,7 @@ def api_minimized_agents():
     POST {"minimized_list": [...]}                    replace the whole list
     """
     import json as _json
-    if not _perplexity_auth():
+    if not _read_auth():
         return jsonify({"error": "Unauthorized"}), 401
 
     def _read():
@@ -4755,7 +4755,7 @@ def api_minimized_agents():
 @app.route("/team/onboarding")
 def team_onboarding_page():
     """Barry's Fast Track onboarding board. Leadership only."""
-    if not _perplexity_auth():
+    if not _read_auth():
         return "Not authorized", 403
     return render_template("onboarding_board.html",
                            api_key=request.args.get("key", ""))
@@ -6990,7 +6990,7 @@ def api_agents_money():
     appointments that math requires (using THEIR goal-setting rates), the
     one lever to coach, and both earned statuses (transfers + Phoenix).
     Sorted by dollar gap so the most expensive conversation is on top."""
-    if not _perplexity_auth():
+    if not _read_auth():
         return jsonify({"error": "Unauthorized"}), 401
     try:
         import math as _math
@@ -8871,6 +8871,13 @@ def _perplexity_auth() -> bool:
     except Exception:
         return False
 
+
+def _read_auth() -> bool:
+    """Read-level auth: the owner (key or session) OR a coach (key or
+    session). Use on GET surfaces both Barry and Danny should see. The
+    global gate already 403s any coach non-GET before route code runs,
+    so granting a coach here can never grant a write."""
+    return _perplexity_auth() or _auth_role() == "coach"
 
 def _abbrev_name(full_name: str) -> str:
     """'James Greear' -> 'James G.'  Strips PII from lead names."""
@@ -13478,6 +13485,155 @@ def webhook_projectblue():
         return jsonify({"ok": True, "error": "internal"}), 200
 
 
+def _pond_outreach_insight(base, enriched):
+    """The conclusions layer for the AI Outreach tab. Deterministic, no LLM.
+
+    Turns raw pond-mailer counts into the answers a team leader actually
+    needs: what is working, what is not, what happens after the AI converts
+    a lead, and the questions the raw feed never surfaces. All bullets are
+    computed from real rows so every claim is defensible.
+    """
+    insight = {"working": [], "not_working": [], "questions": [],
+               "outcomes": {}, "agents": [], "by_strategy": [], "by_tier": []}
+    try:
+        deep = _db.get_pond_insight_data(days=60) or {}
+    except Exception as e:
+        logger.warning("pond insight data failed: %s", e)
+        deep = {}
+    f = base.get("funnel", {}) or {}
+
+    # ── After the yes: routed → called → appointment ────────────────────────
+    routed = [l for l in enriched]
+    called = [l for l in routed if l.get("calls_since", 0) > 0]
+    uncalled = [l for l in routed if l.get("status") == "dropped"]
+    lag_hours = sorted(l["hours_to_call"] for l in called
+                       if l.get("hours_to_call") is not None)
+    median_lag = lag_hours[len(lag_hours) // 2] if lag_hours else None
+    ro = deep.get("routed_outcomes") or {}
+    insight["outcomes"] = {
+        "routed": len(routed),
+        "called": len(called),
+        "called_pct": round(len(called) / len(routed) * 100) if routed else None,
+        "median_hours_to_call": median_lag,
+        "routed_60d": ro.get("routed", 0),
+        "appts_60d": ro.get("with_appt", 0),
+        "appt_names": ro.get("appts", []),
+        "uncalled": [{"person": l.get("person_name"), "agent": l.get("agent_name"),
+                      "days": round((l.get("hours_since") or 0) / 24, 1)}
+                     for l in sorted(uncalled, key=lambda x: -(x.get("hours_since") or 0))[:8]],
+    }
+
+    # ── Agent follow-through table ──────────────────────────────────────────
+    by_agent = {}
+    for l in routed:
+        a = l.get("agent_name") or "Unassigned"
+        d = by_agent.setdefault(a, {"agent": a, "routed": 0, "called": 0, "lags": []})
+        d["routed"] += 1
+        if l.get("calls_since", 0) > 0:
+            d["called"] += 1
+            if l.get("hours_to_call") is not None:
+                d["lags"].append(l["hours_to_call"])
+    for d in by_agent.values():
+        lags = sorted(d.pop("lags"))
+        d["median_hours"] = lags[len(lags) // 2] if lags else None
+        d["called_pct"] = round(d["called"] / d["routed"] * 100) if d["routed"] else 0
+    insight["agents"] = sorted(by_agent.values(),
+                               key=lambda d: (d["called_pct"], -d["routed"]))
+
+    # ── Message + tier scoreboards (60d, reply-attributed) ─────────────────
+    strategies = [r for r in (deep.get("by_strategy") or []) if r.get("sends", 0) >= 10]
+    tiers = [r for r in (deep.get("by_tier") or []) if r.get("sends", 0) >= 10]
+    for r in strategies + tiers:
+        r["reply_rate"] = round(r["replies"] / r["sends"] * 100, 1) if r["sends"] else 0
+    insight["by_strategy"] = sorted(strategies, key=lambda r: -r["reply_rate"])
+    insight["by_tier"] = sorted(tiers, key=lambda r: -r["reply_rate"])
+
+    # ── Verdict bullets ─────────────────────────────────────────────────────
+    W, N = insight["working"].append, insight["not_working"].append
+    total_sent = (f.get("emails_sent", 0) or 0) + (f.get("sms_sent", 0) or 0)
+    total_replied = (f.get("email_replied", 0) or 0) + (f.get("sms_replied", 0) or 0)
+    overall_rr = round(total_replied / total_sent * 100, 1) if total_sent else 0
+
+    if len(insight["by_strategy"]) >= 2:
+        best, worst = insight["by_strategy"][0], insight["by_strategy"][-1]
+        if best["reply_rate"] > max(overall_rr * 1.3, worst["reply_rate"] * 1.5):
+            W("The '%s' message is your workhorse: %s%% of sends get a reply "
+              "vs %s%% overall. Send more of what works."
+              % (best["key"], best["reply_rate"], overall_rr))
+        if worst["replies"] == 0 and worst["sends"] >= 15:
+            N("The '%s' message has %d sends and zero replies in 60 days. "
+              "Retire it or rewrite it." % (worst["key"], worst["sends"]))
+    if len(insight["by_tier"]) >= 2:
+        bt = insight["by_tier"][0]
+        if bt["reply_rate"] >= max(overall_rr * 1.3, 1):
+            W("%s leads answer the AI most (%s%% reply rate). That is where "
+              "the pond still has life." % (bt["key"], bt["reply_rate"]))
+
+    if ro.get("with_appt"):
+        W("%d appointment%s on the calendar came from leads the AI woke up "
+          "in the last 60 days. The robot is feeding the humans."
+          % (ro["with_appt"], "s" if ro["with_appt"] != 1 else ""))
+    elif ro.get("routed", 0) >= 5:
+        N("The AI has converted %d leads to a yes in 60 days and not one has "
+          "an appointment on the calendar since. The leak is after the "
+          "handoff, not in the outreach." % ro["routed"])
+
+    if uncalled:
+        N("%d lead%s replied to the AI, got routed to an agent, and never "
+          "got a call. Every one is listed below with the agent's name on it."
+          % (len(uncalled), "s" if len(uncalled) != 1 else ""))
+    elif routed and insight["outcomes"]["called_pct"] == 100:
+        W("Every routed reply this month got an agent call. The handoff is "
+          "holding.")
+    if median_lag is not None:
+        if median_lag <= 4:
+            W("When agents do call, they move: median %.1f hours from reply "
+              "to first call." % median_lag)
+        elif median_lag >= 24:
+            N("Median time from an AI-earned yes to the first agent call is "
+              "%.0f hours. Warm goes cold in one." % median_lag)
+
+    burn = deep.get("burn") or {}
+    b_now, b_prev = burn.get("optout_per_100"), burn.get("optout_per_100_prev")
+    if b_now is not None and b_prev is not None and b_now >= max(b_prev * 1.5, 3):
+        N("Opt-outs are climbing: %.1f per 100 sends vs %.1f last month. The "
+          "list is telling you the volume or the message is off." % (b_now, b_prev))
+
+    # ── Questions you are not asking ────────────────────────────────────────
+    Q = insight["questions"].append
+    if ro.get("routed"):
+        Q({"q": "What happens after the yes?",
+           "a": "In 60 days: %d leads said yes to the AI, %s have an agent "
+                "call logged, and %d now have an appointment on the calendar. "
+                "The email is the cheap part; this chain is the money."
+                % (ro["routed"],
+                   ("%d%%" % insight["outcomes"]["called_pct"])
+                   if insight["outcomes"]["called_pct"] is not None else "?",
+                   ro.get("with_appt", 0))})
+    if median_lag is not None and insight["agents"]:
+        fast = [a for a in insight["agents"] if a.get("median_hours") is not None]
+        if len(fast) >= 2:
+            fast.sort(key=lambda a: a["median_hours"])
+            Q({"q": "Who moves fastest on an AI convert?",
+               "a": "%s calls in a median of %.1f hours. %s takes %.1f. Same "
+                    "leads, same phone. Speed is a choice."
+                    % (fast[0]["agent"], fast[0]["median_hours"],
+                       fast[-1]["agent"], fast[-1]["median_hours"])})
+    spl = deep.get("sends_per_lead")
+    if spl:
+        Q({"q": "How hard is the AI working each lead?",
+           "a": "The average pond lead absorbed %.1f touches in 60 days. "
+                "Below about 3, replies are luck; past 6 with no reply, the "
+                "lead is telling you no without saying it." % spl})
+    if b_now is not None:
+        Q({"q": "Are we burning the list?",
+           "a": "%.1f opt-outs per 100 sends this month%s. Every opt-out is a "
+                "lead nobody can ever text again, so this number is the rent "
+                "the AI pays." % (b_now,
+                (" vs %.1f last month" % b_prev) if b_prev is not None else "")})
+    return insight
+
+
 @app.route("/api/pond-mailer/dashboard")
 def api_pond_mailer_dashboard():
     """
@@ -13508,10 +13664,11 @@ def api_pond_mailer_dashboard():
             routing_ts   = lead.get("received_ts", 0)
             routing_dt   = datetime.fromtimestamp(routing_ts, tz=timezone.utc) if routing_ts else None
 
-            agent_name   = "Unassigned"
-            stage        = "Unknown"
-            calls_since  = 0
-            last_call_dt = None
+            agent_name    = "Unassigned"
+            stage         = "Unknown"
+            calls_since   = 0
+            last_call_dt  = None
+            first_call_dt = None
 
             try:
                 person = fub.get_person(pid)
@@ -13551,10 +13708,9 @@ def api_pond_mailer_dashboard():
                     calls = fub.get_calls(person_id=pid, since=routing_dt)
                     calls_since = len(calls)
                     if calls:
-                        last_call_dt = max(
-                            (c.get("created", "") for c in calls),
-                            default=None
-                        )
+                        stamps = [c.get("created", "") for c in calls if c.get("created")]
+                        last_call_dt = max(stamps, default=None)
+                        first_call_dt = min(stamps, default=None)
 
             except Exception as e:
                 logger.warning("FUB enrichment failed for lead %s: %s", pid, e)
@@ -13571,17 +13727,26 @@ def api_pond_mailer_dashboard():
             else:
                 status = "dropped"
 
+            hours_to_call = None
+            if first_call_dt and routing_dt:
+                try:
+                    _fc = datetime.fromisoformat(first_call_dt.replace("Z", "+00:00"))
+                    hours_to_call = round((_fc - routing_dt).total_seconds() / 3600, 1)
+                except Exception:
+                    pass
             enriched.append({
                 **lead,
-                "agent_name":   agent_name,
-                "stage":        stage,
-                "calls_since":  calls_since,
-                "last_call_dt": last_call_dt,
-                "hours_since":  round(hours_since, 1),
-                "status":       status,
+                "agent_name":    agent_name,
+                "stage":         stage,
+                "calls_since":   calls_since,
+                "last_call_dt":  last_call_dt,
+                "hours_to_call": hours_to_call,
+                "hours_since":   round(hours_since, 1),
+                "status":        status,
             })
 
-        result = {**base, "routed_leads": enriched}
+        insight = _pond_outreach_insight(base, enriched)
+        result = {**base, "routed_leads": enriched, "insight": insight}
         _cache[cache_key] = {"ts": datetime.now().timestamp(), "data": result}
         return jsonify(result)
 
@@ -15909,7 +16074,7 @@ def training_board():
     """The Dojo board, conclusions-first: the team verdict, then each agent
     diagnosed like a sales leader would (archetype, what the tape proves,
     the money in fixing it), sorted by coaching upside. For Barry and Danny."""
-    if not _perplexity_auth():
+    if not _read_auth():
         return ("<h3 style='font-family:sans-serif;padding:2rem'>Not authorized. "
                 "Log in first.</h3>"), 403
     from datetime import date as _date, timedelta as _td
@@ -16110,7 +16275,7 @@ def api_appointments_insight():
     """The appointments money layer: leak lists with names, agent/source/
     slot segments, dollars-left-on-table. Serves the nightly cache;
     ?refresh=1 rebuilds now (bounded FUB touch checks, ~30-60s)."""
-    if not _perplexity_auth():
+    if not _read_auth():
         return jsonify({"error": "Unauthorized"}), 401
     import appt_insight as _ai
     try:
@@ -16146,7 +16311,7 @@ def scheduled_appt_insight():
 def api_hotsheet_scoreboard():
     """Worked-rate per agent on their morning hot sheets (verified against
     real FUB call logs). Feeds Pulse and coaching conversations."""
-    if not _perplexity_auth():
+    if not _read_auth():
         return jsonify({"error": "Unauthorized"}), 401
     days = request.args.get("days", 7, type=int)
     return jsonify({"ok": True, "days": days,

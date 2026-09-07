@@ -8218,3 +8218,169 @@ def ensure_appointment_created_col():
                 """)
     except Exception as e:
         logger.warning("ensure_appointment_created_col failed: %s", e)
+
+
+def get_pond_insight_data(days=60):
+    """Theme-level intelligence for the AI Outreach tab.
+
+    Answers the team-leader questions the raw feed cannot: which message
+    strategies earn replies, which lead tiers respond, what actually happens
+    after a lead is routed to an agent (appointments), and whether the list
+    is being burned (opt-outs per send, trend). Replies are attributed to the
+    latest send that lead received before replying.
+    """
+    if not is_available():
+        return {}
+    out = {"days": days, "by_strategy": [], "by_tier": [],
+           "routed_outcomes": {}, "burn": {}, "sends_per_lead": None}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                sends_cte = """
+                    WITH sends AS (
+                        SELECT person_id, strategy, leadstream_tier, sent_at
+                        FROM pond_email_log
+                        WHERE NOT dry_run AND sent_at >= NOW() - INTERVAL '%s days'
+                        UNION ALL
+                        SELECT person_id, strategy, leadstream_tier, sent_at
+                        FROM pond_sms_log
+                        WHERE NOT dry_run AND sent_at >= NOW() - INTERVAL '%s days'
+                    ),
+                    replies AS (
+                        SELECT person_id, sentiment, received_at FROM pond_reply_log
+                        WHERE received_at >= NOW() - INTERVAL '%s days'
+                        UNION ALL
+                        SELECT person_id, sentiment, received_at FROM pond_sms_reply_log
+                        WHERE received_at >= NOW() - INTERVAL '%s days'
+                    ),
+                    attributed AS (
+                        SELECT r.sentiment,
+                               (SELECT s.strategy FROM sends s
+                                 WHERE s.person_id = r.person_id
+                                   AND s.sent_at <= r.received_at
+                                 ORDER BY s.sent_at DESC LIMIT 1) AS strategy,
+                               (SELECT s.leadstream_tier FROM sends s
+                                 WHERE s.person_id = r.person_id
+                                   AND s.sent_at <= r.received_at
+                                 ORDER BY s.sent_at DESC LIMIT 1) AS tier
+                        FROM replies r
+                        WHERE r.person_id IS NOT NULL
+                    )
+                """ % (days, days, days, days)
+
+                for dim, send_col in (("strategy", "strategy"),
+                                      ("tier", "leadstream_tier")):
+                    cur.execute(sends_cte + """
+                        SELECT COALESCE(s.%s, '(unknown)') AS k,
+                               COUNT(*) AS sends,
+                               COUNT(DISTINCT s.person_id) AS leads
+                        FROM sends s GROUP BY 1 ORDER BY 2 DESC
+                    """ % send_col)
+                    rows = {k: {"key": k, "sends": int(sn), "leads": int(ld),
+                                "replies": 0, "positive": 0, "optouts": 0}
+                            for k, sn, ld in cur.fetchall()}
+                    a_col = "strategy" if dim == "strategy" else "tier"
+                    cur.execute(sends_cte + """
+                        SELECT COALESCE(a.%s, '(unknown)'),
+                               COUNT(*),
+                               COUNT(*) FILTER (WHERE a.sentiment = 'positive'),
+                               COUNT(*) FILTER (WHERE a.sentiment = 'negative')
+                        FROM attributed a GROUP BY 1
+                    """ % a_col)
+                    for k, rep, pos, neg in cur.fetchall():
+                        rows.setdefault(k, {"key": k, "sends": 0, "leads": 0,
+                                            "replies": 0, "positive": 0, "optouts": 0})
+                        rows[k].update(replies=int(rep), positive=int(pos), optouts=int(neg))
+                    out["by_strategy" if dim == "strategy" else "by_tier"] = \
+                        sorted(rows.values(), key=lambda r: -r["sends"])
+
+                # After the route: did an appointment ever land on the calendar?
+                cur.execute("""
+                    WITH routed AS (
+                        SELECT person_id, MIN(received_at) AS routed_at FROM (
+                            SELECT person_id, received_at FROM pond_reply_log
+                            WHERE routed AND received_at >= NOW() - INTERVAL '%s days'
+                            UNION ALL
+                            SELECT person_id, received_at FROM pond_sms_reply_log
+                            WHERE routed AND received_at >= NOW() - INTERVAL '%s days'
+                        ) x WHERE person_id IS NOT NULL GROUP BY person_id
+                    )
+                    SELECT COUNT(*) AS routed,
+                           COUNT(*) FILTER (WHERE a.pid IS NOT NULL) AS with_appt
+                    FROM routed r
+                    LEFT JOIN LATERAL (
+                        SELECT a.person_id AS pid FROM appointments a
+                        WHERE a.person_id = r.person_id
+                          AND COALESCE(a.fub_created_at, a.created_at) >= r.routed_at
+                          AND a.status NOT IN ('canceled')
+                        LIMIT 1
+                    ) a ON TRUE
+                """ % (days, days))
+                row = cur.fetchone()
+                out["routed_outcomes"] = {"routed": int(row[0] or 0),
+                                          "with_appt": int(row[1] or 0)}
+
+                # Names for the proof line: appointments born from AI replies
+                cur.execute("""
+                    WITH routed AS (
+                        SELECT person_id, MIN(received_at) AS routed_at FROM (
+                            SELECT person_id, received_at FROM pond_reply_log
+                            WHERE routed AND received_at >= NOW() - INTERVAL '%s days'
+                            UNION ALL
+                            SELECT person_id, received_at FROM pond_sms_reply_log
+                            WHERE routed AND received_at >= NOW() - INTERVAL '%s days'
+                        ) x WHERE person_id IS NOT NULL GROUP BY person_id
+                    )
+                    SELECT a.person_name, a.agent_name, a.start_time::date
+                    FROM routed r JOIN appointments a ON a.person_id = r.person_id
+                    WHERE COALESCE(a.fub_created_at, a.created_at) >= r.routed_at
+                      AND a.status NOT IN ('canceled')
+                    ORDER BY a.start_time DESC LIMIT 10
+                """ % (days, days))
+                out["routed_outcomes"]["appts"] = [
+                    {"person": p, "agent": ag, "date": str(d)}
+                    for p, ag, d in cur.fetchall()]
+
+                # List burn: opt-outs per 100 sends, this 30d vs the 30 before
+                cur.execute("""
+                    WITH s AS (
+                        SELECT sent_at FROM pond_email_log WHERE NOT dry_run
+                          AND sent_at >= NOW() - INTERVAL '60 days'
+                        UNION ALL
+                        SELECT sent_at FROM pond_sms_log WHERE NOT dry_run
+                          AND sent_at >= NOW() - INTERVAL '60 days'
+                    ), n AS (
+                        SELECT received_at FROM pond_reply_log
+                        WHERE sentiment = 'negative' AND received_at >= NOW() - INTERVAL '60 days'
+                        UNION ALL
+                        SELECT received_at FROM pond_sms_reply_log
+                        WHERE sentiment = 'negative' AND received_at >= NOW() - INTERVAL '60 days'
+                    )
+                    SELECT
+                      (SELECT COUNT(*) FROM s WHERE sent_at >= NOW() - INTERVAL '30 days'),
+                      (SELECT COUNT(*) FROM s WHERE sent_at <  NOW() - INTERVAL '30 days'),
+                      (SELECT COUNT(*) FROM n WHERE received_at >= NOW() - INTERVAL '30 days'),
+                      (SELECT COUNT(*) FROM n WHERE received_at <  NOW() - INTERVAL '30 days')
+                """)
+                s30, s_prev, n30, n_prev = cur.fetchone()
+                out["burn"] = {
+                    "optout_per_100": round(n30 / s30 * 100, 1) if s30 else None,
+                    "optout_per_100_prev": round(n_prev / s_prev * 100, 1) if s_prev else None,
+                }
+
+                # Touch depth: how many sends the average lead has absorbed
+                cur.execute("""
+                    SELECT COUNT(*), COUNT(DISTINCT person_id) FROM (
+                        SELECT person_id FROM pond_email_log
+                        WHERE NOT dry_run AND sent_at >= NOW() - INTERVAL '%s days'
+                        UNION ALL
+                        SELECT person_id FROM pond_sms_log
+                        WHERE NOT dry_run AND sent_at >= NOW() - INTERVAL '%s days'
+                    ) x
+                """ % (days, days))
+                tot, uniq = cur.fetchone()
+                out["sends_per_lead"] = round(tot / uniq, 1) if uniq else None
+        return out
+    except Exception as e:
+        logger.warning("get_pond_insight_data failed: %s", e)
+        return out

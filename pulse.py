@@ -532,6 +532,29 @@ def _engines(cur):
 
 # ── entry point ─────────────────────────────────────────────────────────────
 
+# ── annual pace: the one number the old Command Center tab owned ────────────
+
+def _pace(cur):
+    """Closings pace vs what the roster needs. YTD closings projected to a
+    full year, against ~10 closings per active agent per year (the number a
+    team this size must hit to sustain itself)."""
+    rows = _q(cur, """
+        SELECT COUNT(*) FILTER (WHERE close_date >= date_trunc('year', CURRENT_DATE)
+                                AND close_date <= CURRENT_DATE),
+               EXTRACT(doy FROM CURRENT_DATE)::int
+        FROM deal_log WHERE stage = 'closing'
+    """)
+    ytd, doy = (int(rows[0][0] or 0), int(rows[0][1] or 1)) if rows else (0, 1)
+    try:
+        n_agents = len(_db.get_agent_profiles(active_only=True) or [])
+    except Exception:
+        n_agents = 0
+    projected = round(ytd / max(doy, 1) * 365) if ytd else 0
+    target = n_agents * 10 if n_agents else None
+    return {"ytd_closings": ytd, "projected": projected,
+            "target": target, "n_agents": n_agents}
+
+
 def build_pulse():
     """Assemble the whole Pulse payload. Postgres only; ~10 fast queries."""
     out = {"as_of": datetime.now(timezone.utc).isoformat(), "sections_failed": []}
@@ -544,6 +567,13 @@ def build_pulse():
                 funnel = {"weeks": [], "tiles": [], "rates": {}, "raw": {}}
                 out["sections_failed"].append("funnel")
             out["funnel"] = funnel
+
+            try:
+                out["pace"] = _pace(cur)
+            except Exception as e:
+                logger.error("pulse pace failed: %s", e)
+                out["pace"] = None
+                out["sections_failed"].append("pace")
 
             for key, fn, args in (
                 ("agents", _agent_themes, (cur, funnel)),
