@@ -299,11 +299,12 @@ def run_nurture_run(dry_run=True, only_agent=None, preview_to=None):
             call_line = call_line or cl
             token = secrets.token_urlsafe(9)
             if not dry_run:
-                ok = _db.save_nurture_card(
+                stored = _db.save_nurture_card(
                     run_date, token, agent, person.get("id"),
                     (person.get("name") or "").strip(), c["phone"], message, why)
-                if not ok:
+                if not stored:
                     continue
+                token = stored  # same-day re-runs reuse the existing token
             saved += 1
             cards_html.append(_card_html(
                 base, token, (person.get("name") or "").strip(), why, message,

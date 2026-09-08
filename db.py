@@ -9013,10 +9013,15 @@ def save_nurture_card(run_date, token, agent_name, person_id, lead_name,
                         (run_date, token, agent_name, person_id, lead_name,
                          lead_phone, message, why)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (run_date, agent_name, person_id) DO NOTHING
+                    ON CONFLICT (run_date, agent_name, person_id)
+                    DO UPDATE SET message = EXCLUDED.message,
+                                  why = EXCLUDED.why,
+                                  lead_phone = EXCLUDED.lead_phone
+                    RETURNING token
                 """, (run_date, token, agent_name, str(person_id), lead_name,
                       lead_phone, message, why))
-                return cur.rowcount > 0
+                row = cur.fetchone()
+                return row[0] if row else None
     except Exception as e:
         logger.warning("save_nurture_card failed: %s", e)
         return False
