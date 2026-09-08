@@ -4902,8 +4902,17 @@ def api_onboarding_seed():
     profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
                     if p["agent_name"] == name), None)
     base = (os.environ.get("BASE_URL") or "").rstrip("/")
-    seeded = _onboard_new_hire(name, (profile or {}).get("email"), base)
-    return jsonify({"ok": bool(seeded), "seeded": seeded})
+    if body.get("quiet"):
+        # Backfill mode: seed without firing the day-0 Ana email (used for
+        # existing agents whose docs are already handled).
+        seeded = _db.seed_onboarding(name)
+    else:
+        seeded = _onboard_new_hire(name, (profile or {}).get("email"), base)
+    for key in (body.get("mark_done") or []):
+        _db.mark_onboarding_task(agent_name=name, task_key=key,
+                                 done_by=body.get("done_by") or "backfill")
+    return jsonify({"ok": bool(seeded), "seeded": seeded,
+                    "open": _db.get_open_onboarding_tasks(name)})
 
 
 @app.route("/api/admin/onboarding-board")
