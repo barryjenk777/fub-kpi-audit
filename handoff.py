@@ -117,8 +117,23 @@ def run_handoff_scan(dry_run=False):
         summary["messages"].append({"rung": 1, "agent": agent, "message": msg})
         if dry_run or seeding:
             continue
+        # Attention governor: after 3 instant texts in a day, further
+        # handoffs ride the morning sheet instead of the phone buzzing a
+        # fourth time (transfer-flood days taught agents to ignore texts).
+        try:
+            if _db.count_attention_today(agent, kinds=["handoff"]) >= 3:
+                _db.log_attention(agent, "deferred_handoff", "text")
+                summary.setdefault("deferred_governor", 0)
+                summary["deferred_governor"] += 1
+                continue
+        except Exception:
+            pass
         if _db.claim_once("handoff1_%s" % pid) and _queue(profile, agent, msg):
             summary["rung1_sent"] += 1
+            try:
+                _db.log_variant("handoff_rung1", "v%d" % idx, pid, agent)
+            except Exception:
+                pass
 
     # ── Rung 2: 4+ hours old, still no verified call ────────────────────────
     # Only during the working day (9am-8pm ET) so the nudge lands when a call

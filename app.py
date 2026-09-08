@@ -93,6 +93,8 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/v/", "/vp/", "/go/", "/mthumb/", "/audio/",
         # Nurture Run one-tap redirects (token IS the auth)
         "/nr/",
+        # Agent Operating Rhythm (no PII, bookmarkable)
+        "/rhythm",
         # Market Pulse pages: texted/emailed to leads, must be public
         "/market",
         # Vercel course endpoints check COURSE_API_KEY internally
@@ -8860,8 +8862,18 @@ def _fub_upsert_appt_resource(appt, event_name):
     # Fell-through appointment: instant rebook nudge (email), once per appt.
     if outcome in ("No show", "Reschedule Needed") and prev_outcome != outcome \
             and agent_name and agent_name not in _EXCLUDED_REBOOK:
-        if _db.claim_once("rebook_%s" % appt_id):
-            _appt_rebook_email(agent_name, person_name, outcome)
+        _eh = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+        _et_hour = datetime.now(timezone(timedelta(hours=_eh))).hour
+        if not (7 <= _et_hour < 21):
+            # Quiet hours: no agent-facing pings at night. The unrebooked
+            # no-show is guaranteed a slot in the next morning text.
+            _db.log_attention(agent_name, "deferred_rebook", "email")
+        elif _db.count_attention_today(agent_name, kinds=["rebook"]) >= 2:
+            _db.log_attention(agent_name, "deferred_rebook", "email")
+        elif _db.claim_once("rebook_%s" % appt_id):
+            if _appt_rebook_email(agent_name, person_name, outcome):
+                _db.log_attention(agent_name, "rebook", "email")
+                _db.log_variant("rebook", "v1", person_id, agent_name)
 
 
 def _fub_outbound_touch(person_id, is_call):
@@ -8875,6 +8887,7 @@ def _fub_outbound_touch(person_id, is_call):
         try:
             if _db.mark_isa_first_call(str(person_id)):
                 logger.info("ISA first call marked for person %s", person_id)
+                _db.stamp_handoff_variant_minutes(str(person_id))
         except Exception as e:
             logger.warning("mark_isa_first_call failed (non-fatal): %s", e)
     try:
@@ -8965,6 +8978,15 @@ def _fub_process_webhook(event, uri, resource_ids):
             for r in _fub_fetch_webhook_resources(uri):
                 person_id = r.get("personId")
                 outbound = (not r.get("isIncoming", True)) or r.get("isOutbound", False)
+                if person_id and not outbound and event == "textMessagesCreated":
+                    # Inbound text: if this person got a Nurture Run message
+                    # recently, the message earned a reply — the metric that
+                    # decides which copy banks live and die.
+                    try:
+                        if _db.mark_nurture_reply(person_id):
+                            _db.stamp_variant_outcome("nurture_run", person_id, 1.0)
+                    except Exception:
+                        pass
                 if not person_id or not outbound or person_id in seen:
                     continue
                 seen.add(person_id)
@@ -17423,6 +17445,87 @@ function doCopy(){
 </script></body></html>""" % (first, first, msg_html, fub_url, first, msg_js)
 
 
+@app.route("/rhythm")
+def agent_rhythm():
+    """The Agent Operating Rhythm: the whole week on one page, so system
+    messages read as a rhythm, not noise. Linked from the recurring emails."""
+    return """<!DOCTYPE html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<meta name='robots' content='noindex'><title>The Legacy Rhythm</title>
+<style>body{margin:0;background:#0d1117;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;line-height:1.55}
+.wrap{max-width:520px;margin:0 auto;padding:1.8rem 1.2rem 3rem}
+.kick{font-size:.62rem;font-weight:800;letter-spacing:.18em;color:#f5a623;text-transform:uppercase}
+h1{font-size:1.6rem;font-weight:850;margin:.3rem 0 .3rem}
+.sub{color:#8a93a5;font-size:.85rem;margin-bottom:1.4rem}
+.row{display:flex;gap:.9rem;background:#151b24;border:1px solid #232c3a;border-radius:12px;padding:.95rem 1.1rem;margin-bottom:.7rem;align-items:flex-start}
+.when{flex-shrink:0;width:5.4rem;font-size:.7rem;font-weight:800;color:#f5a623;text-transform:uppercase;letter-spacing:.06em;padding-top:.15rem}
+.what b{display:block;font-size:.92rem;margin-bottom:.15rem}
+.what span{font-size:.78rem;color:#8a93a5}
+.note{margin-top:1.4rem;background:#fffbf0;border-left:4px solid #f5a623;border-radius:8px;color:#3d4450;font-size:.85rem;padding:.85rem 1rem}
+</style></head><body><div class='wrap'>
+<div class='kick'>Legacy Home Team</div>
+<h1>Your week, one rhythm</h1>
+<div class='sub'>Everything the system sends you, when it comes, and what it
+needs from you. If it is not on this page, it can wait.</div>
+<div class='row'><div class='when'>Weekdays 8:15am</div><div class='what'>
+  <b>The morning text</b><span>Three calls, picked and verified. Make them
+  before lunch and your scoreboard stays green.</span></div></div>
+<div class='row'><div class='when'>Tuesday 10:30am</div><div class='what'>
+  <b>The Nurture Run</b><span>Ten of your quiet leads, messages already
+  written. Two taps each, sent from your FUB number. Ten minutes total.</span></div></div>
+<div class='row'><div class='when'>Wednesday 8:15am</div><div class='what'>
+  <b>Rep check</b><span>Inside the morning text: your Dojo practice line and
+  the number to call. Pass is 7 or better. Phoenix leads ride on it.</span></div></div>
+<div class='row'><div class='when'>Sunday 7pm</div><div class='what'>
+  <b>The Dojo</b><span>Your week's focus and scenario, picked from your real
+  call grades. Reps due by Sunday night.</span></div></div>
+<div class='row'><div class='when'>Anytime</div><div class='what'>
+  <b>Hot pings</b><span>A transfer from Fhalen, an appointment that fell
+  through. These are the only mid-day interruptions, capped at a few per
+  day, and they always mean money is cooling right now.</span></div></div>
+<div class='note'><b>The deal:</b> nothing after 9pm, nothing that is not on
+this page, and every message either has a lead attached or a rep attached.
+Phoenix bonus leads are earned two ways: your dials and your weekly reps.</div>
+</div></body></html>"""
+
+
+@app.route("/api/admin/attention/load")
+def api_attention_load():
+    """Per-agent message load and deferrals: the governor's report card."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify({"ok": True,
+                    "load": _db.attention_load(
+                        days=request.args.get("days", 7, type=int))})
+
+
+@app.route("/api/admin/variants/scoreboard")
+def api_variants_scoreboard():
+    """Copy-variant performance with flags. Retiring a variant stays a
+    human decision; this is the evidence."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    rows = _db.variant_scoreboard(system=request.args.get("system"),
+                                  days=request.args.get("days", 90, type=int))
+    by_sys = {}
+    for r in rows:
+        by_sys.setdefault(r["system"], []).append(r)
+    flags = []
+    for system, vs in by_sys.items():
+        judged = [v for v in vs if v["sends"] >= 20]
+        if len(judged) < 2:
+            continue
+        mean_rate = sum(v["outcome_rate"] for v in judged) / len(judged)
+        for v in judged:
+            if mean_rate > 0 and v["outcome_rate"] < mean_rate * 0.5:
+                flags.append({"system": system, "variant": v["variant"],
+                              "sends": v["sends"],
+                              "outcome_rate": v["outcome_rate"],
+                              "system_mean": round(mean_rate),
+                              "verdict": "retire candidate"})
+    return jsonify({"ok": True, "variants": rows, "flags": flags})
+
+
 @app.route("/api/admin/nurture-run/run", methods=["POST"])
 def api_nurture_run():
     """Trigger a Nurture Run. Body: {"dry_run": bool, "only_agent": str,
@@ -17445,6 +17548,105 @@ def api_nurture_scoreboard():
     return jsonify({"ok": True,
                     "scoreboard": _db.nurture_scoreboard(
                         weeks=request.args.get("weeks", 1, type=int))})
+
+
+def _tape_of_week():
+    """Pick the best call and the most teachable rep from the last 7 days of
+    per-call grades (14-day fallback), framed by the team's Dojo focus.
+    Returns (best, teach, days_used) as call-grade rows or Nones."""
+    grades = _db.get_call_grades(days=7, limit=100)
+    days_used = 7
+    if len([g for g in grades if g.get("grade") is not None]) < 4:
+        grades = _db.get_call_grades(days=14, limit=100)
+        days_used = 14
+    graded = [g for g in grades if g.get("grade") is not None and g.get("lead")]
+    if not graded:
+        return None, None, days_used
+    best = max(graded, key=lambda g: (g["grade"],
+               1 if "Appointment Set" in (g.get("detail") or "") else 0))
+    hot = [g for g in graded if "Hot" in (g.get("detail") or "") and g is not best]
+    pool = hot or [g for g in graded if g is not best]
+    teach = min(pool, key=lambda g: g["grade"]) if pool else None
+    return best, teach, days_used
+
+
+def scheduled_tape_of_week():
+    """Monday 7:30am ET: the meeting segment, ready to run. Goes to Barry
+    only — praise is a pattern, and patterns are his voice, so the machine
+    hands him the tape and the words instead of texting the team."""
+    if not _db.try_acquire_job_lock("tape_of_week"):
+        return
+    try:
+        best, teach, days_used = _tape_of_week()
+        if not best:
+            print("[TAPE] not enough graded calls yet; skipping")
+            return
+        import postmark_client as _pm
+        b_first = (best.get("agent") or "").split()[0]
+        b_out = (best.get("detail") or "").split(" | ")[0] or "graded"
+        teach_html = ""
+        if teach and teach.get("grade", 10) <= 6:
+            t_first = (teach.get("agent") or "").split()[0]
+            focus_bits = (teach.get("detail") or "").split(" | ")
+            teach_html = """
+<tr><td style="background:#ffffff;padding:20px 30px 6px">
+  <div style="font-size:11px;font-weight:800;letter-spacing:.14em;color:#9a741f;text-transform:uppercase;margin-bottom:6px">The rep we are all doing this week</div>
+  <div style="font-size:15px;line-height:1.6;color:#1a1f26">
+  %s's call with <strong>%s</strong> graded a <strong>%.0f</strong> (%s).
+  Not a callout, a curriculum: this is the exact scenario the Dojo trains.
+  Play 60 seconds of it, then ask the room: where was the ask? Let THEM find
+  it. %s already knows; let the tape do the teaching, not you.</div>
+</td></tr>""" % (t_first, teach.get("lead"), teach.get("grade"),
+                 focus_bits[0] if focus_bits else "", t_first)
+        html = """<div style="background:#f4f4f0;padding:24px 0">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;font-family:-apple-system,'Segoe UI',Arial,sans-serif">
+<tr><td style="background:#0d1117;padding:24px 30px">
+  <div style="font-size:11px;font-weight:800;letter-spacing:.2em;color:#f5a623;text-transform:uppercase;margin-bottom:6px">Tape of the Week</div>
+  <div style="font-size:23px;font-weight:900;color:#ffffff">Your meeting segment, ready to run</div>
+</td></tr>
+<tr><td style="height:4px;background:#f5a623;font-size:0">&nbsp;</td></tr>
+<tr><td style="background:#ffffff;padding:22px 30px 6px">
+  <div style="font-size:11px;font-weight:800;letter-spacing:.14em;color:#2e7d4f;text-transform:uppercase;margin-bottom:6px">The play</div>
+  <div style="font-size:15px;line-height:1.6;color:#1a1f26">
+  <strong>%s</strong> called <strong>%s</strong> and graded a
+  <strong>%.0f</strong>, outcome: %s. Find it in Maverick's call history
+  (%s, %s) and play the first two minutes at the meeting. Then say why it
+  worked before anyone else does. Effort that gets noticed repeats.</div>
+</td></tr>
+%s
+<tr><td style="background:#fffbf0;border-left:4px solid #f5a623;padding:14px 30px;font-size:13px;line-height:1.6;color:#3d4450">
+  <strong>Praise text to send %s from YOUR phone, word for word:</strong><br>
+  "%s, pulled your %s call from last week for the team meeting. That is what
+  the standard sounds like. Proud of you."</td></tr>
+<tr><td style="background:#ffffff;padding:16px 30px 22px;font-size:12px;color:#8a8f98">
+  Window: last %d days of graded calls. Full history on the call grades feed.</td></tr>
+</table></td></tr></table></div>""" % (
+            best.get("agent"), best.get("lead"), best.get("grade"), b_out,
+            best.get("date") or "recent",
+            (best.get("detail") or "").split(" | ")[-1] or "",
+            teach_html, b_first, b_first, best.get("lead"), days_used)
+        _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+                 subject="Tape of the Week: %s's %.0f on %s"
+                         % (b_first, best.get("grade"), best.get("lead")),
+                 html=html)
+        print("[TAPE] sent: best=%s/%s teach=%s" % (
+            best.get("agent"), best.get("grade"),
+            (teach or {}).get("agent")))
+        _record_fired("tape_of_week")
+    except Exception as e:
+        _alert_on_job_failure("tape_of_week", str(e))
+        raise
+    finally:
+        _db.release_job_lock("tape_of_week")
+
+
+@app.route("/api/admin/tape-of-week/run", methods=["POST"])
+def api_tape_run():
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    scheduled_tape_of_week()
+    return jsonify({"ok": True})
 
 
 def scheduled_nurture_run():
@@ -20019,6 +20221,10 @@ def start_scheduler():
     _scheduler.add_job(scheduled_ooc_sweep,
                        CronTrigger(hour=6, minute=40, timezone=ET),
                        id="ooc_sweep", name="Maverick OOC flag age ledger (6:40am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_tape_of_week,
+                       CronTrigger(day_of_week="mon", hour=7, minute=30, timezone=ET),
+                       id="tape_of_week", name="Tape of the Week to Barry (Mon 7:30am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_nurture_run,
                        CronTrigger(day_of_week="tue", hour=10, minute=30, timezone=ET),

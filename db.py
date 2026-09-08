@@ -6664,6 +6664,13 @@ def queue_agent_imessage(agent_name, fub_user_id, phone, message,
     if not is_available():
         return None
     try:
+        log_attention(agent_name, (week_day or "text"),
+                      "email" if agent_name in getattr(
+                          __import__("config"), "EMAIL_DELIVERY_AGENTS", set())
+                      else "text")
+    except Exception:
+        pass
+    try:
         import config as _cfg
         if agent_name in getattr(_cfg, "EMAIL_DELIVERY_AGENTS", set()):
             return _email_agent_message(agent_name, fub_user_id, phone, message,
@@ -8989,8 +8996,14 @@ def ensure_nurture_run_table():
                         clicked_at   TIMESTAMPTZ,
                         click_action TEXT,
                         verified_at  TIMESTAMPTZ,
+                        replied_at   TIMESTAMPTZ,
+                        variant      TEXT,
                         UNIQUE (run_date, agent_name, person_id)
                     );
+                    ALTER TABLE nurture_run_log
+                        ADD COLUMN IF NOT EXISTS replied_at TIMESTAMPTZ;
+                    ALTER TABLE nurture_run_log
+                        ADD COLUMN IF NOT EXISTS variant TEXT;
                     CREATE INDEX IF NOT EXISTS idx_nr_person
                         ON nurture_run_log (person_id, run_date DESC);
                     CREATE INDEX IF NOT EXISTS idx_nr_token
@@ -9001,7 +9014,7 @@ def ensure_nurture_run_table():
 
 
 def save_nurture_card(run_date, token, agent_name, person_id, lead_name,
-                      lead_phone, message, why):
+                      lead_phone, message, why, variant=None):
     if not is_available():
         return False
     ensure_nurture_run_table()
@@ -9011,15 +9024,16 @@ def save_nurture_card(run_date, token, agent_name, person_id, lead_name,
                 cur.execute("""
                     INSERT INTO nurture_run_log
                         (run_date, token, agent_name, person_id, lead_name,
-                         lead_phone, message, why)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         lead_phone, message, why, variant)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (run_date, agent_name, person_id)
                     DO UPDATE SET message = EXCLUDED.message,
                                   why = EXCLUDED.why,
-                                  lead_phone = EXCLUDED.lead_phone
+                                  lead_phone = EXCLUDED.lead_phone,
+                                  variant = EXCLUDED.variant
                     RETURNING token
                 """, (run_date, token, agent_name, str(person_id), lead_name,
-                      lead_phone, message, why))
+                      lead_phone, message, why, variant))
                 row = cur.fetchone()
                 return row[0] if row else None
     except Exception as e:
@@ -9119,3 +9133,235 @@ def get_recent_hotsheet_pids(days=3):
     except Exception as e:
         logger.warning("get_recent_hotsheet_pids failed: %s", e)
         return []
+
+
+# ── Attention governor: one ledger for every agent-facing message ───────────
+# Instant nudges are perishable money and stay instant, but pile-ups are
+# what teach agents to ignore the phone. The ledger counts everything so
+# caps are enforceable and load is finally measurable.
+
+def ensure_attention_ledger():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS attention_ledger (
+                        id         SERIAL PRIMARY KEY,
+                        agent_name TEXT NOT NULL,
+                        day        DATE NOT NULL DEFAULT CURRENT_DATE,
+                        kind       TEXT NOT NULL,   -- morning_text|handoff|phoenix|rebook|nurture_run|dojo|deferred_*
+                        channel    TEXT,            -- text|email
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_att_agent_day
+                        ON attention_ledger (agent_name, day);
+                """)
+    except Exception as e:
+        logger.warning("ensure_attention_ledger failed: %s", e)
+
+
+def log_attention(agent_name, kind, channel):
+    if not is_available():
+        return
+    ensure_attention_ledger()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO attention_ledger (agent_name, kind, channel)
+                    VALUES (%s, %s, %s)
+                """, (agent_name, kind, channel))
+    except Exception as e:
+        logger.warning("log_attention failed: %s", e)
+
+
+def count_attention_today(agent_name, kinds=None, channel=None):
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                q = """SELECT COUNT(*) FROM attention_ledger
+                       WHERE agent_name = %s AND day = CURRENT_DATE
+                         AND kind NOT LIKE 'deferred%%'"""
+                params = [agent_name]
+                if kinds:
+                    q += " AND kind = ANY(%s)"
+                    params.append(list(kinds))
+                if channel:
+                    q += " AND channel = %s"
+                    params.append(channel)
+                cur.execute(q, params)
+                return int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.warning("count_attention_today failed: %s", e)
+        return 0
+
+
+def attention_load(days=7):
+    """Per-agent message load, for Mission Control and the governor's own
+    report card."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COUNT(*) FILTER (WHERE kind NOT LIKE 'deferred%%'),
+                           COUNT(*) FILTER (WHERE channel = 'text'
+                                            AND kind NOT LIKE 'deferred%%'),
+                           COUNT(*) FILTER (WHERE kind LIKE 'deferred%%')
+                    FROM attention_ledger
+                    WHERE day >= CURRENT_DATE - %s
+                    GROUP BY agent_name ORDER BY 2 DESC
+                """, (int(days),))
+                return [{"agent": r[0], "messages": int(r[1]), "texts": int(r[2]),
+                         "deferred": int(r[3])} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("attention_load failed: %s", e)
+        return []
+
+
+# ── Message variant measurement: which words actually move leads ────────────
+
+def ensure_variants_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS message_variants (
+                        id           SERIAL PRIMARY KEY,
+                        system       TEXT NOT NULL,   -- handoff_rung1|nurture_run|rebook
+                        variant_key  TEXT NOT NULL,
+                        person_id    TEXT,
+                        agent_name   TEXT,
+                        sent_at      TIMESTAMPTZ DEFAULT NOW(),
+                        outcome_at   TIMESTAMPTZ,
+                        outcome_val  NUMERIC          -- minutes-to-call, or 1.0 for reply
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_mv_person
+                        ON message_variants (person_id, system, outcome_at);
+                    CREATE INDEX IF NOT EXISTS idx_mv_system
+                        ON message_variants (system, variant_key);
+                """)
+    except Exception as e:
+        logger.warning("ensure_variants_table failed: %s", e)
+
+
+def log_variant(system, variant_key, person_id, agent_name):
+    if not is_available():
+        return
+    ensure_variants_table()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO message_variants (system, variant_key, person_id, agent_name)
+                    VALUES (%s, %s, %s, %s)
+                """, (system, variant_key, str(person_id), agent_name))
+    except Exception as e:
+        logger.warning("log_variant failed: %s", e)
+
+
+def stamp_variant_outcome(system, person_id, outcome_val=1.0, within_days=7):
+    """Stamp the most recent un-stamped send of this system to this person."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE message_variants SET outcome_at = NOW(), outcome_val = %s
+                    WHERE id = (
+                        SELECT id FROM message_variants
+                        WHERE system = %s AND person_id = %s
+                          AND outcome_at IS NULL
+                          AND sent_at >= NOW() - make_interval(days => %s)
+                        ORDER BY sent_at DESC LIMIT 1)
+                """, (outcome_val, system, str(person_id), int(within_days)))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("stamp_variant_outcome failed: %s", e)
+        return 0
+
+
+def variant_scoreboard(system=None, days=90):
+    """Per variant: sends, outcome rate, median outcome value. The flagging
+    layer reads this; retiring copy stays a human decision."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                q = """
+                    SELECT system, variant_key, COUNT(*),
+                           COUNT(*) FILTER (WHERE outcome_at IS NOT NULL),
+                           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY outcome_val)
+                               FILTER (WHERE outcome_val IS NOT NULL)
+                    FROM message_variants
+                    WHERE sent_at >= NOW() - make_interval(days => %s)"""
+                params = [int(days)]
+                if system:
+                    q += " AND system = %s"
+                    params.append(system)
+                q += " GROUP BY system, variant_key ORDER BY system, 4::float / GREATEST(COUNT(*),1) DESC"
+                cur.execute(q, params)
+                return [{"system": r[0], "variant": r[1], "sends": int(r[2]),
+                         "outcomes": int(r[3]),
+                         "outcome_rate": round(r[3] / r[2] * 100) if r[2] else 0,
+                         "median_val": round(float(r[4]), 1) if r[4] is not None else None}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("variant_scoreboard failed: %s", e)
+        return []
+
+
+def mark_nurture_reply(person_id):
+    """Inbound text from a person with a recent nurture card = the message
+    worked. Stamps the card and the variant."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE nurture_run_log SET replied_at = NOW()
+                    WHERE person_id = %s AND replied_at IS NULL
+                      AND verified_at IS NOT NULL
+                      AND run_date >= CURRENT_DATE - 7
+                """, (str(person_id),))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("mark_nurture_reply failed: %s", e)
+        return 0
+
+
+def stamp_handoff_variant_minutes(person_id):
+    """Minutes from transfer to first verified call, onto the rung-1 variant."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE message_variants mv
+                    SET outcome_at = NOW(),
+                        outcome_val = GREATEST(sub.mins, 0)
+                    FROM (SELECT EXTRACT(EPOCH FROM (first_call_at - transfer_date)) / 60 AS mins
+                          FROM isa_transfers WHERE person_id = %s
+                            AND first_call_at IS NOT NULL) sub
+                    WHERE mv.id = (
+                        SELECT id FROM message_variants
+                        WHERE system = 'handoff_rung1' AND person_id = %s
+                          AND outcome_at IS NULL
+                        ORDER BY sent_at DESC LIMIT 1)
+                """, (str(person_id), str(person_id)))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("stamp_handoff_variant_minutes failed: %s", e)
+        return 0

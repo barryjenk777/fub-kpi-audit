@@ -120,7 +120,7 @@ def _compose_message(person, flag_age_days):
         why_bits.append("%d days since a real touch" % flag_age_days)
     why = " · ".join(why_bits) or "on your list"
 
-    message, call_line = None, None
+    message, call_line, variant = None, None, None
     if slug:
         snap = _db.get_market_snapshot(slug) or {}
         nurture = (snap.get("nurture") or {}).get(side) or {}
@@ -129,19 +129,23 @@ def _compose_message(person, flag_age_days):
             pid_digits = int("".join(c for c in str(person.get("id") or "0")
                                      if c.isdigit()) or 0)
             week = date.today().isocalendar()[1]
-            pick = texts[(pid_digits + week) % len(texts)]
+            idx = (pid_digits + week) % len(texts)
+            pick = texts[idx]
             message = pick.replace("{first}", first)
+            variant = "%s:%s:%d" % (slug, side, idx)
         if nurture.get("call_track"):
             call_line = nurture["call_track"].replace("{first}", first)
     if not message:
         pid_digits = int("".join(c for c in str(person.get("id") or "0")
                                  if c.isdigit()) or 0)
-        pick = _EVERGREEN_TEXTS[pid_digits % len(_EVERGREEN_TEXTS)]
+        idx = pid_digits % len(_EVERGREEN_TEXTS)
+        pick = _EVERGREEN_TEXTS[idx]
         message = pick.replace("{first}", first)
+        variant = "evergreen:%s:%d" % (side, idx)
     if not call_line:
         topic = "your next move" if side == "buyers" else "what your place is worth"
         call_line = _EVERGREEN_CALL.replace("{first}", first).replace("{topic}", topic)
-    return message, why, call_line
+    return message, why, call_line, variant
 
 
 def _best_phone(person):
@@ -253,7 +257,9 @@ def build_email(agent_first, cards_html, n_cards, call_line, scoreboard_line):
   I see every send on my board, and so does the market: leads we touch stay
   ours, leads we ignore buy with somebody else. Nobody is asking you to
   write anything. I wrote it. You tap send.<br><br>
-  Let's get it,<br><strong>Barry Jenkins</strong>
+  Let's get it,<br><strong>Barry Jenkins</strong><br><br>
+  <a href="https://www.legacycommandcenter.com/rhythm" style="font-size:12px;
+     color:#8a8f98">Your full weekly rhythm, one page &rarr;</a>
 </td></tr>
 </table></td></tr></table></div>""" % (agent_first, n_cards, minutes, sb, cards_html, call_line)
 
@@ -295,16 +301,22 @@ def run_nurture_run(dry_run=True, only_agent=None, preview_to=None):
         call_line = None
         for c in cards:
             person = c["person"]
-            message, why, cl = _compose_message(person, c.get("age"))
+            message, why, cl, variant = _compose_message(person, c.get("age"))
             call_line = call_line or cl
             token = secrets.token_urlsafe(9)
             if not dry_run:
                 stored = _db.save_nurture_card(
                     run_date, token, agent, person.get("id"),
-                    (person.get("name") or "").strip(), c["phone"], message, why)
+                    (person.get("name") or "").strip(), c["phone"], message, why,
+                    variant=variant)
                 if not stored:
                     continue
                 token = stored  # same-day re-runs reuse the existing token
+                try:
+                    _db.log_variant("nurture_run", variant or "unknown",
+                                    person.get("id"), agent)
+                except Exception:
+                    pass
             saved += 1
             cards_html.append(_card_html(
                 base, token, (person.get("name") or "").strip(), why, message,
@@ -333,6 +345,11 @@ def run_nurture_run(dry_run=True, only_agent=None, preview_to=None):
             _pm.send(to="%s <%s>" % (agent, to), from_email=config.EMAIL_FROM,
                      subject=subject, html=html)
             summary["sent"] += 1
+            if not preview_to:
+                try:
+                    _db.log_attention(agent, "nurture_run", "email")
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning("[NURTURE RUN] send failed for %s: %s", agent, e)
             summary["agents"][agent]["error"] = str(e)[:120]
