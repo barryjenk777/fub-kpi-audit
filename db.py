@@ -8965,3 +8965,152 @@ def get_call_grades(agent_name=None, lead_name=None, days=14, limit=100):
     except Exception as e:
         logger.warning("get_call_grades failed: %s", e)
         return []
+
+
+# ── Nurture Run: weekly one-tap nurture, logged and webhook-verified ────────
+
+def ensure_nurture_run_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS nurture_run_log (
+                        id           SERIAL PRIMARY KEY,
+                        run_date     DATE NOT NULL DEFAULT CURRENT_DATE,
+                        token        TEXT UNIQUE NOT NULL,
+                        agent_name   TEXT NOT NULL,
+                        person_id    TEXT NOT NULL,
+                        lead_name    TEXT,
+                        lead_phone   TEXT,
+                        message      TEXT,
+                        why          TEXT,
+                        clicked_at   TIMESTAMPTZ,
+                        click_action TEXT,
+                        verified_at  TIMESTAMPTZ,
+                        UNIQUE (run_date, agent_name, person_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_nr_person
+                        ON nurture_run_log (person_id, run_date DESC);
+                    CREATE INDEX IF NOT EXISTS idx_nr_token
+                        ON nurture_run_log (token);
+                """)
+    except Exception as e:
+        logger.warning("ensure_nurture_run_table failed: %s", e)
+
+
+def save_nurture_card(run_date, token, agent_name, person_id, lead_name,
+                      lead_phone, message, why):
+    if not is_available():
+        return False
+    ensure_nurture_run_table()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO nurture_run_log
+                        (run_date, token, agent_name, person_id, lead_name,
+                         lead_phone, message, why)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (run_date, agent_name, person_id) DO NOTHING
+                """, (run_date, token, agent_name, str(person_id), lead_name,
+                      lead_phone, message, why))
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("save_nurture_card failed: %s", e)
+        return False
+
+
+def get_nurture_card_by_token(token):
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, agent_name, person_id, lead_name, lead_phone, message
+                    FROM nurture_run_log WHERE token = %s
+                """, (token,))
+                r = cur.fetchone()
+        if not r:
+            return None
+        return {"id": r[0], "agent_name": r[1], "person_id": r[2],
+                "lead_name": r[3], "lead_phone": r[4], "message": r[5]}
+    except Exception as e:
+        logger.warning("get_nurture_card_by_token failed: %s", e)
+        return None
+
+
+def mark_nurture_click(token, action):
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE nurture_run_log
+                    SET clicked_at = COALESCE(clicked_at, NOW()), click_action = %s
+                    WHERE token = %s
+                """, (action, token))
+    except Exception as e:
+        logger.warning("mark_nurture_click failed: %s", e)
+
+
+def verify_nurture_touch(person_id):
+    """Called from the FUB outbound webhook: any outbound text or call to a
+    person with an open card in the last 7 days stamps it verified."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE nurture_run_log
+                    SET verified_at = NOW()
+                    WHERE person_id = %s AND verified_at IS NULL
+                      AND run_date >= CURRENT_DATE - 7
+                """, (str(person_id),))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("verify_nurture_touch failed: %s", e)
+        return 0
+
+
+def nurture_scoreboard(weeks=1):
+    """Per-agent: cards, taps, verified touches for recent runs."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, COUNT(*),
+                           COUNT(*) FILTER (WHERE clicked_at IS NOT NULL),
+                           COUNT(*) FILTER (WHERE verified_at IS NOT NULL)
+                    FROM nurture_run_log
+                    WHERE run_date >= CURRENT_DATE - %s
+                    GROUP BY agent_name ORDER BY 4 DESC
+                """, (int(weeks) * 7,))
+                return [{"agent": r[0], "cards": int(r[1]), "tapped": int(r[2]),
+                         "verified": int(r[3])} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("nurture_scoreboard failed: %s", e)
+        return []
+
+
+def get_recent_hotsheet_pids(days=3):
+    """person_ids named in recent morning texts (one voice per lead per week)."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT person_id FROM hotsheet_log
+                    WHERE sheet_date >= CURRENT_DATE - %s
+                """, (int(days),))
+                return [str(r[0]) for r in cur.fetchall() if r[0]]
+    except Exception as e:
+        logger.warning("get_recent_hotsheet_pids failed: %s", e)
+        return []

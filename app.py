@@ -91,6 +91,8 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         # Lead-facing video and short-link surfaces. These URLs are texted and
         # emailed to real leads, and Twilio fetches MMS media unauthenticated.
         "/v/", "/vp/", "/go/", "/mthumb/", "/audio/",
+        # Nurture Run one-tap redirects (token IS the auth)
+        "/nr/",
         # Market Pulse pages: texted/emailed to leads, must be public
         "/market",
         # Vercel course endpoints check COURSE_API_KEY internally
@@ -8865,6 +8867,10 @@ def _fub_upsert_appt_resource(appt, event_name):
 def _fub_outbound_touch(person_id, is_call):
     """Outbound call/text to a lead: stamp ISA first-call and clear
     LeadStream tags immediately (the original purpose of this webhook)."""
+    try:
+        _db.verify_nurture_touch(person_id)
+    except Exception:
+        pass
     if is_call:
         try:
             if _db.mark_isa_first_call(str(person_id)):
@@ -17350,6 +17356,97 @@ def api_maverick_call_grades():
         days=request.args.get("days", 14, type=int))})
 
 
+@app.route("/nr/<token>/<action>")
+def nurture_run_tap(token, action):
+    """One-tap Nurture Run redirect. Logs the tap, then opens the right
+    surface: sms = the agent's Messages app pre-addressed with the message
+    composed (their own number sends it); fub = the lead record (FUB's
+    universal links open the app when installed); call = the dialer."""
+    if action not in ("sms", "fub", "call"):
+        return "Not found", 404
+    card = _db.get_nurture_card_by_token(token)
+    if not card:
+        return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
+                "This link has expired. Check this week's Nurture Run email."), 404
+    _db.mark_nurture_click(token, action)
+    if action == "fub":
+        return redirect("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
+                        % card["person_id"])
+    digits = "".join(c for c in (card.get("lead_phone") or "") if c.isdigit())
+    if len(digits) == 10:
+        digits = "1" + digits
+    tel = "+" + digits if digits else ""
+    if not tel:
+        return redirect("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
+                        % card["person_id"])
+    if action == "call":
+        return redirect("tel:%s" % tel)
+    from urllib.parse import quote
+    body = quote(card.get("message") or "")
+    ua = (request.headers.get("User-Agent") or "").lower()
+    sep = "&" if ("iphone" in ua or "ipad" in ua or "mac os" in ua) else "?"
+    return redirect("sms:%s%sbody=%s" % (tel, sep, body))
+
+
+@app.route("/api/admin/nurture-run/run", methods=["POST"])
+def api_nurture_run():
+    """Trigger a Nurture Run. Body: {"dry_run": bool, "only_agent": str,
+    "preview_to": "barry@..."} — preview_to routes every email to one
+    inbox for review instead of the team."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    import nurture_run as _nr
+    out = _nr.run_nurture_run(dry_run=bool(body.get("dry_run", True)),
+                              only_agent=body.get("only_agent"),
+                              preview_to=body.get("preview_to"))
+    return jsonify(out)
+
+
+@app.route("/api/admin/nurture-run/scoreboard")
+def api_nurture_scoreboard():
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify({"ok": True,
+                    "scoreboard": _db.nurture_scoreboard(
+                        weeks=request.args.get("weeks", 1, type=int))})
+
+
+def scheduled_nurture_run():
+    """Tuesday 10:30am ET. Live only once Barry flips nurture_run_live
+    (app_state); until then each Tuesday sends HIM the full preview set."""
+    if not _db.try_acquire_job_lock("nurture_run"):
+        return
+    try:
+        import nurture_run as _nr
+        live, _ = _db.get_app_state("nurture_run_live")
+        if (live or "").strip() == "1":
+            out = _nr.run_nurture_run(dry_run=False)
+        else:
+            out = _nr.run_nurture_run(dry_run=False,
+                                      preview_to=config.EMAIL_FROM)
+        print("[NURTURE RUN] sent=%s agents=%s" % (out.get("sent"),
+              {k: v.get("cards") for k, v in out.get("agents", {}).items()}))
+        _record_fired("nurture_run")
+    except Exception as e:
+        _alert_on_job_failure("nurture_run", str(e))
+        raise
+    finally:
+        _db.release_job_lock("nurture_run")
+
+
+@app.route("/api/admin/nurture-run/go-live", methods=["POST"])
+def api_nurture_go_live():
+    """Flip the Tuesday run from Barry-preview to team-live (or back with
+    {"live": false})."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    val = "1" if body.get("live", True) else "0"
+    _db.set_app_state("nurture_run_live", val)
+    return jsonify({"ok": True, "nurture_run_live": val})
+
+
 @app.route("/api/admin/maverick/rules")
 def api_maverick_rules():
     """Rules-board snapshots for trending (coach view: is past-due falling?)."""
@@ -19887,6 +19984,10 @@ def start_scheduler():
     _scheduler.add_job(scheduled_ooc_sweep,
                        CronTrigger(hour=6, minute=40, timezone=ET),
                        id="ooc_sweep", name="Maverick OOC flag age ledger (6:40am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_nurture_run,
+                       CronTrigger(day_of_week="tue", hour=10, minute=30, timezone=ET),
+                       id="nurture_run", name="Nurture Run weekly email (Tue 10:30am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_market_pulse_refresh,
                        CronTrigger(day="1,15", hour=5, minute=10, timezone=ET),
