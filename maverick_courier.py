@@ -269,9 +269,8 @@ def _harvest(url, headless, debug=False):
             cfg_hist = _load_config().get("call_history_url")
             candidates = [u for u in [
                 cfg_hist,
-                "https://my.maverickre.com/ai/call-grading/call-history",
+                # Confirmed by Barry, Sep 2026:
                 "https://my.maverickre.com/ai/call-grading/ai-grading-call-history",
-                "https://my.maverickre.com/agent/call-history",
             ] if u]
             got_hist = False
             for hurl in candidates:

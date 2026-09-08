@@ -8212,6 +8212,17 @@ def _agent_meeting_intel(agent_name):
     except Exception as e:
         logger.warning("intel appts failed: %s", e)
 
+    try:  # Named call tape: this agent's graded calls, worst first (14d)
+        grades = _db.get_call_grades(agent_name=agent_name, days=14, limit=50)
+        low = sorted((g for g in grades if g.get("grade") is not None
+                      and g["grade"] <= 5), key=lambda g: g["grade"])[:3]
+        high = [g for g in grades if (g.get("grade") or 0) >= 8][:2]
+        if low or high:
+            intel["tape_calls"] = {"low": low, "high": high,
+                                   "graded_14d": len(grades)}
+    except Exception as e:
+        logger.warning("intel tape_calls failed: %s", e)
+
     try:  # Maverick follow-up flags: open count, oldest, clearance speed
         row = next((s for s in (_db.get_ooc_stats() or [])
                     if s["agent"] == agent_name), None)
@@ -8383,6 +8394,22 @@ def api_meeting_brief(agent_name):
                 lines.append(
                     "Ghosted after a held appointment (FUB-verified, no touch since): %s." %
                     "; ".join("%s (%s days silent)" % (g["lead"], g["days"]) for g in gh))
+            tc = intel.get("tape_calls")
+            if tc:
+                bits = []
+                for g in tc.get("low", []):
+                    bits.append("%s graded %.0f (%s)" % (
+                        g.get("lead") or "a lead", g.get("grade") or 0,
+                        (g.get("detail") or "").split(" | ")[0] or "no outcome"))
+                if bits:
+                    lines.append(
+                        "Named low-grade calls, last 14 days: %s. These are "
+                        "real leads Barry can pull the tape on in the meeting."
+                        % "; ".join(bits))
+                for g in tc.get("high", [])[:1]:
+                    lines.append(
+                        "Best recent call: %s graded %.0f. Worth praising by "
+                        "name." % (g.get("lead") or "a lead", g.get("grade") or 0))
             oc = intel.get("ooc")
             if oc:
                 lines.append(
@@ -16694,47 +16721,67 @@ def _maverick_parse_overview(raw):
 
 
 def _maverick_parse_call_history(raw):
-    """v1 parser for the per-call grade history capture. The page structure
-    lands tonight with the first harvest; until then this parses the common
-    Maverick table shape (lead line, agent line, date, grade like '6.5' or
-    '6/10') and stays conservative: rows missing a grade or a plausible name
-    are skipped, and the raw chunk is always in maverick_reports for a
-    re-parse once we see the real layout."""
+    """Parse the AI Grading Call History table (structure confirmed from the
+    live page, Sep 2026). Rows linearize as: agent avatar initials, agent
+    name, lead name, lead stage ("Lead" or "A - Hot 1-3 Months"), date/time
+    ("09/07/2026 02:14 PM"), outcome, recording stage, grade (1-10). The
+    parser walks lines as a state machine keyed on known agent names and
+    commits a row only when agent, lead, and grade are all present."""
     import re as _re
     if "MAVERICK CALL HISTORY" not in raw:
         return 0
     text = raw.split("MAVERICK CALL HISTORY", 1)[1]
     known_agents = {p.get("agent_name") for p in
                     (_db.get_agent_profiles(active_only=False) or [])}
-    date_re = _re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b")
-    grade_re = _re.compile(r"^(\d{1,2}(?:\.\d)?)(?:\s*/\s*10)?$")
-    rows, ctx = [], {}
+    known_agents.add("Fhalen Tendencia")
+    dt_re = _re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}:\d{2}\s*[AP]M)$")
+    grade_re = _re.compile(r"^(\d{1,2})$")
+    stage_re = _re.compile(r"^([A-D]\s*-\s*.{2,30}|Lead)$")
+    OUTCOMES = {"callback requested", "appointment set", "follow-up needed",
+                "no answer", "left voicemail", "not interested", "wrong number"}
+    REC_STAGES = {"appointment outstanding", "long term nurture",
+                  "short term nurture", "actively listed / showing homes",
+                  "lead", "new lead"}
+    rows, cur = [], {}
     for line in (l.strip() for l in text.splitlines()):
-        if not line:
+        if not line or (len(line) <= 3 and line.isupper()):
+            continue  # blank or avatar initials
+        if line in known_agents:
+            cur = {"agent_name": line}
             continue
-        dm = date_re.search(line)
+        if not cur:
+            continue
+        low = line.lower()
+        dm = dt_re.match(line)
         if dm:
-            m, d, y = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
-            y = y + 2000 if y < 100 else y
-            try:
-                ctx["call_date"] = "%04d-%02d-%02d" % (y, m, d)
-            except Exception:
-                pass
+            cur["call_date"] = "%s-%02d-%02d" % (dm.group(3), int(dm.group(1)),
+                                                 int(dm.group(2)))
+            cur["time"] = dm.group(4)
+            continue
+        if stage_re.match(line) and "lead_name" in cur and "lead_stage" not in cur:
+            cur["lead_stage"] = line
+            continue
+        if low in OUTCOMES:
+            cur["outcome"] = line
+            continue
+        if low in REC_STAGES and "lead_name" in cur:
+            cur["rec_stage"] = line
             continue
         gm = grade_re.match(line)
-        if gm and float(gm.group(1)) <= 10:
-            ctx["grade"] = float(gm.group(1))
-        elif line in known_agents:
-            ctx["agent_name"] = line
-        elif 2 <= len(line.split()) <= 4 and len(line) < 40 \
-                and not any(c.isdigit() for c in line):
-            ctx["lead_name"] = line
-        if all(k in ctx for k in ("grade", "lead_name")):
-            rows.append({"call_date": ctx.get("call_date"),
-                         "agent_name": ctx.get("agent_name"),
-                         "lead_name": ctx.pop("lead_name"),
-                         "grade": ctx.pop("grade"),
-                         "detail": None, "raw_line": line[:300]})
+        if gm and 1 <= int(gm.group(1)) <= 10 and "lead_name" in cur:
+            detail = " | ".join(filter(None, [
+                cur.get("outcome"), cur.get("rec_stage"),
+                cur.get("lead_stage"), cur.get("time")]))
+            rows.append({"call_date": cur.get("call_date"),
+                         "agent_name": cur.get("agent_name"),
+                         "lead_name": cur.get("lead_name"),
+                         "grade": float(gm.group(1)),
+                         "detail": detail or None, "raw_line": None})
+            cur = {"agent_name": cur.get("agent_name")}
+            continue
+        if "lead_name" not in cur and 1 <= len(line.split()) <= 4 \
+                and len(line) < 42 and not any(c.isdigit() for c in line):
+            cur["lead_name"] = line
     return _db.save_call_grades(rows)
 
 
