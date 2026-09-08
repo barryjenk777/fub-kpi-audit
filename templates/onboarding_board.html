@@ -87,6 +87,14 @@ textarea{width:100%;min-height:110px;background:#0d1729;color:var(--ink);border:
   </div>
 
   <div id="banner-wrap"></div>
+
+  <div class="sec">Day One Pipeline</div>
+  <div class="sub" style="margin:-2px 0 8px">Every new hire, every task, one
+  board. Docs unsigned = not on the team yet: no leads, no morning texts,
+  until dotloop comes back. Ana's items check off from her email; anything
+  can be marked here too.</div>
+  <div id="pipeline-wrap"><div class="spin">Loading...</div></div>
+
   <div class="stats" id="stats"></div>
 
   <div id="nosync-wrap"></div>
@@ -125,6 +133,7 @@ function darkCell(n){
 
 function load(force){
   document.getElementById('table-wrap').innerHTML='<div class="spin">Loading...</div>';
+  loadPipeline();
   fetch(qs('/api/admin/onboarding-board'+(force?'?force=1':'')))
     .then(function(r){ return r.json(); })
     .then(function(d){ DATA=d; render(); })
@@ -324,6 +333,62 @@ document.getElementById('btn-refresh').onclick=function(){ load(1); };
 document.getElementById('modal').onclick=function(e){ if(e.target.id==='modal') closeModal(); };
 document.getElementById('nudge').onclick=function(e){ if(e.target.id==='nudge') closeNudge(); };
 load(0);
+
+function loadPipeline(){
+  fetch(qs('/api/admin/onboarding/pipeline'))
+    .then(r=>r.json())
+    .then(d=>{
+      var el=document.getElementById('pipeline-wrap');
+      var hires=d.hires||[];
+      if(!hires.length){
+        el.innerHTML='<div class="sub">No hires in the pipeline. New agents '+
+          'seed automatically on their first day; to backfill someone, use '+
+          'the seed endpoint or ask Claude.';
+        return;
+      }
+      var gated=new Set(d.gated||[]);
+      var h='';
+      hires.forEach(function(hire){
+        var open=hire.tasks.filter(function(t){return !t.done_at});
+        var done=hire.tasks.length-open.length;
+        h+='<div style="background:#16213e;border:1px solid #26365c;border-radius:10px;padding:14px 16px;margin-bottom:10px">';
+        h+='<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;align-items:baseline">';
+        h+='<b>'+hire.agent_name+'</b>';
+        h+='<span style="font-size:11px;color:#93a4c4">started '+hire.started_at+
+           ' &middot; '+done+'/'+hire.tasks.length+' done'+
+           (gated.has(hire.agent_name)?' &middot; <b style="color:#e5544b">GATED: docs unsigned</b>':'')+
+           (hire.completed_at?' &middot; <b style="color:#37c98b">COMPLETE</b>':'')+'</span></div>';
+        h+='<div style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:5px">';
+        hire.tasks.forEach(function(t){
+          var ok=!!t.done_at;
+          h+='<div style="font-size:12px;display:flex;gap:6px;align-items:baseline;'+
+             (ok?'color:#93a4c4':'color:#e8eefc')+'">';
+          h+='<span style="color:'+(ok?'#37c98b':'#f5a623')+'">'+(ok?'&#10003;':'&#9675;')+'</span>';
+          h+='<span>'+t.label+' <i style="color:#7c8aa5;font-size:10px">'+t.owner+'</i></span>';
+          if(!ok){
+            h+='<a href="#" style="color:#f5a623;font-size:10px;margin-left:auto" '+
+               'onclick="markTask(\''+hire.agent_name.replace(/'/g,"\\'")+'\',\''+t.key+'\');return false">done</a>';
+          }
+          h+='</div>';
+        });
+        h+='</div>';
+        h+='<div style="margin-top:8px;font-size:11px;color:#93a4c4">Hire\'s headshot/bio link: '+
+           '<a href="'+hire.join_url+'" style="color:#f5a623">'+hire.join_url+'</a></div>';
+        h+='</div>';
+      });
+      el.innerHTML=h;
+    })
+    .catch(function(e){
+      document.getElementById('pipeline-wrap').innerHTML=
+        '<div class="sub" style="color:#e5544b">Pipeline failed to load: '+e.message+'</div>';
+    });
+}
+function markTask(agent,key){
+  fetch(qs('/api/admin/onboarding/task-done'),{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({agent_name:agent,task_key:key,done_by:'board'})})
+  .then(function(){loadPipeline();});
+}
 </script>
 </body>
 </html>

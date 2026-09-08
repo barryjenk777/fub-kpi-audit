@@ -9365,3 +9365,255 @@ def stamp_handoff_variant_minutes(person_id):
     except Exception as e:
         logger.warning("stamp_handoff_variant_minutes failed: %s", e)
         return 0
+
+
+# ── Day One Pipeline: every new hire, every task, one board ─────────────────
+
+ONBOARDING_TASKS = [
+    # (key, lane, owner, label)
+    ("sign_docs",      "agent", "ana",   "Commission agreement + handbook signed (dotloop)"),
+    ("goals_setup",    "agent", "agent", "Goals set in Command Center"),
+    ("fasttrack",      "agent", "agent", "Fast Track course completed"),
+    ("headshot_bio",   "agent", "agent", "Headshot + bio submitted"),
+    ("meet_matt",      "agent", "matt",  "Systems walkthrough with Matt"),
+    ("meet_ana",       "agent", "ana",   "Intro call with Ana (transactions)"),
+    ("ana_dotloop",    "ops",   "ana",   "Create dotloop '{name} - Onboarding Docs', send to agent + Barry"),
+    ("roster_sheet",   "ops",   "ana",   "Add to roster spreadsheet"),
+    ("email_dist",     "ops",   "ana",   "Add to team email distribution"),
+    ("ylopo_support",  "ops",   "ana",   "Notify Ylopo support of the new agent"),
+    ("ylopo_website",  "ops",   "barry", "Ylopo website form (stars.ylopo.com admin)"),
+    ("social_post",    "ops",   "barry", "Announcement post published"),
+]
+
+
+def ensure_onboarding_pipeline():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS onboarding_pipeline (
+                        agent_name  TEXT PRIMARY KEY,
+                        started_at  DATE NOT NULL DEFAULT CURRENT_DATE,
+                        join_token  TEXT UNIQUE,
+                        completed_at DATE
+                    );
+                    CREATE TABLE IF NOT EXISTS onboarding_tasks (
+                        id         SERIAL PRIMARY KEY,
+                        agent_name TEXT NOT NULL,
+                        task_key   TEXT NOT NULL,
+                        lane       TEXT NOT NULL,
+                        owner      TEXT NOT NULL,
+                        label      TEXT,
+                        done_at    TIMESTAMPTZ,
+                        done_by    TEXT,
+                        token      TEXT UNIQUE,
+                        UNIQUE (agent_name, task_key)
+                    );
+                    CREATE TABLE IF NOT EXISTS onboarding_uploads (
+                        id         SERIAL PRIMARY KEY,
+                        agent_name TEXT NOT NULL,
+                        filename   TEXT,
+                        mimetype   TEXT,
+                        data       BYTEA,
+                        bio        TEXT,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                """)
+    except Exception as e:
+        logger.warning("ensure_onboarding_pipeline failed: %s", e)
+
+
+def seed_onboarding(agent_name):
+    """Create the pipeline + task set for one hire. Idempotent."""
+    if not is_available():
+        return None
+    ensure_onboarding_pipeline()
+    import secrets as _sec
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO onboarding_pipeline (agent_name, join_token)
+                    VALUES (%s, %s)
+                    ON CONFLICT (agent_name) DO NOTHING
+                    RETURNING join_token
+                """, (agent_name, _sec.token_urlsafe(9)))
+                row = cur.fetchone()
+                is_new = bool(row)
+                for key, lane, owner, label in ONBOARDING_TASKS:
+                    cur.execute("""
+                        INSERT INTO onboarding_tasks
+                            (agent_name, task_key, lane, owner, label, token)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (agent_name, task_key) DO NOTHING
+                    """, (agent_name, key, lane, owner,
+                          label.replace("{name}", agent_name),
+                          _sec.token_urlsafe(9)))
+                cur.execute("SELECT join_token FROM onboarding_pipeline WHERE agent_name = %s",
+                            (agent_name,))
+                token = cur.fetchone()[0]
+        return {"agent_name": agent_name, "join_token": token, "new": is_new}
+    except Exception as e:
+        logger.warning("seed_onboarding failed: %s", e)
+        return None
+
+
+def get_onboarding_pipeline():
+    """All hires with their task states, newest first."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT p.agent_name, p.started_at, p.join_token, p.completed_at,
+                           t.task_key, t.lane, t.owner, t.label, t.done_at, t.done_by, t.token
+                    FROM onboarding_pipeline p
+                    JOIN onboarding_tasks t ON t.agent_name = p.agent_name
+                    ORDER BY p.started_at DESC, t.id
+                """)
+                out = {}
+                for r in cur.fetchall():
+                    h = out.setdefault(r[0], {
+                        "agent_name": r[0], "started_at": str(r[1]),
+                        "join_token": r[2],
+                        "completed_at": str(r[3]) if r[3] else None,
+                        "tasks": []})
+                    h["tasks"].append({
+                        "key": r[4], "lane": r[5], "owner": r[6], "label": r[7],
+                        "done_at": r[8].isoformat() if r[8] else None,
+                        "done_by": r[9], "token": r[10]})
+                return list(out.values())
+    except Exception as e:
+        logger.warning("get_onboarding_pipeline failed: %s", e)
+        return []
+
+
+def mark_onboarding_task(agent_name=None, task_key=None, token=None, done_by=None):
+    """Complete a task by (agent, key) or by its one-click token."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if token:
+                    cur.execute("""
+                        UPDATE onboarding_tasks
+                        SET done_at = COALESCE(done_at, NOW()), done_by = COALESCE(done_by, %s)
+                        WHERE token = %s
+                        RETURNING agent_name, task_key, label
+                    """, (done_by or "link", token))
+                else:
+                    cur.execute("""
+                        UPDATE onboarding_tasks
+                        SET done_at = COALESCE(done_at, NOW()), done_by = COALESCE(done_by, %s)
+                        WHERE agent_name = %s AND task_key = %s
+                        RETURNING agent_name, task_key, label
+                    """, (done_by or "board", agent_name, task_key))
+                r = cur.fetchone()
+                if not r:
+                    return None
+                cur.execute("""
+                    UPDATE onboarding_pipeline SET completed_at = CURRENT_DATE
+                    WHERE agent_name = %s AND completed_at IS NULL
+                      AND NOT EXISTS (SELECT 1 FROM onboarding_tasks
+                                      WHERE agent_name = %s AND done_at IS NULL)
+                """, (r[0], r[0]))
+                return {"agent_name": r[0], "task_key": r[1], "label": r[2]}
+    except Exception as e:
+        logger.warning("mark_onboarding_task failed: %s", e)
+        return None
+
+
+def get_onboarding_gated():
+    """Hires whose docs are unsigned: not on the team yet, per Barry. These
+    names are excluded from lead routing and the accountability rhythm."""
+    if not is_available():
+        return set()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name FROM onboarding_tasks
+                    WHERE task_key = 'sign_docs' AND done_at IS NULL
+                """)
+                return {r[0] for r in cur.fetchall()}
+    except Exception as e:
+        logger.warning("get_onboarding_gated failed: %s", e)
+        return set()
+
+
+def get_open_onboarding_tasks(agent_name, lane=None):
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                q = """SELECT task_key, label, owner FROM onboarding_tasks
+                       WHERE agent_name = %s AND done_at IS NULL"""
+                params = [agent_name]
+                if lane:
+                    q += " AND lane = %s"
+                    params.append(lane)
+                cur.execute(q + " ORDER BY id", params)
+                return [{"key": r[0], "label": r[1], "owner": r[2]}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_open_onboarding_tasks failed: %s", e)
+        return []
+
+
+def save_onboarding_upload(agent_name, filename, mimetype, data, bio):
+    if not is_available():
+        return None
+    ensure_onboarding_pipeline()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO onboarding_uploads (agent_name, filename, mimetype, data, bio)
+                    VALUES (%s, %s, %s, %s, %s) RETURNING id
+                """, (agent_name, filename, mimetype, data, bio))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("save_onboarding_upload failed: %s", e)
+        return None
+
+
+def get_onboarding_upload(upload_id):
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, filename, mimetype, data, bio
+                    FROM onboarding_uploads WHERE id = %s
+                """, (upload_id,))
+                r = cur.fetchone()
+        if not r:
+            return None
+        return {"agent_name": r[0], "filename": r[1], "mimetype": r[2],
+                "data": bytes(r[3]) if r[3] else b"", "bio": r[4]}
+    except Exception as e:
+        logger.warning("get_onboarding_upload failed: %s", e)
+        return None
+
+
+def get_pipeline_row_by_join_token(token):
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, started_at FROM onboarding_pipeline
+                    WHERE join_token = %s
+                """, (token,))
+                r = cur.fetchone()
+        return {"agent_name": r[0], "started_at": str(r[1])} if r else None
+    except Exception as e:
+        logger.warning("get_pipeline_row_by_join_token failed: %s", e)
+        return None

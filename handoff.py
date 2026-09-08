@@ -60,6 +60,12 @@ def run_handoff_scan(dry_run=False):
     client = FUBClient()
     profiles = _profiles_by_name()
     now_et = _et_now()
+    # Day One gate: hires whose docs are unsigned are not on the team yet
+    # (Barry's rule) and get no transfer pings; those leads escalate normally.
+    try:
+        _gated = _db.get_onboarding_gated()
+    except Exception:
+        _gated = set()
     summary = {"new_transfers": 0, "rung1_sent": 0, "rung2_sent": 0,
                "messages": []}
 
@@ -80,7 +86,7 @@ def run_handoff_scan(dry_run=False):
         pid = str(person.get("id") or "")
         agent = (person.get("assignedTo") or "").strip()
         lead_name = (person.get("name") or "").strip()
-        if not pid or not agent or agent in _EXCLUDED:
+        if not pid or not agent or agent in _EXCLUDED or agent in _gated:
             continue
         is_new = _db.record_isa_transfer(pid, lead_name=lead_name, agent_name=agent)
         if not is_new:

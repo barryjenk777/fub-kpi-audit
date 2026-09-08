@@ -1850,7 +1850,7 @@ Full onboarding portal: {GAMMA_SITE}""",
 }
 
 
-def send_onboarding_sequence_email(agent_name, first_name, email, setup_url, day):
+def send_onboarding_sequence_email(agent_name, first_name, email, setup_url, day, open_items=None):
     """
     Send one email from the 6-part onboarding content sequence (days 2-7).
     Day 1 is the goal setup invite (send_goal_onboarding_email).
@@ -1867,6 +1867,20 @@ def send_onboarding_sequence_email(agent_name, first_name, email, setup_url, day
     subject = seq["subject"]
     body    = seq["body"](first_name, setup_url)
     html    = body.replace("\n", "<br>")
+
+    if open_items:
+        items_html = "".join("<li style='margin-bottom:6px'>%s</li>" % it
+                             for it in open_items)
+        html += ("<div style='background:#fffbf0;border-left:4px solid "
+                 "#f5a623;border-radius:6px;padding:12px 16px;margin:18px 0;"
+                 "font-family:-apple-system,Segoe UI,Arial,sans-serif'>"
+                 "<div style='font-size:11px;font-weight:800;letter-spacing:"
+                 ".14em;color:#9a741f;text-transform:uppercase;margin-bottom:"
+                 "6px'>Still open on your list</div><ul style='margin:0;"
+                 "padding-left:18px;font-size:14px;line-height:1.5'>%s</ul>"
+                 "</div>" % items_html)
+        body += "\n\nStill open on your list:\n" + \
+            "\n".join("- " + it for it in open_items)
 
     try:
         _pm.send(

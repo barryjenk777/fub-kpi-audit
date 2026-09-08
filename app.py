@@ -95,6 +95,8 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/nr/",
         # Agent Operating Rhythm (no PII, bookmarkable)
         "/rhythm",
+        # Day One Pipeline: ops one-click done links + the hire's own page
+        "/ob/", "/join/",
         # Market Pulse pages: texted/emailed to leads, must be public
         "/market",
         # Vercel course endpoints check COURSE_API_KEY internally
@@ -4687,6 +4689,221 @@ def _ft_board_data(force=False):
             "cache_age_s": roster.get("_cache_age_s"),
             "stats": stats, "matched": matched,
             "not_synced": not_synced, "unmatched": unmatched}
+
+
+def _ana_email():
+    """Ana Pena's email from the roster (TM; excluded from agent surfaces
+    but very much on the ops surfaces)."""
+    for p in (_db.get_agent_profiles(active_only=False) or []):
+        if (p.get("agent_name") or "").startswith("Ana "):
+            return p.get("email")
+    return None
+
+
+def _onboard_new_hire(agent_name, agent_email, base_url):
+    """Seed the Day One Pipeline and fire the day-0 automations: Ana's
+    dotloop task email (with one-click done links) and the hire's personal
+    /join link woven into their Day 1 email by the caller."""
+    seeded = _db.seed_onboarding(agent_name)
+    if not seeded or not seeded.get("new"):
+        return seeded
+    import postmark_client as _pm
+    first = agent_name.split()[0]
+    tasks = {t["key"]: t for t in
+             next((h["tasks"] for h in _db.get_onboarding_pipeline()
+                   if h["agent_name"] == agent_name), [])}
+    ana = _ana_email()
+    if ana:
+        def _done_link(key):
+            t = tasks.get(key) or {}
+            return "%s/ob/%s/done" % (base_url, t.get("token", ""))
+        html = """<div style="background:#f4f4f0;padding:24px 0">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;font-family:-apple-system,'Segoe UI',Arial,sans-serif">
+<tr><td style="background:#0d1117;padding:22px 30px">
+  <div style="font-size:11px;font-weight:800;letter-spacing:.2em;color:#f5a623;text-transform:uppercase;margin-bottom:6px">New hire · Day One Pipeline</div>
+  <div style="font-size:22px;font-weight:900;color:#ffffff">Ana, %s just joined. Four things are yours.</div>
+</td></tr>
+<tr><td style="height:4px;background:#f5a623;font-size:0">&nbsp;</td></tr>
+<tr><td style="background:#ffffff;padding:22px 30px;font-size:15px;line-height:1.7;color:#1a1f26">
+  <strong>1. Dotloop first, it gates everything:</strong> create a loop named
+  <strong>"%s - Onboarding Docs"</strong> with the commission agreement and the
+  handbook, and send it to %s%s and Barry to sign. They are not on the team
+  until this is signed, so this one is same-day.
+  <a href="%s" style="color:#9a741f;font-weight:700">Mark done</a><br><br>
+  <strong>2.</strong> Add %s to the roster spreadsheet.
+  <a href="%s" style="color:#9a741f;font-weight:700">Mark done</a><br>
+  <strong>3.</strong> Add them to the team email distribution.
+  <a href="%s" style="color:#9a741f;font-weight:700">Mark done</a><br>
+  <strong>4.</strong> Let Ylopo support know we have a new agent.
+  <a href="%s" style="color:#9a741f;font-weight:700">Mark done</a><br><br>
+  Each "mark done" link checks the item off the onboarding board so nobody
+  has to ask. When their headshot and bio come in you will get a download
+  link by email for the Drive folder and the website.
+</td></tr>
+<tr><td style="background:#ffffff;padding:0 30px 24px;font-size:15px;color:#1a1f26">Thank you, Ana.<br><strong>Barry</strong></td></tr>
+</table></td></tr></table></div>""" % (
+            first, agent_name,
+            agent_name, (" (%s)" % agent_email) if agent_email else "",
+            _done_link("ana_dotloop"), first, _done_link("roster_sheet"),
+            _done_link("email_dist"), _done_link("ylopo_support"))
+        try:
+            _pm.send(to="Ana Pena <%s>" % ana, from_email=config.EMAIL_FROM,
+                     subject="New hire: %s. Dotloop today, three more this week."
+                             % agent_name,
+                     html=html, cc=config.EMAIL_FROM)
+            logger.info("[ONBOARD] Ana task email sent for %s", agent_name)
+        except Exception as e:
+            logger.warning("[ONBOARD] Ana email failed: %s", e)
+    return seeded
+
+
+@app.route("/ob/<token>/done")
+def onboarding_task_done_link(token):
+    """One-click task completion from the ops emails."""
+    r = _db.mark_onboarding_task(token=token)
+    if not r:
+        return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
+                "This link has expired or was already used."), 404
+    return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
+            "<h2>&#10003; Done</h2><p>%s: <b>%s</b> is checked off. "
+            "Thank you.</p></div>" % (r["agent_name"], r["label"]))
+
+
+@app.route("/join/<token>", methods=["GET", "POST"])
+def onboarding_join_page(token):
+    """The hire's personal page: bio + headshot upload. Token is the auth.
+    On submit: stored, Ana and Barry get the download link, task checks off."""
+    row = _db.get_pipeline_row_by_join_token(token)
+    if not row:
+        return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
+                "This link is not active. Ask Barry for a fresh one."), 404
+    agent = row["agent_name"]
+    first = agent.split()[0]
+    if request.method == "POST":
+        bio = (request.form.get("bio") or "").strip()
+        f = request.files.get("headshot")
+        if not f or not bio:
+            return redirect(request.path + "?err=1")
+        data = f.read()
+        if len(data) > 15 * 1024 * 1024:
+            return redirect(request.path + "?err=2")
+        uid = _db.save_onboarding_upload(agent, f.filename,
+                                         f.mimetype or "image/jpeg", data, bio)
+        _db.mark_onboarding_task(agent_name=agent, task_key="headshot_bio",
+                                 done_by="agent")
+        base = (os.environ.get("BASE_URL") or "").rstrip("/")
+        link = "%s/api/admin/onboarding/upload/%s" % (base, uid)
+        try:
+            import postmark_client as _pm
+            ana = _ana_email()
+            _pm.send(to=", ".join(filter(None, [config.EMAIL_FROM, ana])),
+                     from_email=config.EMAIL_FROM,
+                     subject="%s's headshot and bio are in" % first,
+                     html="<p>%s submitted their headshot and bio.</p>"
+                          "<p><a href='%s'>Download here</a> (sign in to "
+                          "Command Center first), then drop the photo in the "
+                          "team Drive folder and use the bio for the website "
+                          "and the announcement post.</p><p>Bio:</p>"
+                          "<blockquote>%s</blockquote>"
+                          % (agent, link,
+                             bio.replace("&", "&amp;").replace("<", "&lt;")))
+        except Exception as e:
+            logger.warning("[ONBOARD] upload notify failed: %s", e)
+        return ("<div style='font-family:sans-serif;padding:3rem;text-align:center;"
+                "max-width:480px;margin:0 auto'><h2>&#10003; Got it, %s</h2>"
+                "<p>Headshot and bio received. You are officially on the "
+                "website track. Back to the Fast Track course you go.</p></div>"
+                % first)
+    err = request.args.get("err")
+    err_html = ""
+    if err == "1":
+        err_html = "<p style='color:#a63d2e'>Both the photo and the bio are needed.</p>"
+    elif err == "2":
+        err_html = "<p style='color:#a63d2e'>That photo is over 15MB. A phone photo is fine, just not the RAW file.</p>"
+    return """<!DOCTYPE html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<meta name='robots' content='noindex'><title>Welcome, %s</title>
+<style>body{margin:0;background:#0d1117;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;line-height:1.55}
+.wrap{max-width:480px;margin:0 auto;padding:1.8rem 1.2rem 3rem}
+.kick{font-size:.62rem;font-weight:800;letter-spacing:.18em;color:#f5a623;text-transform:uppercase}
+h1{font-size:1.5rem;font-weight:850;margin:.3rem 0 .5rem}
+p{color:#c7cdd6;font-size:.9rem}
+label{display:block;font-size:.72rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#f5a623;margin:1.1rem 0 .35rem}
+textarea,input[type=file]{width:100%%;box-sizing:border-box;background:#151b24;border:1px solid #232c3a;border-radius:10px;color:#e8edf8;font-size:.9rem;padding:.7rem}
+textarea{min-height:9rem;font-family:inherit}
+button{width:100%%;background:#f5a623;color:#0d1117;font-size:1rem;font-weight:800;border:none;border-radius:12px;padding:1rem;margin-top:1.2rem;cursor:pointer}
+</style></head><body><div class='wrap'>
+<div class='kick'>Legacy Home Team</div>
+<h1>Welcome, %s. Two things for the website.</h1>
+<p>Your headshot goes on the team site and your bio tells clients who they
+are working with. Two minutes now saves three reminder emails later.</p>
+%s
+<form method='POST' enctype='multipart/form-data'>
+<label>Your headshot</label>
+<input type='file' name='headshot' accept='image/*' required>
+<p style='font-size:.75rem;color:#8a93a5'>A clean phone photo works: good light, plain background, shoulders up.</p>
+<label>Your bio (3 to 6 sentences)</label>
+<textarea name='bio' required placeholder='Who you are, how long you have been in real estate or what you did before, what part of Hampton Roads you know best, and one human thing about you (family, hobby, team).'></textarea>
+<button type='submit'>Send it in</button>
+</form>
+</div></body></html>""" % (first, first, err_html)
+
+
+@app.route("/api/admin/onboarding/upload/<int:upload_id>")
+def api_onboarding_upload(upload_id):
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    u = _db.get_onboarding_upload(upload_id)
+    if not u:
+        return jsonify({"error": "not found"}), 404
+    from flask import Response
+    return Response(u["data"], mimetype=u["mimetype"] or "image/jpeg",
+                    headers={"Content-Disposition":
+                             'attachment; filename="%s"' % (u["filename"] or "headshot.jpg")})
+
+
+@app.route("/api/admin/onboarding/pipeline")
+def api_onboarding_pipeline():
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    base = (os.environ.get("BASE_URL") or "").rstrip("/")
+    hires = _db.get_onboarding_pipeline()
+    for h in hires:
+        h["join_url"] = "%s/join/%s" % (base, h.pop("join_token", ""))
+        for t in h["tasks"]:
+            t.pop("token", None)
+    return jsonify({"ok": True, "hires": hires,
+                    "gated": sorted(_db.get_onboarding_gated())})
+
+
+@app.route("/api/admin/onboarding/task-done", methods=["POST"])
+def api_onboarding_task_done():
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    r = _db.mark_onboarding_task(agent_name=body.get("agent_name"),
+                                 task_key=body.get("task_key"),
+                                 done_by=body.get("done_by") or "board")
+    if not r:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/admin/onboarding/seed", methods=["POST"])
+def api_onboarding_seed():
+    """Manually start the pipeline for a hire (or backfill a recent one)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    name = (body.get("agent_name") or "").strip()
+    if not name:
+        return jsonify({"error": "agent_name required"}), 400
+    profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
+                    if p["agent_name"] == name), None)
+    base = (os.environ.get("BASE_URL") or "").rstrip("/")
+    seeded = _onboard_new_hire(name, (profile or {}).get("email"), base)
+    return jsonify({"ok": bool(seeded), "seeded": seeded})
 
 
 @app.route("/api/admin/onboarding-board")
@@ -18555,6 +18772,11 @@ def scheduled_onboarding_escalation():
                                            dashboard_url=dashboard_url)
                 _db.mark_onboarding_sent(name)
                 print(f"[ONBOARDING] Day 1 goal invite sent to {name}")
+                try:
+                    _onboard_new_hire(name, email, base_url)
+                    print(f"[ONBOARDING] Day One Pipeline seeded for {name}")
+                except Exception as _pe:
+                    print(f"[ONBOARDING] pipeline seed failed for {name}: {_pe}")
             except Exception as e:
                 print(f"[ONBOARDING] Day 1 invite failed for {name}: {e}")
 
@@ -18591,10 +18813,55 @@ def scheduled_onboarding_escalation():
                 print(f"[ONBOARDING SEQ] {name} has no email — skipping Day {seq_day}")
                 continue
 
+            open_items = []
             try:
-                send_onboarding_sequence_email(name, first, email, setup_url, day=seq_day)
+                _tasks = _db.get_open_onboarding_tasks(name, lane="agent")
+                _row = next((h for h in _db.get_onboarding_pipeline()
+                             if h["agent_name"] == name), None)
+                _join = ("%s/join/%s" % (base_url, _row["join_token"])) \
+                    if _row and _row.get("join_token") else None
+                for _t in _tasks:
+                    lbl = _t["label"]
+                    if _t["key"] == "headshot_bio" and _join:
+                        lbl += " (two minutes: %s)" % _join
+                    open_items.append(lbl)
+            except Exception:
+                pass
+            try:
+                send_onboarding_sequence_email(name, first, email, setup_url,
+                                               day=seq_day, open_items=open_items)
             except Exception as e:
                 print(f"[ONBOARDING SEQ] Day {seq_day} failed for {name}: {e}")
+
+        # ── Step 3: day-10 escalation — anything still open lands on Barry ──
+        try:
+            from datetime import date as _d
+            stale = []
+            for h in _db.get_onboarding_pipeline():
+                if h.get("completed_at"):
+                    continue
+                started = _d.fromisoformat(h["started_at"])
+                if (_d.today() - started).days < 10:
+                    continue
+                open_t = [t for t in h["tasks"] if not t["done_at"]]
+                if open_t:
+                    stale.append((h["agent_name"], (_d.today() - started).days, open_t))
+            if stale and _db.claim_once("onboard_escal_%s" % _d.today().isocalendar()[1]):
+                import postmark_client as _pm
+                lines = "".join(
+                    "<p><b>%s</b> (day %d): %s</p>"
+                    % (n, d, "; ".join("%s (%s)" % (t["label"], t["owner"])
+                                       for t in ot)) for n, d, ot in stale)
+                _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+                         subject="Onboarding stuck: %d hire%s past day 10"
+                                 % (len(stale), "s" if len(stale) != 1 else ""),
+                         html="<div style='font-family:sans-serif'>"
+                              "<p>These onboarding items are still open past "
+                              "day 10. Owners in parentheses.</p>%s"
+                              "<p>Board: %s/team/onboarding</p></div>"
+                              % (lines, base_url))
+        except Exception as _ee:
+            print(f"[ONBOARDING] escalation check failed: {_ee}")
 
     except Exception as e:
         _alert_on_job_failure("onboarding_escalation", str(e))

@@ -283,10 +283,14 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
         client, uid_by_agent, today)
     summary["verified_yesterday"] = sum(t for _, t in scoreboard.values())
 
+    try:
+        _gated = _db.get_onboarding_gated()
+    except Exception:
+        _gated = set()
     for profile in profiles:
         agent = profile.get("agent_name")
         uid = profile.get("fub_user_id")
-        if not agent or not uid or agent in _EXCLUDED:
+        if not agent or not uid or agent in _EXCLUDED or agent in _gated:
             continue
 
         picks, used_pids = [], set()

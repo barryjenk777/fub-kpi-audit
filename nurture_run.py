@@ -274,8 +274,13 @@ def run_nurture_run(dry_run=True, only_agent=None, preview_to=None):
     base = (os.environ.get("BASE_URL")
             or "https://web-production-3363cc.up.railway.app").rstrip("/")
     run_date = date.today()
+    try:
+        _gated = _db.get_onboarding_gated()
+    except Exception:
+        _gated = set()
     profiles = [p for p in (_db.get_agent_profiles(active_only=True) or [])
                 if p["agent_name"] not in _EXCLUDED
+                and p["agent_name"] not in _gated
                 and (not only_agent or p["agent_name"] == only_agent)]
 
     recent = set()
