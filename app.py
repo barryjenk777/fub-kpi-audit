@@ -3513,6 +3513,12 @@ def api_send_hype_email():
         if success:
             logger.info("hype-email sent: %s", msg)
             try:
+                for _n, _e in data["to_emails"]:
+                    if _e:
+                        _db.log_attention(_n, "hype", "email")
+            except Exception:
+                pass
+            try:
                 _db.set_app_state("hype_email_last_sent",
                                   datetime.now(timezone.utc).isoformat())
             except Exception as _se:
@@ -17476,6 +17482,9 @@ needs from you. If it is not on this page, it can wait.</div>
 <div class='row'><div class='when'>Wednesday 8:15am</div><div class='what'>
   <b>Rep check</b><span>Inside the morning text: your Dojo practice line and
   the number to call. Pass is 7 or better. Phoenix leads ride on it.</span></div></div>
+<div class='row'><div class='when'>Sunday 9pm</div><div class='what'>
+  <b>The board</b><span>Who earned the live transfer line for next week.
+  Your dials and conversations this week decide it.</span></div></div>
 <div class='row'><div class='when'>Sunday 7pm</div><div class='what'>
   <b>The Dojo</b><span>Your week's focus and scenario, picked from your real
   call grades. Reps due by Sunday night.</span></div></div>

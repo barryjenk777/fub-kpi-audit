@@ -734,6 +734,10 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
       <span class="nav-icon">🚀</span> Onboarding
       <span class="nav-ext">↗</span>
     </a>
+    <div class="nav-section">Settings</div>
+    <button class="nav-item" data-tab="msgsync" onclick="switchTab('msgsync')">
+      <span class="nav-icon">📨</span> Messaging &amp; Sync
+    </button>
     <a class="nav-item" href="/logout">
       <span class="nav-icon">🚪</span> Log out
     </a>
@@ -774,6 +778,10 @@ tbody tr:hover td{background:rgba(255,255,255,.018)}
         </div>
         <div class="cc-ask-answer" id="cc-ask-answer"></div>
       </div>
+    </div>
+
+    <div class="tab-pane" id="tab-msgsync">
+      <div id="msgsync-body"><div class="loading-pane"><span class="spinner"></span> Reading the message ledger…</div></div>
     </div>
 
     <div class="tab-pane" id="tab-goals">
@@ -1049,11 +1057,12 @@ function switchTab(name){
     appointments:'Every appointment plus where appointment money leaks: meetings nobody followed up after, upcoming ones at risk of no-show, and outcomes never logged.',
     meeting:'Pick an agent, get the 90-second brief: a TLDR, one number to open with, three questions to ask, the nurture play for their internet leads, and the commitment to walk out with.',
     isa:'Fhalen\'s handoffs, judged like an investment: volume trend, verified speed to first call, which agents honor the handoff, and whether speed is paying off in appointments.',
+    msgsync:'The diagnostics behind every message the system sends: per-agent load and quiet-hour deferrals from the attention governor, which copy variants win, webhook receipts, and the agent rhythm page.',
     outreach:'The AI that texts and emails dormant leads for you: what is working, what is not, and what agents do once a lead says yes. Green checks are wins; warnings need your voice.',
     manager:''};
   const dEl=document.getElementById('topbar-desc');
   if(dEl)dEl.textContent=DESCS[name]||'';
-  const titles={pulse:'📈 Pulse — 60/90 day themes',goals:'🧑‍💼 Agents — Goals & Money',kpi:'🧑‍💼 Agents — Weekly KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach'};
+  const titles={pulse:'📈 Pulse — 60/90 day themes',goals:'🧑‍💼 Agents — Goals & Money',kpi:'🧑‍💼 Agents — Weekly KPIs',manager:'👔 Sales Manager',appointments:'📅 Appointments',meeting:'🤝 1-on-1 Coaching',isa:'📞 ISA — Fhalen',outreach:'✉️ AI Outreach',msgsync:'📨 Messaging & Sync'};
   document.getElementById('topbar-title').textContent=titles[name]||name;
 
   if(!_loaded[name]){
@@ -1065,6 +1074,7 @@ function switchTab(name){
     else if(name==='meeting')     loadMeetingAgents();
     else if(name==='isa'){loadIsaTransfers();loadIsa();}
     else if(name==='outreach')    loadOutreach();
+    else if(name==='msgsync')     loadMsgSync();
   }
 }
 
@@ -2702,6 +2712,56 @@ async function sendEmail(){const btn=document.getElementById('btnSendEmail');btn
 /* ════════════════════════════════════════════════
    AI OUTREACH TAB
 ════════════════════════════════════════════════ */
+async function loadMsgSync(){
+  const el=document.getElementById('msgsync-body');
+  const esc=s=>(s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  try{
+    const [aL,vS,wS,nS]=await Promise.all([
+      fetch('/api/admin/attention/load?days=7').then(r=>r.json()),
+      fetch('/api/admin/variants/scoreboard').then(r=>r.json()),
+      fetch('/api/admin/webhook-stats').then(r=>r.json()).catch(()=>({})),
+      fetch('/api/admin/nurture-run/scoreboard').then(r=>r.json()).catch(()=>({}))
+    ]);
+    let h='';
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1rem">`;
+    h+=`<div style="padding:.8rem 1.2rem;border-bottom:1px solid var(--border)"><b>📨 Attention governor</b> <span style="font-size:.72rem;color:var(--muted)">every message the system sent each agent, last 7 days. Caps: 3 instant texts and 2 rebook emails a day, nothing 9pm to 7am. Deferred = the governor held it and the morning text covered it.</span></div>`;
+    const load=aL.load||[];
+    if(load.length){
+      h+='<div class="tbl-wrap"><table><thead><tr><th>Agent</th><th>Messages</th><th>Texts</th><th>Deferred</th></tr></thead><tbody>';
+      load.forEach(r=>{h+=`<tr><td style="font-weight:600">${esc(r.agent)}</td><td>${r.messages}</td><td>${r.texts}</td><td style="color:${r.deferred>0?'var(--gold)':'var(--muted)'}">${r.deferred}</td></tr>`;});
+      h+='</tbody></table></div>';
+    } else h+=`<div style="padding:1rem 1.2rem;color:var(--muted);font-size:.8rem">Ledger starts counting from tonight's sends.</div>`;
+    h+='</div>';
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1rem">`;
+    h+=`<div style="padding:.8rem 1.2rem;border-bottom:1px solid var(--border)"><b>🧪 Copy variants</b> <span style="font-size:.72rem;color:var(--muted)">which words win. Handoff outcome = minutes to first call; nurture outcome = the lead replied. Flags appear at 20+ sends under half the system average.</span></div>`;
+    const vars=vS.variants||[];
+    if(vars.length){
+      h+='<div class="tbl-wrap"><table><thead><tr><th>System</th><th>Variant</th><th>Sends</th><th>Outcome rate</th><th>Median</th></tr></thead><tbody>';
+      vars.forEach(v=>{h+=`<tr><td>${esc(v.system)}</td><td style="font-size:.74rem">${esc(v.variant)}</td><td>${v.sends}</td><td><b>${v.outcome_rate}%</b></td><td style="color:var(--muted)">${v.median_val==null?'':v.median_val}</td></tr>`;});
+      h+='</tbody></table></div>';
+      (vS.flags||[]).forEach(f=>{h+=`<div style="padding:.6rem 1.2rem;background:rgba(239,68,68,.08);font-size:.78rem"><b style="color:var(--red)">Retire candidate:</b> ${esc(f.system)} ${esc(f.variant)}: ${f.outcome_rate}% vs system mean ${f.system_mean}%</div>`;});
+    } else h+=`<div style="padding:1rem 1.2rem;color:var(--muted);font-size:.8rem">First verdicts land after a few weeks of sends.</div>`;
+    h+='</div>';
+    const counts=(wS.stats||wS||{}).counts||{};
+    h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:1rem 1.2rem;margin-bottom:1rem">`;
+    h+=`<b>🔌 Sync receipts</b> <span style="font-size:.72rem;color:var(--muted)">FUB webhook events received</span><div style="margin-top:.5rem;font-size:.8rem;color:var(--muted)">`;
+    h+=Object.keys(counts).length?Object.entries(counts).map(([k,v])=>`${esc(k)}: <b style="color:var(--text)">${v}</b>`).join(' · '):'no receipts yet';
+    h+=`</div></div>`;
+    const nsb=(nS.scoreboard||[]);
+    if(nsb.length){
+      h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1rem">`;
+      h+=`<div style="padding:.8rem 1.2rem;border-bottom:1px solid var(--border)"><b>🌱 Nurture Run</b> <span style="font-size:.72rem;color:var(--muted)">this week: cards sent, taps, webhook-verified sends</span></div>`;
+      h+='<div class="tbl-wrap"><table><thead><tr><th>Agent</th><th>Cards</th><th>Tapped</th><th>Verified</th></tr></thead><tbody>';
+      nsb.forEach(r=>{h+=`<tr><td style="font-weight:600">${esc(r.agent)}</td><td>${r.cards}</td><td>${r.tapped}</td><td style="color:${r.verified>0?'var(--green)':'var(--muted)'}">${r.verified}</td></tr>`;});
+      h+='</tbody></table></div></div>';
+    }
+    h+=`<div style="font-size:.78rem;color:var(--muted)">Agent-facing rhythm page: <a href="/rhythm" target="_blank" style="color:var(--gold)">/rhythm</a> (linked from the recurring emails).</div>`;
+    el.innerHTML=h;
+  }catch(e){
+    el.innerHTML=`<div class="alert red"><span class="alert-icon">⚠️</span><div><div class="alert-title">Could not load diagnostics</div><div class="alert-body">${e.message}</div></div></div>`;
+  }
+}
+
 async function loadOutreach(force, _attempt){
   _attempt=_attempt||1;
   const ld=document.getElementById('loading-outreach');

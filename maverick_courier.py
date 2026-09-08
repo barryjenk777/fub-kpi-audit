@@ -310,6 +310,20 @@ def _harvest(url, headless, debug=False):
                             and "PAGE NOT FOUND" not in up and "404" not in up[:200]:
                         chunks.append("MAVERICK CALL HISTORY\nSOURCE_URL: %s\n%s"
                                       % (hurl, htxt))
+                        # Recon: can the recordings themselves be fetched?
+                        # Collect any audio/media URLs the page exposes so
+                        # the server can judge whether Tape of the Week can
+                        # ship with a hosted player.
+                        try:
+                            srcs = page.eval_on_selector_all(
+                                "audio, audio source, video source, "
+                                "a[href*='record'], a[href*='.mp3'], a[href*='.wav']",
+                                "els => els.map(e => e.src || e.href).filter(Boolean)")
+                            srcs = [s for s in dict.fromkeys(srcs)][:20]
+                            if srcs:
+                                chunks.append("MAVERICK AUDIO URLS\n" + "\n".join(srcs))
+                        except Exception:
+                            pass
                         got_hist = True
                         break
                 except Exception:

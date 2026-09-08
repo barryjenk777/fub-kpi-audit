@@ -465,6 +465,10 @@ def run_dojo_monday(dry_run=False):
             _db.save_dojo_prescription(week_start, agent, diag["focus"],
                                        sc.get("label"), sc.get("phone"),
                                        diag["reps"], diag["reason"])
+            try:
+                _db.log_attention(agent, "dojo", "email")
+            except Exception:
+                pass
             summary["sent"] += 1
         except Exception as e:
             logger.error("dojo email failed for %s: %s", agent, e)
