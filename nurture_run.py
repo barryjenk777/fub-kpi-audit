@@ -224,7 +224,7 @@ def build_email(agent_first, cards_html, n_cards, call_line, scoreboard_line):
   <div style="font-size:11px;font-weight:800;letter-spacing:.2em;color:#f5a623;
               text-transform:uppercase;margin-bottom:8px">The Nurture Run</div>
   <div style="font-size:26px;font-weight:900;color:#ffffff;line-height:1.15">
-    %s, your %d for this week.</div>
+    %s, %d of your leads need to hear from you.</div>
   <div style="font-size:15px;color:#c7cdd6;margin-top:8px">About %d minutes,
     phone in hand. Every message below is already written. Read it, tap the
     button, your Messages app opens with it ready to go. Tweak a word if you
@@ -321,7 +321,8 @@ def run_nurture_run(dry_run=True, only_agent=None, preview_to=None):
                           else "Let's beat it this week."))
         html = build_email(_first(agent), "".join(cards_html), saved,
                            call_line or "", sb_line)
-        subject = "Your %d for this week. Ten minutes." % saved
+        subject = ("%d of your leads need to hear from you "
+                   "(all written, just tap send)" % saved)
         to = preview_to or email
         if preview_to:
             subject = "[PREVIEW %s] %s" % (agent, subject)
