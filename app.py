@@ -4758,6 +4758,52 @@ def _onboard_new_hire(agent_name, agent_email, base_url):
     return seeded
 
 
+def _docs_signed_email(agent_name):
+    """The door opening. Docs came back signed, the gate lifts, and the
+    agent hears it immediately instead of the machine switching on in
+    silence. Once per hire via claim_once."""
+    if not _db.claim_once("docs_signed_%s" % agent_name.replace(" ", "_")):
+        return
+    profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
+                    if p["agent_name"] == agent_name), None)
+    email = (profile or {}).get("email")
+    if not email:
+        return
+    first = agent_name.split()[0]
+    try:
+        import postmark_client as _pm
+        _pm.send(to="%s <%s>" % (agent_name, email),
+                 from_email=config.EMAIL_FROM,
+                 cc=config.EMAIL_FROM,
+                 subject="%s, you're in. Everything just switched on." % first,
+                 html="""<div style="background:#f4f4f0;padding:24px 0">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;font-family:-apple-system,'Segoe UI',Arial,sans-serif">
+<tr><td style="background:#0d1117;padding:24px 30px">
+  <div style="font-size:11px;font-weight:800;letter-spacing:.2em;color:#f5a623;text-transform:uppercase;margin-bottom:6px">Legacy Home Team</div>
+  <div style="font-size:24px;font-weight:900;color:#ffffff">%s, you're officially in.</div>
+</td></tr>
+<tr><td style="height:4px;background:#f5a623;font-size:0">&nbsp;</td></tr>
+<tr><td style="background:#ffffff;padding:22px 30px;font-size:15px;line-height:1.7;color:#1a1f26">
+  Your signatures just came back, and here is what switched on the moment
+  they did:<br><br>
+  <strong>Your leads.</strong> LeadStream starts ranking them for you tonight.<br>
+  <strong>Your morning text.</strong> Weekdays at 8:15, three calls picked
+  and verified. Make them before lunch.<br>
+  <strong>Your Tuesday Nurture Run.</strong> Ten quiet leads, messages
+  already written, two taps each.<br>
+  <strong>The transfer line.</strong> Hit your weekly numbers and live
+  transfers come to you.<br><br>
+  Nobody eases onto this team. The machine treats you like a full agent
+  starting now, because you are one.<br><br>
+  Let's get it,<br><strong>Barry Jenkins</strong>
+</td></tr>
+</table></td></tr></table></div>""" % first)
+        logger.info("[ONBOARD] docs-signed email sent to %s", agent_name)
+    except Exception as e:
+        logger.warning("[ONBOARD] docs-signed email failed: %s", e)
+
+
 @app.route("/ob/<token>/done")
 def onboarding_task_done_link(token):
     """One-click task completion from the ops emails."""
@@ -4765,6 +4811,8 @@ def onboarding_task_done_link(token):
     if not r:
         return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
                 "This link has expired or was already used."), 404
+    if r.get("task_key") == "sign_docs":
+        _docs_signed_email(r["agent_name"])
     return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
             "<h2>&#10003; Done</h2><p>%s: <b>%s</b> is checked off. "
             "Thank you.</p></div>" % (r["agent_name"], r["label"]))
@@ -4887,6 +4935,8 @@ def api_onboarding_task_done():
                                  done_by=body.get("done_by") or "board")
     if not r:
         return jsonify({"error": "not found"}), 404
+    if r.get("task_key") == "sign_docs" and body.get("done_by") != "backfill":
+        _docs_signed_email(r["agent_name"])
     return jsonify({"ok": True, **r})
 
 
@@ -18841,6 +18891,58 @@ def scheduled_onboarding_escalation():
                                                day=seq_day, open_items=open_items)
             except Exception as e:
                 print(f"[ONBOARDING SEQ] Day {seq_day} failed for {name}: {e}")
+
+        # ── Step 2b: Day 14 mirror — real numbers, no ghosting after day 7 ──
+        for agent in all_agents:
+            sent_at = agent.get("onboarding_sent_at")
+            if not sent_at:
+                continue
+            try:
+                sent_date = datetime.fromisoformat(
+                    sent_at.replace("Z", "+00:00") if isinstance(sent_at, str)
+                    else sent_at.isoformat()).date()
+            except Exception:
+                continue
+            if (today - sent_date).days != 13:
+                continue
+            name = agent["agent_name"]
+            email = agent.get("email")
+            if not email or not _db.claim_once("onboard_d14_%s"
+                                               % name.replace(" ", "_")):
+                continue
+            first = name.split()[0]
+            try:
+                ctx = _db.get_agent_activity_context(name) or {}
+                w = ctx.get("windows", {})
+                calls = (w.get("this_week", {}).get("calls", 0) or 0) +                         (w.get("last_week", {}).get("calls", 0) or 0)
+                convos = (w.get("this_week", {}).get("convos", 0) or 0) +                          (w.get("last_week", {}).get("convos", 0) or 0)
+                appts = (w.get("this_week", {}).get("appts", 0) or 0) +                         (w.get("last_week", {}).get("appts", 0) or 0)
+                open_t = _db.get_open_onboarding_tasks(name, lane="agent")
+                open_html = ("<br><br><strong>Still open from onboarding:</strong> "
+                             + "; ".join(t["label"] for t in open_t)
+                             ) if open_t else ""
+                verdict = ("That is a real start. The agents who make it here "
+                           "are the ones who do week three exactly like week "
+                           "one." if convos >= 5 else
+                           "Slower start than either of us wants, and that is "
+                           "fixable this week, not someday. Ten dials a day "
+                           "changes this number fast. Text me and we will "
+                           "build the block together.")
+                import postmark_client as _pm
+                _pm.send(to="%s <%s>" % (name, email),
+                         from_email=config.EMAIL_FROM, cc=config.EMAIL_FROM,
+                         subject="%s, your first two weeks by the numbers" % first,
+                         html="""<div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;padding:20px;font-size:15px;line-height:1.7;color:#1a1f26">
+<p>Hey %s,</p>
+<p>Two weeks in. No opinions today, just your actual numbers:</p>
+<p><strong>%d dials &middot; %d real conversations &middot; %d appointments set</strong></p>
+<p>%s</p>%s
+<p>Let's get it,<br><strong>Barry Jenkins</strong></p></div>"""
+                              % (first, calls, convos, appts, verdict, open_html))
+                print(f"[ONBOARDING] Day 14 mirror sent to {name}")
+                _db.log_attention(name, "onboard_d14", "email")
+            except Exception as e:
+                print(f"[ONBOARDING] Day 14 mirror failed for {name}: {e}")
 
         # ── Step 3: day-10 escalation — anything still open lands on Barry ──
         try:

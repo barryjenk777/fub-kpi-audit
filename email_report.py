@@ -1689,6 +1689,8 @@ Full onboarding portal: {GAMMA_SITE}
 
 13 sections, 13 videos. It won't take long. And it answers most of the questions you probably already have.
 
+You'll also get an invite to the Fast Track course. That's where the real systems training lives: Follow Up Boss, working your leads, the daily workflow, all in short videos you can do from your phone. The emails this week give you the map. Fast Track teaches you to drive.
+
 If you haven't set up your goals yet, your personal link is here: {setup_url}
 
 Tomorrow I'll walk you through exactly how you get paid.
@@ -1718,6 +1720,8 @@ Almost everyone on the team is on the LPT Brokerage Partner Plan. Here's how it 
 Do the math: if your average commission check is $6,000 per deal, you hit the cap around deal 3 or 4. From that point forward, everything is yours.
 
 There's also a Business Builder option ($500 flat per transaction, $5,000 cap, 100% from day one) that works better for high-volume agents focused on rapid growth. Full comparison is in Section 8 of the onboarding portal.
+
+One more money thing: Ana, our transaction manager, is sending you a dotloop with the commission agreement and handbook to sign. Ana touches every closing you will ever have here, so when her name shows up in your inbox, that is a good day. Sign it when it arrives. You are not fully on the team until it comes back.
 
 What the team covers: leads, FUB CRM, AI engagement, ISA support, weekly training, 1:1 coaching, office access, and all LPT tools.
 
@@ -1812,6 +1816,8 @@ Every week we sit down with you and go through your numbers. Calls, conversation
 
 Text me at (757) 816-4037 to get your weekly 1:1 on the calendar.
 
+Two people to meet this week if you haven't yet. Matt does a systems walkthrough with every new agent to make sure Follow Up Boss and your daily workflow actually make sense; grab 20 minutes with him. And get 10 minutes with Ana, our transaction manager. She will run every closing you have here, and knowing her before your first deal makes that first deal smooth.
+
 The Maverick system will flag leads that need attention. When it does, log a call or a text and it clears. No drama. Just stay on top of it.
 
 If you ever get stuck on anything, text me at (757) 816-4037.
@@ -1832,13 +1838,13 @@ You've made it through the handbook. You've seen how we operate, how you get pai
 
 One thing left.
 
-Go to the onboarding portal, find the handbook, and sign the last page. It's a signature page acknowledging you've read and understood how we work together. Email the signed copy to barry@yourfriendlyagent.net.
+Check your email for a dotloop from Ana called "Your Name - Onboarding Docs." It has two documents: the commission agreement and the handbook signature page. Open it, read them, sign them. Ana and I sign right behind you.
 
-That's it. Two minutes.
+That's it. Two minutes, all digital, nothing to print or scan.
 
 I don't ask for this to be bureaucratic. I ask for it because this team runs on clarity and mutual commitment. You know what's expected. I know you've seen it. That signature closes the loop.
 
-Once I have it, you're fully in.
+The moment those signatures land, everything switches on at once: your leads, your morning texts, the whole machine. You'll get an email when it happens.
 
 Looking forward to building something with you.
 
