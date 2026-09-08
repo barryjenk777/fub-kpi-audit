@@ -311,7 +311,36 @@ def _agent_themes(cur, funnel):
             doing.append("Outcome logging is holding: %d of %d recent appointments "
                          "have a logged result." % (total - missing, total))
 
-        # Maverick follow-up flags: the tag is Maverick's; the age is ours.
+        # Maverick rules board trend (courier-captured): call out the rule
+    # closest to money when it is bleeding, and the win when it improves.
+    try:
+        snaps = _db.get_maverick_rules_trend(days=14) or []
+        dates = sorted({s["date"] for s in snaps}, reverse=True)
+        if dates:
+            latest = [s for s in snaps if s["date"] == dates[0] and s["rule"]]
+            worst = max((s for s in latest if s.get("past_due")),
+                        key=lambda s: s["past_due"], default=None)
+            prev = None
+            if len(dates) >= 2 and worst:
+                prev = next((s for s in snaps if s["date"] == dates[-1]
+                             and s["rule"] == worst["rule"]), None)
+            if worst and prev and prev.get("past_due") and \
+                    worst["past_due"] <= prev["past_due"] * 0.75:
+                doing.append(
+                    "Maverick's '%s' backlog is shrinking: %d past due, down "
+                    "from %d. The nudges are getting worked."
+                    % (worst["rule"], worst["past_due"], prev["past_due"]))
+            elif worst and worst.get("past_due", 0) >= 30:
+                doing_none = ("%d leads are past due on Maverick's '%s' rule "
+                              "(%d%% of everyone eligible). This is the rule "
+                              "closest to money; make it the huddle number."
+                              % (worst["past_due"], worst["rule"],
+                                 worst.get("past_due_pct") or 0))
+                not_doing.append(doing_none)
+    except Exception as e:
+        logger.warning("pulse maverick rules bullet failed: %s", e)
+
+    # Maverick follow-up flags: the tag is Maverick's; the age is ours.
     try:
         ooc = _db.get_ooc_stats() or []
         open_total = sum(s["open"] for s in ooc)

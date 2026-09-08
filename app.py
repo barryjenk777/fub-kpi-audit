@@ -16693,6 +16693,78 @@ def _maverick_parse_overview(raw):
     return upserted
 
 
+def _maverick_parse_rules(raw):
+    """Parse the rules-and-alerts board text into snapshot rows.
+
+    The board text (inner_text) interleaves group headers ("Nurture Rules"
+    followed by "53% Past Due / 3% At Risk / 44% Complete"), rule names, and
+    per-rule status strings like "137 (83%) Past Due". Tolerant line-scan:
+    a group header is any line ending in "Rules"; the three percentages that
+    follow are the group summary; every "N (M%) Past Due" after it belongs
+    to the most recent non-noise line as the rule name. Raw text is stored
+    in maverick_reports regardless, so parses can be improved and re-run."""
+    import re as _re
+    if "MAVERICK RULES BOARD" not in raw:
+        return 0
+    text = raw.split("MAVERICK RULES BOARD", 1)[1]
+    NOISE = {"lead", "trigger", "eligibility", "timeframe", "agent", "action",
+             "agent action time", "auto", "nudge/", "reassign", "status",
+             "actions", "nudge all", "re-assign all", "n", "--", "",
+             "lead entered stage", "low completion", "call", "text", "email",
+             "call, text", "call, text, email", "task completed",
+             "appointment stage or", "time update",
+             "appointment stage or time update", "update appointment",
+             "update appointment outcome", "schedule appt or", "update stage",
+             "schedule appt or update stage", "appointment update, task completed",
+             "call, text, email,",
+             "call, text, email, appointment update, task completed",
+             'lead has "appointment outstanding"'}
+    rows, group, last_line = [], None, None
+    pct3 = _re.compile(r"(\d+)% Past Due")
+    risk = _re.compile(r"(\d+)% At Risk")
+    comp = _re.compile(r"(\d+)% Complete")
+    rulestat = _re.compile(r"^(\d+) \((\d+)%\) Past Due")
+    for line in (l.strip() for l in text.splitlines()):
+        low = line.lower()
+        if not line:
+            continue
+        if low.endswith(" rules") or low.endswith(" rules edit"):
+            group = _re.sub(r"\s*edit$", "", line, flags=_re.I)
+            continue
+        m = pct3.search(line)
+        if m and group and "(" not in line:
+            # group summary line(s)
+            entry = next((r for r in rows if r["group"] == group and r["rule"] is None), None)
+            if not entry:
+                entry = {"group": group, "rule": None, "past_due": None,
+                         "past_due_pct": None, "at_risk_pct": None,
+                         "complete_pct": None}
+                rows.append(entry)
+            entry["past_due_pct"] = int(m.group(1))
+            m2, m3 = risk.search(line), comp.search(line)
+            if m2: entry["at_risk_pct"] = int(m2.group(1))
+            if m3: entry["complete_pct"] = int(m3.group(1))
+            continue
+        mr = rulestat.match(line)
+        if mr and group and last_line:
+            rows.append({"group": group, "rule": last_line,
+                         "past_due": int(mr.group(1)),
+                         "past_due_pct": int(mr.group(2)),
+                         "at_risk_pct": None, "complete_pct": None})
+            continue
+        m2, m3 = risk.search(line), comp.search(line)
+        if group and (m2 or m3) and "(" not in line:
+            entry = next((r for r in rows if r["group"] == group and r["rule"] is None), None)
+            if entry:
+                if m2 and entry.get("at_risk_pct") is None: entry["at_risk_pct"] = int(m2.group(1))
+                if m3 and entry.get("complete_pct") is None: entry["complete_pct"] = int(m3.group(1))
+            continue
+        if low not in NOISE and not low.startswith("last 7 day") \
+                and low != "indefinite" and not _re.match(r"^\d+ (hour|day|minute)s?$", low):
+            last_line = line
+    return _db.save_maverick_rules(rows)
+
+
 def _maverick_parse_dashboard(raw):
     """Parse the AI Grading Dashboard text harvest into a team-intel
     snapshot: the ask funnel, top missed discovery questions, top objection
@@ -17173,6 +17245,15 @@ def api_ooc_board():
                     "oldest": _db.get_ooc_open(min_age_days=0, limit=25)})
 
 
+@app.route("/api/admin/maverick/rules")
+def api_maverick_rules():
+    """Rules-board snapshots for trending (coach view: is past-due falling?)."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = request.args.get("days", 28, type=int)
+    return jsonify({"ok": True, "rows": _db.get_maverick_rules_trend(days=days)})
+
+
 @app.route("/api/admin/maverick/reports")
 def api_maverick_reports():
     """Recent Maverick reports incl. raw payloads (for extraction tuning)."""
@@ -17231,8 +17312,14 @@ def api_maverick_ingest():
         dashboard_saved = bool(_maverick_parse_dashboard(raw))
     except Exception as e:
         logger.warning("maverick dashboard parse failed: %s", e)
+    rules_rows = 0
+    try:
+        rules_rows = _maverick_parse_rules(raw)
+    except Exception as e:
+        logger.warning("maverick rules parse failed: %s", e)
     return jsonify({"ok": True, "id": rid, "agent": agent, "grade": grade,
-                    "stats_rows": stats_rows, "dashboard_saved": dashboard_saved})
+                    "stats_rows": stats_rows, "dashboard_saved": dashboard_saved,
+                    "rules_rows": rules_rows})
 
 
 @app.route("/api/appointments/insight")

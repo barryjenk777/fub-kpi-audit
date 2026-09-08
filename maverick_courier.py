@@ -247,6 +247,22 @@ def _harvest(url, headless, debug=False):
         except Exception as e:
             chunks.append("DASHBOARD_HARVEST_FAILED: %s" % str(e)[:200])
 
+        # Fourth capture: the rules and alerts board (per-rule past-due
+        # counts and completion). Generic text harvest; server parses.
+        try:
+            rules_url = "https://my.maverickre.com/agent/agent-rules-and-alerts"
+            page.goto(rules_url, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(9000)
+            rtxt = ""
+            try:
+                rtxt = page.inner_text("body")
+            except Exception:
+                pass
+            if len(rtxt.strip()) > 400 and "BOOK A DEMO" not in rtxt.upper():
+                chunks.append("MAVERICK RULES BOARD\n" + rtxt)
+        except Exception as e:
+            chunks.append("RULES_HARVEST_FAILED: %s" % str(e)[:200])
+
         final_url = page.url
         ctx.close()
     return final_url, body_text, chunks

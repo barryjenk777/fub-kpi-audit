@@ -8811,3 +8811,82 @@ def get_recent_noshows_unrebooked(days=3, excluded=()):
     except Exception as e:
         logger.warning("get_recent_noshows_unrebooked failed: %s", e)
         return []
+
+
+# ── Maverick rules board snapshots (per-rule past-due trend) ────────────────
+
+def ensure_maverick_rules_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS maverick_rules_snapshot (
+                        id            SERIAL PRIMARY KEY,
+                        snapshot_date DATE NOT NULL DEFAULT CURRENT_DATE,
+                        group_name    TEXT NOT NULL,
+                        rule_name     TEXT,
+                        past_due      INTEGER,
+                        past_due_pct  INTEGER,
+                        at_risk_pct   INTEGER,
+                        complete_pct  INTEGER,
+                        UNIQUE (snapshot_date, group_name, rule_name)
+                    );
+                """)
+    except Exception as e:
+        logger.warning("ensure_maverick_rules_table failed: %s", e)
+
+
+def save_maverick_rules(rows):
+    """Upsert one day's parse. rows: [{group, rule (None = group summary),
+    past_due, past_due_pct, at_risk_pct, complete_pct}]."""
+    if not is_available() or not rows:
+        return 0
+    ensure_maverick_rules_table()
+    n = 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for r in rows:
+                    cur.execute("""
+                        INSERT INTO maverick_rules_snapshot
+                            (group_name, rule_name, past_due, past_due_pct,
+                             at_risk_pct, complete_pct)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (snapshot_date, group_name, rule_name)
+                        DO UPDATE SET past_due = EXCLUDED.past_due,
+                                      past_due_pct = EXCLUDED.past_due_pct,
+                                      at_risk_pct = EXCLUDED.at_risk_pct,
+                                      complete_pct = EXCLUDED.complete_pct
+                    """, (r.get("group"), r.get("rule"), r.get("past_due"),
+                          r.get("past_due_pct"), r.get("at_risk_pct"),
+                          r.get("complete_pct")))
+                    n += 1
+        return n
+    except Exception as e:
+        logger.warning("save_maverick_rules failed: %s", e)
+        return n
+
+
+def get_maverick_rules_trend(days=28):
+    """Snapshots for trending, newest first, group summaries and rules."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT snapshot_date, group_name, rule_name, past_due,
+                           past_due_pct, at_risk_pct, complete_pct
+                    FROM maverick_rules_snapshot
+                    WHERE snapshot_date >= CURRENT_DATE - %s
+                    ORDER BY snapshot_date DESC, group_name, rule_name NULLS FIRST
+                """, (int(days),))
+                return [{"date": str(r[0]), "group": r[1], "rule": r[2],
+                         "past_due": r[3], "past_due_pct": r[4],
+                         "at_risk_pct": r[5], "complete_pct": r[6]}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_maverick_rules_trend failed: %s", e)
+        return []
