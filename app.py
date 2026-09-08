@@ -16768,7 +16768,9 @@ def _maverick_parse_call_history(raw):
             cur["rec_stage"] = line
             continue
         gm = grade_re.match(line)
-        if gm and 1 <= int(gm.group(1)) <= 10 and "lead_name" in cur:
+        if gm and 1 <= int(gm.group(1)) <= 10 and "lead_name" in cur \
+                and cur.get("call_date") \
+                and "\u2026" not in cur["lead_name"] and len(cur["lead_name"]) > 2:
             detail = " | ".join(filter(None, [
                 cur.get("outcome"), cur.get("rec_stage"),
                 cur.get("lead_stage"), cur.get("time")]))

@@ -250,14 +250,37 @@ def _harvest(url, headless, debug=False):
         # Fourth capture: the rules and alerts board (per-rule past-due
         # counts and completion). Generic text harvest; server parses.
         try:
+            import re as _re
             rules_url = "https://my.maverickre.com/agent/agent-rules-and-alerts"
             page.goto(rules_url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(9000)
-            rtxt = ""
-            try:
-                rtxt = page.inner_text("body")
-            except Exception:
-                pass
+            page.wait_for_timeout(8000)
+
+            def _rules_text():
+                try:
+                    t = page.inner_text("body")
+                except Exception:
+                    t = ""
+                return t, len(_re.findall(r"\(\d+%\) Past Due", t))
+
+            rtxt, nstat = _rules_text()
+            if nstat == 0:
+                # Groups load collapsed; per-rule rows only exist in the DOM
+                # once expanded. Click each group header, re-measure, keep
+                # whichever snapshot shows more per-rule stat lines.
+                try:
+                    headers = page.get_by_text(_re.compile(r"Rules$"))
+                    for i in range(min(headers.count(), 12)):
+                        try:
+                            headers.nth(i).click(timeout=2000)
+                            page.wait_for_timeout(600)
+                        except Exception:
+                            continue
+                    page.wait_for_timeout(2500)
+                    rtxt2, nstat2 = _rules_text()
+                    if nstat2 > nstat:
+                        rtxt = rtxt2
+                except Exception:
+                    pass
             if len(rtxt.strip()) > 400 and "BOOK A DEMO" not in rtxt.upper():
                 chunks.append("MAVERICK RULES BOARD\n" + rtxt)
         except Exception as e:
