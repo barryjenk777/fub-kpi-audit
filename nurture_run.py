@@ -202,11 +202,11 @@ def _card_html(base, token, lead_name, why, message, fub_url):
                   font-style:italic">%s</div>
     </td></tr>
     <tr><td style="padding:0 18px 16px">
-      <a href="%s/nr/%s/sms" style="display:inline-block;background:#f5a623;
+      <a href="%s/nr/%s/go" style="display:inline-block;background:#f5a623;
          color:#0d1117;font-size:15px;font-weight:800;text-decoration:none;
-         border-radius:10px;padding:12px 22px">Send to %s &rarr;</a>
+         border-radius:10px;padding:12px 22px">Text %s from FUB &rarr;</a>
       <a href="%s/nr/%s/fub" style="display:inline-block;font-size:12px;
-         color:#8a8f98;text-decoration:underline;padding:12px 10px">Open in FUB</a>
+         color:#8a8f98;text-decoration:underline;padding:12px 10px">record only</a>
     </td></tr>
   </table>
 </td></tr>""" % (lead_name, why, msg_html, base, token, first, base, token)
@@ -226,9 +226,9 @@ def build_email(agent_first, cards_html, n_cards, call_line, scoreboard_line):
   <div style="font-size:26px;font-weight:900;color:#ffffff;line-height:1.15">
     %s, %d of your leads need to hear from you.</div>
   <div style="font-size:15px;color:#c7cdd6;margin-top:8px">About %d minutes,
-    phone in hand. Every message below is already written. Read it, tap the
-    button, your Messages app opens with it ready to go. Tweak a word if you
-    want. Hit send.</div>%s
+    phone in hand. Every message below is already written. Tap the button,
+    it copies the message and opens the lead in FUB. Paste, send from your
+    FUB number, next card. Two taps per lead.</div>%s
 </td></tr>
 <tr><td style="height:4px;background:#f5a623;font-size:0">&nbsp;</td></tr>
 <tr><td style="padding:22px 28px 6px;font-size:14px;line-height:1.6;color:#1a1f26;background:#f4f4f0">

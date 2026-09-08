@@ -17362,30 +17362,65 @@ def nurture_run_tap(token, action):
     surface: sms = the agent's Messages app pre-addressed with the message
     composed (their own number sends it); fub = the lead record (FUB's
     universal links open the app when installed); call = the dialer."""
-    if action not in ("sms", "fub", "call"):
+    if action not in ("go", "fub", "sms", "call"):
         return "Not found", 404
     card = _db.get_nurture_card_by_token(token)
     if not card:
         return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
                 "This link has expired. Check this week's Nurture Run email."), 404
     _db.mark_nurture_click(token, action)
-    if action == "fub":
-        return redirect("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
-                        % card["person_id"])
-    digits = "".join(c for c in (card.get("lead_phone") or "") if c.isdigit())
-    if len(digits) == 10:
-        digits = "1" + digits
-    tel = "+" + digits if digits else ""
-    if not tel:
-        return redirect("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
-                        % card["person_id"])
-    if action == "call":
-        return redirect("tel:%s" % tel)
-    from urllib.parse import quote
-    body = quote(card.get("message") or "")
-    ua = (request.headers.get("User-Agent") or "").lower()
-    sep = "&" if ("iphone" in ua or "ipad" in ua or "mac os" in ua) else "?"
-    return redirect("sms:%s%sbody=%s" % (tel, sep, body))
+    fub_url = ("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
+               % card["person_id"])
+    if action in ("fub", "sms", "call"):
+        # FUB record is the only destination: texts go out on the FUB
+        # number so Barry sees the conversation (Barry, Sep 2026). Legacy
+        # sms/call actions from older emails land here too.
+        return redirect(fub_url)
+    # action == "go": the launchpad. One tap copies the message, the next
+    # opens the lead in FUB; the agent pastes and sends from their FUB line.
+    first = (card.get("lead_name") or "the lead").split()[0]
+    msg = (card.get("message") or "")
+    msg_html = msg.replace("&", "&amp;").replace("<", "&lt;")
+    msg_js = json.dumps(msg)
+    return """<!DOCTYPE html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<meta name='robots' content='noindex'><title>Text %s</title>
+<style>body{margin:0;background:#0d1117;color:#e8edf8;
+  font-family:-apple-system,'Segoe UI',sans-serif;line-height:1.5}
+.wrap{max-width:480px;margin:0 auto;padding:1.6rem 1.2rem 3rem;text-align:center}
+.kick{font-size:.62rem;font-weight:800;letter-spacing:.18em;color:#f5a623;text-transform:uppercase}
+h1{font-size:1.4rem;font-weight:850;margin:.4rem 0 1rem}
+.msg{background:#fffbf0;border-left:4px solid #f5a623;border-radius:10px;
+  color:#3d4450;font-size:1rem;font-style:italic;padding:1rem 1.1rem;
+  text-align:left;margin-bottom:1.1rem}
+.btn{display:block;width:100%%;box-sizing:border-box;background:#f5a623;color:#0d1117;
+  font-size:1.05rem;font-weight:800;text-decoration:none;border:none;
+  border-radius:12px;padding:1rem;margin-bottom:.7rem;cursor:pointer}
+.btn.ghost{background:transparent;color:#f5a623;border:2px solid #f5a623}
+.hint{font-size:.78rem;color:#8a93a5;margin-top:.6rem}
+</style></head><body><div class='wrap'>
+<div class='kick'>The Nurture Run</div>
+<h1>Two taps and %s hears from you</h1>
+<div class='msg' id='msg'>%s</div>
+<button class='btn' id='copy' onclick='doCopy()'>1. Copy the message</button>
+<a class='btn ghost' href='%s'>2. Open %s in FUB &rarr;</a>
+<div class='hint'>Paste into the text box and send from your FUB number.
+Barry sees the conversation where it belongs, attached to the lead.</div>
+</div>
+<script>
+function doCopy(){
+  var t=%s;
+  function done(){var b=document.getElementById('copy');
+    b.textContent='Copied. Now open FUB below.';b.style.background='#37c98b'}
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(done).catch(fallback);}
+  else{fallback();}
+  function fallback(){var ta=document.createElement('textarea');ta.value=t;
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand('copy');done();}catch(e){}
+    document.body.removeChild(ta);}
+}
+</script></body></html>""" % (first, first, msg_html, fub_url, first, msg_js)
 
 
 @app.route("/api/admin/nurture-run/run", methods=["POST"])
