@@ -8212,6 +8212,14 @@ def _agent_meeting_intel(agent_name):
     except Exception as e:
         logger.warning("intel appts failed: %s", e)
 
+    try:  # Maverick follow-up flags: open count, oldest, clearance speed
+        row = next((s for s in (_db.get_ooc_stats() or [])
+                    if s["agent"] == agent_name), None)
+        if row and (row["open"] or row["cleared_14d"]):
+            intel["ooc"] = row
+    except Exception as e:
+        logger.warning("intel ooc failed: %s", e)
+
     try:  # Phoenix: earned anything lately?
         trend = _db.get_goals_trend_data(excluded=excluded) or {}
         earned = next((e for e in (trend.get("phoenix", {}).get("earned_by") or [])
@@ -8375,6 +8383,15 @@ def api_meeting_brief(agent_name):
                 lines.append(
                     "Ghosted after a held appointment (FUB-verified, no touch since): %s." %
                     "; ".join("%s (%s days silent)" % (g["lead"], g["days"]) for g in gh))
+            oc = intel.get("ooc")
+            if oc:
+                lines.append(
+                    "Maverick follow-up flags: %s open (oldest waiting %s days),"
+                    " cleared %s in the last 2 weeks%s." % (
+                        oc.get("open"), oc.get("oldest_days") or 0,
+                        oc.get("cleared_14d"),
+                        (", avg %s days to clear" % oc["avg_days_to_clear"])
+                        if oc.get("avg_days_to_clear") is not None else ""))
             px = intel.get("phoenix_earned_30d")
             if px:
                 lines.append("Phoenix bonus leads earned in 30 days: %s. The dials-plus-reps bar is working for them." % px)
@@ -17045,6 +17062,58 @@ h1{font-size:1.3rem;margin-bottom:.2rem} a{color:#f5a623}
 
 
 
+def scheduled_ooc_sweep():
+    """Daily reconcile of Maverick's MAV_NUDGE_OUTSTANDING flags into the
+    age ledger. Read-only against FUB; one people-fetch per active agent."""
+    if not _db.try_acquire_job_lock("ooc_sweep"):
+        return
+    try:
+        client = FUBClient()
+        tag = getattr(config, "COMPLIANCE_TAG", "MAV_NUDGE_OUTSTANDING").lower()
+        flagged = []
+        for p in (_db.get_agent_profiles(active_only=True) or []):
+            uid = p.get("fub_user_id")
+            if not uid:
+                continue
+            try:
+                people = client.get_people(assigned_user_id=uid, limit=500) or []
+            except Exception as e:
+                logger.warning("[OOC] fetch failed for %s: %s", p["agent_name"], e)
+                continue
+            for person in people:
+                tags = [t.lower() for t in (person.get("tags") or [])]
+                if tag in tags:
+                    flagged.append({"person_id": person.get("id"),
+                                    "lead_name": (person.get("name") or "").strip(),
+                                    "agent_name": p["agent_name"]})
+        out = _db.ooc_sweep(flagged)
+        print(f"[OOC SWEEP] open={out.get('open')} new={out.get('new')} cleared={out.get('cleared')}")
+        _record_fired("ooc_sweep")
+    except Exception as e:
+        _alert_on_job_failure("ooc_sweep", str(e))
+        raise
+    finally:
+        _db.release_job_lock("ooc_sweep")
+
+
+@app.route("/api/admin/ooc/sweep", methods=["POST"])
+def api_ooc_sweep():
+    """Manual trigger for the OOC ledger sweep."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    scheduled_ooc_sweep()
+    return jsonify({"ok": True, "stats": _db.get_ooc_stats()})
+
+
+@app.route("/api/admin/ooc/board", methods=["GET"])
+def api_ooc_board():
+    """Per-agent flag stats + the oldest open flags, for dashboards and QA."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify({"ok": True, "stats": _db.get_ooc_stats(),
+                    "oldest": _db.get_ooc_open(min_age_days=0, limit=25)})
+
+
 @app.route("/api/admin/maverick/reports")
 def api_maverick_reports():
     """Recent Maverick reports incl. raw payloads (for extraction tuning)."""
@@ -19558,6 +19627,10 @@ def start_scheduler():
     _scheduler.add_job(scheduled_sync_appointments_db,
                        CronTrigger(hour=4, minute=50, timezone=ET),
                        id="appt_db_sync", name="FUB appointments DB mirror (4:50am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_ooc_sweep,
+                       CronTrigger(hour=6, minute=40, timezone=ET),
+                       id="ooc_sweep", name="Maverick OOC flag age ledger (6:40am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_market_pulse_refresh,
                        CronTrigger(day="1,15", hour=5, minute=10, timezone=ET),

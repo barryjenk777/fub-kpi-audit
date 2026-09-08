@@ -258,6 +258,16 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
         except Exception as e:
             logger.warning("[HOT SHEET] dojo rx read failed: %s", e)
 
+    # Aged Maverick flags: leads the nudge system has been flagging for a
+    # week or more. One per agent per day, oldest first, so the flag stops
+    # being a silent statistic and becomes a named call.
+    ooc_by_agent = {}
+    try:
+        for row in _db.get_ooc_open(min_age_days=7, limit=100):
+            ooc_by_agent.setdefault(row["agent"], []).append(row)
+    except Exception as e:
+        logger.warning("[HOT SHEET] ooc ledger read failed: %s", e)
+
     # The loop: verify prior sheets against real call logs (skip in dry runs
     # so previews never consume the one-shot verification marks)
     scoreboard, uncalled = ({}, {}) if dry_run else _verify_yesterday(
@@ -316,6 +326,20 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
             picks.append((t["person_id"], _first(t["name"]),
                           _lead_reason(client, {}, isa_days=t["days"])))
             used_pids.add(t["person_id"])
+
+        # 1b. Aged Maverick flags: the nudge system has been pointing at
+        # this lead for a week plus. Clear it or lose it.
+        for row in (ooc_by_agent.get(agent) or [])[:1]:
+            if len(picks) >= 3:
+                break
+            pid = str(row["person_id"])
+            if pid in used_pids or pid in phoenix_pids \
+                    or not _usable_name(row.get("lead")):
+                continue
+            picks.append((pid, _first(row["lead"]),
+                          "Maverick has flagged this one for %d days. One call "
+                          "clears it" % int(row["age_days"])))
+            used_pids.add(pid)
 
         # 2. LeadStream list by score
         if len(picks) < 3:

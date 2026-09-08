@@ -311,6 +311,20 @@ def _agent_themes(cur, funnel):
             doing.append("Outcome logging is holding: %d of %d recent appointments "
                          "have a logged result." % (total - missing, total))
 
+        # Maverick follow-up flags: the tag is Maverick's; the age is ours.
+    try:
+        ooc = _db.get_ooc_stats() or []
+        open_total = sum(s["open"] for s in ooc)
+        oldest = max((s["oldest_days"] or 0) for s in ooc) if ooc else 0
+        if open_total >= 20:
+            worst = max(ooc, key=lambda s: s["open"])
+            not_doing.append(
+                "%d leads are sitting on Maverick's overdue-follow-up list "
+                "(oldest %d days; %s holds %d). One call each clears them."
+                % (open_total, oldest, _first(worst["agent"]), worst["open"]))
+    except Exception as e:
+        logger.warning("pulse ooc bullet failed: %s", e)
+
     return {"doing": doing[:3], "not_doing": not_doing[:3]}
 
 

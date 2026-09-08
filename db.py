@@ -8631,3 +8631,134 @@ def get_isa_insight_data(days=60, excluded=()):
     except Exception as e:
         logger.warning("get_isa_insight_data failed: %s", e)
         return out
+
+
+# ── OOC ledger: age-tracking for Maverick's MAV_NUDGE_OUTSTANDING flags ─────
+# Maverick detects overdue follow-up and tags FUB; the tag alone is a
+# snapshot with no memory. This ledger gives every flag a birthdate and a
+# clearance time, so the team can see WHICH leads have waited HOW long and
+# whether agents are clearing flags faster week over week.
+
+def ensure_ooc_ledger():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS ooc_ledger (
+                        person_id   TEXT PRIMARY KEY,
+                        lead_name   TEXT,
+                        agent_name  TEXT,
+                        first_seen  DATE NOT NULL DEFAULT CURRENT_DATE,
+                        last_seen   DATE NOT NULL DEFAULT CURRENT_DATE,
+                        cleared_at  DATE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_ooc_agent
+                        ON ooc_ledger (agent_name, cleared_at);
+                """)
+    except Exception as e:
+        logger.warning("ensure_ooc_ledger failed: %s", e)
+
+
+def ooc_sweep(flagged):
+    """Reconcile the ledger against today's flagged set.
+
+    flagged: [{person_id, lead_name, agent_name}] currently carrying the tag.
+    Rows newly flagged get first_seen today; a previously CLEARED lead that
+    reappears restarts its clock; open rows not in today's set get cleared_at
+    stamped. Returns summary counts."""
+    if not is_available():
+        return {}
+    ensure_ooc_ledger()
+    ids = [str(f["person_id"]) for f in flagged]
+    out = {"open": len(ids), "new": 0, "cleared": 0}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for f in flagged:
+                    cur.execute("""
+                        INSERT INTO ooc_ledger (person_id, lead_name, agent_name)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (person_id) DO UPDATE SET
+                            lead_name  = EXCLUDED.lead_name,
+                            agent_name = EXCLUDED.agent_name,
+                            last_seen  = CURRENT_DATE,
+                            first_seen = CASE WHEN ooc_ledger.cleared_at IS NOT NULL
+                                              THEN CURRENT_DATE ELSE ooc_ledger.first_seen END,
+                            cleared_at = NULL
+                    """, (str(f["person_id"]), f.get("lead_name"), f.get("agent_name")))
+                    if cur.rowcount:
+                        pass
+                cur.execute("""
+                    UPDATE ooc_ledger SET cleared_at = CURRENT_DATE
+                    WHERE cleared_at IS NULL AND NOT (person_id = ANY(%s))
+                """, (ids or [""],))
+                out["cleared"] = cur.rowcount
+                cur.execute("""
+                    SELECT COUNT(*) FROM ooc_ledger
+                    WHERE cleared_at IS NULL AND first_seen = CURRENT_DATE
+                """)
+                out["new"] = int(cur.fetchone()[0] or 0)
+        return out
+    except Exception as e:
+        logger.warning("ooc_sweep failed: %s", e)
+        return out
+
+
+def get_ooc_open(agent_name=None, min_age_days=0, limit=200):
+    """Open flags with age, oldest first."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                q = """
+                    SELECT person_id, lead_name, agent_name, first_seen,
+                           (CURRENT_DATE - first_seen) AS age_days
+                    FROM ooc_ledger
+                    WHERE cleared_at IS NULL
+                      AND (CURRENT_DATE - first_seen) >= %s
+                """
+                params = [int(min_age_days)]
+                if agent_name:
+                    q += " AND agent_name = %s"
+                    params.append(agent_name)
+                q += " ORDER BY first_seen LIMIT %s"
+                params.append(int(limit))
+                cur.execute(q, params)
+                return [{"person_id": r[0], "lead": r[1], "agent": r[2],
+                         "first_seen": str(r[3]), "age_days": int(r[4])}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_ooc_open failed: %s", e)
+        return []
+
+
+def get_ooc_stats():
+    """Per-agent open counts, oldest age, and 14-day clearance speed."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COUNT(*) FILTER (WHERE cleared_at IS NULL) AS open,
+                           MAX(CURRENT_DATE - first_seen)
+                               FILTER (WHERE cleared_at IS NULL) AS oldest_days,
+                           COUNT(*) FILTER (WHERE cleared_at >= CURRENT_DATE - 14) AS cleared_14d,
+                           AVG(cleared_at - first_seen)
+                               FILTER (WHERE cleared_at >= CURRENT_DATE - 14) AS avg_days_to_clear
+                    FROM ooc_ledger
+                    GROUP BY agent_name
+                    ORDER BY 2 DESC
+                """)
+                return [{"agent": r[0], "open": int(r[1] or 0),
+                         "oldest_days": int(r[2]) if r[2] is not None else None,
+                         "cleared_14d": int(r[3] or 0),
+                         "avg_days_to_clear": round(float(r[4]), 1) if r[4] is not None else None}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_ooc_stats failed: %s", e)
+        return []
