@@ -16693,6 +16693,51 @@ def _maverick_parse_overview(raw):
     return upserted
 
 
+def _maverick_parse_call_history(raw):
+    """v1 parser for the per-call grade history capture. The page structure
+    lands tonight with the first harvest; until then this parses the common
+    Maverick table shape (lead line, agent line, date, grade like '6.5' or
+    '6/10') and stays conservative: rows missing a grade or a plausible name
+    are skipped, and the raw chunk is always in maverick_reports for a
+    re-parse once we see the real layout."""
+    import re as _re
+    if "MAVERICK CALL HISTORY" not in raw:
+        return 0
+    text = raw.split("MAVERICK CALL HISTORY", 1)[1]
+    known_agents = {p.get("agent_name") for p in
+                    (_db.get_agent_profiles(active_only=False) or [])}
+    date_re = _re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b")
+    grade_re = _re.compile(r"^(\d{1,2}(?:\.\d)?)(?:\s*/\s*10)?$")
+    rows, ctx = [], {}
+    for line in (l.strip() for l in text.splitlines()):
+        if not line:
+            continue
+        dm = date_re.search(line)
+        if dm:
+            m, d, y = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
+            y = y + 2000 if y < 100 else y
+            try:
+                ctx["call_date"] = "%04d-%02d-%02d" % (y, m, d)
+            except Exception:
+                pass
+            continue
+        gm = grade_re.match(line)
+        if gm and float(gm.group(1)) <= 10:
+            ctx["grade"] = float(gm.group(1))
+        elif line in known_agents:
+            ctx["agent_name"] = line
+        elif 2 <= len(line.split()) <= 4 and len(line) < 40 \
+                and not any(c.isdigit() for c in line):
+            ctx["lead_name"] = line
+        if all(k in ctx for k in ("grade", "lead_name")):
+            rows.append({"call_date": ctx.get("call_date"),
+                         "agent_name": ctx.get("agent_name"),
+                         "lead_name": ctx.pop("lead_name"),
+                         "grade": ctx.pop("grade"),
+                         "detail": None, "raw_line": line[:300]})
+    return _db.save_call_grades(rows)
+
+
 def _maverick_parse_rules(raw):
     """Parse the rules-and-alerts board text into snapshot rows.
 
@@ -17245,6 +17290,17 @@ def api_ooc_board():
                     "oldest": _db.get_ooc_open(min_age_days=0, limit=25)})
 
 
+@app.route("/api/admin/maverick/call-grades")
+def api_maverick_call_grades():
+    """Per-call grades tied to leads (courier capture 5). ?agent= ?lead= ?days="""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify({"ok": True, "rows": _db.get_call_grades(
+        agent_name=request.args.get("agent"),
+        lead_name=request.args.get("lead"),
+        days=request.args.get("days", 14, type=int))})
+
+
 @app.route("/api/admin/maverick/rules")
 def api_maverick_rules():
     """Rules-board snapshots for trending (coach view: is past-due falling?)."""
@@ -17317,9 +17373,14 @@ def api_maverick_ingest():
         rules_rows = _maverick_parse_rules(raw)
     except Exception as e:
         logger.warning("maverick rules parse failed: %s", e)
+    call_grade_rows = 0
+    try:
+        call_grade_rows = _maverick_parse_call_history(raw)
+    except Exception as e:
+        logger.warning("maverick call history parse failed: %s", e)
     return jsonify({"ok": True, "id": rid, "agent": agent, "grade": grade,
                     "stats_rows": stats_rows, "dashboard_saved": dashboard_saved,
-                    "rules_rows": rules_rows})
+                    "rules_rows": rules_rows, "call_grade_rows": call_grade_rows})
 
 
 @app.route("/api/appointments/insight")

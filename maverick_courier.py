@@ -263,6 +263,42 @@ def _harvest(url, headless, debug=False):
         except Exception as e:
             chunks.append("RULES_HARVEST_FAILED: %s" % str(e)[:200])
 
+        # Fifth capture: per-call grade history (grades tied to lead names).
+        # URL varies by account; honor config override, then try candidates.
+        try:
+            cfg_hist = _load_config().get("call_history_url")
+            candidates = [u for u in [
+                cfg_hist,
+                "https://my.maverickre.com/ai/call-grading/call-history",
+                "https://my.maverickre.com/ai/call-grading/ai-grading-call-history",
+                "https://my.maverickre.com/agent/call-history",
+            ] if u]
+            got_hist = False
+            for hurl in candidates:
+                try:
+                    page.goto(hurl, wait_until="domcontentloaded", timeout=45000)
+                    page.wait_for_timeout(8000)
+                    htxt = ""
+                    try:
+                        htxt = page.inner_text("body")
+                    except Exception:
+                        pass
+                    up = htxt.upper()
+                    if len(htxt.strip()) > 400 and "BOOK A DEMO" not in up \
+                            and "PAGE NOT FOUND" not in up and "404" not in up[:200]:
+                        chunks.append("MAVERICK CALL HISTORY\nSOURCE_URL: %s\n%s"
+                                      % (hurl, htxt))
+                        got_hist = True
+                        break
+                except Exception:
+                    continue
+            if not got_hist:
+                chunks.append("CALL_HISTORY_NOT_FOUND: tried %d urls. Set "
+                              "call_history_url in ~/.maverick_courier.json"
+                              % len(candidates))
+        except Exception as e:
+            chunks.append("CALL_HISTORY_HARVEST_FAILED: %s" % str(e)[:200])
+
         final_url = page.url
         ctx.close()
     return final_url, body_text, chunks

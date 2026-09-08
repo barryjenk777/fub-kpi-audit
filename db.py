@@ -8890,3 +8890,78 @@ def get_maverick_rules_trend(days=28):
     except Exception as e:
         logger.warning("get_maverick_rules_trend failed: %s", e)
         return []
+
+
+# ── Per-call Maverick grades tied to leads ──────────────────────────────────
+
+def ensure_call_grades_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS maverick_call_grades (
+                        id          SERIAL PRIMARY KEY,
+                        call_date   DATE,
+                        agent_name  TEXT,
+                        lead_name   TEXT,
+                        grade       NUMERIC,
+                        detail      TEXT,
+                        raw_line    TEXT,
+                        ingested_at TIMESTAMPTZ DEFAULT NOW(),
+                        UNIQUE (call_date, agent_name, lead_name, grade)
+                    );
+                """)
+    except Exception as e:
+        logger.warning("ensure_call_grades_table failed: %s", e)
+
+
+def save_call_grades(rows):
+    if not is_available() or not rows:
+        return 0
+    ensure_call_grades_table()
+    n = 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for r in rows:
+                    cur.execute("""
+                        INSERT INTO maverick_call_grades
+                            (call_date, agent_name, lead_name, grade, detail, raw_line)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (call_date, agent_name, lead_name, grade)
+                        DO NOTHING
+                    """, (r.get("call_date"), r.get("agent_name"),
+                          r.get("lead_name"), r.get("grade"),
+                          r.get("detail"), r.get("raw_line")))
+                    n += cur.rowcount
+        return n
+    except Exception as e:
+        logger.warning("save_call_grades failed: %s", e)
+        return n
+
+
+def get_call_grades(agent_name=None, lead_name=None, days=14, limit=100):
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                q = """SELECT call_date, agent_name, lead_name, grade, detail
+                       FROM maverick_call_grades
+                       WHERE (call_date IS NULL OR call_date >= CURRENT_DATE - %s)"""
+                params = [int(days)]
+                if agent_name:
+                    q += " AND agent_name = %s"; params.append(agent_name)
+                if lead_name:
+                    q += " AND lead_name ILIKE %s"; params.append("%%" + lead_name + "%%")
+                q += " ORDER BY call_date DESC NULLS LAST, id DESC LIMIT %s"
+                params.append(int(limit))
+                cur.execute(q, params)
+                return [{"date": str(r[0]) if r[0] else None, "agent": r[1],
+                         "lead": r[2], "grade": float(r[3]) if r[3] is not None else None,
+                         "detail": r[4]} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_call_grades failed: %s", e)
+        return []
