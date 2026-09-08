@@ -17071,9 +17071,11 @@ def scheduled_ooc_sweep():
         client = FUBClient()
         tag = getattr(config, "COMPLIANCE_TAG", "MAV_NUDGE_OUTSTANDING").lower()
         flagged = []
+        _skip = set(config.EXCLUDED_USERS) \
+            | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
         for p in (_db.get_agent_profiles(active_only=True) or []):
             uid = p.get("fub_user_id")
-            if not uid:
+            if not uid or p.get("agent_name") in _skip:
                 continue
             try:
                 people = client.get_people(assigned_user_id=uid, limit=500) or []
