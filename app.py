@@ -8735,6 +8735,57 @@ def _fub_fetch_webhook_resources(uri: str):
     return []
 
 
+_EXCLUDED_REBOOK = set(config.EXCLUDED_USERS) \
+    | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+
+
+def _appt_rebook_email(agent_name, lead_name, outcome):
+    """Instant rebook nudge when an appointment falls through. EMAIL, never
+    text: event triggers fire at any hour and Barry's cell only carries the
+    predictable morning rhythm (Barry, Sep 2026). Uncalled ones escalate
+    into the next One Morning Text via get_recent_noshows_unrebooked."""
+    try:
+        profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
+                        if p.get("agent_name") == agent_name), None)
+        email = (profile or {}).get("email")
+        if not email:
+            logger.info("[REBOOK] no email for %s, skipping", agent_name)
+            return False
+        a_first = (agent_name or "").split()[0]
+        l_first = (lead_name or "your lead").split()[0]
+        fell = "no showed" if outcome == "No show" else "asked to reschedule"
+        subject = "Rebook %s today" % l_first
+        html = """<div style="background:#f4f4f0;padding:24px 0">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;font-family:-apple-system,'Segoe UI',Arial,sans-serif">
+<tr><td style="background:#0d1117;padding:22px 30px">
+  <div style="font-size:11px;font-weight:800;letter-spacing:.2em;color:#f5a623;text-transform:uppercase;margin-bottom:6px">Appointment fell through</div>
+  <div style="font-size:22px;font-weight:900;color:#ffffff">%s, call %s in the next hour</div>
+</td></tr>
+<tr><td style="height:4px;background:#f5a623;font-size:0">&nbsp;</td></tr>
+<tr><td style="background:#ffffff;padding:24px 30px;font-size:15px;line-height:1.65;color:#1a1f26">
+  %s just %s. That is not a dead lead, it is a warm one with a guilty conscience, and the same day call is when they rebook.<br><br>
+  Offer two specific times, not "when works for you." If they do not pick up, say this on the voicemail or by text:
+</td></tr>
+<tr><td style="background:#fffbf0;border-left:4px solid #f5a623;padding:14px 30px;font-size:14px;font-style:italic;line-height:1.6;color:#3d4450">
+  No worries at all about today, life happens. I am holding two spots this week and I would rather give one to you than give it away. Which works better, or should I look at other times?
+</td></tr>
+<tr><td style="background:#ffffff;padding:18px 30px 24px;font-size:15px;color:#1a1f26">If nobody rebooks them, this name is on your morning sheet.<br><br>Let's get it,<br><strong>Barry Jenkins</strong></td></tr>
+</table></td></tr></table></div>""" % (a_first, l_first, lead_name or "Your lead", fell)
+        import postmark_client as _pm
+        _pm.send(to="%s <%s>" % (agent_name, email),
+                 from_email=config.EMAIL_FROM, subject=subject, html=html)
+        _db.log_automation_event(
+            event_type="rebook_nudge", person_id=None, person_name=lead_name,
+            agent_name=agent_name, payload={"outcome": outcome},
+            triggered_by="webhook_fub")
+        logger.info("[REBOOK] emailed %s about %s (%s)", agent_name, lead_name, outcome)
+        return True
+    except Exception as e:
+        logger.warning("[REBOOK] email failed for %s: %s", agent_name, e)
+        return False
+
+
 def _fub_upsert_appt_resource(appt, event_name):
     """Shared appointment upsert used by the webhook processor."""
     from config import APT_OUTCOME_IDS
@@ -8748,6 +8799,7 @@ def _fub_upsert_appt_resource(appt, event_name):
         return
     outcome_id = appt.get("outcomeId")
     outcome = APT_OUTCOME_IDS.get(outcome_id) if outcome_id else None
+    prev_outcome = _db.get_appointment_prev_outcome(appt_id)
     status = "showed" if outcome == "Met with Client" else \
              "no_show" if outcome in ("No show",) else \
              "canceled" if appt.get("canceled") else "scheduled"
@@ -8776,6 +8828,11 @@ def _fub_upsert_appt_resource(appt, event_name):
         payload={"fub_appt_id": appt_id, "status": status, "outcome": outcome},
         triggered_by="webhook_fub",
     )
+    # Fell-through appointment: instant rebook nudge (email), once per appt.
+    if outcome in ("No show", "Reschedule Needed") and prev_outcome != outcome \
+            and agent_name and agent_name not in _EXCLUDED_REBOOK:
+        if _db.claim_once("rebook_%s" % appt_id):
+            _appt_rebook_email(agent_name, person_name, outcome)
 
 
 def _fub_outbound_touch(person_id, is_call):

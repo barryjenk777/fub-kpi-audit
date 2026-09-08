@@ -8762,3 +8762,52 @@ def get_ooc_stats():
     except Exception as e:
         logger.warning("get_ooc_stats failed: %s", e)
         return []
+
+
+def get_appointment_prev_outcome(fub_appt_id):
+    """Outcome currently stored for this appointment, before an upsert."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT outcome FROM appointments WHERE fub_appt_id = %s",
+                            (fub_appt_id,))
+                row = cur.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        logger.warning("get_appointment_prev_outcome failed: %s", e)
+        return None
+
+
+def get_recent_noshows_unrebooked(days=3, excluded=()):
+    """Appointments that fell through (no show / reschedule needed) in the
+    last N days where the lead has NO future appointment on the calendar.
+    The morning-text escalation for rebooks nobody made."""
+    if not is_available():
+        return []
+    excl = tuple(excluded) or ("",)
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT a.person_id, a.person_name, a.agent_name,
+                           (CURRENT_DATE - a.start_time::date) AS days_ago
+                    FROM appointments a
+                    WHERE a.outcome IN ('No show', 'Reschedule Needed')
+                      AND a.start_time >= NOW() - make_interval(days => %s)
+                      AND a.start_time < NOW()
+                      AND a.agent_name IS NOT NULL AND a.agent_name NOT IN %s
+                      AND a.person_id IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM appointments f
+                          WHERE f.person_id = a.person_id
+                            AND f.start_time > NOW()
+                            AND f.status NOT IN ('canceled'))
+                    ORDER BY a.start_time DESC
+                """, (int(days), excl))
+                return [{"person_id": str(r[0]), "lead": r[1], "agent": r[2],
+                         "days_ago": int(r[3] or 0)} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_recent_noshows_unrebooked failed: %s", e)
+        return []

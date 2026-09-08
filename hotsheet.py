@@ -258,6 +258,15 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
         except Exception as e:
             logger.warning("[HOT SHEET] dojo rx read failed: %s", e)
 
+    # Fell-through appointments nobody rebooked (the email nudge already
+    # fired; this is the morning escalation in Barry's voice)
+    noshow_by_agent = {}
+    try:
+        for row in _db.get_recent_noshows_unrebooked(days=3, excluded=_EXCLUDED):
+            noshow_by_agent.setdefault(row["agent"], []).append(row)
+    except Exception as e:
+        logger.warning("[HOT SHEET] noshow read failed: %s", e)
+
     # Aged Maverick flags: leads the nudge system has been flagging for a
     # week or more. One per agent per day, oldest first, so the flag stops
     # being a silent statistic and becomes a named call.
@@ -314,6 +323,21 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
             picks.append((pid, _first(g["lead"]),
                           "you met them %d days ago, silence since. Call before "
                           "they book with someone else" % int(g.get("held_days_ago") or 0)))
+            used_pids.add(pid)
+
+        # 0c. Fell-through appointments, still unrebooked
+        for row in (noshow_by_agent.get(agent) or [])[:1]:
+            if len(picks) >= 3:
+                break
+            pid = str(row["person_id"])
+            if pid in used_pids or pid in phoenix_pids \
+                    or not _usable_name(row.get("lead")):
+                continue
+            _d = int(row.get("days_ago") or 0)
+            picks.append((pid, _first(row["lead"]),
+                          "appointment fell through %s and nobody rebooked. "
+                          "Call with two specific times"
+                          % ("yesterday" if _d <= 1 else "%d days ago" % _d)))
             used_pids.add(pid)
 
         # 1. ISA transfers next (max 2)
