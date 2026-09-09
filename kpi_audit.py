@@ -274,7 +274,7 @@ def count_compliance_violations(client, user_id, tag):
     """
     people = client.get_people(
         assigned_user_id=user_id,
-        limit=500
+        limit=100
     )
 
     if not people:

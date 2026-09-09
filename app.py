@@ -16904,7 +16904,7 @@ def scheduled_lead_memory_refresh():
         _db.release_job_lock("lead_memory")
 
 
-def _market_field_sweep(dry_run=True, per_agent_limit=500):
+def _market_field_sweep(dry_run=True, per_agent_limit=100):
     """Write the agent playbook URL onto EVERY assigned lead, not just the
     Call Opener's priority scope (Sep 9 gap: Barry spot-checked hot/warm/
     cold books and found the field empty — those leads never get briefs).
@@ -16926,7 +16926,8 @@ def _market_field_sweep(dry_run=True, per_agent_limit=500):
     for p in (_db.get_agent_profiles(active_only=True) or []):
         agent = p["agent_name"]
         uid = p.get("fub_user_id")
-        if not uid or agent in set(config.EXCLUDED_USERS):
+        if not uid or agent in set(config.EXCLUDED_USERS) \
+                or agent == "Barry Jenkin$":
             continue
         try:
             people = client.get_people(assigned_user_id=uid,
@@ -17853,7 +17854,7 @@ def scheduled_ooc_sweep():
             if not uid or p.get("agent_name") in _skip:
                 continue
             try:
-                people = client.get_people(assigned_user_id=uid, limit=500) or []
+                people = client.get_people(assigned_user_id=uid, limit=100) or []
             except Exception as e:
                 logger.warning("[OOC] fetch failed for %s: %s", p["agent_name"], e)
                 continue
