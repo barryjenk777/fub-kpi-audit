@@ -482,9 +482,13 @@ class FUBClient:
     # ---- People ----
 
     def get_people(self, assigned_user_id=None, tag=None, updated_since=None,
-                   created_since=None, pond_id=None, limit=100):
-        """Get people (leads) with optional filters."""
+                   created_since=None, pond_id=None, limit=100, fields=None):
+        """Get people (leads) with optional filters. `fields` (comma string)
+        trims the payload AND is the only way to get custom fields back from
+        the list endpoint."""
         params = {"limit": limit}
+        if fields:
+            params["fields"] = fields
         if assigned_user_id:
             params["assignedUserId"] = assigned_user_id
         if tag:

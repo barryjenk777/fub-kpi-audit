@@ -16930,8 +16930,9 @@ def _market_field_sweep(dry_run=True, per_agent_limit=100):
                 or agent == "Barry Jenkin$":
             continue
         try:
-            people = client.get_people(assigned_user_id=uid,
-                                       limit=per_agent_limit) or []
+            people = client.get_people(
+                assigned_user_id=uid, limit=per_agent_limit,
+                fields="id,name,stage,tags,addresses," + field) or []
         except Exception as e:
             logger.warning("[MARKET SWEEP] fetch failed for %s: %s", agent, e)
             continue
@@ -16964,6 +16965,11 @@ def _market_field_sweep(dry_run=True, per_agent_limit=100):
             a_written += 1
             out["written"] += 1
         out["agents"][agent] = a_written
+    try:
+        _db.set_app_state("market_sweep_last", json.dumps(
+            {**out, "finished_at": datetime.now(timezone.utc).isoformat()}))
+    except Exception:
+        pass
     return out
 
 
@@ -16974,7 +16980,21 @@ def api_market_field_sweep():
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(silent=True) or {}
-    return jsonify(_market_field_sweep(dry_run=bool(body.get("dry_run", True))))
+    if body.get("dry_run", True):
+        return jsonify(_market_field_sweep(dry_run=True))
+    # Live runs write ~2k records and outlive the request timeout: thread it.
+    threading.Thread(target=_market_field_sweep,
+                     kwargs={"dry_run": False}, daemon=True).start()
+    return jsonify({"ok": True, "started": True,
+                    "check": "GET /api/admin/market-field/last"})
+
+
+@app.route("/api/admin/market-field/last")
+def api_market_field_last():
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    raw, ts = _db.get_app_state("market_sweep_last")
+    return jsonify({"ok": True, "last": json.loads(raw) if raw else None})
 
 
 def scheduled_market_field_sweep():
