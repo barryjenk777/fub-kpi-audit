@@ -8139,6 +8139,158 @@ def api_course_agent_snapshot():
     })
 
 
+@app.route("/api/course/dial-history")
+def api_course_dial_history():
+    """Fast Track: per-day dial/conversation/appointment history for one
+    agent, from the same daily_activity mirror Command Center's own
+    dashboards read (synced from FUB call logs). Powers the Friday Read and
+    Two-Week Read widgets.
+
+      ?key=<COURSE_API_KEY>&email=<agent email>&days=<1-90, default 14>
+
+    Returns: {found, agent_name, days: [{date, dials, convos, appts}, ...]
+    zero-filled oldest first, totals: {dials, convos, appts},
+    source: "command_center_daily_activity"}
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    match = _course_agent_by_email(request.args.get("email"))
+    if not match:
+        return jsonify({"found": False, "reason": "no active agent with that email"}), 404
+    name = match["agent_name"]
+    days = max(1, min(request.args.get("days", 14, type=int) or 14, 90))
+    from datetime import date as _date, timedelta as _td
+    rows = {r["date"]: r for r in _db.get_agent_daily_activity(name, days=days)}
+    out_days, totals = [], {"dials": 0, "convos": 0, "appts": 0.0}
+    for i in range(days, -1, -1):
+        d = str(_date.today() - _td(days=i))
+        r = rows.get(d) or {"date": d, "dials": 0, "convos": 0, "appts": 0.0}
+        out_days.append(r)
+        totals["dials"] += r["dials"]
+        totals["convos"] += r["convos"]
+        totals["appts"] += r["appts"]
+    return jsonify({"found": True, "agent_name": name, "days": out_days,
+                    "totals": totals,
+                    "source": "command_center_daily_activity"})
+
+
+@app.route("/api/course/weeks-hit")
+def api_course_weeks_hit():
+    """Fast Track: completed Mon-Sun weeks with dials/convos and whether the
+    agent HIT the transfer-gate bar that week (the same thresholds the
+    Sunday 9pm rotation decision uses). Powers the Weeks Hit History widget.
+
+      ?key=<COURSE_API_KEY>&email=<agent email>&weeks=<1-26, default 12>
+
+    Returns: {found, agent_name, thresholds: {min_dials, min_convos},
+    weeks: [{week_start, week_end, dials, convos, hit}, ...] oldest first
+    (completed weeks only), current_streak, best_streak}
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    match = _course_agent_by_email(request.args.get("email"))
+    if not match:
+        return jsonify({"found": False, "reason": "no active agent with that email"}), 404
+    name = match["agent_name"]
+    weeks = max(1, min(request.args.get("weeks", 12, type=int) or 12, 26))
+    apply_saved_settings()
+    min_d = int(getattr(config, "MIN_OUTBOUND_CALLS", 30))
+    min_c = int(getattr(config, "MIN_CONVERSATIONS", 5))
+    from datetime import date as _date, timedelta as _td
+    today = _date.today()
+    this_monday = today - _td(days=today.weekday())
+    rows = _db.get_agent_daily_activity(name, days=weeks * 7 + 7)
+    byweek = {}
+    for r in rows:
+        d = _date.fromisoformat(r["date"])
+        if d >= this_monday:
+            continue  # completed weeks only
+        wk = d - _td(days=d.weekday())
+        agg = byweek.setdefault(wk, {"dials": 0, "convos": 0})
+        agg["dials"] += r["dials"]
+        agg["convos"] += r["convos"]
+    out = []
+    for i in range(weeks, 0, -1):
+        wk = this_monday - _td(days=7 * i)
+        agg = byweek.get(wk, {"dials": 0, "convos": 0})
+        out.append({"week_start": str(wk), "week_end": str(wk + _td(days=6)),
+                    "dials": agg["dials"], "convos": agg["convos"],
+                    "hit": agg["dials"] >= min_d and agg["convos"] >= min_c})
+    cur_streak = 0
+    for w in reversed(out):
+        if w["hit"]:
+            cur_streak += 1
+        else:
+            break
+    best, run = 0, 0
+    for w in out:
+        run = run + 1 if w["hit"] else 0
+        best = max(best, run)
+    return jsonify({"found": True, "agent_name": name,
+                    "thresholds": {"min_dials": min_d, "min_convos": min_c},
+                    "weeks": out, "current_streak": cur_streak,
+                    "best_streak": best,
+                    "source": "command_center_daily_activity"})
+
+
+@app.route("/api/course/rotation-status")
+def api_course_rotation_status():
+    """Fast Track: the agent's live standing against the transfer gate.
+    Powers the Rotation Status widget with the SAME numbers Barry sees.
+
+      ?key=<COURSE_API_KEY>&email=<agent email>
+
+    Returns: {found, agent_name,
+      in_rotation: bool|null  (last completed week's decision, from the same
+                               audit that sends the Sunday email; null if the
+                               audit has no row for this agent yet),
+      this_week: {week_start, dials, convos, days_elapsed},
+      thresholds: {min_dials, min_convos},
+      on_pace: bool  (this week's dials projected across 5 weekdays),
+      decision_at: "Sunday 21:00 ET"}
+    """
+    if not _course_auth_ok():
+        return jsonify({"error": "unauthorized"}), 403
+    match = _course_agent_by_email(request.args.get("email"))
+    if not match:
+        return jsonify({"found": False, "reason": "no active agent with that email"}), 404
+    name = match["agent_name"]
+    apply_saved_settings()
+    min_d = int(getattr(config, "MIN_OUTBOUND_CALLS", 30))
+    min_c = int(getattr(config, "MIN_CONVERSATIONS", 5))
+    from datetime import date as _date, timedelta as _td
+    today = _date.today()
+    this_monday = today - _td(days=today.weekday())
+    rows = _db.get_agent_daily_activity(name, days=8)
+    wk = {"dials": 0, "convos": 0}
+    for r in rows:
+        if _date.fromisoformat(r["date"]) >= this_monday:
+            wk["dials"] += r["dials"]
+            wk["convos"] += r["convos"]
+    days_elapsed = min((today - this_monday).days + 1, 7)
+    workdays_elapsed = max(min(days_elapsed, 5), 1)
+    proj_dials = wk["dials"] / workdays_elapsed * 5
+    proj_convos = wk["convos"] / workdays_elapsed * 5
+    in_rotation = None
+    try:
+        audit = cache_get("audit") or {}
+        row = next((a for a in audit.get("agents", [])
+                    if a.get("name") == name), None)
+        if row:
+            in_rotation = bool((row.get("evaluation") or {}).get("overall_pass"))
+    except Exception:
+        pass
+    return jsonify({"found": True, "agent_name": name,
+                    "in_rotation": in_rotation,
+                    "this_week": {"week_start": str(this_monday),
+                                  "dials": wk["dials"], "convos": wk["convos"],
+                                  "days_elapsed": days_elapsed},
+                    "thresholds": {"min_dials": min_d, "min_convos": min_c},
+                    "on_pace": proj_dials >= min_d and proj_convos >= min_c,
+                    "decision_at": "Sunday 21:00 ET",
+                    "source": "command_center"})
+
+
 @app.route("/api/course/call-progress")
 def api_course_call_progress():
     """Fast Track REAL-TIME: how many calls an agent has made since a given

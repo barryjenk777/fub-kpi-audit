@@ -9617,3 +9617,26 @@ def get_pipeline_row_by_join_token(token):
     except Exception as e:
         logger.warning("get_pipeline_row_by_join_token failed: %s", e)
         return None
+
+
+def get_agent_daily_activity(agent_name, days=14):
+    """Per-day dials/convos/appts for one agent, oldest first. Missing days
+    are NOT zero-filled here; callers fill for display."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT activity_date, calls_logged, convos_logged, appts_logged
+                    FROM daily_activity
+                    WHERE agent_name = %s
+                      AND activity_date >= CURRENT_DATE - %s
+                    ORDER BY activity_date
+                """, (agent_name, int(days)))
+                return [{"date": str(r[0]), "dials": int(r[1] or 0),
+                         "convos": int(r[2] or 0), "appts": float(r[3] or 0)}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_agent_daily_activity failed: %s", e)
+        return []
