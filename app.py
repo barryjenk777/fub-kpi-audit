@@ -16904,6 +16904,96 @@ def scheduled_lead_memory_refresh():
         _db.release_job_lock("lead_memory")
 
 
+def _market_field_sweep(dry_run=True, per_agent_limit=500):
+    """Write the agent playbook URL onto EVERY assigned lead, not just the
+    Call Opener's priority scope (Sep 9 gap: Barry spot-checked hot/warm/
+    cold books and found the field empty — those leads never get briefs).
+
+    City and side come from the lead's own tags and address; leads with no
+    city match get the all-cities ammo page so no agent ever opens a lead
+    with an empty cheat-sheet field. Writes only when the field is empty or
+    pre-playbook. Returns per-agent counts."""
+    import lead_memory as _lm
+    from nurture_run import _lead_city_slug, _lead_side
+    field = _lm._MARKET_FIELD
+    if not field:
+        return {"error": "MARKET_REPORT_CUSTOM_FIELD not configured"}
+    base = (os.environ.get("MARKET_BASE_URL")
+            or os.environ.get("BASE_URL", "")).rstrip("/")
+    client = FUBClient()
+    out = {"dry_run": dry_run, "written": 0, "already_current": 0,
+           "fallback_ammo": 0, "skipped": 0, "agents": {}}
+    for p in (_db.get_agent_profiles(active_only=True) or []):
+        agent = p["agent_name"]
+        uid = p.get("fub_user_id")
+        if not uid or agent in set(config.EXCLUDED_USERS):
+            continue
+        try:
+            people = client.get_people(assigned_user_id=uid,
+                                       limit=per_agent_limit) or []
+        except Exception as e:
+            logger.warning("[MARKET SWEEP] fetch failed for %s: %s", agent, e)
+            continue
+        a_written = 0
+        agent_q = "?a=" + "-".join(agent.lower().split())
+        for person in people:
+            stage = (person.get("stage") or "").lower()
+            if "trash" in stage:
+                out["skipped"] += 1
+                continue
+            current = (person.get(field) or "").strip()
+            if "/market/playbook/" in current or current.endswith("/market/ammo"):
+                out["already_current"] += 1
+                continue
+            slug = _lead_city_slug(person)
+            if slug:
+                side = _lead_side(person)
+                url = "%s/market/playbook/%s/%s%s" % (base, slug, side, agent_q)
+            else:
+                url = "%s/market/ammo" % base
+                out["fallback_ammo"] += 1
+            if not dry_run:
+                try:
+                    client._request("PUT", "people/%s" % person.get("id"),
+                                    json_data={field: url})
+                except Exception as e:
+                    logger.warning("[MARKET SWEEP] PUT failed for %s: %s",
+                                   person.get("id"), e)
+                    continue
+            a_written += 1
+            out["written"] += 1
+        out["agents"][agent] = a_written
+    return out
+
+
+@app.route("/api/admin/market-field/sweep", methods=["POST"])
+def api_market_field_sweep():
+    """Playbook-URL coverage for every assigned lead. {"dry_run": true}
+    counts without writing."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    return jsonify(_market_field_sweep(dry_run=bool(body.get("dry_run", True))))
+
+
+def scheduled_market_field_sweep():
+    """Weekly (Sun 6:50am ET): new leads and stage moves pick up their
+    playbook link without waiting for the Call Opener's scope."""
+    if not _db.try_acquire_job_lock("market_field_sweep"):
+        return
+    try:
+        out = _market_field_sweep(dry_run=False)
+        print("[MARKET SWEEP] written=%s current=%s fallback=%s"
+              % (out.get("written"), out.get("already_current"),
+                 out.get("fallback_ammo")))
+        _record_fired("market_field_sweep")
+    except Exception as e:
+        _alert_on_job_failure("market_field_sweep", str(e))
+        raise
+    finally:
+        _db.release_job_lock("market_field_sweep")
+
+
 @app.route("/api/admin/market-field/backfill", methods=["POST"])
 def api_market_field_backfill():
     """One-time migration: rewrite every lead's FUB Market Report field from
@@ -20768,6 +20858,10 @@ def start_scheduler():
     _scheduler.add_job(scheduled_nurture_run,
                        CronTrigger(day_of_week="tue", hour=10, minute=30, timezone=ET),
                        id="nurture_run", name="Nurture Run weekly email (Tue 10:30am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_market_field_sweep,
+                       CronTrigger(day_of_week="sun", hour=6, minute=50, timezone=ET),
+                       id="market_field_sweep", name="Playbook URL sweep, all assigned leads (Sun 6:50am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_market_pulse_refresh,
                        CronTrigger(day="1,15", hour=5, minute=10, timezone=ET),
