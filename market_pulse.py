@@ -210,6 +210,7 @@ VOICE (Barry Jenkins, "Too Nice for Sales"):
 - {first} is the ONLY placeholder that exists. NEVER write [Agent Name], [Brokerage], or any bracketed placeholder, and NEVER script the caller introducing themselves by name. Any agent on the team may send these.
 - Texts under 280 characters each. No emojis in more than one of them. NEVER use em dashes or en dashes.
 - Never invent numbers. Use ONLY the data supplied. Round naturally the way a human talks ("about three weeks", "just over 40%").
+- STAY ON THE LEAD'S SIDE. A text for a BUYER must never mention selling their home, listing strategy, or what their home is worth. A text for a SELLER must never pitch home shopping or tours. The parenthetical framing after each data angle tells you what this lead cares about; write from that angle.
 
 OUTPUT exactly this JSON, nothing else:
 {"texts": ["...", "...", "..."], "call_track": "...", "hooks": ["...", "..."]}
@@ -219,7 +220,13 @@ OUTPUT exactly this JSON, nothing else:
 
 
 def _nurture_hooks(snapshot, side):
-    """Deterministic data angles fed to the writer (and the fallback texts)."""
+    """Deterministic data angles fed to the writer (and the fallback texts).
+
+    SIDE-FRAMED (Sep 10 fix: the buyer bank was getting seller angles, so
+    every downstream surface served sellers' scripts to buyer leads). Same
+    underlying stats, framed for what THIS lead cares about: a buyer wants
+    leverage, pace, and the cost of waiting; a seller wants proof of demand
+    and the price of overpricing."""
     r = snapshot.get("realtor") or {}
     z = snapshot.get("zillow") or {}
     city = snapshot.get("city", "your city")
@@ -231,16 +238,30 @@ def _nurture_hooks(snapshot, side):
     yy = r.get("median_list_price_yy")
     sale = (z.get("median_sale_price") or {}).get("latest")
     sale_ago = (z.get("median_sale_price") or {}).get("year_ago")
-    if above:
-        hooks.append(f"{round(above*100)}% of {city} homes sold OVER asking price last month")
-    if speed:
-        hooks.append(f"typical {city} home finds its buyer in {int(speed)} days right now")
-    if cuts:
-        hooks.append(f"{round(cuts*100)}% of {city} listings had to cut their price (overpricing punished fast)")
-    if price and yy:
-        hooks.append(f"median asking price in {city} is ${int(price):,}, {'up' if yy>0 else 'down'} {abs(yy)*100:.0f}% in a year")
-    if sale and sale_ago and sale > sale_ago:
-        hooks.append(f"typical {city} sale price climbed ${int(sale-sale_ago):,} in the last 12 months")
+
+    if side == "sellers":
+        if above:
+            hooks.append(f"{round(above*100)}% of {city} homes sold OVER asking price last month (real demand for well-priced homes)")
+        if sale and sale_ago and sale > sale_ago:
+            hooks.append(f"typical {city} sale price climbed ${int(sale-sale_ago):,} in the last 12 months (their equity likely grew)")
+        if speed:
+            hooks.append(f"typical {city} home finds its buyer in {int(speed)} days right now (priced right means fast)")
+        if cuts:
+            hooks.append(f"{round(cuts*100)}% of {city} listings had to cut their price (overpricing gets punished, pricing right wins)")
+        if price and yy and yy > 0:
+            hooks.append(f"median asking price in {city} is ${int(price):,}, up {yy*100:.0f}% in a year")
+    else:
+        if cuts:
+            hooks.append(f"{round(cuts*100)}% of {city} listings cut their price last month (sellers ARE negotiating, buyers have openings)")
+        if speed:
+            hooks.append(f"the typical {city} home goes pending in {int(speed)} days (the good ones do not wait around)")
+        if price and yy:
+            if yy > 0:
+                hooks.append(f"median asking price in {city} is ${int(price):,}, up {yy*100:.0f}% in a year (waiting has been expensive)")
+            else:
+                hooks.append(f"median asking price in {city} is ${int(price):,}, down {abs(yy)*100:.0f}% from last year (a rare window)")
+        if above:
+            hooks.append(f"{round(above*100)}% of {city} homes went over asking last month (prepared buyers win, surprised buyers lose)")
     return hooks
 
 
