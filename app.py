@@ -9575,6 +9575,38 @@ def _fub_upsert_appt_resource(appt, event_name):
         payload={"fub_appt_id": appt_id, "status": status, "outcome": outcome},
         triggered_by="webhook_fub",
     )
+    # Fhalen's conversions: she creates the appointment and invites the
+    # agent she picked (confirmed live, Sep 11). Her pick becomes an OFFER
+    # with the green button; assignment happens on accept, cascade on
+    # silence. Zero change to her workflow.
+    if "Created" in event_name and person_id \
+            and appt.get("createdById") == getattr(config, "ISA_USER_ID", None):
+        try:
+            picked = next((i.get("name") for i in invitees
+                           if i.get("userId")
+                           and i.get("userId") != config.ISA_USER_ID
+                           and not i.get("personId")), None)
+            if _db.claim_once("dispatch_appt_%s" % appt_id):
+                import dispatch as _dp
+                _eh = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+                _appt_label = start_dt.astimezone(
+                    timezone(timedelta(hours=_eh))).strftime("%a %b %d, %I:%M %p")
+                city = ""
+                try:
+                    p = FUBClient().get_person(person_id) or {}
+                    for a2 in (p.get("addresses") or []):
+                        if isinstance(a2, dict) and a2.get("city"):
+                            city = a2["city"]
+                            break
+                except Exception:
+                    pass
+                _dp.make_offer("fhalen", person_id, person_name, city,
+                               _appt_label, None, agent_name=picked,
+                               audit=cache_get("audit") or {})
+                logger.info("[DISPATCH] Fhalen appt %s -> offer to %s",
+                            appt_id, picked or "next in rotation")
+        except Exception as e:
+            logger.warning("[DISPATCH] fhalen appt intake failed: %s", e)
     # Fell-through appointment: instant rebook nudge (email), once per appt.
     if outcome in ("No show", "Reschedule Needed") and prev_outcome != outcome \
             and agent_name and agent_name not in _EXCLUDED_REBOOK:

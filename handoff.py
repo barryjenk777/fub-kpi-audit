@@ -127,6 +127,13 @@ def run_handoff_scan(dry_run=False):
         # handoffs ride the morning sheet instead of the phone buzzing a
         # fourth time (transfer-flood days taught agents to ignore texts).
         try:
+            # An open or accepted dispatch offer supersedes rung-1: the
+            # agent already has the green button in hand.
+            if _db.dispatch_person_state(pid):
+                continue
+        except Exception:
+            pass
+        try:
             if _db.count_attention_today(agent, kinds=["handoff"]) >= 3:
                 _db.log_attention(agent, "deferred_handoff", "text")
                 summary.setdefault("deferred_governor", 0)
