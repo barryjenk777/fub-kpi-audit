@@ -62,6 +62,17 @@ def eligible_agents(lead_city=None, audit=None):
             continue
         if (a.get("evaluation") or {}).get("overall_pass"):
             passing.append(name)
+    if not passing:
+        # Audit cache cold: fall back to the FUB Priority Agents group,
+        # the same durable membership the AI's round robin draws from.
+        try:
+            from fub_client import FUBClient
+            names = FUBClient().get_group_member_names(
+                getattr(config, "PRIORITY_GROUP_ID", 12))
+            passing = [n for n in names
+                       if n not in _EXCLUDED and n not in gated]
+        except Exception:
+            pass
     for name in getattr(config, "PROTECTED_AGENTS", []):
         if name not in passing and name not in _EXCLUDED:
             passing.append(name)

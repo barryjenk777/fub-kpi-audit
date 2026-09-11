@@ -519,6 +519,16 @@ class FUBClient:
         except Exception:
             return 0
 
+    def get_group_member_names(self, group_id):
+        """Names of users in a FUB group (e.g. the Priority Agents group)."""
+        try:
+            d = self._request("GET", f"groups/{group_id}") or {}
+            g = d.get("group") or d
+            return [(u.get("name") or "").strip()
+                    for u in (g.get("users") or []) if u.get("name")]
+        except Exception:
+            return []
+
     def get_all_user_emails(self):
         """
         Return a list of (name, email) for every FUB user that has an email address.
