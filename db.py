@@ -9659,3 +9659,25 @@ def get_agent_daily_activity(agent_name, days=14):
     except Exception as e:
         logger.warning("get_agent_daily_activity failed: %s", e)
         return []
+
+
+def get_latest_upload_meta(agent_name):
+    """Latest headshot/bio submission for a hire (no image bytes)."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, filename, bio, created_at
+                    FROM onboarding_uploads
+                    WHERE agent_name = %s ORDER BY id DESC LIMIT 1
+                """, (agent_name,))
+                r = cur.fetchone()
+        if not r:
+            return None
+        return {"upload_id": r[0], "filename": r[1], "bio": r[2],
+                "submitted_at": r[3].isoformat() if r[3] else None}
+    except Exception as e:
+        logger.warning("get_latest_upload_meta failed: %s", e)
+        return None

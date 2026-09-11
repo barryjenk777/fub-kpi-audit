@@ -372,8 +372,19 @@ function loadPipeline(){
           h+='</div>';
         });
         h+='</div>';
-        h+='<div style="margin-top:8px;font-size:11px;color:#93a4c4">Hire\'s headshot/bio link: '+
-           '<a href="'+hire.join_url+'" style="color:#f5a623">'+hire.join_url+'</a></div>';
+        if(hire.upload){
+          h+='<div style="margin-top:8px;padding:8px 10px;background:#0f1520;border-radius:8px;font-size:12px">';
+          h+='<b style="color:#37c98b">&#10003; Headshot + bio in</b> ('+(hire.upload.submitted_at||'').slice(0,10)+') '+
+             '<a href="'+hire.upload.download_url+'" style="color:#f5a623">download headshot</a>';
+          if(hire.upload.bio){
+            h+='<div style="margin-top:5px;color:#c9d5ec;font-style:italic">"'+
+               hire.upload.bio.replace(/</g,'&lt;').slice(0,400)+(hire.upload.bio.length>400?'…':'')+'"</div>';
+          }
+          h+='</div>';
+        } else {
+          h+='<div style="margin-top:8px;font-size:11px;color:#93a4c4">Waiting on headshot/bio. Hire\'s link: '+
+             '<a href="'+hire.join_url+'" style="color:#f5a623">'+hire.join_url+'</a></div>';
+        }
         h+='</div>';
       });
       el.innerHTML=h;

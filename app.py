@@ -4921,6 +4921,11 @@ def api_onboarding_pipeline():
         h["join_url"] = "%s/join/%s" % (base, h.pop("join_token", ""))
         for t in h["tasks"]:
             t.pop("token", None)
+        up = _db.get_latest_upload_meta(h["agent_name"])
+        if up:
+            h["upload"] = {**up,
+                           "download_url": "%s/api/admin/onboarding/upload/%s"
+                                           % (base, up["upload_id"])}
     return jsonify({"ok": True, "hires": hires,
                     "gated": sorted(_db.get_onboarding_gated())})
 
