@@ -1088,15 +1088,6 @@ async function askClaude(){
   const question=(inp?.value||'').trim();
   if(!question){inp?.focus();return;}
 
-  // Build a compact context string from the current briefing visible on screen
-  const briefingEl=document.querySelector('.cc-briefing-text');
-  const insightsEl=document.querySelector('.cc-insights-block');
-  const guidanceEl=document.querySelector('.cc-guidance-action');
-  let ctx='';
-  if(briefingEl)ctx+='Briefing: '+briefingEl.innerText+'\n';
-  if(guidanceEl)ctx+='Guidance: '+guidanceEl.innerText+'\n';
-  if(insightsEl)ctx+='Insights: '+insightsEl.innerText+'\n';
-
   btn.disabled=true;
   btn.textContent='Thinking…';
   ans.style.display='none';
@@ -1106,8 +1097,8 @@ async function askClaude(){
     const r=await fetch('/api/ask-claude',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({question,context:ctx}),
-      signal:AbortSignal.timeout(30000),
+      body:JSON.stringify({question}),
+      signal:AbortSignal.timeout(60000),
     });
     const d=await r.json();
     if(d.error)throw new Error(d.error);

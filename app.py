@@ -12227,6 +12227,100 @@ if (!('ontouchstart' in window)) {{
     return _R(html_out, status=200, mimetype="text/html")
 
 
+def _ask_claude_data_pack():
+    """Assemble the live data pack for the Ask Claude box, entirely from
+    caches and cheap Postgres reads (never a live FUB walk: answers must
+    come back in seconds). The Sep 11 failure mode this fixes: the box
+    shipped questions with NO data attached, so the model truthfully
+    claimed it had no access."""
+    pack = {}
+    try:  # weekly KPI audit: per-agent evaluations + team totals
+        audit = cache_get("audit") or {}
+        pack["kpi_week"] = {
+            "period": audit.get("period"),
+            "thresholds": audit.get("thresholds"),
+            "agents": [{
+                "name": a.get("name"),
+                "pass": (a.get("evaluation") or {}).get("overall_pass"),
+                "calls": (a.get("metrics") or {}).get("outbound_calls"),
+                "convos": (a.get("metrics") or {}).get("conversations"),
+                "ooc_flags": (a.get("metrics") or {}).get("compliance_violations"),
+            } for a in (audit.get("agents") or [])],
+        }
+    except Exception:
+        pass
+    try:  # Pulse: 30v30 funnel, rates, annual pace, theme bullets
+        p = _pulse_cache.get("data") or {}
+        pack["funnel_30d"] = {
+            "tiles": [{"label": t.get("label"), "last30": t.get("d30"),
+                       "prior30": t.get("prev30")}
+                      for t in (p.get("funnel", {}).get("tiles") or [])],
+            "rates": p.get("funnel", {}).get("rates"),
+            "annual_pace": p.get("pace"),
+            "themes": p.get("themes"),
+        }
+    except Exception:
+        pass
+    try:  # Appointments money layer incl. BY SOURCE (Ylopo PPC etc.)
+        import appt_insight as _ai
+        c = _ai.get_cached() or {}
+        pack["appointments_60d"] = {
+            "by_source": c.get("by_source"),
+            "by_agent": c.get("by_agent"),
+            "by_weekday": c.get("by_weekday"),
+            "ghosted_after_held": len(c.get("ghosted_after_held") or []),
+            "no_outcome": len(c.get("no_outcome_list") or []),
+            "leak_dollars": c.get("leak_dollars"),
+        }
+    except Exception:
+        pass
+    try:  # Maverick call quality + rules backlog
+        stats = _db.get_latest_maverick_stats() or {}
+        pack["call_quality"] = {k: {"calls_graded": v.get("calls_graded"),
+                                    "avg_grade": v.get("avg_grade"),
+                                    "appt_ask_pct": v.get("appt_ask")}
+                               for k, v in stats.items()}
+        rules = _db.get_maverick_rules_trend(days=3) or []
+        pack["followup_backlog"] = [r for r in rules if r.get("rule")][:15]
+    except Exception:
+        pass
+    try:  # AI outreach / Blue
+        cached = _cache.get("pond_mailer_dashboard")
+        if cached:
+            ins = (cached.get("data") or {}).get("insight") or {}
+            pack["ai_outreach"] = {"blue_variants": (ins.get("blue") or {}).get("by_variant"),
+                                   "outcomes": ins.get("outcomes"),
+                                   "verdict": {"working": ins.get("working"),
+                                               "not_working": ins.get("not_working")}}
+    except Exception:
+        pass
+    try:  # deals last 30/90 by agent
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COUNT(*) FILTER (WHERE contract_date >= CURRENT_DATE - 30) AS contracts_30d,
+                           COUNT(*) FILTER (WHERE close_date >= CURRENT_DATE - 30
+                                            AND stage = 'closing') AS closings_30d,
+                           COUNT(*) FILTER (WHERE close_date >= CURRENT_DATE - 90
+                                            AND stage = 'closing') AS closings_90d
+                    FROM deal_log GROUP BY agent_name
+                """)
+                pack["deals"] = [{"agent": r[0], "contracts_30d": int(r[1]),
+                                  "closings_30d": int(r[2]), "closings_90d": int(r[3])}
+                                 for r in cur.fetchall()]
+    except Exception:
+        pass
+    try:  # phoenix + nurture pulse
+        t = _db.get_goals_trend_data(excluded=set(config.EXCLUDED_USERS)) or {}
+        pack["phoenix_30d"] = t.get("phoenix")
+        pack["weekly_team_dials"] = t.get("weekly")
+        pack["nurture_run"] = _db.nurture_scoreboard(weeks=2)
+    except Exception:
+        pass
+    return pack
+
+
 @app.route("/api/ask-claude", methods=["POST"])
 def api_ask_claude():
     """
@@ -12246,7 +12340,7 @@ def api_ask_claude():
     import anthropic as _anthropic
     body = request.get_json(force=True, silent=True) or {}
     question = (body.get("question") or "").strip()
-    extra_ctx = (body.get("context") or "").strip()
+    extra_ctx = json.dumps(_ask_claude_data_pack(), default=str)
 
     if not question:
         return jsonify({"error": "question is required"}), 400
@@ -12256,20 +12350,27 @@ def api_ask_claude():
         return jsonify({"error": "ANTHROPIC_API_KEY not configured"}), 500
 
     system_prompt = (
-        "You are Barry Jenkins' real estate coaching partner. "
-        "Barry leads Legacy Home Team in Virginia Beach/Chesapeake/Suffolk — "
-        "a top Hampton Roads real estate team. "
-        "He runs a small team of agents and tracks their KPIs (calls, conversations, "
-        "appointment set rate, show rate, contract rate) weekly. "
-        "He uses a coaching philosophy from his book 'Too Nice for Sales': "
-        "never shame agents, always reframe, teaching over pushing, story-first, "
-        "conversational tone, actionable endings. "
-        "His ISA (Inside Sales Agent) is Joe — handles call volume accountability. "
-        "Conversion gaps (opener, ask, close) are Barry's domain. "
-        "When answering, be direct and specific. No fluff. "
-        "Give 2-4 bullet points of actionable coaching advice max. "
-        "Keep responses under 250 words. Plain text, no markdown headers. "
-        "If the question references specific data, use it directly in your answer."
+        "You are the analyst inside Barry Jenkins' Command Center dashboard. "
+        "Barry leads Legacy Home Team (Hampton Roads). The user message "
+        "contains a LIVE DATA PACK (JSON) assembled seconds ago from the "
+        "team's real systems: weekly KPI audit, 30-day funnel, appointments "
+        "by source and agent, Maverick call grades, follow-up backlog, AI "
+        "outreach results, deals, Phoenix, and nurture scores.\n"
+        "Rules:\n"
+        "1. Answer from the pack, with the numbers, and show simple math.\n"
+        "2. NEVER say you lack access to the CRM or data. If a specific "
+        "number is not in the pack, say exactly which number is missing and "
+        "name the tab that has it (Appointments, Agents, AI Outreach, "
+        "Training, LeadStream), then answer the parts you CAN.\n"
+        "3. Windows in the pack vary (7-day KPIs, 30-day funnel, 60-day "
+        "appointments). State the window you are quoting.\n"
+        "4. Sources: appointment source names are exact (e.g. 'Ylopo PPC+', "
+        "'zbuyer'). A question about 'Ylopo prospecting' maps to the Ylopo "
+        "source rows.\n"
+        "5. Coaching voice: Barry's 'Too Nice for Sales' register. Direct, "
+        "warm, never shaming, no corporate speak, no em dashes. End with "
+        "the one action the numbers suggest.\n"
+        "6. Be concise: lead with the answer, keep it under 250 words."
     )
 
     user_content = question
@@ -12279,8 +12380,8 @@ def api_ask_claude():
     try:
         client = _anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=512,
+            model="claude-sonnet-5",
+            max_tokens=3000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
         )
