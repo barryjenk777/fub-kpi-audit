@@ -2805,25 +2805,46 @@ function buildOutreach(d){
   const oc=ins.outcomes||{};
   let h='';
 
-  // ── BLUE MESSAGE NURTURE: iMessage variants + campaign efficacy ───────
+  // ── BLUE MESSAGE NURTURE: the live experiment + decision record ───────
   const blue=ins.blue||{};
   const bv=blue.by_variant||[], bs=(blue.by_strategy||[]).filter(r=>r.sends>=5);
   if(bv.length){
     const VLABEL={video:'🎬 HeyGen video',voice:'🎙️ Voice memo',none:'💬 Plain text'};
     h+=`<div style="background:linear-gradient(135deg,var(--surface),rgba(96,165,250,.06));border:1px solid var(--border);border-left:3px solid #60a5fa;border-radius:var(--r);padding:1.1rem 1.3rem;margin-bottom:1.2rem">`;
-    h+=`<div style="font-weight:800;font-size:.95rem;margin-bottom:.15rem">💙 Blue Message Nurture</div>`;
-    h+=`<div style="font-size:.72rem;color:var(--muted);margin-bottom:.9rem">iMessage nurture via Project Blue, last 60 days. Each lead's replies are credited to the last message style they received, so this is a real A/B read.</div>`;
+    h+=`<div style="font-weight:800;font-size:.95rem;margin-bottom:.15rem">💙 Blue Message Nurture — the live experiment</div>`;
+    h+=`<div style="font-size:.72rem;color:var(--muted);margin-bottom:.9rem">Voice memo vs plain text, judged on INTERESTED replies (replies alone misled us for weeks: video tied on replies and never produced a single interested one). Each lead credits the last style they received.</div>`;
     h+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.7rem">`;
     bv.forEach(v=>{
       const rr=v.reply_rate!=null?v.reply_rate:(v.sends?Math.round(v.replies/v.sends*1000)/10:0);
-      h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm,8px);padding:.8rem .9rem">`;
-      h+=`<div style="font-size:.68rem;font-weight:700;margin-bottom:.4rem">${VLABEL[v.key]||esc(v.key)}</div>`;
-      h+=`<div style="font-size:1.5rem;font-weight:800">${rr}%</div>`;
-      h+=`<div style="font-size:.62rem;color:var(--muted)">reply rate · ${v.sends} sends</div>`;
-      h+=`<div style="font-size:.66rem;margin-top:.35rem"><span style="color:var(--green)">${v.positive} interested</span> · <span style="color:${v.optouts>0?'var(--red)':'var(--muted)'}">${v.optouts} opt-outs</span></div>`;
+      const ir=v.sends?Math.round(v.positive/v.sends*1000)/10:0;
+      const retired=v.key==='video';
+      h+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm,8px);padding:.8rem .9rem;${retired?'opacity:.55':''}">`;
+      h+=`<div style="font-size:.68rem;font-weight:700;margin-bottom:.4rem">${VLABEL[v.key]||esc(v.key)}${retired?' <span style="background:rgba(239,68,68,.15);color:var(--red);font-size:.55rem;font-weight:800;padding:.1rem .4rem;border-radius:99px;letter-spacing:.06em">RETIRED</span>':''}</div>`;
+      h+=`<div style="font-size:1.5rem;font-weight:800;color:${ir>0?'var(--green)':'var(--muted)'}">${ir}%</div>`;
+      h+=`<div style="font-size:.62rem;color:var(--muted)">interested per send · ${v.sends} sends</div>`;
+      h+=`<div style="font-size:.66rem;margin-top:.35rem;color:var(--muted)">${rr}% replied · <span style="color:${v.optouts>0?'var(--red)':'var(--muted)'}">${v.optouts} opt-outs</span></div>`;
       h+='</div>';
     });
     h+='</div>';
+    if(bv.some(v=>v.key==='video')){
+      h+=`<div style="margin-top:.7rem;padding:.55rem .85rem;background:var(--surface);border-left:3px solid var(--red);border-radius:6px;font-size:.72rem;color:var(--muted)"><b style="color:var(--text)">Decision record:</b> HeyGen video retired Sep 11, 2026. 74 sends, zero interested replies, 6 opt-outs, plus render budget and cap costs. The voice memo produced interested replies at 2.5x plain text. Human beats produced.</div>`;
+    }
+    const bw=blue.weekly||[];
+    if(bw.length>=3){
+      const maxS=Math.max(...bw.map(w=>w.sends),1);
+      h+=`<div style="margin-top:.9rem"><div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem">Engagement by week (bars = sends, gold = replies)</div>`;
+      h+=`<div style="display:flex;align-items:flex-end;gap:4px;height:52px">`;
+      bw.forEach(w=>{
+        const sh=Math.max(Math.round(w.sends/maxS*46),w.sends>0?4:2);
+        const rh=Math.max(Math.round(w.replies/maxS*46),w.replies>0?3:0);
+        const lbl=new Date(w.week+'T12:00:00').toLocaleDateString('en-US',{month:'numeric',day:'numeric'});
+        h+=`<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:2px" title="week of ${lbl}: ${w.sends} sends, ${w.replies} replies">`;
+        h+=`<div style="width:100%;position:relative;height:${sh}px;background:rgba(96,165,250,.35);border-radius:2px 2px 0 0">`;
+        if(rh>0)h+=`<div style="position:absolute;bottom:0;left:0;right:0;height:${rh}px;background:var(--gold);border-radius:2px 2px 0 0"></div>`;
+        h+=`</div><div style="font-size:.5rem;color:var(--subtle)">${lbl}</div></div>`;
+      });
+      h+=`</div></div>`;
+    }
     if(bs.length){
       h+=`<div style="margin-top:.9rem"><div style="font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem">By campaign</div>`;
       h+='<div class="tbl-wrap"><table><thead><tr><th>Campaign</th><th>Sends</th><th>Reply rate</th><th>Interested</th><th>Opt-outs</th></tr></thead><tbody>';

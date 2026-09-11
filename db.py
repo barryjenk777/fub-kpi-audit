@@ -8438,6 +8438,25 @@ def get_pond_insight_data(days=60):
                         blue["by_variant" if dim == "variant" else "by_strategy"].append(row)
                     blue["by_variant"].sort(key=lambda r: -r["sends"])
                     blue["by_strategy"].sort(key=lambda r: -r["sends"])
+                    # Weekly engagement trend: is Blue getting better?
+                    cur.execute("""
+                        WITH s AS (
+                            SELECT date_trunc('week', sent_at)::date AS wk, COUNT(*) AS n
+                            FROM pond_sms_log
+                            WHERE NOT dry_run AND sent_at >= NOW() - INTERVAL '56 days'
+                            GROUP BY 1),
+                        r AS (
+                            SELECT date_trunc('week', received_at)::date AS wk, COUNT(*) AS n
+                            FROM pond_sms_reply_log
+                            WHERE received_at >= NOW() - INTERVAL '56 days'
+                            GROUP BY 1)
+                        SELECT COALESCE(s.wk, r.wk), COALESCE(s.n, 0), COALESCE(r.n, 0)
+                        FROM s FULL OUTER JOIN r ON r.wk = s.wk
+                        ORDER BY 1
+                    """)
+                    blue["weekly"] = [{"week": str(w), "sends": int(sn),
+                                       "replies": int(rp)}
+                                      for w, sn, rp in cur.fetchall()]
                     out["blue"] = blue
                 except Exception as e:
                     logger.warning("blue nurture insight failed: %s", e)
