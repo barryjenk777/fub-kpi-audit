@@ -752,6 +752,13 @@ PHOENIX_DEDUPE_DAYS = 30
 # and every exact-match comparison against "PHOENIX" silently failed (Sep 2026).
 PHOENIX_TAG = "Phoenix"
 
+# ── HeyGen: RETIRED Sep 11, 2026 per Barry ──────────────────────────────────
+# The Blue A/B verdict: 74 video sends, zero interested replies, 6 opt-outs,
+# while the plain voice memo produced interested replies at 2.5x plain text.
+# Human beats produced. All render paths are gated on this flag; set
+# HEYGEN_ENABLED=1 in Railway (then Deploy) to resurrect without a code change.
+HEYGEN_ENABLED = _os.environ.get("HEYGEN_ENABLED", "0").strip() == "1"
+
 # Weekdays (of last week's Mon-Fri) an agent must hit their personal daily
 # dial target to earn Phoenix status for this week's bonus pool
 PHOENIX_QUALIFY_DAYS_REQUIRED = 4

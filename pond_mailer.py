@@ -54,6 +54,7 @@ DRIP_COOLDOWN_DAYS = 10   # 5 gaps × 10 days = 50-day drip (emails 4-9)
 
 # SMS channel has its own cooldown, separate from email cadence.
 # 5 days minimum between texts to the same lead (TCPA/carrier best practice).
+import config  # noqa: E402
 from config import SMS_COOLDOWN_DAYS  # noqa: E402
 # Was 15 days — tightened because active searchers go cold waiting that long.
 
@@ -4005,7 +4006,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0:
+                if config.HEYGEN_ENABLED and heygen_available() and _hg_slots_left > 0:
                     # FUB addresses array is usually empty for Ylopo leads.
                     # Try standard address fields, then fall back to tag-derived city.
                     _addrs   = person.get("addresses") or []
@@ -4116,7 +4117,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0:
+                if config.HEYGEN_ENABLED and heygen_available() and _hg_slots_left > 0:
                     # Score gate NOT applied on Email 1 — every Z-buyer deserves a
                     # personalized video on first contact regardless of LeadStream score.
                     # FUB addresses array is usually empty for Ylopo leads.
@@ -4236,7 +4237,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0:
+                if config.HEYGEN_ENABLED and heygen_available() and _hg_slots_left > 0:
                     # Score gate NOT applied on Email 1 — every buyer deserves a
                     # personalized video on first contact regardless of LeadStream score.
                     _beh_city      = (behavior.get("cities") or [])
@@ -4393,7 +4394,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
+                if config.HEYGEN_ENABLED and heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     _addrs_fu   = person.get("addresses") or []
                     _addr0_fu   = _addrs_fu[0] if _addrs_fu else {}
                     _street_fu  = (_addr0_fu.get("street") or "").strip()
@@ -4512,7 +4513,7 @@ def run_pond_mailer(dry_run=True, person_id=None, limit=None, daily_cap=None, to
                     make_video_email_html,
                     DEFAULT_AVATAR, DEFAULT_AVATAR_TYPE, DEFAULT_VOICE,
                 )
-                if heygen_available() and _hg_slots_left > 0 and _video_eligible:
+                if config.HEYGEN_ENABLED and heygen_available() and _hg_slots_left > 0 and _video_eligible:
                     _addrs_e4   = person.get("addresses") or []
                     _addr0_e4   = _addrs_e4[0] if _addrs_e4 else {}
                     _street_e4  = (_addr0_e4.get("street") or "").strip()
