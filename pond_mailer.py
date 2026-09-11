@@ -3309,6 +3309,11 @@ def run_new_lead_mailer(dry_run=True):
                 # Sign the first text so the lead knows who's reaching out
                 if _nl_hist_count == 0:
                     _nl_sms_body += " Barry w/ LPT Realty"
+                # Atomic per-lead claim: even racing runs cannot double-text
+                # (idempotency row insert wins exactly once).
+                if not dry_run and not _db.claim_once("newlead_sms_%s" % pid):
+                    logger.info("new-lead SMS already claimed for %s, skipping", pid)
+                    continue
                 _nl_result = _pb_nl.send_message(_nl_phone, _nl_sms_body, dry_run=dry_run)
 
                 if _nl_result.get("success"):

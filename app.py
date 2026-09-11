@@ -15811,7 +15811,13 @@ def scheduled_send_hype_email():
 
 
 def scheduled_new_lead_check():
-    """Every 5 minutes — check Shark Tank for new leads and fire immediate email."""
+    """Every 5 minutes — check Shark Tank for new leads and fire immediate
+    email/text. Job-locked: this was the ONE scheduled job without a lock,
+    so two workers could both pass the already-texted check before either
+    logged, and the lead got the same text twice (Barry's lead-audit
+    doubles, Sep 10)."""
+    if not _db.try_acquire_job_lock("new_lead_check"):
+        return
     try:
         from pond_mailer import run_new_lead_mailer
         result = run_new_lead_mailer(dry_run=False)
@@ -15820,6 +15826,8 @@ def scheduled_new_lead_check():
         _record_fired("new_lead_check")
     except Exception as e:
         print(f"[SCHEDULER] New lead mailer error: {e}")
+    finally:
+        _db.release_job_lock("new_lead_check")
 
 
 def scheduled_new_lead_watchdog():
