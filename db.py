@@ -9681,3 +9681,197 @@ def get_latest_upload_meta(agent_name):
     except Exception as e:
         logger.warning("get_latest_upload_meta failed: %s", e)
         return None
+
+
+# ── Dispatch: offer/accept/cascade for converted-lead assignment ────────────
+
+def ensure_dispatch_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS dispatch_offers (
+                        id          SERIAL PRIMARY KEY,
+                        source      TEXT NOT NULL,          -- fhalen | ai_text | ai_voice
+                        person_id   TEXT NOT NULL,
+                        lead_name   TEXT,
+                        lead_city   TEXT,
+                        appt_time   TEXT,
+                        notes       TEXT,
+                        agent_name  TEXT NOT NULL,
+                        token       TEXT UNIQUE NOT NULL,
+                        hop         INTEGER DEFAULT 1,
+                        offered_at  TIMESTAMPTZ DEFAULT NOW(),
+                        expires_at  TIMESTAMPTZ NOT NULL,
+                        accepted_at TIMESTAMPTZ,
+                        passed_at   TIMESTAMPTZ,
+                        pass_reason TEXT,
+                        expired_at  TIMESTAMPTZ,
+                        terminal    BOOLEAN DEFAULT FALSE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_do_open
+                        ON dispatch_offers (expires_at)
+                        WHERE accepted_at IS NULL AND passed_at IS NULL
+                          AND expired_at IS NULL;
+                    CREATE INDEX IF NOT EXISTS idx_do_person
+                        ON dispatch_offers (person_id, offered_at DESC);
+                """)
+    except Exception as e:
+        logger.warning("ensure_dispatch_table failed: %s", e)
+
+
+def create_dispatch_offer(source, person_id, lead_name, lead_city, appt_time,
+                          notes, agent_name, token, minutes=5, hop=1):
+    if not is_available():
+        return None
+    ensure_dispatch_table()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO dispatch_offers
+                        (source, person_id, lead_name, lead_city, appt_time,
+                         notes, agent_name, token, hop, expires_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,
+                            NOW() + make_interval(mins => %s))
+                    RETURNING id
+                """, (source, str(person_id), lead_name, lead_city, appt_time,
+                      notes, agent_name, token, hop, int(minutes)))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("create_dispatch_offer failed: %s", e)
+        return None
+
+
+def get_dispatch_offer(token=None, offer_id=None):
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, source, person_id, lead_name, lead_city,
+                           appt_time, notes, agent_name, token, hop,
+                           offered_at, expires_at, accepted_at, passed_at,
+                           expired_at, terminal
+                    FROM dispatch_offers WHERE %s = %s
+                """ % ("token" if token else "id", "%s"),
+                    (token if token else offer_id,))
+                r = cur.fetchone()
+        if not r:
+            return None
+        keys = ("id","source","person_id","lead_name","lead_city","appt_time",
+                "notes","agent_name","token","hop","offered_at","expires_at",
+                "accepted_at","passed_at","expired_at","terminal")
+        return dict(zip(keys, r))
+    except Exception as e:
+        logger.warning("get_dispatch_offer failed: %s", e)
+        return None
+
+
+def resolve_dispatch_offer(offer_id, outcome, reason=None):
+    """outcome: accepted | passed | expired. Returns latency seconds."""
+    if not is_available():
+        return None
+    col = {"accepted": "accepted_at", "passed": "passed_at",
+           "expired": "expired_at"}[outcome]
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE dispatch_offers
+                    SET %s = NOW(), pass_reason = COALESCE(%%s, pass_reason)
+                    WHERE id = %%s AND accepted_at IS NULL
+                      AND passed_at IS NULL AND expired_at IS NULL
+                    RETURNING EXTRACT(EPOCH FROM (NOW() - offered_at))
+                """ % col, (reason, offer_id))
+                r = cur.fetchone()
+                return float(r[0]) if r else None
+    except Exception as e:
+        logger.warning("resolve_dispatch_offer failed: %s", e)
+        return None
+
+
+def mark_dispatch_terminal(offer_id):
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE dispatch_offers SET terminal = TRUE WHERE id = %s",
+                            (offer_id,))
+    except Exception as e:
+        logger.warning("mark_dispatch_terminal failed: %s", e)
+
+
+def due_dispatch_offers():
+    """Open offers past their window, for the cascade job."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id FROM dispatch_offers
+                    WHERE accepted_at IS NULL AND passed_at IS NULL
+                      AND expired_at IS NULL AND expires_at < NOW()
+                """)
+                return [r[0] for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("due_dispatch_offers failed: %s", e)
+        return []
+
+
+def dispatch_person_state(person_id, hours=24):
+    """Offer history for one lead in the window (for the board + dedupe)."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, hop, offered_at, accepted_at, passed_at,
+                           pass_reason, expired_at, terminal
+                    FROM dispatch_offers
+                    WHERE person_id = %s
+                      AND offered_at >= NOW() - make_interval(hours => %s)
+                    ORDER BY id
+                """, (str(person_id), int(hours)))
+                return [{"agent": r[0], "hop": r[1],
+                         "offered_at": r[2].isoformat() if r[2] else None,
+                         "accepted": bool(r[3]), "passed": bool(r[4]),
+                         "pass_reason": r[5], "expired": bool(r[6]),
+                         "terminal": bool(r[7])} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("dispatch_person_state failed: %s", e)
+        return []
+
+
+def dispatch_agent_stats(days=30):
+    """Accept rate + median accept latency per agent."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, COUNT(*),
+                           COUNT(*) FILTER (WHERE accepted_at IS NOT NULL),
+                           COUNT(*) FILTER (WHERE passed_at IS NOT NULL),
+                           COUNT(*) FILTER (WHERE expired_at IS NOT NULL),
+                           PERCENTILE_CONT(0.5) WITHIN GROUP (
+                               ORDER BY EXTRACT(EPOCH FROM (accepted_at - offered_at)))
+                               FILTER (WHERE accepted_at IS NOT NULL)
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - make_interval(days => %s)
+                    GROUP BY agent_name ORDER BY 3 DESC
+                """, (int(days),))
+                return [{"agent": r[0], "offers": int(r[1]), "accepted": int(r[2]),
+                         "passed": int(r[3]), "expired": int(r[4]),
+                         "median_accept_secs": round(float(r[5])) if r[5] is not None else None}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("dispatch_agent_stats failed: %s", e)
+        return []

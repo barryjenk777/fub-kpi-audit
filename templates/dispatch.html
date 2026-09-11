@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Dispatch</title>
+<style>
+:root{--bg:#0f172a;--panel:#16213e;--line:#26365c;--ink:#e8eefc;--muted:#93a4c4;
+--gold:#f5a623;--green:#37c98b;--red:#e5544b;--blue:#5b8def}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font-family:-apple-system,'Segoe UI',Arial,sans-serif;font-size:14px}
+.wrap{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:20px;margin:0 0 2px}
+.sub{color:var(--muted);font-size:12.5px;margin:0 0 16px}
+.lead{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:14px 16px;margin-bottom:10px}
+.lh{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;align-items:baseline}
+.nm{font-weight:750;font-size:15px}
+.tag{font-size:10px;font-weight:800;letter-spacing:.08em;padding:2px 8px;border-radius:99px}
+.t-open{background:rgba(245,166,35,.15);color:var(--gold)}
+.t-acc{background:rgba(55,201,139,.15);color:var(--green)}
+.t-term{background:rgba(229,84,75,.2);color:var(--red)}
+.meta{color:var(--muted);font-size:12px;margin:.2rem 0 .5rem}
+.hist{font-size:11.5px;color:var(--muted);margin-bottom:.5rem}
+.agents{display:flex;flex-wrap:wrap;gap:6px}
+.agents button{background:#1c2a4a;border:1px solid var(--line);color:var(--ink);
+border-radius:9px;padding:7px 12px;font-size:12.5px;cursor:pointer;text-align:left}
+.agents button:hover{border-color:var(--gold)}
+.agents .stat{display:block;font-size:10px;color:var(--muted)}
+.agents .geo{border-color:var(--blue)}
+.spin{color:var(--muted);padding:30px;text-align:center}
+.note{font-size:11.5px;color:var(--muted);margin-top:18px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎯 Dispatch</h1>
+  <p class="sub">Tag a lead <b>ISA_TRANSFER_FRESH</b> in FUB like always, hit refresh here,
+  pick the agent. They get 5 minutes to accept or it auto-advances down the rotation.
+  Top of each agent list = next in rotation. Blue border = matches the lead's area.
+  <a href="#" onclick="load();return false" style="color:var(--gold)">↻ Refresh</a></p>
+  <div id="board"><div class="spin">Loading…</div></div>
+  <p class="note">Accepted leads assign in FUB automatically and drop off this board as the
+  tag expires. A red UNCLAIMED chip means three agents let it pass; it needs a human decision.
+  Nobody is emailed or texted until you pick, and after that the machine drives.</p>
+</div>
+<script>
+var KEY=new URLSearchParams(location.search).get('key')||'';
+function qs(p){return p+(p.indexOf('?')>-1?'&':'?')+'key='+encodeURIComponent(KEY);}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function load(){
+  fetch(qs('/api/dispatch/queue')).then(r=>r.json()).then(function(d){
+    if(d.error){document.getElementById('board').innerHTML='<div class="spin">'+esc(d.error)+'</div>';return;}
+    var geo=d.geo_overrides||{};
+    var h='';
+    (d.queue||[]).forEach(function(l){
+      var chip=l.terminal?'<span class="tag t-term">UNCLAIMED ×3</span>':
+        l.accepted?'<span class="tag t-acc">ACCEPTED</span>':
+        l.open_offer?'<span class="tag t-open">OFFER OUT</span>':'';
+      h+='<div class="lead"><div class="lh"><span class="nm">'+esc(l.name||'Unknown')+'</span>'+chip+'</div>';
+      h+='<div class="meta">'+esc(l.city||'city unknown')+(l.stage?' · '+esc(l.stage):'')+
+         (l.assigned_to?' · currently: '+esc(l.assigned_to):'')+'</div>';
+      if(l.offers&&l.offers.length){
+        h+='<div class="hist">'+l.offers.map(function(o){
+          var s=o.accepted?'✓ accepted':o.passed?('passed ('+esc(o.pass_reason||'')+')'):o.expired?'expired':'waiting…';
+          return esc(o.agent)+' '+s;}).join(' → ')+'</div>';
+      }
+      if(!l.accepted&&!l.open_offer){
+        h+='<div class="agents">';
+        (d.agents||[]).forEach(function(a){
+          var isGeo=Object.keys(geo).some(function(g){
+            return g===a.agent&&(geo[g]||[]).some(function(c){
+              return (l.city||'').toLowerCase().indexOf(c)>-1;});});
+          var stat=[];
+          if(a.accept_rate!=null)stat.push(a.accept_rate+'% accept');
+          if(a.median_accept_secs!=null)stat.push(a.median_accept_secs+'s to accept');
+          if(a.called_pct!=null)stat.push(a.called_pct+'% called');
+          h+='<button class="'+(isGeo?'geo':'')+'" onclick="offer(\''+esc(l.person_id)+'\',\''+esc(a.agent)+'\')">'+
+             esc(a.agent)+(isGeo?' 📍':'')+'<span class="stat">'+(stat.join(' · ')||'no history yet')+'</span></button>';
+        });
+        h+='</div>';
+      }
+      h+='</div>';
+    });
+    document.getElementById('board').innerHTML=h||'<div class="spin">No fresh transfers waiting. Tag one in FUB and refresh.</div>';
+  }).catch(function(e){
+    document.getElementById('board').innerHTML='<div class="spin">Could not load: '+esc(e.message)+'</div>';
+  });
+}
+function offer(pid,agent){
+  fetch(qs('/api/dispatch/offer'),{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({person_id:pid,agent_name:agent})})
+  .then(r=>r.json()).then(function(d){
+    if(d.error)alert(d.error);
+    load();
+  });
+}
+load();
+setInterval(load,45000);
+</script>
+</body>
+</html>

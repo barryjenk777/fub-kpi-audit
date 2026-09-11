@@ -97,6 +97,8 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/rhythm",
         # Day One Pipeline: ops one-click done links + the hire's own page
         "/ob/", "/join/",
+        # Dispatch: agent accept pages (token auth) + Fhalen's board (own key)
+        "/a/", "/dispatch",
         # Market Pulse pages: texted/emailed to leads, must be public
         "/market",
         # Vercel course endpoints check COURSE_API_KEY internally
@@ -4970,6 +4972,281 @@ def api_onboarding_seed():
                     "open": _db.get_open_onboarding_tasks(name)})
 
 
+def _dispatch_auth():
+    """Fhalen's board: ISA_DISPATCH_KEY (Railway) or owner auth."""
+    k = (os.environ.get("ISA_DISPATCH_KEY") or "").strip()
+    provided = (request.args.get("key") or "").strip()
+    return (k and provided == k) or _perplexity_auth()
+
+
+def _dispatch_accept(offer):
+    """Assignment happens ON accept: FUB person moves to the accepter, the
+    rotation advances, Fhalen and Barry get the receipt in the thread log."""
+    import dispatch as _dp
+    client = FUBClient()
+    agent = offer["agent_name"]
+    profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
+                    if p["agent_name"] == agent), None)
+    uid = (profile or {}).get("fub_user_id")
+    if uid:
+        try:
+            client.update_person_fields(offer["person_id"],
+                                        {"assignedUserId": uid})
+        except Exception as e:
+            logger.warning("[DISPATCH] FUB assign failed for %s: %s",
+                           offer["person_id"], e)
+    _dp.advance_rotation()
+    _db.log_automation_event(
+        event_type="dispatch_accept", person_id=offer["person_id"],
+        person_name=offer["lead_name"], agent_name=agent,
+        payload={"source": offer["source"], "hop": offer["hop"]},
+        triggered_by="dispatch")
+
+
+@app.route("/a/<token>", methods=["GET", "POST"])
+def dispatch_accept_page(token):
+    """The green button. Token is the auth; works from any channel."""
+    import dispatch as _dp
+    offer = _db.get_dispatch_offer(token=token)
+    if not offer:
+        return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
+                "This offer link is not valid."), 404
+    first = (offer["agent_name"] or "").split()[0]
+    lead_first = (offer["lead_name"] or "the lead").split()[0]
+    already = offer["accepted_at"] or offer["passed_at"] or offer["expired_at"]
+    if request.method == "POST" and not already:
+        action = request.form.get("action")
+        if action == "accept":
+            lat = _db.resolve_dispatch_offer(offer["id"], "accepted")
+            if lat is not None:
+                _dispatch_accept(offer)
+                return ("<div style='font-family:sans-serif;padding:3rem;"
+                        "text-align:center;max-width:440px;margin:0 auto'>"
+                        "<h2 style='color:#2e7d4f'>&#10003; %s is yours</h2>"
+                        "<p>Accepted in %d seconds. They are assigned to you "
+                        "in Follow Up Boss right now%s. The clock that "
+                        "matters starts now: call while they still remember "
+                        "saying yes.</p></div>"
+                        % (lead_first, int(lat),
+                           (", appointment %s" % offer["appt_time"])
+                           if offer["appt_time"] else ""))
+            already = True
+        elif action == "pass":
+            reason = (request.form.get("reason") or "no reason")[:60]
+            lat = _db.resolve_dispatch_offer(offer["id"], "passed", reason=reason)
+            if lat is not None:
+                if offer["hop"] < _dp.MAX_HOPS:
+                    _dp.make_offer(offer["source"], offer["person_id"],
+                                   offer["lead_name"], offer["lead_city"],
+                                   offer["appt_time"], offer["notes"],
+                                   hop=offer["hop"] + 1,
+                                   audit=cache_get("audit") or {})
+                else:
+                    _db.mark_dispatch_terminal(offer["id"])
+                return ("<div style='font-family:sans-serif;padding:3rem;"
+                        "text-align:center'><h2>Passed</h2><p>%s moves to the "
+                        "next agent. Passing is fine when the reason is real; "
+                        "it costs you rotation position, not respect.</p></div>"
+                        % lead_first)
+            already = True
+    if already:
+        state = ("accepted by you" if offer["accepted_at"] else
+                 "passed" if offer["passed_at"] else "expired and moved on")
+        return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
+                "This offer was already %s.</div>" % state)
+    secs_left = max(0, int((offer["expires_at"] - datetime.now(timezone.utc))
+                           .total_seconds()))
+    return """<!DOCTYPE html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<meta name='robots' content='noindex'><title>New handoff</title>
+<style>body{margin:0;background:#0d1117;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;line-height:1.5}
+.wrap{max-width:440px;margin:0 auto;padding:1.8rem 1.2rem;text-align:center}
+.kick{font-size:.62rem;font-weight:800;letter-spacing:.18em;color:#f5a623;text-transform:uppercase}
+h1{font-size:1.5rem;font-weight:850;margin:.4rem 0}
+.card{background:#151b24;border:1px solid #232c3a;border-radius:12px;padding:1rem 1.1rem;margin:1rem 0;text-align:left;font-size:.92rem}
+.timer{font-size:.85rem;color:#f5a623;font-weight:700;margin-bottom:.6rem}
+button{width:100%%;font-size:1.05rem;font-weight:800;border:none;border-radius:12px;padding:1.05rem;cursor:pointer;margin-bottom:.6rem}
+.go{background:#2ecc71;color:#07130b}
+.pass{background:transparent;color:#8a93a5;border:1px solid #31363b;font-size:.85rem;padding:.7rem}
+.reasons{display:none;gap:.4rem;flex-direction:column}
+.reasons button{background:#151b24;color:#e8edf8;border:1px solid #31363b;font-size:.85rem;padding:.7rem}
+</style></head><body><div class='wrap'>
+<div class='kick'>Handoff for %s</div>
+<h1>%s said yes. Want them?</h1>
+<div class='card'>%s%s%s</div>
+<div class='timer' id='t'>%d seconds left, then it moves to the next agent</div>
+<form method='POST' id='f'><input type='hidden' name='action' value='accept'>
+<button class='go' type='submit'>&#10003; Accept %s</button></form>
+<button class='pass' onclick="document.querySelector('.reasons').style.display='flex';this.style.display='none'">Pass instead</button>
+<form method='POST' class='reasons'>
+<input type='hidden' name='action' value='pass'>
+<button name='reason' value='on an appointment'>On an appointment</button>
+<button name='reason' value='driving'>Driving</button>
+<button name='reason' value='not my area'>Not my area</button>
+<button name='reason' value='other'>Other</button>
+</form>
+<script>var s=%d;var el=document.getElementById('t');
+setInterval(function(){s=Math.max(0,s-1);
+el.textContent=s>0?(s+' seconds left, then it moves to the next agent'):'Window closed. It may have moved on.';},1000);
+</script>
+</div></body></html>""" % (
+        first, lead_first,
+        "<b>%s</b>" % (offer["lead_name"] or ""),
+        (" &middot; %s" % offer["lead_city"].title()) if offer["lead_city"] else "",
+        ("<br>Appointment: <b>%s</b>" % offer["appt_time"]) if offer["appt_time"]
+        else "<br>No appointment yet, they are warm and expecting a call",
+        secs_left, lead_first, secs_left)
+
+
+@app.route("/dispatch")
+def dispatch_board():
+    """Fhalen's board: live tagged transfers awaiting an owner, the offer
+    state per lead, and one-click agent picks with receipts."""
+    if not _dispatch_auth():
+        return redirect("/login")
+    return render_template("dispatch.html",
+                           key=request.args.get("key", ""))
+
+
+@app.route("/api/dispatch/queue")
+def api_dispatch_queue():
+    if not _dispatch_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import dispatch as _dp
+    client = FUBClient()
+    audit = cache_get("audit") or {}
+    try:
+        people = client.get_people(tag=config.ISA_TRANSFER_FRESH_TAG,
+                                   limit=100) or []
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+    queue = []
+    for p in people[:40]:
+        pid = str(p.get("id"))
+        state = _db.dispatch_person_state(pid)
+        accepted = any(s["accepted"] for s in state)
+        addr = ""
+        for a in (p.get("addresses") or []):
+            c = a.get("city") if isinstance(a, dict) else None
+            if c:
+                addr = c
+                break
+        queue.append({
+            "person_id": pid,
+            "name": (p.get("name") or "").strip(),
+            "city": addr,
+            "stage": p.get("stage"),
+            "assigned_to": p.get("assignedTo"),
+            "offers": state,
+            "accepted": accepted,
+            "open_offer": any(not (s["accepted"] or s["passed"] or s["expired"])
+                              for s in state),
+            "terminal": any(s.get("terminal") for s in state),
+        })
+    agents = []
+    stats = {s["agent"]: s for s in _db.dispatch_agent_stats(days=30)}
+    isa = {a["agent"]: a for a in
+           (_db.get_isa_insight_data(days=60, excluded=set())
+            or {}).get("by_agent", [])}
+    for name in _dp.eligible_agents(None, audit=audit):
+        s, i = stats.get(name, {}), isa.get(name, {})
+        agents.append({"agent": name,
+                       "accept_rate": (round(s["accepted"] / s["offers"] * 100)
+                                       if s.get("offers") else None),
+                       "median_accept_secs": s.get("median_accept_secs"),
+                       "called_pct": i.get("called_pct"),
+                       "median_hours_to_call": i.get("median_hours")})
+    return jsonify({"ok": True, "queue": queue, "agents": agents,
+                    "geo_overrides": _dp.DISPATCH_GEO_OVERRIDES})
+
+
+@app.route("/api/dispatch/offer", methods=["POST"])
+def api_dispatch_offer():
+    if not _dispatch_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import dispatch as _dp
+    body = request.get_json(silent=True) or {}
+    pid = str(body.get("person_id") or "").strip()
+    agent = (body.get("agent_name") or "").strip() or None
+    if not pid:
+        return jsonify({"error": "person_id required"}), 400
+    client = FUBClient()
+    try:
+        person = client.get_person(pid) or {}
+    except Exception:
+        person = {}
+    city = ""
+    for a in (person.get("addresses") or []):
+        if isinstance(a, dict) and a.get("city"):
+            city = a["city"]
+            break
+    appt_time = None
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT to_char(start_time AT TIME ZONE 'America/New_York',
+                                   'Dy Mon DD, HH12:MI AM')
+                    FROM appointments
+                    WHERE person_id = %s AND start_time > NOW()
+                      AND status NOT IN ('canceled')
+                    ORDER BY start_time LIMIT 1
+                """, (int(pid),))
+                r = cur.fetchone()
+                appt_time = r[0] if r else None
+    except Exception:
+        pass
+    out = _dp.make_offer("fhalen", pid, (person.get("name") or "").strip(),
+                         city, appt_time, body.get("notes"),
+                         agent_name=agent, audit=cache_get("audit") or {})
+    if not out:
+        return jsonify({"error": "no eligible agent"}), 409
+    return jsonify({"ok": True, **out})
+
+
+def scheduled_dispatch_cascade():
+    """Every minute: expire due offers and auto-advance (Barry: auto
+    advance for sure). Terminal hops alert Fhalen and Barry."""
+    if not _db.try_acquire_job_lock("dispatch_cascade"):
+        return
+    try:
+        import dispatch as _dp
+        for oid in _db.due_dispatch_offers():
+            offer = _db.get_dispatch_offer(offer_id=oid)
+            if not offer:
+                continue
+            if _db.resolve_dispatch_offer(oid, "expired") is None:
+                continue
+            if offer["hop"] < _dp.MAX_HOPS:
+                nxt = _dp.make_offer(offer["source"], offer["person_id"],
+                                     offer["lead_name"], offer["lead_city"],
+                                     offer["appt_time"], offer["notes"],
+                                     hop=offer["hop"] + 1,
+                                     audit=cache_get("audit") or {})
+                if nxt:
+                    continue
+            _db.mark_dispatch_terminal(oid)
+            try:
+                import postmark_client as _pm
+                fhalen = getattr(config, "LIVE_CALLS_ADMIN_EMAIL", None)
+                _pm.send(to=", ".join(filter(None, [config.EMAIL_FROM, fhalen])),
+                         from_email=config.EMAIL_FROM,
+                         subject="Unclaimed handoff: %s" % (offer["lead_name"] or
+                                                            offer["person_id"]),
+                         html="<p>%s cascaded through %d agents with no "
+                              "acceptance. They are unowned. Dispatch board: "
+                              "%s/dispatch</p>"
+                              % (offer["lead_name"] or "A converted lead",
+                                 offer["hop"],
+                                 (os.environ.get("BASE_URL") or "").rstrip("/")))
+            except Exception as e:
+                logger.warning("[DISPATCH] terminal alert failed: %s", e)
+    except Exception as e:
+        logger.warning("[DISPATCH] cascade error: %s", e)
+    finally:
+        _db.release_job_lock("dispatch_cascade")
+
+
 @app.route("/api/admin/onboarding-board")
 def api_onboarding_board():
     """JSON behind the onboarding board. ?force=1 bypasses the 60s cache."""
@@ -9412,6 +9689,33 @@ def _fub_process_webhook(event, uri, resource_ids):
                             _fub_instant_prep(appt)
                         except Exception as e:
                             logger.warning("instant prep failed: %s", e)
+        elif event == "peopleTagsCreated":
+            for pid in (resource_ids or []):
+                try:
+                    person = FUBClient().get_person(pid) or {}
+                    tags_l = [t.lower() for t in (person.get("tags") or [])]
+                    if not ("ai_needs_follow_up" in tags_l
+                            or "ai_voice_needs_follow_up" in tags_l):
+                        continue
+                    if not _db.claim_once("aidispatch_%s" % pid):
+                        continue
+                    live, _ = _db.get_app_state("dispatch_ai_live")
+                    if (live or "").strip() == "1":
+                        import dispatch as _dp
+                        src_kind = ("ai_voice" if "ai_voice_needs_follow_up"
+                                    in tags_l else "ai_text")
+                        _dp.make_offer(src_kind, pid,
+                                       (person.get("name") or "").strip(),
+                                       audit=cache_get("audit") or {})
+                    else:
+                        _db.log_automation_event(
+                            event_type="ai_convert_seen", person_id=pid,
+                            person_name=person.get("name"), agent_name=None,
+                            payload={"tags": [t for t in (person.get("tags") or [])
+                                              if "FOLLOW_UP" in t.upper()]},
+                            triggered_by="webhook_fub")
+                except Exception as e:
+                    logger.warning("ai intake failed for %s: %s", pid, e)
         elif event in ("callsCreated", "textMessagesCreated"):
             seen = set()
             for r in _fub_fetch_webhook_resources(uri):
@@ -20997,6 +21301,10 @@ def start_scheduler():
     _scheduler.add_job(scheduled_market_field_sweep,
                        CronTrigger(day_of_week="sun", hour=6, minute=50, timezone=ET),
                        id="market_field_sweep", name="Playbook URL sweep, all assigned leads (Sun 6:50am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_dispatch_cascade,
+                       CronTrigger(minute="*", timezone=ET),
+                       id="dispatch_cascade", name="Dispatch offer cascade (every minute)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_market_pulse_refresh,
                        CronTrigger(day="1,15", hour=5, minute=10, timezone=ET),
