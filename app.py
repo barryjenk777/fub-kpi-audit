@@ -97,8 +97,9 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/rhythm",
         # Day One Pipeline: ops one-click done links + the hire's own page
         "/ob/", "/join/",
-        # Dispatch: agent accept pages (token auth) + Fhalen's board (own key)
-        "/a/", "/dispatch",
+        # Dispatch: agent accept pages (token auth) + Fhalen's board and its
+        # APIs (own key checked inside via _dispatch_auth)
+        "/a/", "/dispatch", "/api/dispatch/",
         # Market Pulse pages: texted/emailed to leads, must be public
         "/market",
         # Vercel course endpoints check COURSE_API_KEY internally
