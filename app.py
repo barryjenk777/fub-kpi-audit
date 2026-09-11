@@ -5204,6 +5204,19 @@ def api_dispatch_offer():
     return jsonify({"ok": True, **out})
 
 
+@app.route("/api/admin/dispatch/go-live", methods=["POST"])
+def api_dispatch_go_live():
+    """Flip Fhalen-appointment auto-offers live (or back to shadow with
+    {"live": false}). AI-conversion auto-offers stay behind dispatch_ai_live
+    separately."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    val = "1" if body.get("live", True) else "0"
+    _db.set_app_state("dispatch_live", val)
+    return jsonify({"ok": True, "dispatch_live": val})
+
+
 def scheduled_dispatch_cascade():
     """Every minute: expire due offers and auto-advance (Barry: auto
     advance for sure). Terminal hops alert Fhalen and Barry."""
@@ -9586,7 +9599,19 @@ def _fub_upsert_appt_resource(appt, event_name):
                            if i.get("userId")
                            and i.get("userId") != config.ISA_USER_ID
                            and not i.get("personId")), None)
-            if _db.claim_once("dispatch_appt_%s" % appt_id):
+            _live, _ = _db.get_app_state("dispatch_live")
+            if (_live or "").strip() != "1":
+                # SHADOW MODE (default until Barry flips go-live): record
+                # what the engine would have done, send nothing.
+                _db.log_automation_event(
+                    event_type="dispatch_shadow", person_id=person_id,
+                    person_name=person_name, agent_name=picked,
+                    payload={"fub_appt_id": appt_id,
+                             "would_offer_to": picked or "next in rotation"},
+                    triggered_by="webhook_fub")
+                logger.info("[DISPATCH shadow] appt %s would offer to %s",
+                            appt_id, picked)
+            elif _db.claim_once("dispatch_appt_%s" % appt_id):
                 import dispatch as _dp
                 _eh = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
                 _appt_label = start_dt.astimezone(
