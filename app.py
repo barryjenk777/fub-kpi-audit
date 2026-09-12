@@ -104,6 +104,9 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/market",
         # Vercel course endpoints check COURSE_API_KEY internally
         "/api/course/",
+        # Social Engine recruiting sync checks RECRUITING_EXPORT_TOKEN
+        # internally (read-only roster + wins export)
+        "/api/recruiting/",
         # TM portal APIs check TM_PORTAL_KEY internally
         "/api/tm/",
         # MCP client discovery
@@ -1068,6 +1071,103 @@ def _start_cc_build():
 
     threading.Thread(target=_bg, daemon=True).start()
     return True
+
+
+@app.route("/api/recruiting/export")
+def api_recruiting_export():
+    """Read-only export for the Social Engine's recruiting stream:
+    roster, whys, identities, goals, activity, streaks, closings.
+    Own-token auth (RECRUITING_EXPORT_TOKEN) per the /api/course/
+    pattern. POSITIVE-STORY fields only leave here as raw data; the
+    engine's composer enforces celebrate-never-expose rules."""
+    import os as _os
+    token = (request.args.get("token")
+              or request.headers.get("X-Export-Token") or "").strip()
+    expected = _os.environ.get("RECRUITING_EXPORT_TOKEN", "").strip()
+    if not expected or token != expected:
+        return jsonify({"error": "Unauthorized"}), 401
+    import datetime as _dt
+    year = _dt.date.today().year
+    out = {"generated_at": _dt.datetime.utcnow().isoformat() + "Z",
+            "year": year, "agents": []}
+    try:
+        from db import get_conn
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT p.agent_name, p.created_at,
+                           w.why_statement, w.who_benefits,
+                           w.what_happens,
+                           i.identity_archetype, i.custom_identity,
+                           i.daily_calls_target,
+                           g.gci_goal,
+                           y.calls_ytd, y.appts_ytd, y.convos_ytd,
+                           s.current_streak, s.longest_streak
+                    FROM agent_profiles p
+                    LEFT JOIN agent_why w USING (agent_name)
+                    LEFT JOIN agent_identity i USING (agent_name)
+                    LEFT JOIN goals g
+                           ON g.agent_name = p.agent_name
+                          AND g.year = %s
+                    LEFT JOIN agent_ytd_cache y
+                           ON y.agent_name = p.agent_name
+                          AND y.year = %s
+                    LEFT JOIN streaks s USING (agent_name)
+                    WHERE p.is_active
+                    ORDER BY p.agent_name
+                    """, (year, year))
+                rows = cur.fetchall()
+                agents = {}
+                for r in rows:
+                    agents[r[0]] = {
+                        "name": r[0],
+                        "joined_at": r[1].isoformat() if r[1] else None,
+                        "why": r[2], "who_benefits": r[3],
+                        "what_happens": r[4],
+                        "identity": r[6] or r[5],
+                        "daily_calls_target": r[7],
+                        "gci_goal": float(r[8]) if r[8] else None,
+                        "calls_ytd": r[9], "appts_ytd": r[10],
+                        "convos_ytd": r[11],
+                        "current_streak": r[12],
+                        "longest_streak": r[13],
+                        "last_28d": {}, "recent_closings": []}
+                cur.execute(
+                    """
+                    SELECT agent_name, SUM(calls_logged),
+                           SUM(convos_logged), SUM(appts_logged)
+                    FROM daily_activity
+                    WHERE activity_date >= CURRENT_DATE - 28
+                    GROUP BY agent_name
+                    """)
+                for name, calls, convos, appts in cur.fetchall():
+                    if name in agents:
+                        agents[name]["last_28d"] = {
+                            "calls": int(calls or 0),
+                            "convos": int(convos or 0),
+                            "appts": float(appts or 0)}
+                cur.execute(
+                    """
+                    SELECT agent_name, deal_name, sale_price,
+                           updated_at
+                    FROM deal_log
+                    WHERE stage = 'closing'
+                      AND updated_at >= NOW() - INTERVAL '90 days'
+                    ORDER BY updated_at DESC LIMIT 60
+                    """)
+                for name, deal, price, when in cur.fetchall():
+                    if name in agents:
+                        agents[name]["recent_closings"].append({
+                            "deal": deal,
+                            "price": float(price) if price else None,
+                            "closed_at": when.isoformat()
+                                          if when else None})
+        out["agents"] = list(agents.values())
+        return jsonify(out)
+    except Exception as e:
+        logger.error("recruiting export failed: %s", e)
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
 
 @app.route("/api/command-center")
