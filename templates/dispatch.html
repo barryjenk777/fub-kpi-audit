@@ -6,135 +6,193 @@
 <meta name="robots" content="noindex">
 <title>Dispatch</title>
 <style>
-:root{--bg:#0f172a;--panel:#16213e;--line:#26365c;--ink:#e8eefc;--muted:#93a4c4;
---gold:#f5a623;--green:#37c98b;--red:#e5544b;--blue:#5b8def}
+:root{--bg:#0f172a;--panel:#16213e;--panel2:#1c2a4a;--line:#26365c;--ink:#e8eefc;
+--muted:#93a4c4;--gold:#f5a623;--green:#37c98b;--red:#e5544b;--blue:#5b8def}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
 font-family:-apple-system,'Segoe UI',Arial,sans-serif;font-size:14px}
-.wrap{max-width:980px;margin:0 auto;padding:20px 16px 60px}
-h1{font-size:20px;margin:0 0 2px}
-.sub{color:var(--muted);font-size:12.5px;margin:0 0 16px}
+.wrap{max-width:920px;margin:0 auto;padding:16px 14px 60px}
+.top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+h1{font-size:19px;margin:0}
+.pulse{display:inline-block;width:8px;height:8px;border-radius:99px;background:var(--green);
+margin-right:6px;animation:pu 2s infinite}
+@keyframes pu{0%{opacity:1}50%{opacity:.3}100%{opacity:1}}
+.mode{font-size:12px;padding:5px 10px;border-radius:99px;font-weight:700}
+.m-live{background:rgba(55,201,139,.15);color:var(--green)}
+.m-prac{background:rgba(245,166,35,.15);color:var(--gold)}
+.score{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}
+.sc{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;text-align:center}
+.sc b{display:block;font-size:20px}
+.sc span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.sec{margin:20px 0 8px;font-size:11px;font-weight:800;letter-spacing:.12em;
+text-transform:uppercase;color:var(--gold)}
+.hint{font-size:11.5px;color:var(--muted);margin:0 0 8px;line-height:1.45}
+.next{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+.ag{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 13px;position:relative}
+.ag.up{border-color:var(--gold);background:linear-gradient(135deg,var(--panel),#1f2540)}
+.ag .who{font-weight:800;font-size:14px}
+.ag .upchip{position:absolute;top:-8px;right:10px;background:var(--gold);color:#0f172a;
+font-size:9px;font-weight:900;letter-spacing:.08em;border-radius:99px;padding:2px 8px}
+.ag .row{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}
+.ag .busy{color:var(--red);font-weight:700}
+.ag .free{color:var(--green);font-weight:700}
+.ag .geo{color:var(--blue)}
 .lead{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-padding:14px 16px;margin-bottom:10px}
-.lh{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;align-items:baseline}
-.nm{font-weight:750;font-size:15px}
-.tag{font-size:10px;font-weight:800;letter-spacing:.08em;padding:2px 8px;border-radius:99px}
-.t-open{background:rgba(245,166,35,.15);color:var(--gold)}
-.t-acc{background:rgba(55,201,139,.15);color:var(--green)}
-.t-term{background:rgba(229,84,75,.2);color:var(--red)}
-.meta{color:var(--muted);font-size:12px;margin:.2rem 0 .5rem}
-.hist{font-size:11.5px;color:var(--muted);margin-bottom:.5rem}
-.agents{display:flex;flex-wrap:wrap;gap:6px}
-.agents button{background:#1c2a4a;border:1px solid var(--line);color:var(--ink);
-border-radius:9px;padding:7px 12px;font-size:12.5px;cursor:pointer;text-align:left}
-.agents button:hover{border-color:var(--gold)}
-.agents .stat{display:block;font-size:10px;color:var(--muted)}
-.agents .geo{border-color:var(--blue)}
-.spin{color:var(--muted);padding:30px;text-align:center}
-.note{font-size:11.5px;color:var(--muted);margin-top:18px;line-height:1.5}
+padding:12px 14px;margin-bottom:8px}
+.lh{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;align-items:center}
+.nm{font-weight:750;font-size:14.5px}
+.meta{color:var(--muted);font-size:11.5px;margin:.15rem 0 .35rem}
+.hist{font-size:11px;color:var(--muted)}
+.bar{height:6px;background:var(--panel2);border-radius:99px;overflow:hidden;margin-top:7px}
+.fill{height:100%;background:var(--gold);border-radius:99px;transition:width 1s linear}
+.cd{font-size:11px;color:var(--gold);font-weight:700}
+.pick{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.pick button{background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer}
+.pick button:hover{border-color:var(--gold)}
+.ghost{opacity:.7}
+.spin{color:var(--muted);padding:26px;text-align:center}
+details summary{cursor:pointer;color:var(--muted);font-size:12px;padding:6px 0}
+@media(max-width:600px){.score{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>🎯 Dispatch</h1>
-  <p class="sub" id="mode"></p>
-  <p class="sub">Set the appointment in FUB exactly like always, with the agent invited.
-  That is the whole job. This page just shows what happens next.
-  <a href="#" onclick="load();return false" style="color:var(--gold)">↻ Refresh</a></p>
+  <div class="top">
+    <h1><span class="pulse"></span>Dispatch</h1>
+    <span class="mode" id="mode">…</span>
+  </div>
+  <p class="hint" style="margin-top:6px">Your workflow doesn't change: set the appointment
+  in FUB with the agent invited. This console answers one question while the lead is still
+  on your line: <b style="color:var(--ink)">who should get this one?</b></p>
+
+  <div class="score" id="score"></div>
   <div id="board"><div class="spin">Loading…</div></div>
 </div>
 <script>
 var KEY=new URLSearchParams(location.search).get('key')||'';
+var DATA=null;
 function qs(p){return p+(p.indexOf('?')>-1?'&':'?')+'key='+encodeURIComponent(KEY);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
 return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-function leadCard(l,d,withButtons){
-    var geo=d.geo_overrides||{};
-    var chip=l.terminal?'<span class="tag t-term">UNCLAIMED ×3</span>':
-      l.accepted?'<span class="tag t-acc">ACCEPTED</span>':
-      l.open_offer?'<span class="tag t-open">OFFER OUT</span>':'';
-    var h='<div class="lead"><div class="lh"><span class="nm">'+esc(l.name||'Unknown')+'</span>'+chip+'</div>';
-    h+='<div class="meta">'+esc(l.city||'city unknown')+(l.stage?' · '+esc(l.stage):'')+
-       (l.assigned_to?' · in FUB: '+esc(l.assigned_to):'')+'</div>';
-    if(l.offers&&l.offers.length){
-      h+='<div class="hist">'+l.offers.map(function(o){
-        var s=o.accepted?'✓ accepted':o.passed?('passed ('+esc(o.pass_reason||'')+')'):o.expired?'expired':'⏱ waiting…';
-        return esc(o.agent)+' '+s;}).join(' → ')+'</div>';
-    }
-    if(withButtons&&!l.accepted&&!l.open_offer){
-      h+='<div class="agents">';
-      (d.agents||[]).forEach(function(a){
-        var isGeo=Object.keys(geo).some(function(g){
-          return g===a.agent&&(geo[g]||[]).some(function(c){
-            return (l.city||'').toLowerCase().indexOf(c)>-1;});});
-        var stat=[];
-        if(a.accept_rate!=null)stat.push(a.accept_rate+'% accept');
-        if(a.median_accept_secs!=null)stat.push(a.median_accept_secs+'s to accept');
-        if(a.called_pct!=null)stat.push(a.called_pct+'% called');
-        h+='<button class="'+(isGeo?'geo':'')+'" onclick="offer(\''+esc(l.person_id)+'\',\''+esc(a.agent)+'\')">'+
-           esc(a.agent)+(isGeo?' 📍':'')+'<span class="stat">'+(stat.join(' · ')||'no history yet')+'</span></button>';
-      });
-      h+='</div>';
-    }
-    return h+'</div>';
+
+function agentCard(a,i){
+  var badges=[];
+  if(a.on_appt_now)badges.push('<span class="busy">ON AN APPT NOW</span>');
+  else badges.push('<span class="free">available</span>');
+  if(a.appts_today)badges.push(a.appts_today+' appt'+(a.appts_today>1?'s':'')+' today');
+  if(a.open_offers)badges.push(a.open_offers+' offer in hand');
+  var hist=[];
+  if(a.accept_rate!=null)hist.push('accepts '+a.accept_rate+'%');
+  if(a.median_accept_secs!=null)hist.push('in ~'+a.median_accept_secs+'s');
+  if(a.called_pct!=null)hist.push('calls '+a.called_pct+'% of handoffs');
+  var geo=(a.geo&&a.geo.length)?'<div class="row geo">📍 also takes: '+a.geo.map(esc).join(', ')+'</div>':'';
+  return '<div class="ag'+(i===0?' up':'')+'">'+(i===0?'<span class="upchip">NEXT UP</span>':'')+
+    '<div class="who">'+esc(a.agent)+'</div>'+
+    '<div class="row">'+badges.join(' · ')+'</div>'+
+    '<div class="row">'+(hist.join(' · ')||'no dispatch history yet')+'</div>'+geo+'</div>';
 }
+
+function leadCard(l,withButtons){
+  var open=(l.offers||[]).find(function(o){return !o.accepted&&!o.passed&&!o.expired;});
+  var h='<div class="lead"><div class="lh"><span class="nm">'+esc(l.name||'Unknown')+'</span>';
+  if(open)h+='<span class="cd" data-left="'+(open.secs_left||0)+'" data-agent="'+esc(open.agent)+'">'+
+    fmtCd(open.secs_left||0)+' · '+esc(open.agent)+'</span>';
+  h+='</div><div class="meta">'+esc(l.city||'')+(l.stage?' · '+esc(l.stage):'')+
+     (l.assigned_to?' · in FUB: '+esc(l.assigned_to):'')+'</div>';
+  if(l.offers&&l.offers.length){
+    h+='<div class="hist">'+l.offers.map(function(o){
+      var s=o.accepted?('✓ accepted'+(o.accept_secs!=null?' in '+o.accept_secs+'s':'')):
+        o.passed?('passed: '+esc(o.pass_reason||'')):o.expired?'let it expire':'deciding…';
+      return esc(o.agent)+' '+s;}).join(' → ')+'</div>';
+  }
+  if(open){
+    var pct=Math.min(100,Math.round((open.secs_left||0)/3));
+    h+='<div class="bar"><div class="fill" style="width:'+pct+'%"></div></div>';
+  }
+  if(withButtons&&!open){
+    h+='<div class="pick">'+(DATA.agents||[]).map(function(a){
+      return '<button onclick="offer(\''+esc(l.person_id)+'\',\''+esc(a.agent)+'\')">'+esc(a.agent)+'</button>';
+    }).join('')+'</div>';
+  }
+  return h+'</div>';
+}
+function fmtCd(s){var m=Math.floor(s/60);return m+':'+('0'+(s%60)).slice(-2);}
 function section(title,body,hint){
   if(!body)return '';
-  return '<div style="margin:18px 0 6px;font-size:11px;font-weight:800;letter-spacing:.12em;'+
-    'text-transform:uppercase;color:var(--gold)">'+title+'</div>'+
-    (hint?'<div class="sub" style="margin-bottom:8px">'+hint+'</div>':'')+body;
+  return '<div class="sec">'+title+'</div>'+(hint?'<p class="hint">'+hint+'</p>':'')+body;
 }
+
+function render(d){
+  DATA=d;
+  document.getElementById('mode').className='mode '+(d.live?'m-live':'m-prac');
+  document.getElementById('mode').textContent=d.live?'LIVE':'PRACTICE MODE · goes live next week';
+  var sc=d.score||{};
+  document.getElementById('score').innerHTML=
+    '<div class="sc"><b>'+(sc.today_dispatched||0)+'</b><span>dispatched today</span></div>'+
+    '<div class="sc"><b>'+(sc.today_accepted||0)+'</b><span>accepted today</span></div>'+
+    '<div class="sc"><b>'+(sc.today_avg_accept_secs!=null?sc.today_avg_accept_secs+'s':'—')+'</b><span>avg time to accept</span></div>'+
+    '<div class="sc"><b>'+(sc.week_dispatched||0)+'</b><span>this week</span></div>';
+  var q=d.queue||[];
+  var open=q.filter(function(l){return l.open_offer;});
+  var needs=q.filter(function(l){return l.terminal;});
+  var accepted=q.filter(function(l){return l.accepted;});
+  var rest=q.filter(function(l){return !l.open_offer&&!l.terminal&&!l.accepted;});
+  var h='';
+  h+=section('Who should get this one?',
+    '<div class="next">'+(d.agents||[]).map(agentCard).join('')+'</div>',
+    'Live right now. Gold card = next in rotation. Invite them on the appointment and the machine does the rest.'+
+    (d.live?'':' (In practice mode nothing sends; this panel still tells you who is really available.)'));
+  h+=section('⏱ In flight',
+    open.map(function(l){return leadCard(l,false);}).join(''),
+    open.length?'The clock is running. If it hits zero it moves to the next agent by itself.':'');
+  h+=section('🔴 Needs you',
+    needs.map(function(l){return leadCard(l,true);}).join(''),
+    needs.length?'Three agents let these pass. Pick someone or take it yourself.':'');
+  if(!d.live&&(d.shadow||[]).length){
+    h+=section('👻 Practice log',
+      d.shadow.map(function(s){
+        var t=s.at?new Date(s.at).toLocaleString('en-US',{weekday:'short',hour:'numeric',minute:'2-digit'}):'';
+        return '<div class="lead ghost"><b>'+esc(s.person_name||'A lead')+'</b> → the green button would have gone to <b>'+
+          esc((s.payload||{}).would_offer_to||s.agent_name||'next in rotation')+'</b> <span class="meta" style="display:inline">'+t+'</span></div>';
+      }).join(''),
+      'Your appointments this week and what the machine would have done. When this list matches your intent, we go live.');
+  }
+  h+=section('✓ Landed',
+    accepted.slice(0,4).map(function(l){return leadCard(l,false);}).join(''),'');
+  if(rest.length){
+    h+='<details><summary>'+rest.length+' older tagged leads (already assigned) — open to re-dispatch one</summary>'+
+       rest.map(function(l){return leadCard(l,true);}).join('')+'</details>';
+  }
+  document.getElementById('board').innerHTML=h;
+}
+
 function load(){
   fetch(qs('/api/dispatch/queue')).then(r=>r.json()).then(function(d){
     if(d.error){document.getElementById('board').innerHTML='<div class="spin">'+esc(d.error)+'</div>';return;}
-    document.getElementById('mode').innerHTML = d.live
-      ? '<b style="color:var(--green)">LIVE:</b> every appointment you create fires a 5-minute accept offer to the agent you invited. No accept, it moves to the next agent automatically.'
-      : '<b style="color:var(--gold)">PRACTICE MODE:</b> nothing you or the system does here texts an agent yet. Your appointments are being recorded below so we can see what the machine WOULD do. It goes live next week.';
-    var q=d.queue||[];
-    var open=q.filter(function(l){return l.open_offer;});
-    var needs=q.filter(function(l){return l.terminal;});
-    var accepted=q.filter(function(l){return l.accepted;});
-    var rest=q.filter(function(l){return !l.open_offer&&!l.terminal&&!l.accepted;});
-    var h='';
-    h+=section('⏱ Offers out right now',
-      open.map(function(l){return leadCard(l,d,false);}).join(''),
-      'The agent has the green button. Five minutes, then it moves on by itself.');
-    h+=section('🔴 Needs your decision',
-      needs.map(function(l){return leadCard(l,d,true);}).join(''),
-      'Three agents let these pass. Pick someone or work it yourself.');
-    if(!d.live&&(d.shadow||[]).length){
-      h+=section('👻 What the machine would have done (practice week)',
-        d.shadow.map(function(s){
-          var t=s.at?new Date(s.at).toLocaleString('en-US',{weekday:'short',hour:'numeric',minute:'2-digit'}):'';
-          return '<div class="lead" style="opacity:.75"><b>'+esc(s.person_name||'A lead')+'</b>'+
-            ' → would have offered <b>'+esc((s.payload||{}).would_offer_to||s.agent_name||'next in rotation')+'</b>'+
-            ' <span class="meta" style="display:inline">'+t+'</span></div>';
-        }).join(''),
-        'Every appointment you created this week, and who the green button would have gone to. When this list looks right, we flip it live.');
-    }
-    h+=section('✓ Accepted recently',
-      accepted.slice(0,5).map(function(l){return leadCard(l,d,false);}).join(''),'');
-    h+=section('Everyone still carrying the fresh-transfer tag',
-      rest.length?('<details><summary style="cursor:pointer;color:var(--muted);font-size:12px">'+
-        rest.length+' leads (mostly older AI transfers already assigned) — open to dispatch one by hand</summary>'+
-        rest.map(function(l){return leadCard(l,d,true);}).join('')+'</details>'):'',
-      '');
-    document.getElementById('board').innerHTML=h||'<div class="spin">Quiet. Set an appointment in FUB and it appears here.</div>';
+    render(d);
   }).catch(function(e){
-    document.getElementById('board').innerHTML='<div class="spin">Could not load: '+esc(e.message)+'</div>';
+    document.getElementById('board').innerHTML='<div class="spin">Reconnecting… ('+esc(e.message)+')</div>';
   });
 }
 function offer(pid,agent){
   fetch(qs('/api/dispatch/offer'),{method:'POST',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({person_id:pid,agent_name:agent})})
-  .then(r=>r.json()).then(function(d){
-    if(d.error)alert(d.error);
-    load();
-  });
+  .then(r=>r.json()).then(function(d){if(d.error)alert(d.error);load();});
 }
+// countdowns tick locally every second; data refreshes every 12s
+setInterval(function(){
+  document.querySelectorAll('.cd[data-left]').forEach(function(el){
+    var s=Math.max(0,parseInt(el.getAttribute('data-left'),10)-1);
+    el.setAttribute('data-left',s);
+    el.textContent=fmtCd(s)+' · '+el.getAttribute('data-agent');
+    var f=el.closest('.lead');if(f){var bar=f.querySelector('.fill');
+      if(bar)bar.style.width=Math.min(100,Math.round(s/3))+'%';}
+  });
+},1000);
 load();
-setInterval(load,45000);
+setInterval(load,12000);
 </script>
 </body>
 </html>

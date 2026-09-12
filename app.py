@@ -5159,10 +5159,15 @@ def api_dispatch_queue():
                        "median_hours_to_call": i.get("median_hours")})
     live, _ = _db.get_app_state("dispatch_live")
     shadow = _db.get_automation_events("dispatch_shadow", days=7, limit=25)
+    today = _db.dispatch_agent_today([a["agent"] for a in agents])
+    for a in agents:
+        a.update(today.get(a["agent"], {}))
+        a["geo"] = _dp.DISPATCH_GEO_OVERRIDES.get(a["agent"], [])
     return jsonify({"ok": True, "queue": queue, "agents": agents,
                     "geo_overrides": _dp.DISPATCH_GEO_OVERRIDES,
                     "live": (live or "").strip() == "1",
-                    "shadow": shadow})
+                    "shadow": shadow,
+                    "score": _db.dispatch_today_score("fhalen")})
 
 
 @app.route("/api/dispatch/offer", methods=["POST"])

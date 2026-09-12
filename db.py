@@ -9833,7 +9833,9 @@ def dispatch_person_state(person_id, hours=24):
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT agent_name, hop, offered_at, accepted_at, passed_at,
-                           pass_reason, expired_at, terminal
+                           pass_reason, expired_at, terminal,
+                           GREATEST(0, EXTRACT(EPOCH FROM (expires_at - NOW())))::int,
+                           EXTRACT(EPOCH FROM (accepted_at - offered_at))::int
                     FROM dispatch_offers
                     WHERE person_id = %s
                       AND offered_at >= NOW() - make_interval(hours => %s)
@@ -9843,7 +9845,10 @@ def dispatch_person_state(person_id, hours=24):
                          "offered_at": r[2].isoformat() if r[2] else None,
                          "accepted": bool(r[3]), "passed": bool(r[4]),
                          "pass_reason": r[5], "expired": bool(r[6]),
-                         "terminal": bool(r[7])} for r in cur.fetchall()]
+                         "terminal": bool(r[7]),
+                         "secs_left": int(r[8]) if r[8] is not None else 0,
+                         "accept_secs": int(r[9]) if r[9] is not None else None}
+                        for r in cur.fetchall()]
     except Exception as e:
         logger.warning("dispatch_person_state failed: %s", e)
         return []
@@ -9900,3 +9905,70 @@ def get_automation_events(event_type, days=7, limit=50):
     except Exception as e:
         logger.warning("get_automation_events failed: %s", e)
         return []
+
+
+def dispatch_agent_today(agent_names):
+    """Live availability per agent for the dispatcher console: appointments
+    today, one happening right now, open offers in hand."""
+    if not is_available() or not agent_names:
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COUNT(*) FILTER (WHERE start_time::date = CURRENT_DATE
+                                            AND status NOT IN ('canceled')),
+                           BOOL_OR(start_time <= NOW() + INTERVAL '10 minutes'
+                                   AND start_time >= NOW() - INTERVAL '60 minutes'
+                                   AND status NOT IN ('canceled'))
+                    FROM appointments
+                    WHERE agent_name = ANY(%s)
+                      AND start_time >= CURRENT_DATE
+                      AND start_time < CURRENT_DATE + 2
+                    GROUP BY agent_name
+                """, (list(agent_names),))
+                out = {r[0]: {"appts_today": int(r[1] or 0),
+                              "on_appt_now": bool(r[2])} for r in cur.fetchall()}
+                cur.execute("""
+                    SELECT agent_name, COUNT(*)
+                    FROM dispatch_offers
+                    WHERE accepted_at IS NULL AND passed_at IS NULL
+                      AND expired_at IS NULL AND agent_name = ANY(%s)
+                    GROUP BY agent_name
+                """, (list(agent_names),))
+                for r in cur.fetchall():
+                    out.setdefault(r[0], {})["open_offers"] = int(r[1])
+                return out
+    except Exception as e:
+        logger.warning("dispatch_agent_today failed: %s", e)
+        return {}
+
+
+def dispatch_today_score(source="fhalen"):
+    """The dispatcher's own scoreboard: today and this week."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                      COUNT(DISTINCT person_id) FILTER (WHERE offered_at::date = CURRENT_DATE),
+                      COUNT(*) FILTER (WHERE accepted_at::date = CURRENT_DATE),
+                      AVG(EXTRACT(EPOCH FROM (accepted_at - offered_at)))
+                          FILTER (WHERE accepted_at::date = CURRENT_DATE),
+                      COUNT(DISTINCT person_id) FILTER (
+                          WHERE offered_at >= date_trunc('week', NOW())),
+                      COUNT(*) FILTER (WHERE accepted_at >= date_trunc('week', NOW()))
+                    FROM dispatch_offers WHERE source = %s
+                """, (source,))
+                r = cur.fetchone()
+        return {"today_dispatched": int(r[0] or 0),
+                "today_accepted": int(r[1] or 0),
+                "today_avg_accept_secs": round(float(r[2])) if r[2] else None,
+                "week_dispatched": int(r[3] or 0),
+                "week_accepted": int(r[4] or 0)}
+    except Exception as e:
+        logger.warning("dispatch_today_score failed: %s", e)
+        return {}
