@@ -9875,3 +9875,28 @@ def dispatch_agent_stats(days=30):
     except Exception as e:
         logger.warning("dispatch_agent_stats failed: %s", e)
         return []
+
+
+def get_automation_events(event_type, days=7, limit=50):
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, person_name, agent_name, payload, created_at
+                    FROM automation_event_log
+                    WHERE event_type = %s
+                      AND created_at >= NOW() - make_interval(days => %s)
+                    ORDER BY created_at DESC LIMIT %s
+                """, (event_type, int(days), int(limit)))
+                out = []
+                for r in cur.fetchall():
+                    payload = r[3] if isinstance(r[3], dict) else {}
+                    out.append({"person_id": r[0], "person_name": r[1],
+                                "agent_name": r[2], "payload": payload,
+                                "at": r[4].isoformat() if r[4] else None})
+                return out
+    except Exception as e:
+        logger.warning("get_automation_events failed: %s", e)
+        return []
