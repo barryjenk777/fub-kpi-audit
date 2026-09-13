@@ -1105,15 +1105,18 @@ def api_recruiting_export():
                            y.calls_ytd, y.appts_ytd, y.convos_ytd,
                            s.current_streak, s.longest_streak
                     FROM agent_profiles p
-                    LEFT JOIN agent_why w USING (agent_name)
-                    LEFT JOIN agent_identity i USING (agent_name)
+                    LEFT JOIN agent_why w
+                           ON w.agent_name = p.agent_name
+                    LEFT JOIN agent_identity i
+                           ON i.agent_name = p.agent_name
                     LEFT JOIN goals g
                            ON g.agent_name = p.agent_name
                           AND g.year = %s
                     LEFT JOIN agent_ytd_cache y
                            ON y.agent_name = p.agent_name
                           AND y.year = %s
-                    LEFT JOIN streaks s USING (agent_name)
+                    LEFT JOIN streaks s
+                           ON s.agent_name = p.agent_name
                     WHERE p.is_active
                     ORDER BY p.agent_name
                     """, (year, year))
