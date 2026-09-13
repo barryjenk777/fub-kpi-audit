@@ -1153,11 +1153,11 @@ def api_recruiting_export():
                 cur.execute(
                     """
                     SELECT agent_name, deal_name, sale_price,
-                           updated_at
+                           close_date
                     FROM deal_log
                     WHERE stage = 'closing'
-                      AND updated_at >= NOW() - INTERVAL '90 days'
-                    ORDER BY updated_at DESC LIMIT 60
+                      AND close_date >= CURRENT_DATE - 90
+                    ORDER BY close_date DESC LIMIT 60
                     """)
                 for name, deal, price, when in cur.fetchall():
                     if name in agents:
