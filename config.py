@@ -61,6 +61,7 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
     "Barry Jenkin$",   # Ylopo test account (barry@ylopo.com), not a real agent
     "Julz Gat",        # accountability paused per Barry, Aug 2026
     "Ana Pena",        # transaction manager, was still getting agent texts (bug, Sep 2026)
+    "Niella Davis",    # leaving the team per Barry, Sep 2026 — no texts, no emails
 }
 
 # Agents on Android phones. iMessage from Barry's personal cell does not reach

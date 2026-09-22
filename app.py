@@ -19694,8 +19694,13 @@ def scheduled_onboarding_escalation():
         from email_report import send_onboarding_sequence_email
         all_agents = _db.get_agent_profiles(active_only=True)
         today      = datetime.now(timezone.utc).date()
+        # Paused/departing agents get no onboarding emails (drip or mirror).
+        _onb_excluded = set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set())) \
+            | set(config.EXCLUDED_USERS)
 
         for agent in all_agents:
+            if agent.get("agent_name") in _onb_excluded:
+                continue
             sent_at = agent.get("onboarding_sent_at")
             if not sent_at:
                 continue
@@ -19745,6 +19750,8 @@ def scheduled_onboarding_escalation():
 
         # ── Step 2b: Day 14 mirror — real numbers, no ghosting after day 7 ──
         for agent in all_agents:
+            if agent.get("agent_name") in _onb_excluded:
+                continue
             sent_at = agent.get("onboarding_sent_at")
             if not sent_at:
                 continue
@@ -19901,7 +19908,9 @@ def scheduled_goal_setup_outreach():
 def _manager_update_agents():
     """Coachable agent first/full names for Joe's weekly update page."""
     profiles = _db.get_agent_profiles(active_only=True) or []
-    excl = set(getattr(config, "EXCLUDED_USERS", [])) | {"Barry Jenkin$"}
+    excl = set(getattr(config, "EXCLUDED_USERS", [])) \
+        | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set())) \
+        | {"Barry Jenkin$"}
     out = []
     for p in profiles:
         nm = p.get("agent_name") or ""
