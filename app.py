@@ -20591,6 +20591,59 @@ def _sales_manager_analytics(weeks=8):
     }
 
 
+@app.route("/api/admin/blue-funnel")
+def api_blue_funnel():
+    """Read-only two-stage Blue funnel by A/B arm: texted -> replied ->
+    consented (first positive reply; voice arm gets the voice note at that
+    moment) -> replied again after the recording. Post-recording replies are
+    inferred by timing (>2 min after consent), since replies are not tagged
+    to a specific outbound."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    WITH arm AS (
+                        SELECT person_id, COALESCE(ab_variant,'none') AS variant
+                        FROM pond_sms_log
+                        WHERE dry_run = FALSE
+                        GROUP BY person_id, COALESCE(ab_variant,'none')
+                    ),
+                    firstpos AS (
+                        SELECT person_id, MIN(received_at) AS consent_at
+                        FROM pond_sms_reply_log
+                        WHERE sentiment = 'positive'
+                        GROUP BY person_id
+                    )
+                    SELECT a.variant,
+                           COUNT(DISTINCT a.person_id) AS leads,
+                           COUNT(DISTINCT r.person_id) AS replied,
+                           COUNT(DISTINCT f.person_id) AS consented,
+                           COUNT(DISTINCT p2.person_id) AS engaged_after,
+                           COUNT(DISTINCT p3.person_id) AS positive_after
+                    FROM arm a
+                    LEFT JOIN pond_sms_reply_log r  ON r.person_id = a.person_id
+                    LEFT JOIN firstpos f            ON f.person_id = a.person_id
+                    LEFT JOIN pond_sms_reply_log p2 ON p2.person_id = f.person_id
+                        AND p2.received_at > f.consent_at + INTERVAL '2 minutes'
+                        AND p2.sentiment IN ('positive', 'neutral')
+                    LEFT JOIN pond_sms_reply_log p3 ON p3.person_id = f.person_id
+                        AND p3.received_at > f.consent_at + INTERVAL '2 minutes'
+                        AND p3.sentiment = 'positive'
+                    GROUP BY a.variant
+                    ORDER BY 2 DESC
+                """)
+                rows = [{"variant": v, "leads": int(l), "replied": int(r),
+                         "consented": int(c), "engaged_after": int(e),
+                         "positive_after": int(p)}
+                        for v, l, r, c, e, p in cur.fetchall()]
+        return jsonify({"ok": True, "arms": rows})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/admin/blue-sms-audit")
 def api_blue_sms_audit():
     """Read-only: Project Blue SMS effectiveness numbers (sends, variants,
