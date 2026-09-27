@@ -194,7 +194,7 @@ def generate_voice_note_script(
                 prop_hint = f"they're in {city}"
 
             resp = client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model="claude-haiku-4-5",
                 max_tokens=250,
                 messages=[{"role": "user", "content": f"""Write a short voice note script for Barry Jenkins to send to {first}, a homeowner in Hampton Roads Virginia who just requested a cash offer on their home. The lead just said yes to receiving a quick voice recording, so this is Barry leaving them a personal voice message.
 
@@ -236,7 +236,7 @@ Output only the script text. Nothing else."""}],
             beh_summary = ". ".join(notes) if notes else "Hampton Roads area"
 
             resp = client.messages.create(
-                model="claude-3-5-haiku-20241022",
+                model="claude-haiku-4-5",
                 max_tokens=250,
                 messages=[{"role": "user", "content": f"""Write a short voice note script for Barry Jenkins to send to {first}, a homeowner in Hampton Roads Virginia who inquired about their home's value.
 
@@ -280,7 +280,7 @@ Output only the script text. Nothing else."""}],
         beh_summary = ". ".join(notes) if notes else "browsing homes in Hampton Roads"
 
         resp = client.messages.create(
-            model="claude-3-5-haiku-20241022",
+            model="claude-haiku-4-5",
             max_tokens=250,
             messages=[{"role": "user", "content": f"""Write a short voice note script for Barry Jenkins to send to {first}, an active home buyer in Hampton Roads Virginia.
 
