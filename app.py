@@ -5702,7 +5702,9 @@ def _desk_evidence(person_id):
             known.sort(key=lambda x: -x[1])
             if known:
                 bits = [_tagmap[t] for t, _ in known[:2]]
-                return "What we know: %s." % "; ".join(bits)
+                line = "What we know: %s." % "; ".join(bits)
+                from coach_voice import _strip_dashes as _sd
+                return _sd(line)
         except Exception:
             pass
         # 3. The Call Opener line built from their real behavior
