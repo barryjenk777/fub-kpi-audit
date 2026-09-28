@@ -5679,7 +5679,9 @@ def _desk_evidence(person_id):
             r = client._request("GET", "textMessages",
                                 params={"personId": person_id, "limit": 30}) or {}
             rows = next((v for v in r.values() if isinstance(v, list)), [])
-            for t in reversed(rows):
+            rows = sorted(rows, key=lambda t: t.get("created") or "",
+                          reverse=True)  # newest inbound first, explicitly
+            for t in rows:
                 if not t.get("isIncoming"):
                     continue
                 body = (t.get("message") or t.get("body") or "").strip()
