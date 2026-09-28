@@ -5996,8 +5996,8 @@ def api_desk_report():
                            ROUND(AVG(EXTRACT(EPOCH FROM accepted_at - offered_at))
                                  FILTER (WHERE accepted_at IS NOT NULL)) AS avg_claim_secs,
                            COUNT(first_call_at) AS verified_calls,
-                           ROUND(AVG(EXTRACT(EPOCH FROM first_call_at - accepted_at)) / 60)
-                                 FILTER (WHERE first_call_at IS NOT NULL) AS avg_claim_to_call_min
+                           ROUND(AVG(EXTRACT(EPOCH FROM first_call_at - accepted_at))
+                                 FILTER (WHERE first_call_at IS NOT NULL) / 60) AS avg_claim_to_call_min
                     FROM dispatch_offers
                     WHERE offered_at >= NOW() - make_interval(days => %s)
                     GROUP BY agent_name ORDER BY claims DESC, offers DESC
