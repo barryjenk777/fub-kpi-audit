@@ -5596,6 +5596,64 @@ def api_slack_actions():
     return "", 200
 
 
+def _desk_celebrate(kind, person_id, minutes=None):
+    """Webhook-driven funnel ceremony for claimed desk leads. One indexed
+    DB stamp per event, zero extra FUB calls, each milestone posts exactly
+    once, ceremony escalates with funnel depth."""
+    try:
+        window = 7 if kind == "convo" else 45
+        row = _db.mark_desk_milestone(str(person_id), kind, window_days=window)
+        if not row:
+            return
+        first = (row["agent_name"] or "?").split()[0]
+        lead = (row["lead_name"] or "their lead").split()[0]
+        days = row["days"]
+        when = "today" if days == 0 else                "yesterday" if days == 1 else "%d days ago" % days
+        pools = {
+            "convo": [
+                "\U0001f5e3\ufe0f %s just had a %s minute conversation with %s, "
+                "a lead claimed off the desk. That's how appointments get born.",
+                "\U0001f5e3\ufe0f Real talk: %s went %s minutes with desk lead "
+                "%s. Conversations pay.",
+                "\U0001f5e3\ufe0f %s turned a tap into a %s minute conversation "
+                "with %s. From button to voice, that's the game.",
+            ],
+            "appt_set": [
+                "\U0001f4c5 APPOINTMENT. %s booked %s, claimed off the desk %s. "
+                "The green button just became a calendar slot.",
+                "\U0001f4c5 %s set an appointment with desk lead %s (claimed "
+                "%s). Tap. Call. Appointment. That's the whole funnel working.",
+                "\U0001f4c5 Desk money: %s just booked %s, claimed %s. "
+                "Whoever said internet leads don't book didn't tap fast enough.",
+            ],
+            "appt_met": [
+                "\U0001f3c6 %s MET with %s, a lead claimed off the desk %s. "
+                "From green button to handshake. This is why the desk exists.",
+                "\U0001f3c6 Held appointment: %s sat down with desk lead %s "
+                "(claimed %s). The tap heard around the team.",
+                "\U0001f3c6 %s met %s face to face, %s after claiming them off "
+                "the desk. Fast hands, real tables.",
+            ],
+        }
+        pool = pools.get(kind) or []
+        if not pool:
+            return
+        try:
+            i = int("".join(c for c in str(person_id) if c.isdigit()) or 0)                 % len(pool)
+        except Exception:
+            i = 0
+        if kind == "convo":
+            msg = pool[i] % ((first, minutes, lead) if pool[i].count("%s") == 3
+                             else (first, lead))
+        else:
+            msg = pool[i] % (first, lead, when)
+        import slack_client as _sl
+        wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
+        _sl.post_message(wins, msg)
+    except Exception as e:
+        logger.warning("desk celebrate failed: %s", e)
+
+
 def _desk_intake_alarm(person_id, person_name, reason):
     """A conversion arrived and the desk could not route it. Page Barry and
     the ops channel immediately, per lead — the consumer is waiting."""
@@ -10551,6 +10609,13 @@ def _fub_upsert_appt_resource(appt, event_name):
         payload={"fub_appt_id": appt_id, "status": status, "outcome": outcome},
         triggered_by="webhook_fub",
     )
+    # Desk funnel ceremony: appointment set / met on claimed leads, straight
+    # off webhooks we already process.
+    if person_id:
+        if "Created" in event_name:
+            _desk_celebrate("appt_set", person_id)
+        if outcome == "Met with Client" and prev_outcome != outcome:
+            _desk_celebrate("appt_met", person_id)
     # Fhalen's conversions: she creates the appointment and invites the
     # agent she picked (confirmed live, Sep 11). Her pick becomes an OFFER
     # with the green button; assignment happens on accept, cascade on
@@ -10633,7 +10698,7 @@ def _fub_upsert_appt_resource(appt, event_name):
                 _db.log_variant("rebook", "v1", person_id, agent_name)
 
 
-def _fub_outbound_touch(person_id, is_call, caller_uid=None):
+def _fub_outbound_touch(person_id, is_call, caller_uid=None, duration=None):
     """Outbound call/text to a lead: stamp ISA first-call and clear
     LeadStream tags immediately (the original purpose of this webhook)."""
     try:
@@ -10681,6 +10746,11 @@ def _fub_outbound_touch(person_id, is_call, caller_uid=None):
                                     _when, _cl))
         except Exception as e:
             logger.warning("dispatch first-call stamp failed: %s", e)
+        # Conversation milestone: 2+ minutes, FUB's own bar, from the same
+        # webhook payload — no extra API calls.
+        if (duration or 0) >= 120:
+            _desk_celebrate("convo", person_id,
+                            minutes=max(2, int(round((duration or 0) / 60))))
     try:
         from config import LEADSTREAM_TAG, LEADSTREAM_POND_TAG
         client = FUBClient()
@@ -10868,7 +10938,8 @@ def _fub_process_webhook(event, uri, resource_ids):
                 seen.add(person_id)
                 _fub_outbound_touch(person_id,
                                     is_call=(event == "callsCreated"),
-                                    caller_uid=r.get("userId"))
+                                    caller_uid=r.get("userId"),
+                                    duration=r.get("duration"))
         # Receipt counter → Mission Control visibility
         try:
             _raw_stats, _ = _db.get_app_state("fub_webhook_stats")

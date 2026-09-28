@@ -9719,6 +9719,12 @@ def ensure_dispatch_table():
                         ON dispatch_offers (person_id, offered_at DESC);
                     ALTER TABLE dispatch_offers
                         ADD COLUMN IF NOT EXISTS first_call_at TIMESTAMPTZ;
+                    ALTER TABLE dispatch_offers
+                        ADD COLUMN IF NOT EXISTS convo_at TIMESTAMPTZ;
+                    ALTER TABLE dispatch_offers
+                        ADD COLUMN IF NOT EXISTS appt_set_at TIMESTAMPTZ;
+                    ALTER TABLE dispatch_offers
+                        ADD COLUMN IF NOT EXISTS appt_met_at TIMESTAMPTZ;
                 """)
     except Exception as e:
         logger.warning("ensure_dispatch_table failed: %s", e)
@@ -9740,6 +9746,39 @@ def count_open_dispatch_offers(agent_name):
     except Exception as e:
         logger.warning("count_open_dispatch_offers failed: %s", e)
         return 0
+
+
+def mark_desk_milestone(person_id, kind, window_days=45):
+    """kind: convo | appt_set | appt_met. Stamps once per claimed offer
+    (webhook-driven, zero extra FUB calls), returning
+    {agent_name, lead_name, days} on the FIRST stamp so the wins feed
+    celebrates each milestone exactly once."""
+    col = {"convo": "convo_at", "appt_set": "appt_set_at",
+           "appt_met": "appt_met_at"}.get(kind)
+    if not col or not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE dispatch_offers
+                       SET %s = NOW()
+                     WHERE person_id = %%s
+                       AND accepted_at IS NOT NULL
+                       AND %s IS NULL
+                       AND accepted_at >= NOW() - make_interval(days => %%s)
+                    RETURNING agent_name, lead_name,
+                        GREATEST(0, EXTRACT(EPOCH FROM NOW() - accepted_at)
+                                 / 86400)::int
+                """ % (col, col), (str(person_id), int(window_days)))
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {"agent_name": row[0], "lead_name": row[1],
+                "days": int(row[2])}
+    except Exception as e:
+        logger.warning("mark_desk_milestone failed: %s", e)
+        return None
 
 
 def get_desk_agent_snapshot(agent_name, days=14):
