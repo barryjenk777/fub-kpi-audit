@@ -5977,6 +5977,71 @@ def api_desk_drill():
                     "unmapped_note": "agents missing from slack-map get nothing"})
 
 
+@app.route("/api/admin/desk/report")
+def api_desk_report():
+    """Read-only distribution report straight off dispatch_offers.
+    ?days=7. The Hot Hand Board's data feed."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = max(1, min(request.args.get("days", 7, type=int) or 7, 60))
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COUNT(*) AS offers,
+                           COUNT(accepted_at) AS claims,
+                           COUNT(passed_at) AS passes,
+                           COUNT(expired_at) AS expiries,
+                           ROUND(AVG(EXTRACT(EPOCH FROM accepted_at - offered_at))
+                                 FILTER (WHERE accepted_at IS NOT NULL)) AS avg_claim_secs,
+                           COUNT(first_call_at) AS verified_calls,
+                           ROUND(AVG(EXTRACT(EPOCH FROM first_call_at - accepted_at)) / 60)
+                                 FILTER (WHERE first_call_at IS NOT NULL) AS avg_claim_to_call_min
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - make_interval(days => %s)
+                    GROUP BY agent_name ORDER BY claims DESC, offers DESC
+                """, (days,))
+                agents = [{"agent": r[0], "offers": int(r[1]), "claims": int(r[2]),
+                           "passes": int(r[3]), "expiries": int(r[4]),
+                           "avg_claim_secs": int(r[5]) if r[5] is not None else None,
+                           "verified_calls": int(r[6]),
+                           "avg_claim_to_call_min": int(r[7]) if r[7] is not None else None}
+                          for r in cur.fetchall()]
+                cur.execute("""
+                    SELECT COUNT(DISTINCT person_id),
+                           COUNT(DISTINCT person_id) FILTER (WHERE accepted_at IS NOT NULL),
+                           COUNT(DISTINCT person_id) FILTER (WHERE terminal),
+                           COUNT(*),
+                           ROUND(AVG(EXTRACT(EPOCH FROM accepted_at - offered_at))
+                                 FILTER (WHERE accepted_at IS NOT NULL))
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - make_interval(days => %s)
+                """, (days,))
+                t = cur.fetchone()
+                cur.execute("""
+                    SELECT lead_name, agent_name, source, hop,
+                           accepted_at IS NOT NULL AS claimed,
+                           first_call_at IS NOT NULL AS called, terminal,
+                           offered_at
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - make_interval(days => %s)
+                    ORDER BY offered_at DESC LIMIT 30
+                """, (days,))
+                recent = [{"lead": r[0], "agent": r[1], "source": r[2],
+                           "hop": r[3], "claimed": r[4], "called": r[5],
+                           "terminal": r[6], "at": r[7].isoformat()}
+                          for r in cur.fetchall()]
+        return jsonify({"ok": True, "days": days,
+                        "totals": {"leads": int(t[0]), "leads_claimed": int(t[1]),
+                                   "leads_terminal": int(t[2]), "offers": int(t[3]),
+                                   "avg_claim_secs": int(t[4]) if t[4] is not None else None},
+                        "by_agent": agents, "recent": recent})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()[:500]}), 500
+
+
 @app.route("/api/admin/desk/mirror")
 def api_desk_mirror():
     """Phase 0 mirror report for the Lead Desk: what the claim engine would
