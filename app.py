@@ -5317,6 +5317,117 @@ def api_dispatch_offer():
     return jsonify({"ok": True, **out})
 
 
+@app.route("/api/admin/desk/mirror")
+def api_desk_mirror():
+    """Phase 0 mirror report for the Lead Desk: what the claim engine would
+    have done, from the shadow logs. ?days=14. ?backfill=1 replays recent
+    Fhalen-created appointments into the shadow log (claim_once dedupes, so
+    it never doubles what the webhook already caught)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = max(1, min(request.args.get("days", 14, type=int) or 14, 60))
+    out = {"ok": True, "days": days}
+    isa_id = getattr(config, "ISA_USER_ID", None)
+
+    if request.args.get("backfill") == "1":
+        added = 0
+        try:
+            client = FUBClient()
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            for appt in (client.get_appointments(since=since) or []):
+                try:
+                    created_dt = datetime.fromisoformat(
+                        (appt.get("created") or "").replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    continue
+                if created_dt < since or str(appt.get("createdById")) != str(isa_id):
+                    continue
+                invitees = appt.get("invitees") or []
+                person_id = next((i.get("personId") for i in invitees
+                                  if i.get("personId")), None)
+                if not person_id:
+                    continue
+                if not _db.claim_once("dispatch_seen_%s" % appt.get("id")):
+                    continue
+                picked = next((i.get("name") for i in invitees
+                               if i.get("userId") and i.get("userId") != isa_id
+                               and not i.get("personId")), None)
+                person_name = next((i.get("name") for i in invitees
+                                    if i.get("personId")), "Unknown")
+                _db.log_automation_event(
+                    event_type="dispatch_shadow", person_id=person_id,
+                    person_name=person_name, agent_name=picked,
+                    payload={"fub_appt_id": appt.get("id"),
+                             "would_offer_to": picked or "next in rotation",
+                             "appt_created": appt.get("created")},
+                    triggered_by="backfill")
+                added += 1
+        except Exception as e:
+            out["backfill_error"] = str(e)[:200]
+        out["backfilled"] = added
+
+    try:
+        shadow = _db.get_automation_events("dispatch_shadow", days=days, limit=500)
+        skips  = _db.get_automation_events("dispatch_intake_skip", days=days, limit=500)
+        ai     = _db.get_automation_events("ai_convert_seen", days=days, limit=500)
+
+        def _hour_hist(rows):
+            hist = {}
+            for r in rows:
+                try:
+                    dt = datetime.fromisoformat(r.get("at") or "")
+                    _eh = -4 if 3 <= dt.month <= 10 else -5
+                    h = dt.astimezone(timezone(timedelta(hours=_eh))).hour
+                    hist[h] = hist.get(h, 0) + 1
+                except (ValueError, AttributeError, TypeError):
+                    continue
+            return {str(k): hist[k] for k in sorted(hist)}
+
+        # AI lane: owner split — the evidence behind the re-engagement rule.
+        assigned_dark = assigned_fresh = unassigned = 0
+        for r in ai:
+            p = r.get("payload") or {}
+            if not p.get("assigned_to"):
+                unassigned += 1
+                continue
+            dark = True
+            try:
+                last_dt = datetime.fromisoformat(
+                    str(p.get("last_comm_at")).replace("Z", "+00:00"))
+                at_dt = datetime.fromisoformat(r.get("at"))
+                dark = (at_dt - last_dt) > timedelta(days=7)
+            except (ValueError, AttributeError, TypeError):
+                pass
+            if dark:
+                assigned_dark += 1
+            else:
+                assigned_fresh += 1
+
+        ai_hours = _hour_hist(ai)
+        after_hours = sum(v for k, v in ai_hours.items()
+                          if int(k) >= 20 or int(k) < 7)
+        would = {}
+        for r in shadow:
+            k = (r.get("payload") or {}).get("would_offer_to") or "?"
+            would[k] = would.get(k, 0) + 1
+
+        out.update({
+            "fhalen_lane": {"shadow_offers": len(shadow),
+                            "would_offer_to": would,
+                            "intake_skips": len(skips)},
+            "ai_lane": {"conversions_seen": len(ai),
+                        "by_hour_et": ai_hours,
+                        "after_hours_8p_to_7a": after_hours,
+                        "owner_split": {"unassigned_or_pond": unassigned,
+                                        "assigned_recently_worked": assigned_fresh,
+                                        "assigned_dark_7d": assigned_dark}},
+            "recent_shadow": shadow[:15],
+        })
+    except Exception as e:
+        out["report_error"] = str(e)[:200]
+    return jsonify(out)
+
+
 @app.route("/api/admin/dispatch/go-live", methods=["POST"])
 def api_dispatch_go_live():
     """Flip Fhalen-appointment auto-offers live (or back to shadow with
@@ -9705,8 +9816,17 @@ def _fub_upsert_appt_resource(appt, event_name):
     # agent she picked (confirmed live, Sep 11). Her pick becomes an OFFER
     # with the green button; assignment happens on accept, cascade on
     # silence. Zero change to her workflow.
-    if "Created" in event_name and person_id \
-            and appt.get("createdById") == getattr(config, "ISA_USER_ID", None):
+    # Trigger on Created OR Updated: at the Created instant FUB often delivers
+    # the invitee list before the lead (person) invitee is attached, so the
+    # person arrives one appointmentsUpdated later. That killed the original
+    # Created-only trigger (90 events processed, 0 shadow rows, Sep 2026).
+    # claim_once dedupes across both events; the 48h recency guard keeps
+    # outcome edits on old appointments from re-triggering intake.
+    if person_id \
+            and str(appt.get("createdById")) == str(getattr(config, "ISA_USER_ID", "")) \
+            and created_dt is not None \
+            and (datetime.now(timezone.utc) - created_dt) <= timedelta(hours=48) \
+            and _db.claim_once("dispatch_seen_%s" % appt_id):
         try:
             picked = next((i.get("name") for i in invitees
                            if i.get("userId")
@@ -9745,6 +9865,16 @@ def _fub_upsert_appt_resource(appt, event_name):
                             appt_id, picked or "next in rotation")
         except Exception as e:
             logger.warning("[DISPATCH] fhalen appt intake failed: %s", e)
+    elif "Created" in event_name and not person_id \
+            and str(appt.get("createdById")) == str(getattr(config, "ISA_USER_ID", "")):
+        # Receipt for the wire itself: Fhalen created it but the lead invitee
+        # is not attached yet — the Updated event completes the intake above.
+        _db.log_automation_event(
+            event_type="dispatch_intake_skip", person_id=None,
+            person_name=None, agent_name=None,
+            payload={"fub_appt_id": appt_id,
+                     "reason": "no person invitee at create"},
+            triggered_by="webhook_fub")
     # Fell-through appointment: instant rebook nudge (email), once per appt.
     if outcome in ("No show", "Reschedule Needed") and prev_outcome != outcome \
             and agent_name and agent_name not in _EXCLUDED_REBOOK:
@@ -9878,11 +10008,18 @@ def _fub_process_webhook(event, uri, resource_ids):
                                        (person.get("name") or "").strip(),
                                        audit=cache_get("audit") or {})
                     else:
+                        # Mirror-mode evidence for the Lead Desk decisions:
+                        # owner + last-touch answer the re-engagement rule,
+                        # the event timestamp answers the evening question.
                         _db.log_automation_event(
                             event_type="ai_convert_seen", person_id=pid,
                             person_name=person.get("name"), agent_name=None,
                             payload={"tags": [t for t in (person.get("tags") or [])
-                                              if "FOLLOW_UP" in t.upper()]},
+                                              if "FOLLOW_UP" in t.upper()],
+                                     "assigned_to": (person.get("assignedTo") or "").strip() or None,
+                                     "last_comm_at": ((person.get("lastCommunication") or {})
+                                                      .get("createdAt")),
+                                     "lead_created": person.get("created")},
                             triggered_by="webhook_fub")
                 except Exception as e:
                     logger.warning("ai intake failed for %s: %s", pid, e)
