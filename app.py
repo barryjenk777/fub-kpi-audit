@@ -5667,36 +5667,39 @@ def scheduled_ring_group_note(force=False):
 
 
 def _desk_evidence(person_id):
-    """One line of the lead's own conversation for the offer card, mined
-    from the latest AI transcript note. Deterministic, one API call, hard
-    no-fabrication: no real line found means no evidence shown."""
+    """Card ammo, in honesty order: (1) the lead's own most recent inbound
+    text, verbatim (works once FUB's API privacy toggle exposes message
+    bodies); (2) the CALL OPENER's SAY line, labeled as an opener, since it
+    is built from the lead's real behavior; (3) nothing. Never scraped note
+    boilerplate — the first two live cards quoted junk (Sep 2026)."""
     try:
         client = FUBClient()
+        # 1. Their own words from the AI conversation (FUB text messages)
+        try:
+            r = client._request("GET", "textMessages",
+                                params={"personId": person_id, "limit": 30}) or {}
+            rows = next((v for v in r.values() if isinstance(v, list)), [])
+            for t in reversed(rows):
+                if not t.get("isIncoming"):
+                    continue
+                body = (t.get("message") or t.get("body") or "").strip()
+                if body and "hidden for privacy" not in body.lower() \
+                        and 8 <= len(body) <= 220:
+                    return 'They said: "%s"' % body
+        except Exception:
+            pass
+        # 2. The Call Opener line built from their real behavior
         r = client._request("GET", "notes",
                             params={"personId": person_id, "limit": 10,
                                     "sort": "-created"}) or {}
         rows = next((v for v in r.values() if isinstance(v, list)), [])
-        markers = ("transcript", "raiya", "ylopo ai", "ai call",
-                   "call summary", "conversation summary")
-        # Boilerplate that is ABOUT the lead, not FROM the lead. The first
-        # live card surfaced a raw-HTML "PRIORITY LEAD ALERT" note (Barry,
-        # Sep 2026) — strip markup, skip alert noise.
         import re as _re
-        noise = ("priority lead alert", "lead alert", "http", "click here",
-                 "view lead", "powered by")
         for n in rows:
-            body = (n.get("body") or "")
-            if not any(m in body.lower() for m in markers):
+            if "call opener" not in (n.get("subject") or "").lower():
                 continue
-            text = _re.sub(r"<[^>]+>", "\n", body)
-            for line in text.splitlines():
-                line = line.strip(" -•*\t")
-                low = line.lower()
-                if len(line) < 25 or len(line) > 180:
-                    continue
-                if any(x in low for x in noise):
-                    continue
-                return line
+            m = _re.search(r'SAY:\s*"([^"]{20,220})"', n.get("body") or "")
+            if m:
+                return 'Opener: "%s"' % m.group(1)
         return None
     except Exception:
         return None
