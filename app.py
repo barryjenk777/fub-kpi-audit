@@ -5588,6 +5588,100 @@ def api_slack_actions():
     return "", 200
 
 
+def _desk_intake_alarm(person_id, person_name, reason):
+    """A conversion arrived and the desk could not route it. Page Barry and
+    the ops channel immediately, per lead — the consumer is waiting."""
+    try:
+        _db.log_automation_event(
+            event_type="desk_intake_fail", person_id=person_id,
+            person_name=person_name, agent_name=None,
+            payload={"reason": reason}, triggered_by="webhook_fub")
+    except Exception:
+        pass
+    try:
+        import slack_client as _sl
+        ops = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+        if ops:
+            _sl.post_message(ops, "🚨 Desk could not route %s: %s. "
+                                  "This lead needs a human NOW."
+                             % (person_name or person_id, reason))
+    except Exception:
+        pass
+    try:
+        import postmark_client as _pm
+        _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+                 subject="DESK ALARM: conversion not routed",
+                 html="<p>%s converted but the desk could not create an "
+                      "offer (%s). Assign them by hand in FUB now.</p>"
+                      % (person_name or person_id, reason))
+    except Exception as e:
+        logger.error("desk alarm email failed: %s", e)
+
+
+def scheduled_desk_watchdog():
+    """Every 30 min while the desk routes live leads: two tripwires.
+    1. Webhook silence: zero FUB webhooks for 60+ min in business hours
+       means the desk is blind while conversions may be arriving — page.
+    2. Any desk_intake_fail in the last hour repeats the page (belt and
+       braces on the per-lead alarm)."""
+    try:
+        live, _ = _db.get_app_state("dispatch_ai_live")
+        if (live or "").strip() != "1":
+            return
+        _eh = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+        now_et = datetime.now(timezone(timedelta(hours=_eh)))
+        if not (8 <= now_et.hour < 20):
+            return
+        alarms = []
+        try:
+            raw, _ = _db.get_app_state("fub_webhook_stats")
+            last_at = (json.loads(raw or "{}") or {}).get("last_at")
+            if last_at:
+                age = (datetime.now(timezone.utc)
+                       - datetime.fromisoformat(last_at)).total_seconds()
+                if age > 3600:
+                    alarms.append("No FUB webhooks for %d minutes. The desk "
+                                  "may be blind to new conversions."
+                                  % int(age / 60))
+        except Exception:
+            pass
+        try:
+            fails = _db.get_automation_events("desk_intake_fail", days=1,
+                                              limit=20)
+            recent = [f for f in fails if f.get("at") and
+                      (datetime.now(timezone.utc)
+                       - datetime.fromisoformat(f["at"])).total_seconds() < 3600]
+            if recent:
+                alarms.append("%d conversion(s) failed to route in the last "
+                              "hour." % len(recent))
+        except Exception:
+            pass
+        if not alarms:
+            return
+        if not _db.claim_once("desk_watchdog_%s"
+                              % datetime.now(timezone.utc).strftime("%Y%m%d%H")):
+            return
+        body = " ".join(alarms)
+        logger.error("[DESK WATCHDOG] %s", body)
+        try:
+            import slack_client as _sl
+            ops = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+            if ops:
+                _sl.post_message(ops, "🚨 DESK WATCHDOG: %s" % body)
+        except Exception:
+            pass
+        try:
+            import postmark_client as _pm
+            _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+                     subject="DESK WATCHDOG: attention needed",
+                     html="<p>%s</p><p>If this persists, re-enable the FUB "
+                          "assignment automation while we diagnose.</p>" % body)
+        except Exception as e:
+            logger.error("desk watchdog email failed: %s", e)
+    except Exception as e:
+        logger.warning("desk watchdog failed: %s", e)
+
+
 def _ring_group_state():
     """Live Transfer inbox (FUB teamInboxes API, read-only) vs this week's
     earned list (Sunday audit passers + protected). Returns
@@ -10603,10 +10697,21 @@ def _fub_process_webhook(event, uri, resource_ids):
                                       (person.get("addresses") or [])
                                       if isinstance(a, dict) and a.get("city")),
                                      None)
-                        _dp.make_offer(src_kind, pid,
+                        _res = _dp.make_offer(src_kind, pid,
                                        (person.get("name") or "").strip(),
                                        _city, notes=_desk_evidence(pid),
                                        audit=cache_get("audit") or {})
+                        if _res:
+                            _db.log_automation_event(
+                                event_type="desk_intake", person_id=pid,
+                                person_name=person.get("name"),
+                                agent_name=_res.get("agent_name"),
+                                payload={"source": src_kind},
+                                triggered_by="webhook_fub")
+                        else:
+                            _desk_intake_alarm(pid, person.get("name"),
+                                               "no offer could be created "
+                                               "(no eligible agent?)")
                     else:
                         # Mirror-mode evidence for the Lead Desk decisions:
                         # owner + last-touch answer the re-engagement rule,
@@ -22385,6 +22490,11 @@ def start_scheduler():
     _scheduler.add_job(scheduled_savebot_scripts,
                        CronTrigger(day_of_week="sat,sun", hour=7, minute=45, timezone=ET),
                        id="savebot_scripts", name="Save-Bot script prompts (weekends 7:45am)",
+                       max_instances=1, coalesce=True)
+    # Desk watchdog: every 30 min, business hours, only while live.
+    _scheduler.add_job(scheduled_desk_watchdog,
+                       CronTrigger(minute="7,37", timezone=ET),
+                       id="desk_watchdog", name="Desk watchdog (every 30 min)",
                        max_instances=1, coalesce=True)
     # Ring group work order to Fhalen: Monday after the group push settles,
     # Tuesday re-check as the self-healing nag. DM only fires on a mismatch.
