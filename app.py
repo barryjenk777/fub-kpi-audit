@@ -5546,10 +5546,10 @@ def scheduled_ring_group_note(force=False):
         if not force and not _db.claim_once("ringgroup_ping_%s_%s" % (wk, today.strftime("%a"))):
             return
         # The inbox phone number, so which one is never left to chance.
-        # Default inferred from inbound call records (Sep 2026); override
-        # via app_state 'ring_group_number' if the line ever changes.
+        # Confirmed by Barry (Sep 2026); override via app_state
+        # 'ring_group_number' if the line ever changes.
         _num_raw, _ = _db.get_app_state("ring_group_number")
-        _num = (_num_raw or "").strip() or "(757) 290-7765"
+        _num = (_num_raw or "").strip() or "(757) 960-1491"
         lines = ["Fhalen, weekly ring group update for the *Live Transfer* "
                  "inbox number *%s* in FUB:" % _num]
         if add:
