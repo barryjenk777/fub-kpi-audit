@@ -5317,6 +5317,168 @@ def api_dispatch_offer():
     return jsonify({"ok": True, **out})
 
 
+def _desk_mirror_card(lane, person_name, detail):
+    """Phase 1: post a read-only mirror line to the private ops channel.
+    Ops-facing only — never the agent channel, so unclaimed history can't
+    poison lead perception. No-op until Slack env vars land."""
+    try:
+        import slack_client as _sl
+        ch = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+        if _sl.is_available() and ch:
+            _sl.post_message(ch, "🪞 %s — %s — %s" % (lane, person_name or "Unknown", detail))
+    except Exception as e:
+        logger.warning("desk mirror card failed: %s", e)
+
+
+@app.route("/api/slack/actions", methods=["POST"])
+def api_slack_actions():
+    """Slack interactivity endpoint. Signature-verified; refuses everything
+    until SLACK_SIGNING_SECRET is set. Phase 1 handles the bell-check drill;
+    desk_claim / desk_pass land here in Phase 2."""
+    import slack_client as _sl
+    if not _sl.signature_ok(request.headers, request.get_data()):
+        return jsonify({"error": "bad signature"}), 401
+    try:
+        payload = json.loads(request.form.get("payload") or "{}")
+    except (ValueError, TypeError):
+        return "", 200
+    actions = payload.get("actions") or []
+    action = actions[0] if actions else {}
+    action_id = action.get("action_id") or ""
+    slack_user = (payload.get("user") or {}).get("id")
+
+    if action_id == "drill_claim":
+        val = {}
+        try:
+            val = json.loads(action.get("value") or "{}")
+        except (ValueError, TypeError):
+            pass
+        secs = None
+        try:
+            secs = round((datetime.now(timezone.utc)
+                          - datetime.fromisoformat(val.get("sent"))).total_seconds())
+        except (ValueError, TypeError):
+            pass
+        _db.log_automation_event(
+            event_type="desk_drill_tap", person_id=None, person_name=None,
+            agent_name=val.get("agent"),
+            payload={"seconds": secs, "slack_user": slack_user},
+            triggered_by="slack")
+        ru = payload.get("response_url")
+        if ru:
+            try:
+                import requests as _rq
+                msg = "✅ Heard you loud and clear"
+                if secs is not None:
+                    msg += " in %ds" % secs
+                _rq.post(ru, json={"replace_original": True, "text": msg + "."},
+                         timeout=5)
+            except Exception:
+                pass
+        return "", 200
+
+    # Phase 2 button ids arrive here (desk_claim, desk_pass). Until then,
+    # acknowledge politely so nothing errors in front of an agent.
+    ru = payload.get("response_url")
+    if ru and action_id:
+        try:
+            import requests as _rq
+            _rq.post(ru, json={"replace_original": False,
+                               "text": "The desk isn't live yet. Soon."}, timeout=5)
+        except Exception:
+            pass
+    return "", 200
+
+
+@app.route("/api/admin/desk/slack-map", methods=["GET", "POST"])
+def api_desk_slack_map():
+    """Agent name → Slack user id map (app_state 'slack_user_map').
+    GET ?automap=1 fills gaps by email lookup against agent profiles;
+    POST {"map": {"Agent Name": "U0123..."}} merges manual entries."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    raw, _ = _db.get_app_state("slack_user_map")
+    try:
+        m = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        m = {}
+    if request.method == "POST":
+        m.update((request.get_json(silent=True) or {}).get("map") or {})
+        _db.set_app_state("slack_user_map", json.dumps(m))
+    elif request.args.get("automap") == "1":
+        import slack_client as _sl
+        if not _sl.is_available():
+            return jsonify({"ok": False, "reason": "SLACK_BOT_TOKEN not set", "map": m})
+        for p in (_db.get_agent_profiles(active_only=True) or []):
+            name, email = p.get("agent_name"), (p.get("email") or "").strip()
+            if name and email and name not in m:
+                sid = _sl.lookup_user_by_email(email)
+                if sid:
+                    m[name] = sid
+        _db.set_app_state("slack_user_map", json.dumps(m))
+    return jsonify({"ok": True, "map": m})
+
+
+@app.route("/api/admin/desk/slack-test", methods=["POST"])
+def api_desk_slack_test():
+    """Prove the token + ops channel work: posts one line to the ops channel."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import slack_client as _sl
+    if not _sl.is_available():
+        return jsonify({"ok": False, "reason": "SLACK_BOT_TOKEN not set"})
+    ch = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+    if not ch:
+        return jsonify({"ok": False, "reason": "SLACK_DESK_OPS_CHANNEL not set"})
+    ts = _sl.post_message(ch, "Command Center is connected. The Lead Desk mirror starts here.")
+    return jsonify({"ok": bool(ts), "channel": ch, "ts": ts})
+
+
+@app.route("/api/admin/desk/drill", methods=["POST"])
+def api_desk_drill():
+    """Bell check: DM every mapped agent a test card with a live green button.
+    Taps land as desk_drill_tap events with latency. Body {"agent": "Name"}
+    limits to one agent. Excluded/paused agents never get one."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import slack_client as _sl
+    if not _sl.is_available():
+        return jsonify({"ok": False, "reason": "SLACK_BOT_TOKEN not set"})
+    only = (request.get_json(silent=True) or {}).get("agent")
+    raw, _ = _db.get_app_state("slack_user_map")
+    try:
+        m = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        m = {}
+    excluded = set(config.EXCLUDED_USERS) \
+        | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+    sent, now_iso = [], datetime.now(timezone.utc).isoformat()
+    for name, sid in m.items():
+        if name in excluded or (only and name != only):
+            continue
+        first = name.split()[0]
+        blocks = [
+            {"type": "section",
+             "text": {"type": "mrkdwn",
+                      "text": ("🔔 *Lead Desk bell check, %s.* When this hits "
+                               "your phone, tap the button. That's the whole "
+                               "drill.") % first}},
+            {"type": "actions",
+             "elements": [{"type": "button", "style": "primary",
+                           "text": {"type": "plain_text", "text": "I got it"},
+                           "action_id": "drill_claim",
+                           "value": json.dumps({"agent": name, "sent": now_iso})}]},
+        ]
+        if _sl.dm_user(sid, "Lead Desk bell check", blocks=blocks):
+            sent.append(name)
+            _db.log_automation_event(
+                event_type="desk_drill_sent", person_id=None, person_name=None,
+                agent_name=name, payload={"slack_user": sid},
+                triggered_by="admin")
+    return jsonify({"ok": True, "sent": sent,
+                    "unmapped_note": "agents missing from slack-map get nothing"})
+
+
 @app.route("/api/admin/desk/mirror")
 def api_desk_mirror():
     """Phase 0 mirror report for the Lead Desk: what the claim engine would
@@ -9844,6 +10006,8 @@ def _fub_upsert_appt_resource(appt, event_name):
                     triggered_by="webhook_fub")
                 logger.info("[DISPATCH shadow] appt %s would offer to %s",
                             appt_id, picked)
+                _desk_mirror_card("Fhalen appt", person_name,
+                                  "pick: %s" % (picked or "next in rotation"))
             elif _db.claim_once("dispatch_appt_%s" % appt_id):
                 import dispatch as _dp
                 _eh = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
@@ -10021,6 +10185,11 @@ def _fub_process_webhook(event, uri, resource_ids):
                                                       .get("createdAt")),
                                      "lead_created": person.get("created")},
                             triggered_by="webhook_fub")
+                        _desk_mirror_card(
+                            "AI conversion",
+                            (person.get("name") or "").strip(),
+                            "voice" if "ai_voice_needs_follow_up" in tags_l
+                            else "text")
                 except Exception as e:
                     logger.warning("ai intake failed for %s: %s", pid, e)
         elif event in ("callsCreated", "textMessagesCreated"):
