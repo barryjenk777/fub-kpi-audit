@@ -4864,6 +4864,19 @@ def _onboard_new_hire(agent_name, agent_email, base_url):
     return seeded
 
 
+def _slack_join_line():
+    """One <br> line inviting the new hire into the team Slack, shown in the
+    door-opening email when SLACK_INVITE_LINK is set. Slack's invite API is
+    Enterprise-only, so the link is the auto-add: they tap it, they're in,
+    and the nightly automap wires them to the Lead Desk with zero clicks."""
+    link = os.environ.get("SLACK_INVITE_LINK", "").strip()
+    if not link:
+        return ""
+    return ("<br><strong>Team Slack.</strong> Join here: "
+            "<a href='%s'>%s</a>. Lead offers and team wins live there. "
+            "Turn notifications on." % (link, link))
+
+
 def _docs_signed_email(agent_name):
     """The door opening. Docs came back signed, the gate lifts, and the
     agent hears it immediately instead of the machine switching on in
@@ -4899,12 +4912,12 @@ def _docs_signed_email(agent_name):
   <strong>Your Tuesday Nurture Run.</strong> Ten quiet leads, messages
   already written, two taps each.<br>
   <strong>The transfer line.</strong> Hit your weekly numbers and live
-  transfers come to you.<br><br>
+  transfers come to you.%s<br><br>
   Nobody eases onto this team. The machine treats you like a full agent
   starting now, because you are one.<br><br>
   Let's get it,<br><strong>Barry Jenkins</strong>
 </td></tr>
-</table></td></tr></table></div>""" % first)
+</table></td></tr></table></div>""" % (first, _slack_join_line()))
         logger.info("[ONBOARD] docs-signed email sent to %s", agent_name)
     except Exception as e:
         logger.warning("[ONBOARD] docs-signed email failed: %s", e)
@@ -5403,7 +5416,16 @@ def api_desk_slack_map():
     except (ValueError, TypeError):
         m = {}
     if request.method == "POST":
-        m.update((request.get_json(silent=True) or {}).get("map") or {})
+        body = request.get_json(silent=True) or {}
+        m.update(body.get("map") or {})
+        # {"lookup": {"Agent Name": "their-slack-email"}} — for people whose
+        # Slack email differs from their profile email (Tanya, Sep 2026).
+        if body.get("lookup"):
+            import slack_client as _sl
+            for name, email in (body.get("lookup") or {}).items():
+                sid = _sl.lookup_user_by_email((email or "").strip())
+                if sid:
+                    m[name] = sid
         _db.set_app_state("slack_user_map", json.dumps(m))
     elif request.args.get("automap") == "1":
         import slack_client as _sl
@@ -19570,6 +19592,27 @@ def scheduled_sync_fub_roster():
         return  # Another worker is already running this job
     try:
         sync_fub_roster()
+        # Slack automap piggyback: any active agent not yet in the desk map
+        # gets looked up by profile email. New hires who accepted the Slack
+        # invite become desk-reachable with zero clicks.
+        try:
+            import slack_client as _sl
+            if _sl.is_available():
+                raw, _ = _db.get_app_state("slack_user_map")
+                m = json.loads(raw or "{}")
+                added = 0
+                for p in (_db.get_agent_profiles(active_only=True) or []):
+                    name, email = p.get("agent_name"), (p.get("email") or "").strip()
+                    if name and email and name not in m:
+                        sid = _sl.lookup_user_by_email(email)
+                        if sid:
+                            m[name] = sid
+                            added += 1
+                if added:
+                    _db.set_app_state("slack_user_map", json.dumps(m))
+                    print(f"[ROSTER SYNC] Slack automap added {added} agent(s)")
+        except Exception as _se:
+            logger.warning("roster slack automap failed: %s", _se)
     except Exception as e:
         _alert_on_job_failure("roster_sync", str(e))
         print(f"[ROSTER SYNC] Unhandled error in scheduled run: {e}")
