@@ -5263,13 +5263,155 @@ el.textContent=s>0?(s+' seconds left, then it moves to the next agent'):'Window 
         secs_left, lead_first, secs_left)
 
 
+@app.route("/api/dispatch/hothand")
+def api_dispatch_hothand():
+    """The Hot Hand Board: one call, everything the 30-second glance needs.
+    Verdicts are computed here so the page stays dumb and fast."""
+    if not _dispatch_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    out = {"ok": True}
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, COUNT(*), COUNT(accepted_at),
+                           COUNT(passed_at), COUNT(expired_at),
+                           ROUND(AVG(EXTRACT(EPOCH FROM accepted_at - offered_at))
+                                 FILTER (WHERE accepted_at IS NOT NULL)),
+                           COUNT(first_call_at), COUNT(convo_at),
+                           COUNT(appt_set_at), COUNT(appt_met_at),
+                           COUNT(*) FILTER (WHERE accepted_at IS NOT NULL
+                                AND first_call_at IS NULL
+                                AND accepted_at < NOW() - INTERVAL '30 minutes'
+                                AND accepted_at > NOW() - INTERVAL '48 hours')
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - INTERVAL '14 days'
+                    GROUP BY agent_name
+                """)
+                rows = cur.fetchall()
+                cur.execute("""
+                    SELECT COUNT(DISTINCT person_id),
+                           COUNT(DISTINCT person_id) FILTER (WHERE accepted_at IS NOT NULL),
+                           COUNT(DISTINCT person_id) FILTER (WHERE terminal),
+                           PERCENTILE_CONT(0.5) WITHIN GROUP (
+                               ORDER BY EXTRACT(EPOCH FROM first_call_at - offered_at) / 60)
+                               FILTER (WHERE first_call_at IS NOT NULL AND hop = 1)
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - INTERVAL '7 days'
+                """)
+                h = cur.fetchone()
+                cur.execute("""
+                    SELECT COUNT(DISTINCT person_id) FROM dispatch_offers
+                    WHERE terminal AND offered_at >= NOW() - INTERVAL '24 hours'
+                """)
+                term24 = int(cur.fetchone()[0] or 0)
+                cur.execute("""
+                    SELECT lead_name, agent_name,
+                           accepted_at IS NOT NULL, first_call_at IS NOT NULL,
+                           appt_set_at IS NOT NULL, appt_met_at IS NOT NULL,
+                           terminal, offered_at
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - INTERVAL '7 days' AND hop = 1
+                    ORDER BY offered_at DESC LIMIT 12
+                """)
+                feed = [{"lead": r[0], "agent": r[1], "claimed": r[2],
+                         "called": r[3], "appt": r[4], "met": r[5],
+                         "terminal": r[6],
+                         "at": r[7].isoformat() if r[7] else None}
+                        for r in cur.fetchall()]
+        excluded = set(config.EXCLUDED_USERS)
+        names = [r[0] for r in rows if r[0] and r[0] not in excluded]
+        today = {}
+        try:
+            today = _db.dispatch_agent_today(names) or {}
+        except Exception:
+            pass
+        agents, needs = [], []
+        totals = {"convos": 0, "appts_set": 0, "appts_met": 0}
+        for r in rows:
+            (name, offers, claims, passes, expiries, avg_secs, called,
+             convos, aset, amet, aging) = r
+            if not name or name in excluded:
+                continue
+            offers, claims, called = int(offers), int(claims), int(called)
+            convos, aset, amet = int(convos), int(aset), int(amet)
+            aging = int(aging)
+            totals["convos"] += convos
+            totals["appts_set"] += aset
+            totals["appts_met"] += amet
+            t = today.get(name) or {}
+            cr = (claims / offers) if offers else 0
+            callr = (called / claims) if claims else 0
+            if offers < 5:
+                v, emoji = "WARMING UP", "\U0001f331"
+                line = ("%d offer%s so far. Too early for a verdict, and this "
+                        "board doesn't guess." % (offers, "" if offers == 1 else "s"))
+                act = "Watch."
+            elif aging >= 2:
+                v, emoji = "STRETCHED", "\U0001f7e1"
+                line = ("%d claimed lead%s aging uncalled%s. Not slacking, "
+                        "full." % (aging, "" if aging == 1 else "s",
+                                   (", %d appointment%s today" % (t.get("appts_today"),
+                                    "" if t.get("appts_today") == 1 else "s"))
+                                   if t.get("appts_today") else ""))
+                act = "Protect them. Route around, not over."
+            elif cr >= 0.6 and callr >= 0.6:
+                v, emoji = "HOT HAND", "\U0001f525"
+                bits = ["claimed %d of %d" % (claims, offers)]
+                if avg_secs is not None:
+                    import dispatch as _dpf
+                    bits.append("avg %s to claim" % _dpf.fmt_secs(avg_secs))
+                if convos:
+                    bits.append("%d conversation%s" % (convos, "" if convos == 1 else "s"))
+                if aset:
+                    bits.append("%d appointment%s" % (aset, "" if aset == 1 else "s"))
+                if amet:
+                    bits.append("%d MET" % amet)
+                line = ", ".join(bits).capitalize() + "."
+                act = "Feed them."
+            elif cr < 0.3:
+                v, emoji = "QUIET", "\u26aa"
+                line = ("Claimed %d of %d offers. The leads moved on to "
+                        "teammates." % (claims, offers))
+                act = "Coach, don't feed."
+            else:
+                v, emoji = "STEADY", "\U0001f7e2"
+                line = ("Claimed %d of %d, %d called, %d conversation%s."
+                        % (claims, offers, called, convos,
+                           "" if convos == 1 else "s"))
+                act = "Working."
+            if v in ("STRETCHED", "QUIET"):
+                needs.append(name)
+            agents.append({"agent": name, "verdict": v, "emoji": emoji,
+                           "line": line, "action": act,
+                           "on_appt_now": bool(t.get("on_appt_now")),
+                           "appts_today": t.get("appts_today") or 0,
+                           "sort": {"HOT HAND": 0, "STEADY": 1, "STRETCHED": 2,
+                                    "QUIET": 3, "WARMING UP": 4}[v]})
+        agents.sort(key=lambda a: (a["sort"], a["agent"]))
+        out["agents"] = agents
+        out["head"] = {
+            "leads_7d": int(h[0] or 0), "claimed_7d": int(h[1] or 0),
+            "reached_nobody_7d": int(h[2] or 0),
+            "median_offer_to_voice_min": round(float(h[3])) if h[3] is not None else None,
+            "terminal_24h": term24, **totals,
+        }
+        out["needs_you"] = bool(term24 or needs)
+        out["needs_names"] = needs
+        out["feed"] = feed
+        return jsonify(out)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()[:500]}), 500
+
+
 @app.route("/dispatch")
 def dispatch_board():
     """Fhalen's board: live tagged transfers awaiting an owner, the offer
     state per lead, and one-click agent picks with receipts."""
     if not _dispatch_auth():
         return redirect("/login")
-    return render_template("dispatch.html",
+    return render_template("desk_board.html",
                            key=request.args.get("key", ""))
 
 

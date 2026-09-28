@@ -1,0 +1,98 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Lead Claims</title>
+<style>
+body{margin:0;background:#0d1117;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;line-height:1.5}
+.wrap{max-width:760px;margin:0 auto;padding:1.6rem 1rem 3rem}
+.kick{font-size:.62rem;font-weight:800;letter-spacing:.18em;color:#f5a623;text-transform:uppercase}
+h1{font-size:1.45rem;font-weight:850;margin:.25rem 0 1rem}
+.calm{background:#12251a;border:1px solid #1f4430;color:#7ee2a8;border-radius:12px;
+  padding:.85rem 1.1rem;font-weight:700;margin-bottom:1rem;display:none}
+.alert{background:#2a1414;border:1px solid #5c2626;color:#ff9d9d;border-radius:12px;
+  padding:.85rem 1.1rem;font-weight:700;margin-bottom:1rem;display:none}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem;margin-bottom:1.2rem}
+.tile{background:#151b24;border:1px solid #232c3a;border-radius:12px;padding:.8rem .9rem}
+.tile b{display:block;font-size:1.5rem;font-weight:900;color:#fff}
+.tile span{font-size:.72rem;color:#8b98ab}
+.row{background:#151b24;border:1px solid #232c3a;border-radius:12px;
+  padding:.85rem 1rem;margin-bottom:.55rem}
+.row .top{display:flex;align-items:center;gap:.55rem;flex-wrap:wrap}
+.row .name{font-weight:850;font-size:1.02rem}
+.v{font-size:.64rem;font-weight:800;letter-spacing:.12em;padding:.14rem .5rem;
+  border-radius:99px;text-transform:uppercase}
+.v-hot{background:#3a2410;color:#ffb454}.v-steady{background:#12251a;color:#7ee2a8}
+.v-str{background:#332a10;color:#ffd75e}.v-quiet{background:#232c3a;color:#9aa7ba}
+.v-warm{background:#1a2331;color:#7db4e8}
+.chip{font-size:.66rem;color:#8b98ab;background:#0d1117;border:1px solid #232c3a;
+  border-radius:99px;padding:.1rem .5rem}
+.line{font-size:.86rem;color:#c0cbdb;margin-top:.3rem}
+.act{font-size:.8rem;font-weight:800;color:#f5a623;margin-top:.15rem}
+h2{font-size:.78rem;font-weight:800;letter-spacing:.14em;color:#8b98ab;
+  text-transform:uppercase;margin:1.4rem 0 .6rem}
+.feed{font-size:.82rem;color:#aab6c8}
+.feed div{padding:.32rem 0;border-bottom:1px solid #1a2230}
+.feed .ok{color:#7ee2a8}.feed .bad{color:#ff9d9d}
+.stamp{font-size:.68rem;color:#5c6a80;margin-top:1.2rem}
+</style></head><body><div class="wrap">
+<div class="kick">Legacy Command Center</div>
+<h1>Lead Claims</h1>
+<div class="calm" id="calm">Nothing needs you today. Every claim is being worked and every lead reached a human.</div>
+<div class="alert" id="alert"></div>
+<div class="tiles" id="tiles"></div>
+<div id="rows"></div>
+<h2>Last 12 leads</h2>
+<div class="feed" id="feed"></div>
+<div class="stamp" id="stamp"></div>
+<script>
+const KEY = "{{ key }}";
+const VC = {"HOT HAND":"v-hot","STEADY":"v-steady","STRETCHED":"v-str","QUIET":"v-quiet","WARMING UP":"v-warm"};
+async function load(){
+  try{
+    const r = await fetch("/api/dispatch/hothand?key="+encodeURIComponent(KEY));
+    const d = await r.json();
+    if(!d.ok) return;
+    const h = d.head||{};
+    document.getElementById("tiles").innerHTML = [
+      [h.median_offer_to_voice_min!=null?h.median_offer_to_voice_min+"m":"—","offer to human voice, median 7d"],
+      [(h.claimed_7d||0)+" / "+(h.leads_7d||0),"leads claimed, 7d"],
+      [h.reached_nobody_7d||0,"reached nobody, 7d"],
+      [h.convos||0,"conversations, 14d"],
+      [(h.appts_set||0)+" / "+(h.appts_met||0),"appts set / met, 14d"],
+    ].map(t=>`<div class="tile"><b>${t[0]}</b><span>${t[1]}</span></div>`).join("");
+    if(d.needs_you){
+      const a=document.getElementById("alert");
+      const bits=[];
+      if(h.terminal_24h) bits.push(h.terminal_24h+" lead"+(h.terminal_24h==1?"":"s")+" reached nobody in the last 24h");
+      if((d.needs_names||[]).length) bits.push("look at: "+d.needs_names.join(", "));
+      a.textContent = "Needs you: "+bits.join(" · ");
+      a.style.display="block";
+      document.getElementById("calm").style.display="none";
+    } else {
+      document.getElementById("calm").style.display="block";
+      document.getElementById("alert").style.display="none";
+    }
+    document.getElementById("rows").innerHTML = (d.agents||[]).map(x=>`
+      <div class="row">
+        <div class="top">
+          <span>${x.emoji}</span>
+          <span class="name">${x.agent}</span>
+          <span class="v ${VC[x.verdict]||''}">${x.verdict}</span>
+          ${x.on_appt_now?'<span class="chip">on an appointment now</span>':''}
+          ${x.appts_today?'<span class="chip">'+x.appts_today+' appt'+(x.appts_today==1?'':'s')+' today</span>':''}
+        </div>
+        <div class="line">${x.line}</div>
+        <div class="act">${x.action}</div>
+      </div>`).join("") || "<div class='line'>No offers in the last 14 days.</div>";
+    document.getElementById("feed").innerHTML = (d.feed||[]).map(f=>{
+      let s = f.met?'<span class="ok">MET</span>':f.appt?'<span class="ok">appointment set</span>':
+              f.called?'<span class="ok">called</span>':f.claimed?'claimed':
+              f.terminal?'<span class="bad">reached nobody</span>':'offered';
+      return `<div><b>${(f.lead||'Lead').split(' ')[0]}</b> → ${f.agent||''} · ${s}</div>`;
+    }).join("");
+    document.getElementById("stamp").textContent =
+      "Live from claim receipts · refreshes every 60s · " + new Date().toLocaleTimeString();
+  }catch(e){}
+}
+load(); setInterval(load, 60000);
+</script></div></body></html>
