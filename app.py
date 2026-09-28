@@ -5513,7 +5513,12 @@ def api_desk_drill():
         | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
     sent, now_iso = [], datetime.now(timezone.utc).isoformat()
     for name, sid in m.items():
-        if name in excluded or (only and name != only):
+        if only:
+            # Explicitly targeted drill: an admin aiming at one name is
+            # deliberate — exclusions don't apply (lets Barry test himself).
+            if name != only:
+                continue
+        elif name in excluded:
             continue
         first = name.split()[0]
         blocks = [
