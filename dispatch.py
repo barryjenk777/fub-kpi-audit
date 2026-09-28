@@ -246,9 +246,18 @@ def make_offer(source, person_id, lead_name, lead_city=None, appt_time=None,
     if not agent_name:
         prior = {o["agent"] for o in _db.dispatch_person_state(person_id)}
         for cand in eligible_agents(lead_city, audit=audit):
-            if cand not in prior:
-                agent_name = cand
-                break
+            if cand in prior:
+                continue
+            # Open-claim cap: an agent already holding 2 live offers is
+            # skipped, so one fast thumb can't vacuum a burst (Salma took
+            # all 5 of a Ylopo tagging sweep on go-live day, Sep 2026).
+            try:
+                if _db.count_open_dispatch_offers(cand) >= 2:
+                    continue
+            except Exception:
+                pass
+            agent_name = cand
+            break
     if not agent_name:
         return None
     token = secrets.token_urlsafe(9)
@@ -257,6 +266,12 @@ def make_offer(source, person_id, lead_name, lead_city=None, appt_time=None,
                                     minutes=OFFER_MINUTES, hop=hop)
     if not oid:
         return None
+    # Rotation advances per fresh offer, not per accept: five conversions
+    # arriving in one burst must land on five different agents. (Go-live
+    # day, Sep 2026: the accept-only pointer sent an entire Ylopo batch to
+    # the same agent.)
+    if hop == 1:
+        advance_rotation()
     sent = _notify(agent_name, token, lead_name, lead_city, appt_time,
                    source, hop, notes=notes, person_id_for_copy=person_id)
     # Fhalen's feedback loop: her pick let it slide, tell her where it went.

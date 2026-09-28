@@ -9724,6 +9724,24 @@ def ensure_dispatch_table():
         logger.warning("ensure_dispatch_table failed: %s", e)
 
 
+def count_open_dispatch_offers(agent_name):
+    """Open (unresolved) offers currently in this agent's hands."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM dispatch_offers
+                    WHERE agent_name = %s AND accepted_at IS NULL
+                      AND passed_at IS NULL AND expired_at IS NULL
+                """, (agent_name,))
+                return int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.warning("count_open_dispatch_offers failed: %s", e)
+        return 0
+
+
 def get_desk_agent_snapshot(agent_name, days=14):
     """Personalization read for offer copy: offers, claims, median claim
     seconds for one agent over the window."""

@@ -5152,7 +5152,7 @@ def _dispatch_accept(offer):
         except Exception as e:
             logger.warning("[DISPATCH] FUB assign failed for %s: %s",
                            offer["person_id"], e)
-    _dp.advance_rotation()
+    # (rotation now advances at offer time — see dispatch.make_offer)
     _db.log_automation_event(
         event_type="dispatch_accept", person_id=offer["person_id"],
         person_name=offer["lead_name"], agent_name=agent,
