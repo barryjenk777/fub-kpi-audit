@@ -5401,33 +5401,44 @@ def api_slack_actions():
     slack_user = (payload.get("user") or {}).get("id")
 
     if action_id == "drill_claim":
+        # Ack Slack IMMEDIATELY (3-second budget), work in a thread. Barry's
+        # first tap spun ~5s on the synchronous version (Sep 2026) — on a
+        # real claim button that spinner is an agent wondering if they got
+        # the lead, so this pattern is law for every desk action.
         val = {}
         try:
             val = json.loads(action.get("value") or "{}")
         except (ValueError, TypeError):
             pass
-        secs = None
-        try:
-            secs = round((datetime.now(timezone.utc)
-                          - datetime.fromisoformat(val.get("sent"))).total_seconds())
-        except (ValueError, TypeError):
-            pass
-        _db.log_automation_event(
-            event_type="desk_drill_tap", person_id=None, person_name=None,
-            agent_name=val.get("agent"),
-            payload={"seconds": secs, "slack_user": slack_user},
-            triggered_by="slack")
         ru = payload.get("response_url")
-        if ru:
+
+        def _drill_work():
+            secs = None
             try:
-                import requests as _rq
-                msg = "✅ Heard you loud and clear"
-                if secs is not None:
-                    msg += " in %ds" % secs
-                _rq.post(ru, json={"replace_original": True, "text": msg + "."},
-                         timeout=5)
-            except Exception:
+                secs = round((datetime.now(timezone.utc)
+                              - datetime.fromisoformat(val.get("sent"))).total_seconds())
+            except (ValueError, TypeError):
                 pass
+            _db.log_automation_event(
+                event_type="desk_drill_tap", person_id=None, person_name=None,
+                agent_name=val.get("agent"),
+                payload={"seconds": secs, "slack_user": slack_user},
+                triggered_by="slack")
+            if ru:
+                try:
+                    import requests as _rq
+                    msg = "White check: heard you loud and clear"
+                    if secs is not None:
+                        msg = "✅ Heard you loud and clear in %ds" % secs
+                    else:
+                        msg = "✅ Heard you loud and clear"
+                    _rq.post(ru, json={"replace_original": True,
+                                       "mrkdwn": True, "text": msg + "."},
+                             timeout=8)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_drill_work, daemon=True).start()
         return "", 200
 
     # Phase 2 button ids arrive here (desk_claim, desk_pass). Until then,
