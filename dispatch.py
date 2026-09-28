@@ -167,7 +167,7 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
                 "Hot one, %s. %s converted %s%s and you're up first.",
                 "%s, fresh conversion: %s got %s%s to raise their hand.",
                 "New money, %s. %s converted %s%s. Your button.",
-                "%s, %s warmed up %s%s and the desk picked you first.",
+                "%s, %s warmed up %s%s and you're first in line.",
             ]
             try:
                 v = int("".join(c for c in str(person_id_for_copy)
@@ -184,7 +184,7 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
             try:
                 snap = _db.get_desk_agent_snapshot(agent_name) or {}
                 if not snap.get("offers"):
-                    personal = ("\nYour first desk offer. Tap it and the "
+                    personal = ("\nYour first lead offer. Tap it and the "
                                 "lead is yours in FUB instantly.")
                 elif snap.get("median_secs") is not None:
                     personal = ("\nYou're claiming in about %s on average. "

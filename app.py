@@ -5590,7 +5590,7 @@ def api_slack_actions():
         try:
             import requests as _rq
             _rq.post(ru, json={"replace_original": False,
-                               "text": "The desk isn't live yet. Soon."}, timeout=5)
+                               "text": "That button isn't live yet. Soon."}, timeout=5)
         except Exception:
             pass
     return "", 200
@@ -5609,30 +5609,32 @@ def _desk_celebrate(kind, person_id, minutes=None):
         lead = (row["lead_name"] or "their lead").split()[0]
         days = row["days"]
         when = "today" if days == 0 else                "yesterday" if days == 1 else "%d days ago" % days
+        # Team language only: agents claim leads and tap buttons. Nobody
+        # on the roster says "the desk" (Barry, Sep 2026).
         pools = {
             "convo": [
-                "\U0001f5e3\ufe0f %s just had a %s minute conversation with %s, "
-                "a lead claimed off the desk. That's how appointments get born.",
-                "\U0001f5e3\ufe0f Real talk: %s went %s minutes with desk lead "
-                "%s. Conversations pay.",
-                "\U0001f5e3\ufe0f %s turned a tap into a %s minute conversation "
-                "with %s. From button to voice, that's the game.",
+                "\U0001f5e3\ufe0f %s just had a %s minute conversation with "
+                "%s, a lead they claimed. That's how appointments get born.",
+                "\U0001f5e3\ufe0f Real talk: %s went %s minutes with %s "
+                "after claiming them. Conversations pay.",
+                "\U0001f5e3\ufe0f %s turned a claim into a %s minute "
+                "conversation with %s. From button to voice, that's the game.",
             ],
             "appt_set": [
-                "\U0001f4c5 APPOINTMENT. %s booked %s, claimed off the desk %s. "
-                "The green button just became a calendar slot.",
-                "\U0001f4c5 %s set an appointment with desk lead %s (claimed "
-                "%s). Tap. Call. Appointment. That's the whole funnel working.",
-                "\U0001f4c5 Desk money: %s just booked %s, claimed %s. "
-                "Whoever said internet leads don't book didn't tap fast enough.",
+                "\U0001f4c5 APPOINTMENT. %s booked %s, claimed %s. The green "
+                "button just became a calendar slot.",
+                "\U0001f4c5 %s set an appointment with %s, claimed %s. Tap. "
+                "Call. Appointment. That's the whole funnel working.",
+                "\U0001f4c5 %s just booked %s, claimed %s. Whoever said "
+                "internet leads don't book didn't tap fast enough.",
             ],
             "appt_met": [
-                "\U0001f3c6 %s MET with %s, a lead claimed off the desk %s. "
-                "From green button to handshake. This is why the desk exists.",
-                "\U0001f3c6 Held appointment: %s sat down with desk lead %s "
-                "(claimed %s). The tap heard around the team.",
-                "\U0001f3c6 %s met %s face to face, %s after claiming them off "
-                "the desk. Fast hands, real tables.",
+                "\U0001f3c6 %s MET with %s, claimed %s. From green button "
+                "to handshake.",
+                "\U0001f3c6 Held appointment: %s sat down with %s, claimed "
+                "%s. The tap that turned into a table.",
+                "\U0001f3c6 %s met %s face to face, %s after claiming them. "
+                "Fast hands, real tables.",
             ],
         }
         pool = pools.get(kind) or []
