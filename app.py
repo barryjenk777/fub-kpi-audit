@@ -6023,14 +6023,15 @@ def api_desk_report():
                     SELECT lead_name, agent_name, source, hop,
                            accepted_at IS NOT NULL AS claimed,
                            first_call_at IS NOT NULL AS called, terminal,
-                           offered_at
+                           offered_at, person_id
                     FROM dispatch_offers
                     WHERE offered_at >= NOW() - make_interval(days => %s)
                     ORDER BY offered_at DESC LIMIT 30
                 """, (days,))
                 recent = [{"lead": r[0], "agent": r[1], "source": r[2],
                            "hop": r[3], "claimed": r[4], "called": r[5],
-                           "terminal": r[6], "at": r[7].isoformat()}
+                           "terminal": r[6], "at": r[7].isoformat(),
+                           "person_id": r[8]}
                           for r in cur.fetchall()]
         return jsonify({"ok": True, "days": days,
                         "totals": {"leads": int(t[0]), "leads_claimed": int(t[1]),
@@ -10772,10 +10773,15 @@ def _fub_process_webhook(event, uri, resource_ids):
                     # Handoff reassignment step (Barry's screenshot, Sep
                     # 2026): all six conversion tags plus Blue's
                     # sms_conversion route through the desk once live.
+                    # Y_AI_PRIORITY removed (Barry, Sep 2026 go-live day):
+                    # it is a browsing-intent rollup that Ylopo re-applies
+                    # in sweeps, not a conversion. The old FUB automation
+                    # muted that with once-per-lead-ever semantics; the desk
+                    # rings only when the lead actually said yes to talking.
                     _desk_tags = ("ai_needs_follow_up",
                                   "ai_voice_needs_follow_up",
                                   "sms_conversion", "claude_text_converted",
-                                  "y_ai_priority", "isa_transfer_unsuccessful",
+                                  "isa_transfer_unsuccessful",
                                   "isa_attempted_transfer_realtor_unavailable")
                     if not any(t in tags_l for t in _desk_tags):
                         continue
