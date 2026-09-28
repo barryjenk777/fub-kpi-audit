@@ -5145,13 +5145,21 @@ def _dispatch_accept(offer):
     profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
                     if p["agent_name"] == agent), None)
     uid = (profile or {}).get("fub_user_id")
+    assign_ok = False
     if uid:
         try:
             client.update_person_fields(offer["person_id"],
                                         {"assignedUserId": uid})
+            assign_ok = True
         except Exception as e:
             logger.warning("[DISPATCH] FUB assign failed for %s: %s",
                            offer["person_id"], e)
+    if not assign_ok:
+        # The agent was just told "assigned to you" — if FUB disagrees,
+        # that is an alarm, not a log line (QA sweep, Sep 2026).
+        _desk_intake_alarm(offer["person_id"], offer["lead_name"],
+                           "claimed by %s but the FUB assignment failed — "
+                           "assign them by hand now" % agent)
     # (rotation now advances at offer time — see dispatch.make_offer)
     _db.log_automation_event(
         event_type="dispatch_accept", person_id=offer["person_id"],
@@ -10559,7 +10567,7 @@ def _fub_upsert_appt_resource(appt, event_name):
                 _db.log_variant("rebook", "v1", person_id, agent_name)
 
 
-def _fub_outbound_touch(person_id, is_call):
+def _fub_outbound_touch(person_id, is_call, caller_uid=None):
     """Outbound call/text to a lead: stamp ISA first-call and clear
     LeadStream tags immediately (the original purpose of this webhook)."""
     try:
@@ -10576,15 +10584,35 @@ def _fub_outbound_touch(person_id, is_call):
         # Desk claim-to-call receipt: the claimed lead got its call. Posts
         # once to the wins feed — the contract, publicly fulfilled.
         try:
-            row = _db.mark_dispatch_first_call(str(person_id))
+            row = _db.mark_dispatch_first_call(str(person_id),
+                                               caller_uid=caller_uid)
             if row:
                 import slack_client as _sl
                 wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
-                _sl.post_message(wins, "\U0001f4de %s called %s %d min after "
-                                       "claiming. That's the desk working."
-                                 % ((row["agent_name"] or "?").split()[0],
+                # Congratulatory and rotating (Barry, Sep 2026): the receipt
+                # should feel like a highlight, not a system log.
+                _closers = [
+                    "That's how money gets made.",
+                    "First voice wins, and that voice was %(first)s's.",
+                    "Speed like that turns leads into closings.",
+                    "That lead will remember who called first.",
+                    "Fastest phone on the team strikes again.",
+                ]
+                _first = (row["agent_name"] or "?").split()[0]
+                try:
+                    _ci = int("".join(c for c in str(person_id)
+                                      if c.isdigit()) or 0) % len(_closers)
+                except Exception:
+                    _ci = 0
+                _cl = _closers[_ci] % {"first": _first} \
+                    if "%(first)s" in _closers[_ci] else _closers[_ci]
+                _mins = row["minutes"]
+                _when = ("%d min" % _mins) if _mins >= 1 else "moments"
+                _sl.post_message(wins, "\U0001f4de %s called %s %s after "
+                                       "claiming. %s"
+                                 % (_first,
                                     (row["lead_name"] or "the lead").split()[0],
-                                    row["minutes"]))
+                                    _when, _cl))
         except Exception as e:
             logger.warning("dispatch first-call stamp failed: %s", e)
     try:
@@ -10686,7 +10714,12 @@ def _fub_process_webhook(event, uri, resource_ids):
                                   "isa_attempted_transfer_realtor_unavailable")
                     if not any(t in tags_l for t in _desk_tags):
                         continue
-                    if not _db.claim_once("aidispatch_%s" % pid):
+                    # Weekly key, not once-ever: a lead whose offer went
+                    # terminal (or who re-converts weeks later) can route
+                    # again. Once-ever silently blacklisted every lead the
+                    # desk ever saw (QA sweep, Sep 2026).
+                    _wk = datetime.now(timezone.utc).strftime("%GW%V")
+                    if not _db.claim_once("aidispatch_%s_%s" % (pid, _wk)):
                         continue
                     live, _ = _db.get_app_state("dispatch_ai_live")
                     # The old automation only assigned POND leads. Same
@@ -10762,7 +10795,9 @@ def _fub_process_webhook(event, uri, resource_ids):
                 if not person_id or not outbound or person_id in seen:
                     continue
                 seen.add(person_id)
-                _fub_outbound_touch(person_id, is_call=(event == "callsCreated"))
+                _fub_outbound_touch(person_id,
+                                    is_call=(event == "callsCreated"),
+                                    caller_uid=r.get("userId"))
         # Receipt counter → Mission Control visibility
         try:
             _raw_stats, _ = _db.get_app_state("fub_webhook_stats")
@@ -15057,11 +15092,6 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
 
     def _send():
         try:
-            # Dedup: only ONE handoff per lead, ever. Claimed at send time so a
-            # timer lost to a redeploy doesn't permanently block a real handoff.
-            if not _db.claim_once(f"handoff:{person_id}"):
-                logger.info("Handoff already sent for person %s — skipping duplicate", person_id)
-                return
             from fub_client import FUBClient
             import projectblue_client as _pb_handoff
             fub = FUBClient()
@@ -15083,6 +15113,36 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
                     agent_phone = (agent.get("mobilePhone") or
                                    agent.get("phone") or
                                    agent.get("phoneNumber") or None)
+
+            # Desk mode: no named agent yet means the claim hasn't landed.
+            # Wait another 15 minutes (twice) rather than burning the
+            # once-per-lead handoff on a generic no-name text (QA sweep,
+            # Sep 2026). _retries rides on the function attribute-free
+            # thread by re-scheduling with a marker in lead_type.
+            try:
+                _ai_live2, _ = _db.get_app_state("dispatch_ai_live")
+            except Exception:
+                _ai_live2 = "0"
+            if (_ai_live2 or "").strip() == "1" and not agent_first:
+                tries = int(_db.get_app_state(
+                    "handoff_wait_%s" % person_id)[0] or 0)                     if _db.get_app_state("handoff_wait_%s" % person_id)[0] else 0
+                if tries < 2:
+                    _db.set_app_state("handoff_wait_%s" % person_id,
+                                      str(tries + 1))
+                    _schedule_sms_handoff(person_id, to_phone,
+                                          reply_text=reply_text,
+                                          lead_first_name=lead_first_name,
+                                          delay_seconds=900,
+                                          lead_type=lead_type)
+                    logger.info("handoff waiting on claim for %s (try %d)",
+                                person_id, tries + 1)
+                    return
+
+            # Dedup: only ONE handoff per lead, ever — claimed at SEND time,
+            # after the agent checks, so a wait-retry never burns it.
+            if not _db.claim_once(f"handoff:{person_id}"):
+                logger.info("Handoff already sent for person %s — skipping duplicate", person_id)
+                return
 
             lead_first = lead_first_name or "there"
 

@@ -9767,25 +9767,31 @@ def get_desk_agent_snapshot(agent_name, days=14):
         return {}
 
 
-def mark_dispatch_first_call(person_id):
+def mark_dispatch_first_call(person_id, caller_uid=None):
     """Stamp first_call_at on a recently claimed offer for this person.
-    Returns {agent_name, lead_name, minutes} on the FIRST stamp, else None,
-    so the wins feed posts the receipt exactly once."""
+    When caller_uid is known, the call must come from the CLAIMING agent —
+    Fhalen or a teammate dialing the lead shouldn't earn the claimer a
+    public receipt (QA sweep, Sep 2026). Returns {agent_name, lead_name,
+    minutes} on the FIRST stamp, else None."""
     if not is_available():
         return None
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    UPDATE dispatch_offers
+                    UPDATE dispatch_offers d
                        SET first_call_at = NOW()
-                     WHERE person_id = %s
-                       AND accepted_at IS NOT NULL
-                       AND first_call_at IS NULL
-                       AND accepted_at >= NOW() - INTERVAL '24 hours'
+                     WHERE d.person_id = %s
+                       AND d.accepted_at IS NOT NULL
+                       AND d.first_call_at IS NULL
+                       AND d.accepted_at >= NOW() - INTERVAL '24 hours'
+                       AND (%s::bigint IS NULL OR EXISTS (
+                            SELECT 1 FROM agent_profiles ap
+                            WHERE ap.agent_name = d.agent_name
+                              AND ap.fub_user_id = %s::bigint))
                     RETURNING agent_name, lead_name,
                         EXTRACT(EPOCH FROM NOW() - accepted_at) / 60
-                """, (str(person_id),))
+                """, (str(person_id), caller_uid, caller_uid))
                 row = cur.fetchone()
         if not row:
             return None

@@ -243,6 +243,29 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
 def make_offer(source, person_id, lead_name, lead_city=None, appt_time=None,
                notes=None, agent_name=None, hop=1, audit=None):
     """Create + send one offer. agent_name None = next eligible."""
+    # Concurrent webhook threads in a burst can race the rotation pointer
+    # and the open-claim cap. A short lock serializes candidate picking;
+    # if the lock is busy for 3s we proceed unlocked rather than drop the
+    # offer (the cap check still narrows the damage).
+    _lock = False
+    if not agent_name:
+        import time as _time
+        for _ in range(10):
+            if _db.try_acquire_job_lock("desk_pick"):
+                _lock = True
+                break
+            _time.sleep(0.3)
+    try:
+        _made = _make_offer_inner(source, person_id, lead_name, lead_city,
+                                  appt_time, notes, agent_name, hop, audit)
+    finally:
+        if _lock:
+            _db.release_job_lock("desk_pick")
+    return _made
+
+
+def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
+                      notes, agent_name, hop, audit):
     if not agent_name:
         prior = {o["agent"] for o in _db.dispatch_person_state(person_id)}
         for cand in eligible_agents(lead_city, audit=audit):
@@ -284,6 +307,25 @@ def make_offer(source, person_id, lead_name, lead_city=None, appt_time=None,
                                 "time. The offer moved to %s."
                                 % ((lead_name or "the lead").split()[0],
                                    agent_name.split()[0]))
+        except Exception:
+            pass
+    if not sent:
+        # An offer nobody was told about is a 5-minute dead hop. Loud.
+        try:
+            _db.log_automation_event(
+                event_type="desk_notify_fail", person_id=person_id,
+                person_name=lead_name, agent_name=agent_name,
+                payload={"hop": hop, "source": source},
+                triggered_by="dispatch")
+            import slack_client as _snf
+            ops = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+            if ops:
+                _snf.post_message(ops, "\u26a0\ufe0f Offer to %s for %s "
+                                       "could not be delivered on any "
+                                       "channel. It expires unseen in %d "
+                                       "minutes." % (agent_name,
+                                                     lead_name or person_id,
+                                                     OFFER_MINUTES))
         except Exception:
             pass
     logger.info("[DISPATCH] offer %s: %s -> %s (hop %d, sent=%s)",
