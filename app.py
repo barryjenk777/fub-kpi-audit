@@ -5516,11 +5516,12 @@ def _ring_group_state():
     return current, target, add, remove
 
 
-def scheduled_ring_group_note():
+def scheduled_ring_group_note(force=False):
     """Mon 8:05am + Tue 9:00am ET — if the Live Transfer inbox doesn't match
     this week's earned list, DM Fhalen the exact work order with a Done
     button. No mismatch = no DM (governor doctrine), just an ops receipt on
-    Monday. The button tap re-reads the inbox and VERIFIES the fix."""
+    Monday. The button tap re-reads the inbox and VERIFIES the fix.
+    force=True (admin endpoint) skips the once-per-day claim."""
     try:
         import slack_client as _sl
         if not _sl.is_available():
@@ -5536,15 +5537,21 @@ def scheduled_ring_group_note():
         today = datetime.now(timezone.utc)
         wk = "%dW%d" % (today.year, today.isocalendar()[1])
         if not add and not remove:
-            if today.weekday() == 0 and _db.claim_once("ringgroup_ok_%s" % wk) and ops:
+            if (force or today.weekday() == 0) \
+                    and _db.claim_once("ringgroup_ok_%s" % wk) and ops:
                 _sl.post_message(ops, "✅ Ring group check: Live Transfer inbox "
                                       "already matches this week's list (%s). Nothing "
                                       "for Fhalen to do." % ", ".join(target))
             return
-        if not _db.claim_once("ringgroup_ping_%s_%s" % (wk, today.strftime("%a"))):
+        if not force and not _db.claim_once("ringgroup_ping_%s_%s" % (wk, today.strftime("%a"))):
             return
+        # The inbox phone number, so which one is never left to chance.
+        # Default inferred from inbound call records (Sep 2026); override
+        # via app_state 'ring_group_number' if the line ever changes.
+        _num_raw, _ = _db.get_app_state("ring_group_number")
+        _num = (_num_raw or "").strip() or "(757) 290-7765"
         lines = ["Fhalen, weekly ring group update for the *Live Transfer* "
-                 "inbox number in FUB:"]
+                 "inbox number *%s* in FUB:" % _num]
         if add:
             lines.append("*Add:* " + ", ".join(add))
         if remove:
@@ -5569,6 +5576,25 @@ def scheduled_ring_group_note():
             logger.info("[RING GROUP] work order sent to Fhalen: +%s -%s", add, remove)
     except Exception as e:
         logger.warning("ring group note failed: %s", e)
+
+
+@app.route("/api/admin/desk/ring-group-note", methods=["GET", "POST"])
+def api_ring_group_note():
+    """GET: current-vs-target diff, read-only. POST {"force": true} fires the
+    work order to Fhalen now, bypassing the once-per-day claim."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        current, target, add, remove = _ring_group_state()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:200]}), 500
+    out = {"ok": True, "current": current, "target": target,
+           "add": add, "remove": remove}
+    if request.method == "POST":
+        scheduled_ring_group_note(
+            force=bool((request.get_json(silent=True) or {}).get("force")))
+        out["fired"] = True
+    return jsonify(out)
 
 
 @app.route("/api/admin/desk/slack-map", methods=["GET", "POST"])
