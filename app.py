@@ -5441,6 +5441,52 @@ def api_slack_actions():
         threading.Thread(target=_drill_work, daemon=True).start()
         return "", 200
 
+    if action_id == "ring_group_done":
+        # Verify-on-tap: re-read the inbox and confirm it actually matches.
+        ru = payload.get("response_url")
+
+        def _ring_verify():
+            try:
+                current, target, add, remove = _ring_group_state()
+                verified = not add and not remove
+                _db.log_automation_event(
+                    event_type="ring_group_done", person_id=None, person_name=None,
+                    agent_name="Fhalen Tendencia",
+                    payload={"verified": verified, "add": add, "remove": remove},
+                    triggered_by="slack")
+                if verified:
+                    msg = ("✅ Verified. The Live Transfer inbox matches this "
+                           "week's list. Thank you Fhalen, you're the best.")
+                else:
+                    bits = []
+                    if add:
+                        bits.append("still needs added: " + ", ".join(add))
+                    if remove:
+                        bits.append("still needs removed: " + ", ".join(remove))
+                    msg = ("Thanks for the tap, but the inbox doesn't match yet. "
+                           "It " + " and ".join(bits) + ". Give it another look "
+                           "and tap again when it's set.")
+                    # Re-arm the button by NOT replacing it on a failed verify.
+                if ru:
+                    try:
+                        import requests as _rq
+                        _rq.post(ru, json={"replace_original": verified,
+                                           "mrkdwn": True, "text": msg}, timeout=8)
+                    except Exception:
+                        pass
+                ops = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+                if ops:
+                    import slack_client as _sl2
+                    _sl2.post_message(ops, ("✅ Ring group updated and verified "
+                                            "by Fhalen." if verified else
+                                            "⚠️ Fhalen tapped done but the "
+                                            "ring group still mismatches."))
+            except Exception as e:
+                logger.warning("ring group verify failed: %s", e)
+
+        threading.Thread(target=_ring_verify, daemon=True).start()
+        return "", 200
+
     # Phase 2 button ids arrive here (desk_claim, desk_pass). Until then,
     # acknowledge politely so nothing errors in front of an agent.
     ru = payload.get("response_url")
@@ -5452,6 +5498,77 @@ def api_slack_actions():
         except Exception:
             pass
     return "", 200
+
+
+def _ring_group_state():
+    """Live Transfer inbox (FUB teamInboxes API, read-only) vs this week's
+    earned list (Sunday audit passers + protected). Returns
+    (current_names, target_names, add, remove)."""
+    client = FUBClient()
+    r = client._request("GET", "teamInboxes/%s" % getattr(config, "LIVE_CALLS_INBOX_ID", 4))
+    current = sorted(u.get("name") for u in ((r or {}).get("users") or []) if u.get("name"))
+    audit = cache_get("audit") or {}
+    passed = [a["name"] for a in (audit.get("agents") or [])
+              if (a.get("evaluation") or {}).get("overall_pass")]
+    target = sorted(set(passed) | set(getattr(config, "PROTECTED_AGENTS", []) or []))
+    add = [n for n in target if n not in current]
+    remove = [n for n in current if n not in target]
+    return current, target, add, remove
+
+
+def scheduled_ring_group_note():
+    """Mon 8:05am + Tue 9:00am ET — if the Live Transfer inbox doesn't match
+    this week's earned list, DM Fhalen the exact work order with a Done
+    button. No mismatch = no DM (governor doctrine), just an ops receipt on
+    Monday. The button tap re-reads the inbox and VERIFIES the fix."""
+    try:
+        import slack_client as _sl
+        if not _sl.is_available():
+            return
+        raw, _ = _db.get_app_state("slack_user_map")
+        fhalen_sid = (json.loads(raw or "{}") or {}).get("Fhalen Tendencia")
+        if not fhalen_sid:
+            return
+        current, target, add, remove = _ring_group_state()
+        if not target:
+            return  # audit cache cold — never send an empty work order
+        ops = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+        today = datetime.now(timezone.utc)
+        wk = "%dW%d" % (today.year, today.isocalendar()[1])
+        if not add and not remove:
+            if today.weekday() == 0 and _db.claim_once("ringgroup_ok_%s" % wk) and ops:
+                _sl.post_message(ops, "✅ Ring group check: Live Transfer inbox "
+                                      "already matches this week's list (%s). Nothing "
+                                      "for Fhalen to do." % ", ".join(target))
+            return
+        if not _db.claim_once("ringgroup_ping_%s_%s" % (wk, today.strftime("%a"))):
+            return
+        lines = ["Fhalen, weekly ring group update for the *Live Transfer* "
+                 "inbox number in FUB:"]
+        if add:
+            lines.append("*Add:* " + ", ".join(add))
+        if remove:
+            lines.append("*Remove:* " + ", ".join(remove))
+        lines.append("Full list this week: " + ", ".join(target))
+        blocks = [
+            {"type": "section",
+             "text": {"type": "mrkdwn", "text": "\n".join(lines)}},
+            {"type": "actions",
+             "elements": [{"type": "button", "style": "primary",
+                           "text": {"type": "plain_text",
+                                    "text": "Click here when you've done it"},
+                           "action_id": "ring_group_done",
+                           "value": json.dumps({"week": wk})}]},
+        ]
+        if _sl.dm_user(fhalen_sid, "Weekly ring group update", blocks=blocks):
+            _db.log_automation_event(
+                event_type="ring_group_note", person_id=None, person_name=None,
+                agent_name="Fhalen Tendencia",
+                payload={"add": add, "remove": remove, "target": target},
+                triggered_by="scheduler")
+            logger.info("[RING GROUP] work order sent to Fhalen: +%s -%s", add, remove)
+    except Exception as e:
+        logger.warning("ring group note failed: %s", e)
 
 
 @app.route("/api/admin/desk/slack-map", methods=["GET", "POST"])
@@ -22019,6 +22136,16 @@ def start_scheduler():
     _scheduler.add_job(scheduled_savebot_scripts,
                        CronTrigger(day_of_week="sat,sun", hour=7, minute=45, timezone=ET),
                        id="savebot_scripts", name="Save-Bot script prompts (weekends 7:45am)",
+                       max_instances=1, coalesce=True)
+    # Ring group work order to Fhalen: Monday after the group push settles,
+    # Tuesday re-check as the self-healing nag. DM only fires on a mismatch.
+    _scheduler.add_job(scheduled_ring_group_note,
+                       CronTrigger(day_of_week="mon", hour=8, minute=5, timezone=ET),
+                       id="ring_group_mon", name="Ring group work order (Mon 8:05am)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_ring_group_note,
+                       CronTrigger(day_of_week="tue", hour=9, minute=0, timezone=ET),
+                       id="ring_group_tue", name="Ring group re-check (Tue 9am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_hot_sheets,
                        CronTrigger(day_of_week="mon-fri", hour=8, minute=15, timezone=ET),
