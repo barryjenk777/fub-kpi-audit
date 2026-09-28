@@ -5484,19 +5484,29 @@ def api_slack_actions():
                 _dispatch_accept(offer)
                 fub_link = ("https://yourfriendlyagent.followupboss.com"
                             "/2/people/view/%s" % offer["person_id"])
-                _say("✅ *%s is yours.* Claimed in %ds. Assigned to you "
+                closers = ["The clock that matters starts now.",
+                           "Call before the coffee gets cold.",
+                           "They said yes minutes ago. Keep it warm.",
+                           "Speed got you the lead. Speed books the appointment."]
+                try:
+                    ci = int("".join(c for c in str(offer["person_id"])
+                                     if c.isdigit()) or 0) % len(closers)
+                except Exception:
+                    ci = 0
+                _say("✅ *%s is yours.* Claimed in %s. Assigned to you "
                      "in FUB right now. Call from the FUB app while they're "
-                     "warm: <%s|open %s in FUB>. The clock that matters "
-                     "starts now." % (lead_first, int(lat), fub_link, lead_first))
+                     "warm: <%s|open %s in FUB>. %s"
+                     % (lead_first, _dp.fmt_secs(lat), fub_link, lead_first,
+                        closers[ci]))
                 try:
                     import slack_client as _sl
                     wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
                     where = (" (%s)" % offer["lead_city"].title()) \
                         if offer["lead_city"] else ""
-                    _sl.post_message(wins, "✅ %s claimed %s%s in %ds. "
+                    _sl.post_message(wins, "✅ %s claimed %s%s in %s. "
                                            "Phone time."
                                      % (offer["agent_name"].split()[0],
-                                        lead_first, where, int(lat)))
+                                        lead_first, where, _dp.fmt_secs(lat)))
                 except Exception:
                     pass
             else:
@@ -5668,14 +5678,25 @@ def _desk_evidence(person_id):
         rows = next((v for v in r.values() if isinstance(v, list)), [])
         markers = ("transcript", "raiya", "ylopo ai", "ai call",
                    "call summary", "conversation summary")
+        # Boilerplate that is ABOUT the lead, not FROM the lead. The first
+        # live card surfaced a raw-HTML "PRIORITY LEAD ALERT" note (Barry,
+        # Sep 2026) — strip markup, skip alert noise.
+        import re as _re
+        noise = ("priority lead alert", "lead alert", "http", "click here",
+                 "view lead", "powered by")
         for n in rows:
             body = (n.get("body") or "")
             if not any(m in body.lower() for m in markers):
                 continue
-            for line in body.splitlines():
+            text = _re.sub(r"<[^>]+>", "\n", body)
+            for line in text.splitlines():
                 line = line.strip(" -•*\t")
-                if 25 <= len(line) <= 180:
-                    return line
+                low = line.lower()
+                if len(line) < 25 or len(line) > 180:
+                    continue
+                if any(x in low for x in noise):
+                    continue
+                return line
         return None
     except Exception:
         return None

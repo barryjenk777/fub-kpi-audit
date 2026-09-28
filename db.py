@@ -9724,6 +9724,31 @@ def ensure_dispatch_table():
         logger.warning("ensure_dispatch_table failed: %s", e)
 
 
+def get_desk_agent_snapshot(agent_name, days=14):
+    """Personalization read for offer copy: offers, claims, median claim
+    seconds for one agent over the window."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*), COUNT(accepted_at),
+                           PERCENTILE_CONT(0.5) WITHIN GROUP (
+                               ORDER BY EXTRACT(EPOCH FROM accepted_at - offered_at))
+                               FILTER (WHERE accepted_at IS NOT NULL)
+                    FROM dispatch_offers
+                    WHERE agent_name = %s
+                      AND offered_at >= NOW() - make_interval(days => %s)
+                """, (agent_name, int(days)))
+                n, claimed, med = cur.fetchone()
+        return {"offers": int(n or 0), "claims": int(claimed or 0),
+                "median_secs": round(float(med)) if med is not None else None}
+    except Exception as e:
+        logger.warning("get_desk_agent_snapshot failed: %s", e)
+        return {}
+
+
 def mark_dispatch_first_call(person_id):
     """Stamp first_call_at on a recently claimed offer for this person.
     Returns {agent_name, lead_name, minutes} on the FIRST stamp, else None,

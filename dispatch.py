@@ -128,8 +128,19 @@ def _slack_user_id(agent_name):
         return None
 
 
+def fmt_secs(secs):
+    """Human time: 47s under a minute, '1 min 32 sec' over (Barry, Sep 2026)."""
+    try:
+        secs = int(round(float(secs)))
+    except (TypeError, ValueError):
+        return "?"
+    if secs < 60:
+        return "%ds" % secs
+    return "%d min %d sec" % (secs // 60, secs % 60)
+
+
 def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
-            hop, notes=None):
+            hop, notes=None, person_id_for_copy=None):
     """The offer. Slack DM with Claim/Pass buttons is the primary channel
     (private offers, public wins — Barry, Sep 2026); the iMessage/email
     queue with the accept URL is the fallback so no offer ever depends on
@@ -149,11 +160,48 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
         sid = _slack_user_id(agent_name)
         if _sl.is_available() and sid:
             evidence = ("\n>_%s_" % notes.strip()) if (notes or "").strip() else ""
-            head = ("\U0001f7e2 *%s, %s converted %s%s and it's your look.*%s%s\n"
-                    "Appointment%s. *%d minutes*, then it moves to the next "
-                    "agent by name."
-                    % (first, who, lead_first, where, again, evidence, when,
+            # Rotating headers, stable per lead (the same lab pattern as the
+            # handoff texts: same message, slightly different, measured).
+            headers = [
+                "%s, %s just converted %s%s. First tap is yours.",
+                "Hot one, %s. %s converted %s%s and you're up first.",
+                "%s, fresh conversion: %s got %s%s to raise their hand.",
+                "New money, %s. %s converted %s%s. Your button.",
+                "%s, %s warmed up %s%s and the desk picked you first.",
+            ]
+            try:
+                v = int("".join(c for c in str(person_id_for_copy)
+                                if c.isdigit()) or 0) % len(headers)
+            except Exception:
+                v = 0
+            head_line = headers[v] % (first, who, lead_first, where)
+            if hop > 1:
+                head_line += " Second look, the first agent let it slide."
+            # One personal line from their own desk record. Positive or
+            # neutral only: the moment of opportunity is never the moment
+            # for a lecture.
+            personal = ""
+            try:
+                snap = _db.get_desk_agent_snapshot(agent_name) or {}
+                if not snap.get("offers"):
+                    personal = ("\nYour first desk offer. Tap it and the "
+                                "lead is yours in FUB instantly.")
+                elif snap.get("median_secs") is not None:
+                    personal = ("\nYou're claiming in about %s on average. "
+                                "Fast hands eat first."
+                                % fmt_secs(snap["median_secs"]))
+            except Exception:
+                pass
+            appt_line = (" Appointment %s." % appt_time) if appt_time else ""
+            head = ("\U0001f7e2 *%s*%s%s%s\n*%d minutes*, then it moves to "
+                    "the next agent by name."
+                    % (head_line, evidence, personal, appt_line,
                        OFFER_MINUTES))
+            try:
+                _db.log_variant("desk_offer", "v%d" % v,
+                                person_id_for_copy, agent_name)
+            except Exception:
+                pass
             blocks = [
                 {"type": "section", "text": {"type": "mrkdwn", "text": head}},
                 {"type": "actions", "elements": [
@@ -210,7 +258,7 @@ def make_offer(source, person_id, lead_name, lead_city=None, appt_time=None,
     if not oid:
         return None
     sent = _notify(agent_name, token, lead_name, lead_city, appt_time,
-                   source, hop, notes=notes)
+                   source, hop, notes=notes, person_id_for_copy=person_id)
     # Fhalen's feedback loop: her pick let it slide, tell her where it went.
     if source == "fhalen" and hop > 1:
         try:
