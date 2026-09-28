@@ -9717,9 +9717,40 @@ def ensure_dispatch_table():
                           AND expired_at IS NULL;
                     CREATE INDEX IF NOT EXISTS idx_do_person
                         ON dispatch_offers (person_id, offered_at DESC);
+                    ALTER TABLE dispatch_offers
+                        ADD COLUMN IF NOT EXISTS first_call_at TIMESTAMPTZ;
                 """)
     except Exception as e:
         logger.warning("ensure_dispatch_table failed: %s", e)
+
+
+def mark_dispatch_first_call(person_id):
+    """Stamp first_call_at on a recently claimed offer for this person.
+    Returns {agent_name, lead_name, minutes} on the FIRST stamp, else None,
+    so the wins feed posts the receipt exactly once."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE dispatch_offers
+                       SET first_call_at = NOW()
+                     WHERE person_id = %s
+                       AND accepted_at IS NOT NULL
+                       AND first_call_at IS NULL
+                       AND accepted_at >= NOW() - INTERVAL '24 hours'
+                    RETURNING agent_name, lead_name,
+                        EXTRACT(EPOCH FROM NOW() - accepted_at) / 60
+                """, (str(person_id),))
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {"agent_name": row[0], "lead_name": row[1],
+                "minutes": round(float(row[2] or 0))}
+    except Exception as e:
+        logger.warning("mark_dispatch_first_call failed: %s", e)
+        return None
 
 
 def create_dispatch_offer(source, person_id, lead_name, lead_city, appt_time,

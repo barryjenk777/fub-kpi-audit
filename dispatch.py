@@ -76,6 +76,13 @@ def eligible_agents(lead_city=None, audit=None):
     for name in getattr(config, "PROTECTED_AGENTS", []):
         if name not in passing and name not in _EXCLUDED:
             passing.append(name)
+    # New-hire grace (Barry, Sep 2026): unconditional desk access through
+    # the listed date, KPI pass or not. Gated hires stay gated — docs first.
+    today = datetime.now(timezone.utc).date().isoformat()
+    for name, until in (getattr(config, "DESK_GRACE_UNTIL", {}) or {}).items():
+        if today <= until and name not in passing \
+                and name not in _EXCLUDED and name not in gated:
+            passing.append(name)
     geo = [n for n, cities in DISPATCH_GEO_OVERRIDES.items()
            if city and any(c in city for c in cities)
            and n not in _EXCLUDED and n not in gated]
@@ -112,20 +119,69 @@ def _accept_url(token):
     return "%s/a/%s" % (base, token)
 
 
-def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source, hop):
-    """The offer message. Rides the standard queue (Barry's cell / email for
-    Android) until Slack lands; the accept page is channel-agnostic."""
-    profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
-                    if p["agent_name"] == agent_name), None)
-    if not profile:
-        return False
+def _slack_user_id(agent_name):
+    try:
+        import json as _json
+        raw, _ = _db.get_app_state("slack_user_map")
+        return (_json.loads(raw or "{}") or {}).get(agent_name)
+    except Exception:
+        return None
+
+
+def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
+            hop, notes=None):
+    """The offer. Slack DM with Claim/Pass buttons is the primary channel
+    (private offers, public wins — Barry, Sep 2026); the iMessage/email
+    queue with the accept URL is the fallback so no offer ever depends on
+    Slack being alive. The accept page stays channel-agnostic."""
     first = agent_name.split()[0]
     lead_first = (lead_name or "a new lead").split()[0]
     where = (" in %s" % lead_city.title()) if lead_city else ""
     when = (" %s" % appt_time) if appt_time else ""
-    who = "Fhalen" if source == "fhalen" else "The AI"
-    again = " (second chance, someone let it expire)" if hop > 1 else ""
-    msg = ("%s, %s converted %s%s and picked you%s. Appointment%s. "
+    who = "Fhalen" if source == "fhalen" else \
+          "The AI (voice)" if source == "ai_voice" else "The AI"
+    again = " Second look, the first agent let it slide." if hop > 1 else ""
+
+    # ── Slack DM first ────────────────────────────────────────────────────
+    try:
+        import json as _json
+        import slack_client as _sl
+        sid = _slack_user_id(agent_name)
+        if _sl.is_available() and sid:
+            evidence = ("\n>_%s_" % notes.strip()) if (notes or "").strip() else ""
+            head = ("\U0001f7e2 *%s, %s converted %s%s and it's your look.*%s%s\n"
+                    "Appointment%s. *%d minutes*, then it moves to the next "
+                    "agent by name."
+                    % (first, who, lead_first, where, again, evidence, when,
+                       OFFER_MINUTES))
+            blocks = [
+                {"type": "section", "text": {"type": "mrkdwn", "text": head}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "style": "primary",
+                     "text": {"type": "plain_text", "text": "CLAIM"},
+                     "action_id": "desk_claim",
+                     "value": _json.dumps({"token": offer_token})},
+                    {"type": "button",
+                     "text": {"type": "plain_text", "text": "Pass"},
+                     "action_id": "desk_pass",
+                     "value": _json.dumps({"token": offer_token})},
+                ]},
+                {"type": "context", "elements": [
+                    {"type": "mrkdwn",
+                     "text": "Buttons not working? <%s|Claim here instead>."
+                             % _accept_url(offer_token)}]},
+            ]
+            if _sl.dm_user(sid, "New lead offer: %s" % lead_first, blocks=blocks):
+                return True
+    except Exception as e:
+        logger.warning("[DISPATCH] slack offer failed for %s: %s", agent_name, e)
+
+    # ── Fallback: the standard queue (Barry's cell / email for Android) ───
+    profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
+                    if p["agent_name"] == agent_name), None)
+    if not profile:
+        return False
+    msg = ("%s, %s converted %s%s and picked you.%s Appointment%s. "
            "Tap to accept in the next %d minutes or it moves to the next "
            "agent: %s"
            % (first, who, lead_first, where, again, when, OFFER_MINUTES,
@@ -154,7 +210,19 @@ def make_offer(source, person_id, lead_name, lead_city=None, appt_time=None,
     if not oid:
         return None
     sent = _notify(agent_name, token, lead_name, lead_city, appt_time,
-                   source, hop)
+                   source, hop, notes=notes)
+    # Fhalen's feedback loop: her pick let it slide, tell her where it went.
+    if source == "fhalen" and hop > 1:
+        try:
+            import slack_client as _sl
+            fh = _slack_user_id("Fhalen Tendencia")
+            if _sl.is_available() and fh:
+                _sl.dm_user(fh, "Heads up: your pick for %s didn't claim in "
+                                "time. The offer moved to %s."
+                                % ((lead_name or "the lead").split()[0],
+                                   agent_name.split()[0]))
+        except Exception:
+            pass
     logger.info("[DISPATCH] offer %s: %s -> %s (hop %d, sent=%s)",
                 oid, lead_name, agent_name, hop, sent)
     return {"offer_id": oid, "agent_name": agent_name, "token": token}

@@ -846,3 +846,11 @@ SAVEBOT_TEMPERATURE = 0.4
 # LLM budget: max personalized scripts per run. Appointments beyond the cap
 # get the deterministic fallback template instead.
 SAVEBOT_MAX_SCRIPTS_PER_RUN = 40
+
+# ── Lead Desk ────────────────────────────────────────────────────────────
+# New hires get unconditional desk access through these dates (Barry,
+# Sep 2026: "Jessica and Mack are new so give them 30 day grace").
+DESK_GRACE_UNTIL = {
+    "Jessica Mandley": "2026-10-28",
+    "Mack Lancaster":  "2026-10-28",
+}

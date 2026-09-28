@@ -5441,6 +5441,84 @@ def api_slack_actions():
         threading.Thread(target=_drill_work, daemon=True).start()
         return "", 200
 
+    if action_id in ("desk_claim", "desk_pass"):
+        # The green button. Ack fast, work in a thread, same resolve paths
+        # as the /a/ accept page so the two channels can never disagree.
+        val = {}
+        try:
+            val = json.loads(action.get("value") or "{}")
+        except (ValueError, TypeError):
+            pass
+        token = val.get("token")
+        ru = payload.get("response_url")
+
+        def _desk_work():
+            import dispatch as _dp
+
+            def _say(text, replace=True):
+                if ru:
+                    try:
+                        import requests as _rq
+                        _rq.post(ru, json={"replace_original": replace,
+                                           "mrkdwn": True, "text": text},
+                                 timeout=8)
+                    except Exception:
+                        pass
+
+            offer = _db.get_dispatch_offer(token=token) if token else None
+            if not offer:
+                _say("This offer is no longer valid.")
+                return
+            lead_first = (offer["lead_name"] or "The lead").split()[0]
+            if offer["accepted_at"] or offer["passed_at"] or offer["expired_at"]:
+                state = ("already claimed" if offer["accepted_at"] else
+                         "already passed" if offer["passed_at"] else
+                         "expired and moved to the next agent")
+                _say("Too late on this one, it %s." % state)
+                return
+            if action_id == "desk_claim":
+                lat = _db.resolve_dispatch_offer(offer["id"], "accepted")
+                if lat is None:
+                    _say("Someone beat you to it by a heartbeat.")
+                    return
+                _dispatch_accept(offer)
+                fub_link = ("https://yourfriendlyagent.followupboss.com"
+                            "/2/people/view/%s" % offer["person_id"])
+                _say("✅ *%s is yours.* Claimed in %ds. Assigned to you "
+                     "in FUB right now. Call from the FUB app while they're "
+                     "warm: <%s|open %s in FUB>. The clock that matters "
+                     "starts now." % (lead_first, int(lat), fub_link, lead_first))
+                try:
+                    import slack_client as _sl
+                    wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
+                    where = (" (%s)" % offer["lead_city"].title()) \
+                        if offer["lead_city"] else ""
+                    _sl.post_message(wins, "✅ %s claimed %s%s in %ds. "
+                                           "Phone time."
+                                     % (offer["agent_name"].split()[0],
+                                        lead_first, where, int(lat)))
+                except Exception:
+                    pass
+            else:
+                lat = _db.resolve_dispatch_offer(offer["id"], "passed",
+                                                 reason="slack pass")
+                if lat is None:
+                    _say("Already resolved.")
+                    return
+                if offer["hop"] < _dp.MAX_HOPS:
+                    _dp.make_offer(offer["source"], offer["person_id"],
+                                   offer["lead_name"], offer["lead_city"],
+                                   offer["appt_time"], offer["notes"],
+                                   hop=offer["hop"] + 1,
+                                   audit=cache_get("audit") or {})
+                else:
+                    _db.mark_dispatch_terminal(offer["id"])
+                _say("Passed. %s moves to the next agent in seconds. Honest "
+                     "passes cost rotation position, not respect." % lead_first)
+
+        threading.Thread(target=_desk_work, daemon=True).start()
+        return "", 200
+
     if action_id == "ring_group_done":
         # Verify-on-tap: re-read the inbox and confirm it actually matches.
         ru = payload.get("response_url")
@@ -5576,6 +5654,59 @@ def scheduled_ring_group_note(force=False):
             logger.info("[RING GROUP] work order sent to Fhalen: +%s -%s", add, remove)
     except Exception as e:
         logger.warning("ring group note failed: %s", e)
+
+
+def _desk_evidence(person_id):
+    """One line of the lead's own conversation for the offer card, mined
+    from the latest AI transcript note. Deterministic, one API call, hard
+    no-fabrication: no real line found means no evidence shown."""
+    try:
+        client = FUBClient()
+        r = client._request("GET", "notes",
+                            params={"personId": person_id, "limit": 10,
+                                    "sort": "-created"}) or {}
+        rows = next((v for v in r.values() if isinstance(v, list)), [])
+        markers = ("transcript", "raiya", "ylopo ai", "ai call",
+                   "call summary", "conversation summary")
+        for n in rows:
+            body = (n.get("body") or "")
+            if not any(m in body.lower() for m in markers):
+                continue
+            for line in body.splitlines():
+                line = line.strip(" -•*\t")
+                if 25 <= len(line) <= 180:
+                    return line
+        return None
+    except Exception:
+        return None
+
+
+@app.route("/api/admin/desk/test-offer", methods=["POST"])
+def api_desk_test_offer():
+    """Guinea-pig endpoint: fire one REAL offer card for a real lead at a
+    named agent (default Barry), through the exact production path. Body
+    {"person_id": 12345, "agent": "Barry Jenkins"}."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    pid = body.get("person_id")
+    if not pid:
+        return jsonify({"ok": False, "reason": "person_id required"}), 400
+    try:
+        person = FUBClient().get_person(pid) or {}
+        city = next((a.get("city") for a in (person.get("addresses") or [])
+                     if isinstance(a, dict) and a.get("city")), None)
+        import dispatch as _dp
+        res = _dp.make_offer("ai_text", str(pid),
+                             (person.get("name") or "").strip(), city,
+                             notes=_desk_evidence(pid),
+                             agent_name=body.get("agent", "Barry Jenkins"),
+                             audit=cache_get("audit") or {})
+        return jsonify({"ok": bool(res), **(res or {})})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e),
+                        "traceback": traceback.format_exc()[:600]}), 500
 
 
 @app.route("/api/admin/desk/ring-group-note", methods=["GET", "POST"])
@@ -10292,6 +10423,20 @@ def _fub_outbound_touch(person_id, is_call):
                 _db.stamp_handoff_variant_minutes(str(person_id))
         except Exception as e:
             logger.warning("mark_isa_first_call failed (non-fatal): %s", e)
+        # Desk claim-to-call receipt: the claimed lead got its call. Posts
+        # once to the wins feed — the contract, publicly fulfilled.
+        try:
+            row = _db.mark_dispatch_first_call(str(person_id))
+            if row:
+                import slack_client as _sl
+                wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
+                _sl.post_message(wins, "\U0001f4de %s called %s %d min after "
+                                       "claiming. That's the desk working."
+                                 % ((row["agent_name"] or "?").split()[0],
+                                    (row["lead_name"] or "the lead").split()[0],
+                                    row["minutes"]))
+        except Exception as e:
+            logger.warning("dispatch first-call stamp failed: %s", e)
     try:
         from config import LEADSTREAM_TAG, LEADSTREAM_POND_TAG
         client = FUBClient()
@@ -10390,8 +10535,13 @@ def _fub_process_webhook(event, uri, resource_ids):
                         import dispatch as _dp
                         src_kind = ("ai_voice" if "ai_voice_needs_follow_up"
                                     in tags_l else "ai_text")
+                        _city = next((a.get("city") for a in
+                                      (person.get("addresses") or [])
+                                      if isinstance(a, dict) and a.get("city")),
+                                     None)
                         _dp.make_offer(src_kind, pid,
                                        (person.get("name") or "").strip(),
+                                       _city, notes=_desk_evidence(pid),
                                        audit=cache_get("audit") or {})
                     else:
                         # Mirror-mode evidence for the Lead Desk decisions:
