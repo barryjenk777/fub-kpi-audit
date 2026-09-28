@@ -4866,15 +4866,52 @@ def _onboard_new_hire(agent_name, agent_email, base_url):
 
 def _slack_join_line():
     """One <br> line inviting the new hire into the team Slack, shown in the
-    door-opening email when SLACK_INVITE_LINK is set. Slack's invite API is
-    Enterprise-only, so the link is the auto-add: they tap it, they're in,
-    and the nightly automap wires them to the Lead Desk with zero clicks."""
-    link = os.environ.get("SLACK_INVITE_LINK", "").strip()
-    if not link:
+    door-opening email. Slack's invite API is Enterprise-only, so the link is
+    the auto-add: they tap it, they're in, and the nightly automap wires them
+    to the Lead Desk with zero clicks.
+
+    The link lives in app_state (not env) because Slack invite links expire
+    in 30 days on this plan: past 28 days the line is omitted (a dead link is
+    worse than no link) and a warning logs. Refresh via
+    POST /api/admin/desk/invite-link {"url": "..."}."""
+    try:
+        raw, _ = _db.get_app_state("slack_invite_link")
+        d = json.loads(raw or "{}")
+        link = (d.get("url") or "").strip()
+        set_at = datetime.fromisoformat(d.get("set_at"))
+        if not link:
+            return ""
+        if (datetime.now(timezone.utc) - set_at) > timedelta(days=28):
+            logger.warning("[ONBOARD] Slack invite link is stale (set %s) — "
+                           "omitted from door-opening email. Refresh it.",
+                           d.get("set_at"))
+            return ""
+    except Exception:
         return ""
     return ("<br><strong>Team Slack.</strong> Join here: "
             "<a href='%s'>%s</a>. Lead offers and team wins live there. "
             "Turn notifications on." % (link, link))
+
+
+@app.route("/api/admin/desk/invite-link", methods=["GET", "POST"])
+def api_desk_invite_link():
+    """Read or refresh the Slack workspace invite link used in the
+    door-opening email. POST {"url": "https://join.slack.com/..."} stamps
+    set_at now; links older than 28 days stop rendering automatically."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    if request.method == "POST":
+        url = ((request.get_json(silent=True) or {}).get("url") or "").strip()
+        if not url.startswith("https://join.slack.com/"):
+            return jsonify({"ok": False, "reason": "expected a join.slack.com link"}), 400
+        _db.set_app_state("slack_invite_link", json.dumps(
+            {"url": url, "set_at": datetime.now(timezone.utc).isoformat()}))
+    raw, _ = _db.get_app_state("slack_invite_link")
+    try:
+        d = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        d = {}
+    return jsonify({"ok": True, **d})
 
 
 def _docs_signed_email(agent_name):
