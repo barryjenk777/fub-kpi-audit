@@ -102,6 +102,9 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/a/", "/dispatch", "/api/dispatch/",
         # Market Pulse pages: texted/emailed to leads, must be public
         "/market",
+        # Slack interactivity: HMAC signature verified inside the route
+        # (found Sep 2026 — Barry's drill tap died here at the global gate)
+        "/api/slack/",
         # Vercel course endpoints check COURSE_API_KEY internally
         "/api/course/",
         # Social Engine recruiting sync checks RECRUITING_EXPORT_TOKEN
@@ -5490,7 +5493,8 @@ def api_desk_slack_test():
     if not ch:
         return jsonify({"ok": False, "reason": "SLACK_DESK_OPS_CHANNEL not set"})
     ts = _sl.post_message(ch, "Command Center is connected. The Lead Desk mirror starts here.")
-    return jsonify({"ok": bool(ts), "channel": ch, "ts": ts})
+    return jsonify({"ok": bool(ts), "channel": ch, "ts": ts,
+                    "signing_secret_set": bool(os.environ.get("SLACK_SIGNING_SECRET"))})
 
 
 @app.route("/api/admin/desk/drill", methods=["POST"])
