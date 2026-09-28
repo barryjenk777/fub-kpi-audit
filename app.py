@@ -10675,22 +10675,34 @@ def _fub_process_webhook(event, uri, resource_ids):
                 try:
                     person = FUBClient().get_person(pid) or {}
                     tags_l = [t.lower() for t in (person.get("tags") or [])]
-                    # One front door: Ylopo AI text/voice conversions AND
-                    # Blue positive replies (sms_conversion) all route
-                    # through the desk once live (Barry, Sep 2026 — found
-                    # while listing which FUB automations to turn off).
-                    if not ("ai_needs_follow_up" in tags_l
-                            or "ai_voice_needs_follow_up" in tags_l
-                            or "sms_conversion" in tags_l):
+                    # One front door, full parity with the retired Warm
+                    # Handoff reassignment step (Barry's screenshot, Sep
+                    # 2026): all six conversion tags plus Blue's
+                    # sms_conversion route through the desk once live.
+                    _desk_tags = ("ai_needs_follow_up",
+                                  "ai_voice_needs_follow_up",
+                                  "sms_conversion", "claude_text_converted",
+                                  "y_ai_priority", "isa_transfer_unsuccessful",
+                                  "isa_attempted_transfer_realtor_unavailable")
+                    if not any(t in tags_l for t in _desk_tags):
                         continue
                     if not _db.claim_once("aidispatch_%s" % pid):
                         continue
                     live, _ = _db.get_app_state("dispatch_ai_live")
-                    if (live or "").strip() == "1":
+                    # The old automation only assigned POND leads. Same
+                    # guard here: a lead an agent already owns is never
+                    # offered to a teammate — it logs to the mirror as
+                    # re-engagement evidence for the first-right rule.
+                    _owned = (not person.get("assignedPondId")) and                         (person.get("assignedTo") or "").strip() not in                         ("", "Fhalen Tendencia")
+                    if (live or "").strip() == "1" and not _owned:
                         import dispatch as _dp
-                        src_kind = ("ai_voice" if "ai_voice_needs_follow_up"
-                                    in tags_l else
-                                    "blue_text" if "sms_conversion" in tags_l
+                        src_kind = ("ai_voice" if any(t in tags_l for t in
+                                    ("ai_voice_needs_follow_up",
+                                     "isa_transfer_unsuccessful",
+                                     "isa_attempted_transfer_realtor_unavailable"))
+                                    else
+                                    "blue_text" if ("sms_conversion" in tags_l
+                                    or "claude_text_converted" in tags_l)
                                     and "ai_needs_follow_up" not in tags_l
                                     else "ai_text")
                         _city = next((a.get("city") for a in
