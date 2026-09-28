@@ -5986,6 +5986,19 @@ def api_desk_mirror():
     return jsonify(out)
 
 
+@app.route("/api/admin/dispatch/ai-go-live", methods=["POST"])
+def api_dispatch_ai_go_live():
+    """Flip AI-conversion auto-offers live (or back with {"live": false}).
+    The second key of the two-key ignition: Barry removes the FUB
+    reassignment automation, this flips the desk to route those leads."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    val = "1" if body.get("live", True) else "0"
+    _db.set_app_state("dispatch_ai_live", val)
+    return jsonify({"ok": True, "dispatch_ai_live": val})
+
+
 @app.route("/api/admin/dispatch/go-live", methods=["POST"])
 def api_dispatch_go_live():
     """Flip Fhalen-appointment auto-offers live (or back to shadow with
@@ -10568,8 +10581,13 @@ def _fub_process_webhook(event, uri, resource_ids):
                 try:
                     person = FUBClient().get_person(pid) or {}
                     tags_l = [t.lower() for t in (person.get("tags") or [])]
+                    # One front door: Ylopo AI text/voice conversions AND
+                    # Blue positive replies (sms_conversion) all route
+                    # through the desk once live (Barry, Sep 2026 — found
+                    # while listing which FUB automations to turn off).
                     if not ("ai_needs_follow_up" in tags_l
-                            or "ai_voice_needs_follow_up" in tags_l):
+                            or "ai_voice_needs_follow_up" in tags_l
+                            or "sms_conversion" in tags_l):
                         continue
                     if not _db.claim_once("aidispatch_%s" % pid):
                         continue
@@ -10577,7 +10595,10 @@ def _fub_process_webhook(event, uri, resource_ids):
                     if (live or "").strip() == "1":
                         import dispatch as _dp
                         src_kind = ("ai_voice" if "ai_voice_needs_follow_up"
-                                    in tags_l else "ai_text")
+                                    in tags_l else
+                                    "blue_text" if "sms_conversion" in tags_l
+                                    and "ai_needs_follow_up" not in tags_l
+                                    else "ai_text")
                         _city = next((a.get("city") for a in
                                       (person.get("addresses") or [])
                                       if isinstance(a, dict) and a.get("city")),
@@ -14906,6 +14927,15 @@ def _schedule_sms_handoff(person_id, to_phone, reply_text="", lead_first_name=""
     if getattr(config, "PROJECT_BLUE_PAUSED", False):
         logger.warning("[PAUSED] handoff SMS suppressed for person %s — PROJECT_BLUE_PAUSED", person_id)
         return
+    # Desk mode: assignment now happens on claim, not on a FUB automation
+    # timer. Wait out the full cascade (3 hops x 5 min) so the text names
+    # the agent who actually claimed, never a stale assignment.
+    try:
+        _ai_live, _ = _db.get_app_state("dispatch_ai_live")
+        if (_ai_live or "").strip() == "1" and delay_seconds < 1200:
+            delay_seconds = 1200
+    except Exception:
+        pass
     import threading
 
     def _send():
