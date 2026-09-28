@@ -5690,7 +5690,22 @@ def _desk_evidence(person_id):
                     return 'They said: "%s"' % body
         except Exception:
             pass
-        # 2. The Call Opener line built from their real behavior
+        # 2. What their tags prove they did (Barry, Sep 2026: "go with what
+        # we know. AI tags"). Plain-English via the same intent dictionary
+        # the pond mailer uses; strongest two signals by LeadStream weight.
+        try:
+            from pond_mailer import YLOPO_INTENT_TAGS as _tagmap
+            from config import LEADSTREAM_SIGNAL_TAGS as _weights
+            person = client.get_person(person_id) or {}
+            tags = person.get("tags") or []
+            known = [(t, _weights.get(t, 0)) for t in tags if t in _tagmap]
+            known.sort(key=lambda x: -x[1])
+            if known:
+                bits = [_tagmap[t] for t, _ in known[:2]]
+                return "What we know: %s." % "; ".join(bits)
+        except Exception:
+            pass
+        # 3. The Call Opener line built from their real behavior
         r = client._request("GET", "notes",
                             params={"personId": person_id, "limit": 10,
                                     "sort": "-created"}) or {}
