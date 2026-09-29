@@ -279,6 +279,14 @@ def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
                     continue
             except Exception:
                 pass
+            # Busy-aware: an agent sitting in an appointment right now
+            # can't tap anything — skip, don't burn a silent 5-minute hop.
+            try:
+                _t = (_db.dispatch_agent_today([cand]) or {}).get(cand) or {}
+                if _t.get("on_appt_now"):
+                    continue
+            except Exception:
+                pass
             agent_name = cand
             break
     if not agent_name:

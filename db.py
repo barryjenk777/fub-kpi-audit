@@ -9810,7 +9810,7 @@ def count_open_dispatch_offers(agent_name):
         return 0
 
 
-def mark_desk_milestone(person_id, kind, window_days=45):
+def mark_desk_milestone(person_id, kind, window_days=45, caller_uid=None):
     """kind: convo | appt_set | appt_met. Stamps once per claimed offer
     (webhook-driven, zero extra FUB calls), returning
     {agent_name, lead_name, days} on the FIRST stamp so the wins feed
@@ -9823,16 +9823,21 @@ def mark_desk_milestone(person_id, kind, window_days=45):
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    UPDATE dispatch_offers
+                    UPDATE dispatch_offers d
                        SET %s = NOW()
-                     WHERE person_id = %%s
-                       AND accepted_at IS NOT NULL
-                       AND %s IS NULL
-                       AND accepted_at >= NOW() - make_interval(days => %%s)
+                     WHERE d.person_id = %%s
+                       AND d.accepted_at IS NOT NULL
+                       AND d.%s IS NULL
+                       AND d.accepted_at >= NOW() - make_interval(days => %%s)
+                       AND (%%s::bigint IS NULL OR EXISTS (
+                            SELECT 1 FROM agent_profiles ap
+                            WHERE ap.agent_name = d.agent_name
+                              AND ap.fub_user_id = %%s::bigint))
                     RETURNING agent_name, lead_name,
                         GREATEST(0, EXTRACT(EPOCH FROM NOW() - accepted_at)
                                  / 86400)::int
-                """ % (col, col), (str(person_id), int(window_days)))
+                """ % (col, col), (str(person_id), int(window_days),
+                                   caller_uid, caller_uid))
                 row = cur.fetchone()
         if not row:
             return None

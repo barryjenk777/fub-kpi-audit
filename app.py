@@ -5738,13 +5738,14 @@ def api_slack_actions():
     return "", 200
 
 
-def _desk_celebrate(kind, person_id, minutes=None):
+def _desk_celebrate(kind, person_id, minutes=None, caller_uid=None):
     """Webhook-driven funnel ceremony for claimed desk leads. One indexed
     DB stamp per event, zero extra FUB calls, each milestone posts exactly
     once, ceremony escalates with funnel depth."""
     try:
         window = 7 if kind == "convo" else 45
-        row = _db.mark_desk_milestone(str(person_id), kind, window_days=window)
+        row = _db.mark_desk_milestone(str(person_id), kind, window_days=window,
+                                      caller_uid=caller_uid)
         if not row:
             return
         first = (row["agent_name"] or "?").split()[0]
@@ -10896,11 +10897,20 @@ def _fub_outbound_touch(person_id, is_call, caller_uid=None, duration=None):
         _db.verify_nurture_touch(person_id)
     except Exception:
         pass
-    # The Guarantee: any verified human touch closes an open escalation.
+    # The Guarantee: a verified HUMAN touch closes an open escalation.
+    # Calls always count (the AI stands down post-conversion). Texts count
+    # only when the sender maps to a real agent, so an automated drip can
+    # never close an incident (QA, Sep 2026).
     try:
-        import escalation as _esc
-        _esc.resolve_for_person(person_id,
-                                how="verified %s" % ("call" if is_call else "text"))
+        _human_text = False
+        if not is_call and caller_uid:
+            _human_text = any(p.get("fub_user_id") == caller_uid
+                              for p in (_db.get_agent_profiles(active_only=True) or []))
+        if is_call or _human_text:
+            import escalation as _esc
+            _esc.resolve_for_person(person_id,
+                                    how="verified %s" % ("call" if is_call
+                                                         else "agent text"))
     except Exception:
         pass
     if is_call:
@@ -10948,7 +10958,8 @@ def _fub_outbound_touch(person_id, is_call, caller_uid=None, duration=None):
         # webhook payload — no extra API calls.
         if (duration or 0) >= 120:
             _desk_celebrate("convo", person_id,
-                            minutes=max(2, int(round((duration or 0) / 60))))
+                            minutes=max(2, int(round((duration or 0) / 60))),
+                            caller_uid=caller_uid)
     try:
         from config import LEADSTREAM_TAG, LEADSTREAM_POND_TAG
         client = FUBClient()
@@ -11073,7 +11084,13 @@ def _fub_process_webhook(event, uri, resource_ids):
                     # guard here: a lead an agent already owns is never
                     # offered to a teammate — it logs to the mirror as
                     # re-engagement evidence for the first-right rule.
-                    _owned = (not person.get("assignedPondId")) and                         (person.get("assignedTo") or "").strip() not in                         ("", "Fhalen Tendencia")
+                    _own_name = (person.get("assignedTo") or "").strip()
+                    _dark_owners = {"", "Fhalen Tendencia"} | set(
+                        getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+                    # A lead owned by a departing/paused agent is effectively
+                    # unowned: no ping reaches anyone, so it routes to the claim
+                    # board instead of vanishing (QA, Sep 2026).
+                    _owned = (not person.get("assignedPondId")) and _own_name not in _dark_owners
                     if (live or "").strip() == "1" and not _owned:
                         import dispatch as _dp
                         src_kind = ("ai_voice" if any(t in _fresh for t in
