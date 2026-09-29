@@ -9730,6 +9730,68 @@ def ensure_dispatch_table():
         logger.warning("ensure_dispatch_table failed: %s", e)
 
 
+def filter_new_desk_tags(person_id, tags):
+    """Seen-tags ledger: returns the subset of `tags` never before recorded
+    for this lead, recording them all. Ylopo never removes tags, and the
+    peopleTagsCreated webhook never says WHICH tag was added — so the desk
+    routes only on tags that are NEW to that lead (the Clarissa fossil,
+    Sep 2026: a 2-week-old AI_VOICE tag masqueraded as a fresh conversion)."""
+    if not is_available() or not tags:
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS desk_tag_seen (
+                        person_id TEXT NOT NULL,
+                        tag       TEXT NOT NULL,
+                        seen_at   TIMESTAMPTZ DEFAULT NOW(),
+                        PRIMARY KEY (person_id, tag)
+                    )
+                """)
+                new = []
+                for t in tags:
+                    cur.execute("""
+                        INSERT INTO desk_tag_seen (person_id, tag)
+                        VALUES (%s, %s) ON CONFLICT DO NOTHING
+                        RETURNING tag
+                    """, (str(person_id), t.lower()))
+                    if cur.fetchone():
+                        new.append(t.lower())
+                return new
+    except Exception as e:
+        logger.warning("filter_new_desk_tags failed: %s", e)
+        return []
+
+
+def seed_desk_tags_bulk(rows):
+    """Backfill: rows = [(person_id, tag), ...]. Returns inserted count."""
+    if not is_available() or not rows:
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS desk_tag_seen (
+                        person_id TEXT NOT NULL,
+                        tag       TEXT NOT NULL,
+                        seen_at   TIMESTAMPTZ DEFAULT NOW(),
+                        PRIMARY KEY (person_id, tag)
+                    )
+                """)
+                n = 0
+                for pid, tag in rows:
+                    cur.execute("""
+                        INSERT INTO desk_tag_seen (person_id, tag)
+                        VALUES (%s, %s) ON CONFLICT DO NOTHING
+                    """, (str(pid), tag.lower()))
+                    n += cur.rowcount
+                return n
+    except Exception as e:
+        logger.warning("seed_desk_tags_bulk failed: %s", e)
+        return 0
+
+
 def count_open_dispatch_offers(agent_name):
     """Open (unresolved) offers currently in this agent's hands."""
     if not is_available():
