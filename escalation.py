@@ -11,8 +11,8 @@ with the full receipt trail of everything already tried.
 Ladder for kind="owned_reengage" (an owned lead engaged the AI):
   rung 1 (0 min)   owner Slack DM            (sent by the caller, app.py)
   rung 2 (+15 min) owner alternate channel   (iMessage/email queue)
-  rung 3 (+30 min) claim board offer         (ownership expires under fire)
-  rung 4 (+45 min) Fhalen, the human backstop
+  rung 3 (+30 min) Fhalen covers the CALL    (the lead is never taken from
+                                              its agent — Barry, Sep 2026)
   rung 5 (+60 min) Barry, with the trail
 
 kind="unclaimed" (a conversion cascaded to terminal, roster never claimed)
@@ -209,22 +209,23 @@ def process_due():
                 _append_trace(eid, "rung 2: alternate channel to %s (%s)"
                               % (owner, "sent" if sent else "FAILED"))
             elif next_rung == 3:
-                import dispatch as _dp
-                res = _dp.make_offer(
-                    "cover", str(pid), lead, None,
-                    notes=("Waiting %d minutes for a callback. First to tap "
-                           "takes the call." % age_min))
-                _append_trace(eid, "rung 3: claim board offer -> %s"
-                              % ((res or {}).get("agent_name") or "no eligible agent"))
-            elif next_rung == 4:
-                msg = ("Fhalen, nobody has reached %s%s %d minutes after "
-                       "they engaged the AI. Can you call them? Any call "
+                # Owned leads are NEVER taken from their agent (Barry, Sep
+                # 2026: "everything except take the lead"). Fhalen covers
+                # the call; the name on the lead doesn't change.
+                msg = ("Fhalen, %s%s engaged the AI %d minutes ago and "
+                       "nobody has reached them. Can you make the call? The "
+                       "lead stays %s, you're covering the moment. Any call "
                        "from anyone closes this out. %s"
-                       % (lead1, (" (%s's lead)" % owner.split()[0]) if owner else "",
-                          age_min, link))
+                       % (lead1,
+                          (" (%s's lead)" % owner.split()[0]) if owner else "",
+                          age_min,
+                          ("%s's" % owner.split()[0]) if owner else "put",
+                          link))
                 sent = _slack_dm("Fhalen Tendencia", msg)
-                _append_trace(eid, "rung 4: Fhalen asked (%s)"
-                              % ("sent" if sent else "FAILED"))
+                _append_trace(eid, "rung 3: Fhalen asked to cover the call "
+                                   "(%s)" % ("sent" if sent else "FAILED"))
+            elif next_rung == 4:
+                pass  # reserved; Barry lands at rung 5 on the hour
             elif next_rung == 5:
                 trace = ""
                 try:
