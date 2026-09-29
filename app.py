@@ -5520,15 +5520,20 @@ def api_dispatch_offer():
     return jsonify({"ok": True, **out})
 
 
-def _desk_mirror_card(lane, person_name, detail):
+def _desk_mirror_card(lane, person_name, detail, person_id=None):
     """Phase 1: post a read-only mirror line to the private ops channel.
     Ops-facing only — never the agent channel, so unclaimed history can't
-    poison lead perception. No-op until Slack env vars land."""
+    poison lead perception. Carries the FUB link so Barry can spot-check
+    the lead in one click (Barry, Sep 2026)."""
     try:
         import slack_client as _sl
         ch = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
         if _sl.is_available() and ch:
-            _sl.post_message(ch, "🪞 %s — %s — %s" % (lane, person_name or "Unknown", detail))
+            name = person_name or "Unknown"
+            if person_id:
+                name = ("<https://yourfriendlyagent.followupboss.com"
+                        "/2/people/view/%s|%s>" % (person_id, name))
+            _sl.post_message(ch, "🪞 %s — %s — %s" % (lane, name, detail))
     except Exception as e:
         logger.warning("desk mirror card failed: %s", e)
 
@@ -10856,7 +10861,8 @@ def _fub_upsert_appt_resource(appt, event_name):
                 logger.info("[DISPATCH shadow] appt %s would offer to %s",
                             appt_id, picked)
                 _desk_mirror_card("Fhalen appt", person_name,
-                                  "pick: %s" % (picked or "next in rotation"))
+                                  "pick: %s" % (picked or "next in rotation"),
+                                  person_id=person_id)
             elif _db.claim_once("dispatch_appt_%s" % appt_id):
                 import dispatch as _dp
                 _eh = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
@@ -11155,7 +11161,7 @@ def _fub_process_webhook(event, uri, resource_ids):
                             "AI conversion",
                             (person.get("name") or "").strip(),
                             "voice" if "ai_voice_needs_follow_up" in _fresh
-                            else "text")
+                            else "text", person_id=pid)
                         # Owner ping (Clarissa gap, Sep 2026): an OWNED lead
                         # who engages the AI is protected from teammates but
                         # the owner must hear about it NOW. The old FUB
