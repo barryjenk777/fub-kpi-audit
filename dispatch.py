@@ -241,7 +241,8 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
 
 
 def make_offer(source, person_id, lead_name, lead_city=None, appt_time=None,
-               notes=None, agent_name=None, hop=1, audit=None):
+               notes=None, agent_name=None, hop=1, audit=None,
+               lead_source=None):
     """Create + send one offer. agent_name None = next eligible."""
     # Concurrent webhook threads in a burst can race the rotation pointer
     # and the open-claim cap. A short lock serializes candidate picking;
@@ -257,18 +258,57 @@ def make_offer(source, person_id, lead_name, lead_city=None, appt_time=None,
             _time.sleep(0.3)
     try:
         _made = _make_offer_inner(source, person_id, lead_name, lead_city,
-                                  appt_time, notes, agent_name, hop, audit)
+                                  appt_time, notes, agent_name, hop, audit,
+                                  lead_source=lead_source)
     finally:
         if _lock:
             _db.release_job_lock("desk_pick")
     return _made
 
 
+def _ordered_candidates(lead_city, audit, source, person_id, hop,
+                        lead_source=None):
+    """Candidate order + which arm chose it. The experiment (Barry, Sep
+    2026): half of hop-1 offers are merit-ordered (best lane converter
+    among the ELIGIBLE gets first look — merit orders within the earned
+    pool, never expands it), half stay pure rotation. route_path is stamped
+    on every offer so the data can prove which arm books more appointments
+    per offered lead. Cascade hops always use rotation order (prior agents
+    are excluded anyway)."""
+    base = eligible_agents(lead_city, audit=audit)
+    if hop != 1 or not base:
+        return base, "rotation"
+    try:
+        arm_merit = (int("".join(c for c in str(person_id)
+                                 if c.isdigit()) or 0) % 2 == 0)
+    except Exception:
+        arm_merit = False
+    if not arm_merit:
+        return base, "rotation"
+    try:
+        import merit as _merit
+        scorecard = _merit.get_cached_scorecard()
+        lane = _merit.lane_for_lead(lead_source or "",
+                                    source in ("fhalen", "ai_voice"))
+        ranked = [n for n, _m in _merit.rank_lane_agents(scorecard, lane, base)]
+        if ranked:
+            # merit-ranked first, then everyone else in rotation order
+            out = ranked + [n for n in base if n not in ranked]
+            return out, "merit:%s" % (lane or "unmapped")
+    except Exception as e:
+        logger.warning("[DISPATCH] merit ordering failed: %s", e)
+    return base, "rotation"
+
+
 def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
-                      notes, agent_name, hop, audit):
+                      notes, agent_name, hop, audit, lead_source=None):
+    route_path = "named"
     if not agent_name:
         prior = {o["agent"] for o in _db.dispatch_person_state(person_id)}
-        for cand in eligible_agents(lead_city, audit=audit):
+        cands, route_path = _ordered_candidates(lead_city, audit, source,
+                                                person_id, hop,
+                                                lead_source=lead_source)
+        for cand in cands:
             if cand in prior:
                 continue
             # Open-claim cap: an agent already holding 2 live offers is
@@ -303,6 +343,10 @@ def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
     # the same agent.)
     if hop == 1:
         advance_rotation()
+    try:
+        _db.set_offer_route(oid, route_path)
+    except Exception:
+        pass
     sent = _notify(agent_name, token, lead_name, lead_city, appt_time,
                    source, hop, notes=notes, person_id_for_copy=person_id)
     # Fhalen's feedback loop: her pick let it slide, tell her where it went.

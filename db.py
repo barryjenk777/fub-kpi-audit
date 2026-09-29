@@ -9725,6 +9725,8 @@ def ensure_dispatch_table():
                         ADD COLUMN IF NOT EXISTS appt_set_at TIMESTAMPTZ;
                     ALTER TABLE dispatch_offers
                         ADD COLUMN IF NOT EXISTS appt_met_at TIMESTAMPTZ;
+                    ALTER TABLE dispatch_offers
+                        ADD COLUMN IF NOT EXISTS route_path TEXT;
                 """)
     except Exception as e:
         logger.warning("ensure_dispatch_table failed: %s", e)
@@ -9790,6 +9792,18 @@ def seed_desk_tags_bulk(rows):
     except Exception as e:
         logger.warning("seed_desk_tags_bulk failed: %s", e)
         return 0
+
+
+def set_offer_route(offer_id, path):
+    if not is_available() or not offer_id:
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE dispatch_offers SET route_path = %s "
+                            "WHERE id = %s", (path, offer_id))
+    except Exception as e:
+        logger.warning("set_offer_route failed: %s", e)
 
 
 def count_open_dispatch_offers(agent_name):

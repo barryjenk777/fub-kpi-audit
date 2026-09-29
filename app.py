@@ -6049,7 +6049,8 @@ def api_desk_test_offer():
                              (person.get("name") or "").strip(), city,
                              notes=_desk_evidence(pid),
                              agent_name=body.get("agent", "Barry Jenkins"),
-                             audit=cache_get("audit") or {})
+                             audit=cache_get("audit") or {},
+                             lead_source=person.get("source"))
         return jsonify({"ok": bool(res), **(res or {})})
     except Exception as e:
         import traceback
@@ -6257,6 +6258,20 @@ def api_desk_report():
                 """, (days,))
                 t = cur.fetchone()
                 cur.execute("""
+                    SELECT CASE WHEN route_path LIKE 'merit%%%%'
+                                THEN 'merit' ELSE 'rotation' END AS arm,
+                           COUNT(*) FILTER (WHERE hop = 1),
+                           COUNT(accepted_at) FILTER (WHERE hop = 1),
+                           COUNT(convo_at), COUNT(appt_set_at), COUNT(appt_met_at)
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - make_interval(days => %s)
+                    GROUP BY 1
+                """, (days,))
+                arms = [{"arm": r[0], "hop1_offers": int(r[1]),
+                         "hop1_claims": int(r[2]), "convos": int(r[3]),
+                         "appts_set": int(r[4]), "appts_met": int(r[5])}
+                        for r in cur.fetchall()]
+                cur.execute("""
                     SELECT lead_name, agent_name, source, hop,
                            accepted_at IS NOT NULL AS claimed,
                            first_call_at IS NOT NULL AS called, terminal,
@@ -6270,7 +6285,7 @@ def api_desk_report():
                            "terminal": r[6], "at": r[7].isoformat(),
                            "person_id": r[8]}
                           for r in cur.fetchall()]
-        return jsonify({"ok": True, "days": days,
+        return jsonify({"ok": True, "days": days, "experiment_arms": arms,
                         "totals": {"leads": int(t[0]), "leads_claimed": int(t[1]),
                                    "leads_terminal": int(t[2]), "offers": int(t[3]),
                                    "avg_claim_secs": int(t[4]) if t[4] is not None else None},
@@ -11109,7 +11124,8 @@ def _fub_process_webhook(event, uri, resource_ids):
                         _res = _dp.make_offer(src_kind, pid,
                                        (person.get("name") or "").strip(),
                                        _city, notes=_desk_evidence(pid),
-                                       audit=cache_get("audit") or {})
+                                       audit=cache_get("audit") or {},
+                                       lead_source=person.get("source"))
                         if _res:
                             _db.log_automation_event(
                                 event_type="desk_intake", person_id=pid,
