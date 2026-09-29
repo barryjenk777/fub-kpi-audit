@@ -6389,6 +6389,11 @@ def scheduled_dispatch_cascade():
         return
     try:
         import dispatch as _dp
+        try:
+            import escalation as _esc
+            _esc.process_due()
+        except Exception as _pe:
+            logger.warning("escalation ladder failed: %s", _pe)
         for oid in _db.due_dispatch_offers():
             offer = _db.get_dispatch_offer(offer_id=oid)
             if not offer:
@@ -6404,6 +6409,14 @@ def scheduled_dispatch_cascade():
                 if nxt:
                     continue
             _db.mark_dispatch_terminal(oid)
+            try:
+                import escalation as _esc
+                _esc.open_escalation(
+                    "unclaimed", offer["person_id"], offer["lead_name"],
+                    owner_agent=None,
+                    note="cascaded through %d agents, none claimed" % offer["hop"])
+            except Exception as _ee:
+                logger.warning("escalation open failed: %s", _ee)
             try:
                 import postmark_client as _pm
                 fhalen = getattr(config, "LIVE_CALLS_ADMIN_EMAIL", None)
@@ -10849,6 +10862,13 @@ def _fub_outbound_touch(person_id, is_call, caller_uid=None, duration=None):
         _db.verify_nurture_touch(person_id)
     except Exception:
         pass
+    # The Guarantee: any verified human touch closes an open escalation.
+    try:
+        import escalation as _esc
+        _esc.resolve_for_person(person_id,
+                                how="verified %s" % ("call" if is_call else "text"))
+    except Exception:
+        pass
     if is_call:
         try:
             if _db.mark_isa_first_call(str(person_id)):
@@ -11111,6 +11131,13 @@ def _fub_process_webhook(event, uri, resource_ids):
                                     agent_name=_owner,
                                     payload={"kind": _kind},
                                     triggered_by="webhook_fub")
+                                import escalation as _esc
+                                _esc.open_escalation(
+                                    "owned_reengage", pid,
+                                    person.get("name"), owner_agent=_owner,
+                                    note="rung 1: owner Slack DM %s"
+                                         % ("sent" if _sent_o else
+                                            "FAILED, fallback queued"))
                         except Exception as _ope:
                             logger.warning("owner ping failed: %s", _ope)
                 except Exception as e:
