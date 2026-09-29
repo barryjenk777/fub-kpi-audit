@@ -125,6 +125,18 @@ def open_escalation(kind, person_id, lead_name, owner_agent=None, note=""):
                 eid = cur.fetchone()[0]
         logger.info("[GUARANTEE] opened #%s %s for %s (owner %s)",
                     eid, kind, lead_name, owner_agent)
+        # Unclaimed conversions enter AT the Fhalen rung, so her ask fires
+        # now, not on the next timer (sequencing gap caught by Barry's
+        # pond-vs-owned question, Sep 2026).
+        if kind == "unclaimed":
+            lead1 = (lead_name or "the lead").split()[0]
+            msg = ("Fhalen, %s converted and cascaded through the whole "
+                   "roster with no claim. Can you call them? Any call from "
+                   "anyone closes this out. %s"
+                   % (lead1, _fub_link(person_id)))
+            sent = _slack_dm("Fhalen Tendencia", msg)
+            _append_trace(eid, "rung 4: Fhalen asked immediately (%s)"
+                          % ("sent" if sent else "FAILED"))
         return eid
     except Exception as e:
         logger.warning("open_escalation failed: %s", e)
