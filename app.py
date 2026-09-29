@@ -6179,6 +6179,40 @@ def api_desk_drill():
                     "unmapped_note": "agents missing from slack-map get nothing"})
 
 
+@app.route("/api/admin/desk/seed-tags", methods=["POST"])
+def api_desk_seed_tags():
+    """One-time backfill: record every lead's EXISTING conversion tags as
+    already-seen, so history can't masquerade as news. Threaded; check
+    Railway logs for the completion line."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    def _seed():
+        try:
+            watch = ("ai_needs_follow_up", "ai_voice_needs_follow_up",
+                     "sms_conversion", "claude_text_converted",
+                     "isa_transfer_unsuccessful",
+                     "isa_attempted_transfer_realtor_unavailable")
+            client = FUBClient()
+            people = client.get_all_people()
+            rows = []
+            for p in people:
+                pid = p.get("id")
+                if not pid:
+                    continue
+                for t in (p.get("tags") or []):
+                    if t.lower() in watch:
+                        rows.append((pid, t.lower()))
+            n = _db.seed_desk_tags_bulk(rows)
+            logger.info("[DESK SEED] recorded %d existing conversion tags "
+                        "from %d leads", n, len(people))
+        except Exception as e:
+            logger.error("[DESK SEED] failed: %s", e)
+
+    threading.Thread(target=_seed, daemon=True).start()
+    return jsonify({"ok": True, "status": "seeding in background"})
+
+
 @app.route("/api/admin/desk/report")
 def api_desk_report():
     """Read-only distribution report straight off dispatch_offers.
@@ -11017,7 +11051,15 @@ def _fub_process_webhook(event, uri, resource_ids):
                                   "sms_conversion", "claude_text_converted",
                                   "isa_transfer_unsuccessful",
                                   "isa_attempted_transfer_realtor_unavailable")
-                    if not any(t in tags_l for t in _desk_tags):
+                    _present = [t for t in _desk_tags if t in tags_l]
+                    if not _present:
+                        continue
+                    # Route only on tags NEW to this lead — Ylopo never
+                    # removes tags and the webhook never says which one was
+                    # added, so fossils must not convert twice (Clarissa,
+                    # Sep 2026).
+                    _fresh = _db.filter_new_desk_tags(pid, _present)
+                    if not _fresh:
                         continue
                     # Weekly key, not once-ever: a lead whose offer went
                     # terminal (or who re-converts weeks later) can route
@@ -11034,14 +11076,14 @@ def _fub_process_webhook(event, uri, resource_ids):
                     _owned = (not person.get("assignedPondId")) and                         (person.get("assignedTo") or "").strip() not in                         ("", "Fhalen Tendencia")
                     if (live or "").strip() == "1" and not _owned:
                         import dispatch as _dp
-                        src_kind = ("ai_voice" if any(t in tags_l for t in
+                        src_kind = ("ai_voice" if any(t in _fresh for t in
                                     ("ai_voice_needs_follow_up",
                                      "isa_transfer_unsuccessful",
                                      "isa_attempted_transfer_realtor_unavailable"))
                                     else
-                                    "blue_text" if ("sms_conversion" in tags_l
-                                    or "claude_text_converted" in tags_l)
-                                    and "ai_needs_follow_up" not in tags_l
+                                    "blue_text" if ("sms_conversion" in _fresh
+                                    or "claude_text_converted" in _fresh)
+                                    and "ai_needs_follow_up" not in _fresh
                                     else "ai_text")
                         _city = next((a.get("city") for a in
                                       (person.get("addresses") or [])
@@ -11079,7 +11121,7 @@ def _fub_process_webhook(event, uri, resource_ids):
                         _desk_mirror_card(
                             "AI conversion",
                             (person.get("name") or "").strip(),
-                            "voice" if "ai_voice_needs_follow_up" in tags_l
+                            "voice" if "ai_voice_needs_follow_up" in _fresh
                             else "text")
                         # Owner ping (Clarissa gap, Sep 2026): an OWNED lead
                         # who engages the AI is protected from teammates but
@@ -11093,7 +11135,7 @@ def _fub_process_webhook(event, uri, resource_ids):
                                         set()))
                             if _owned and _owner and _owner not in _excl:
                                 _kind = ("voice" if "ai_voice_needs_follow_up"
-                                         in tags_l else "text")
+                                         in _fresh else "text")
                                 _lead1 = ((person.get("name") or "your lead")
                                           .strip().split()[0])
                                 _flink = ("https://yourfriendlyagent."
