@@ -11061,6 +11061,58 @@ def _fub_process_webhook(event, uri, resource_ids):
                             (person.get("name") or "").strip(),
                             "voice" if "ai_voice_needs_follow_up" in tags_l
                             else "text")
+                        # Owner ping (Clarissa gap, Sep 2026): an OWNED lead
+                        # who engages the AI is protected from teammates but
+                        # the owner must hear about it NOW. The old FUB
+                        # automation was pond-only too, so this blind spot
+                        # predates the desk; it ends here.
+                        try:
+                            _owner = (person.get("assignedTo") or "").strip()
+                            _excl = set(config.EXCLUDED_USERS) | set(
+                                getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS",
+                                        set()))
+                            if _owned and _owner and _owner not in _excl:
+                                _kind = ("voice" if "ai_voice_needs_follow_up"
+                                         in tags_l else "text")
+                                _lead1 = ((person.get("name") or "your lead")
+                                          .strip().split()[0])
+                                _flink = ("https://yourfriendlyagent."
+                                          "followupboss.com/2/people/view/%s"
+                                          % pid)
+                                _msg = ("\U0001f525 %s, your lead %s just "
+                                        "engaged the AI (%s) and is ready for "
+                                        "a human. Already yours, no button to "
+                                        "tap. Call now: <%s|open %s in FUB>."
+                                        % (_owner.split()[0], _lead1, _kind,
+                                           _flink, _lead1))
+                                import slack_client as _slo
+                                import dispatch as _dpo
+                                _sid = _dpo._slack_user_id(_owner)
+                                _sent_o = bool(_slo.is_available() and _sid
+                                               and _slo.dm_user(_sid, _msg))
+                                if not _sent_o:
+                                    _prof = next(
+                                        (p2 for p2 in
+                                         (_db.get_agent_profiles(active_only=True) or [])
+                                         if p2["agent_name"] == _owner), None)
+                                    if _prof:
+                                        import re as _reo
+                                        _plain = _reo.sub(r"<[^|>]+\|([^>]+)>",
+                                                          r"\1 %s" % _flink,
+                                                          _msg)
+                                        _db.queue_agent_imessage(
+                                            _owner, _prof.get("fub_user_id"),
+                                            _prof.get("phone") or "",
+                                            _plain, week_day="dispatch")
+                                _db.log_automation_event(
+                                    event_type="desk_owner_ping",
+                                    person_id=pid,
+                                    person_name=person.get("name"),
+                                    agent_name=_owner,
+                                    payload={"kind": _kind},
+                                    triggered_by="webhook_fub")
+                        except Exception as _ope:
+                            logger.warning("owner ping failed: %s", _ope)
                 except Exception as e:
                     logger.warning("ai intake failed for %s: %s", pid, e)
         elif event in ("callsCreated", "textMessagesCreated"):
