@@ -6186,13 +6186,24 @@ def api_desk_drill():
                     "unmapped_note": "agents missing from slack-map get nothing"})
 
 
-@app.route("/api/admin/desk/seed-tags", methods=["POST"])
+@app.route("/api/admin/desk/seed-tags", methods=["GET", "POST"])
 def api_desk_seed_tags():
     """One-time backfill: record every lead's EXISTING conversion tags as
     already-seen, so history can't masquerade as news. Threaded; check
     Railway logs for the completion line."""
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
+    if request.method == "GET":
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*), COUNT(DISTINCT person_id) "
+                                "FROM desk_tag_seen")
+                    n, p = cur.fetchone()
+            return jsonify({"ok": True, "tags_recorded": int(n or 0),
+                            "leads_covered": int(p or 0)})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)[:200]})
 
     def _seed():
         try:
@@ -11090,9 +11101,29 @@ def _fub_process_webhook(event, uri, resource_ids):
                     # removes tags and the webhook never says which one was
                     # added, so fossils must not convert twice (Clarissa,
                     # Sep 2026).
-                    _fresh = _db.filter_new_desk_tags(pid, _present)
+                    _fresh, _first_enc = _db.filter_new_desk_tags(
+                        pid, _present, with_first_flag=True)
                     if not _fresh:
                         continue
+                    # Self-seeding (Sep 30, false-conversion cards): a lead
+                    # OLDER than 7 days meeting the ledger for the first
+                    # time is assumed to carry fossils — record silently,
+                    # route nothing. New leads can't have fossils, so their
+                    # first tags are genuine news. This removes all
+                    # dependence on the bulk seed surviving deploys.
+                    if _first_enc:
+                        try:
+                            _created = datetime.fromisoformat(
+                                (person.get("created") or "")
+                                .replace("Z", "+00:00"))
+                            if (datetime.now(timezone.utc) - _created
+                                    ).days > 7:
+                                logger.info("[DESK] ledger self-seeded %s "
+                                            "(old lead, first encounter, "
+                                            "tags recorded, not routed)", pid)
+                                continue
+                        except (ValueError, AttributeError, TypeError):
+                            continue
                     # Weekly key, not once-ever: a lead whose offer went
                     # terminal (or who re-converts weeks later) can route
                     # again. Once-ever silently blacklisted every lead the
