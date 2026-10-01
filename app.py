@@ -6200,8 +6200,23 @@ def api_desk_seed_tags():
                     cur.execute("SELECT COUNT(*), COUNT(DISTINCT person_id) "
                                 "FROM desk_tag_seen")
                     n, p = cur.fetchone()
-            return jsonify({"ok": True, "tags_recorded": int(n or 0),
-                            "leads_covered": int(p or 0)})
+                    recent = []
+                    hrs = request.args.get("recent", type=int)
+                    if hrs:
+                        cur.execute("""
+                            SELECT person_id, tag, seen_at
+                            FROM desk_tag_seen
+                            WHERE seen_at >= NOW() - make_interval(hours => %s)
+                            ORDER BY seen_at
+                        """, (hrs,))
+                        recent = [{"person_id": r[0], "tag": r[1],
+                                   "seen_at": r[2].isoformat()}
+                                  for r in cur.fetchall()]
+            out = {"ok": True, "tags_recorded": int(n or 0),
+                   "leads_covered": int(p or 0)}
+            if hrs:
+                out["recent"] = recent
+            return jsonify(out)
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)[:200]})
 
