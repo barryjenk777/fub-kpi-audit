@@ -6205,6 +6205,16 @@ def api_desk_seed_tags():
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)[:200]})
 
+    # Chunked synchronous seeding: the scan runs on a machine deploys
+    # can't kill, rows arrive here in batches (Sep 30 — two background
+    # seed threads died in deploy churn; never again).
+    body = request.get_json(silent=True) or {}
+    if body.get("rows"):
+        rows = [(r[0], r[1]) for r in body["rows"]
+                if isinstance(r, (list, tuple)) and len(r) == 2][:1000]
+        n = _db.seed_desk_tags_bulk(rows)
+        return jsonify({"ok": True, "inserted": n, "received": len(rows)})
+
     def _seed():
         try:
             watch = ("ai_needs_follow_up", "ai_voice_needs_follow_up",
