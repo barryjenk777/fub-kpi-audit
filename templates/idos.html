@@ -1,0 +1,106 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your IDOS Math</title>
+<style>
+body{margin:0;background:#0d1117;color:#e8edf8;font-family:-apple-system,'Segoe UI',Arial,sans-serif;line-height:1.4}
+.wrap{max-width:560px;margin:0 auto;padding:1.6rem 1.1rem 3rem;text-align:center}
+.kick{font-size:.68rem;font-weight:800;letter-spacing:.22em;color:#f5a623;text-transform:uppercase}
+h1{font-size:1.7rem;font-weight:900;margin:.3rem 0 .4rem}
+.sub{color:#9aa7ba;font-size:.95rem;margin-bottom:1.4rem}
+.dollar{display:flex;align-items:center;justify-content:center;gap:.3rem;margin:0 0 .4rem}
+.dollar span{font-size:2.4rem;font-weight:900;color:#f5a623}
+input{background:#151b24;border:2px solid #2b3a50;border-radius:14px;color:#fff;
+  font-size:2.4rem;font-weight:900;width:7.5ch;text-align:center;padding:.35rem .4rem;outline:none}
+input:focus{border-color:#f5a623}
+.hint{font-size:.78rem;color:#5c6a80;margin-bottom:1.2rem}
+.go{background:#2ea44f;color:#fff;border:none;border-radius:14px;font-size:1.15rem;
+  font-weight:900;padding:.85rem 2.2rem;cursor:pointer;letter-spacing:.02em}
+.cascade{margin-top:1.4rem;text-align:left}
+.step{background:#151b24;border:1px solid #232c3a;border-radius:14px;padding:.8rem 1rem;
+  margin-bottom:.5rem;display:flex;justify-content:space-between;align-items:baseline;
+  opacity:0;transform:translateY(8px);transition:all .45s ease}
+.step.on{opacity:1;transform:none}
+.step b{font-size:1.5rem;font-weight:900;color:#fff}
+.step span{font-size:.85rem;color:#9aa7ba}
+.tuesday{background:#1d1406;border:2px solid #f5a623;border-radius:16px;padding:1.1rem;
+  margin-top:.7rem;text-align:center;opacity:0;transform:translateY(8px);transition:all .5s ease}
+.tuesday.on{opacity:1;transform:none}
+.tuesday b{display:block;font-size:2rem;font-weight:900;color:#f5a623}
+.tuesday span{color:#e8edf8;font-size:.95rem}
+.punch{margin-top:1.1rem;font-size:1rem;color:#c0cbdb;font-style:italic;display:none}
+.foot{margin-top:2rem;font-size:.8rem;color:#5c6a80}
+.foot b{color:#9aa7ba}
+details{margin-top:1.1rem;text-align:left;font-size:.8rem;color:#8b98ab}
+summary{cursor:pointer;color:#f5a623;font-weight:700}
+.asm{display:flex;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid #1a2230}
+</style></head><body><div class="wrap">
+<div class="kick">Individual Definition of Success</div>
+<h1>What does your dream cost on a Tuesday?</h1>
+<div class="sub">Type the income you actually want next year. The same math my team's goal software runs will introduce your dream number to your Tuesday number.</div>
+<div class="dollar"><span>$</span><input id="gci" inputmode="numeric" placeholder="150,000" autofocus></div>
+<div class="hint">your GCI goal for the next 12 months</div>
+<button class="go" onclick="run()">DO MY MATH</button>
+<div class="cascade" id="cascade" style="display:none">
+  <div class="step" id="s1"><span>closings your number requires</span><b id="v1"></b></div>
+  <div class="step" id="s2"><span>contracts to write (80% close)</span><b id="v2"></b></div>
+  <div class="step" id="s3"><span>appointments to sit (30% convert)</span><b id="v3"></b></div>
+  <div class="step" id="s4"><span>real conversations (1 in 10 books)</span><b id="v4"></b></div>
+  <div class="step" id="s5"><span>dials for the year (15% reached)</span><b id="v5"></b></div>
+  <div class="tuesday" id="tu">
+    <span>which means your Tuesday is</span>
+    <b id="vt"></b>
+    <span id="vtsub"></span>
+  </div>
+  <div class="punch" id="punch">A goal without arithmetic is a wish. Now you know the exchange rate.</div>
+</div>
+<details><summary>the assumptions (tune them to your market)</summary>
+  <div class="asm"><span>avg sale price</span><span>$<input id="price" value="400000" style="font-size:.85rem;width:9ch;padding:.1rem"></span></div>
+  <div class="asm"><span>commission %</span><span><input id="comm" value="2.5" style="font-size:.85rem;width:5ch;padding:.1rem">%</span></div>
+</details>
+<div class="foot">This is the live math behind the goal system at <b>Legacy Home Team</b> (Hampton Roads).
+Built by Barry Jenkins with Claude. Want the full IDOS worksheet and the weekly playbook?
+<b>Text SALES to (757) 780-1241.</b></div>
+<script>
+function fmt(n, d){return n.toLocaleString(undefined,{maximumFractionDigits:d===undefined?0:d});}
+document.getElementById("gci").addEventListener("input", function(e){
+  var raw = e.target.value.replace(/[^0-9]/g,"");
+  e.target.value = raw ? Number(raw).toLocaleString() : "";
+});
+document.getElementById("gci").addEventListener("keydown", function(e){
+  if(e.key === "Enter") run();
+});
+function run(){
+  var gci = Number((document.getElementById("gci").value||"").replace(/[^0-9]/g,""));
+  if(!gci || gci < 1000){ document.getElementById("gci").focus(); return; }
+  var price = Number(document.getElementById("price").value)||400000;
+  var comm  = (Number(document.getElementById("comm").value)||2.5)/100;
+  var avgCommission = price * comm;
+  var closings  = gci / avgCommission;
+  var contracts = closings / 0.80;
+  var appts     = contracts / 0.30;
+  var convos    = appts / 0.10;
+  var dials     = convos / 0.15;
+  var convosWk  = convos / 50;
+  var dialsWk   = dials / 50;
+  var dialsDay  = dialsWk / 5;
+  var minsDay   = Math.max(5, Math.round(dialsDay * 2.5));
+  document.getElementById("v1").textContent = fmt(closings,1);
+  document.getElementById("v2").textContent = fmt(contracts,1);
+  document.getElementById("v3").textContent = fmt(appts,0);
+  document.getElementById("v4").textContent = fmt(convos,0);
+  document.getElementById("v5").textContent = fmt(dials,0);
+  document.getElementById("vt").textContent =
+    fmt(convosWk,1) + " conversations a week";
+  document.getElementById("vtsub").textContent =
+    "about " + fmt(dialsDay,0) + " dials a day. Roughly " + minsDay +
+    " minutes of your life, five days a week, buys the whole number at the top.";
+  document.getElementById("cascade").style.display = "block";
+  ["s1","s2","s3","s4","s5"].forEach(function(id,i){
+    var el=document.getElementById(id); el.classList.remove("on");
+    setTimeout(function(){el.classList.add("on");}, 250+i*420);
+  });
+  var tu=document.getElementById("tu"); tu.classList.remove("on");
+  setTimeout(function(){tu.classList.add("on");
+    document.getElementById("punch").style.display="block";}, 250+5*420+300);
+}
+</script></div></body></html>

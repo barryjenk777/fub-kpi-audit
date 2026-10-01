@@ -102,6 +102,8 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/a/", "/dispatch", "/api/dispatch/",
         # Market Pulse pages: texted/emailed to leads, must be public
         "/market",
+        # IDOS stage calculator (FallCon talk QR target; static math, no PII)
+        "/idos",
         # Slack interactivity: HMAC signature verified inside the route
         # (found Sep 2026 — Barry's drill tap died here at the global gate)
         "/api/slack/",
@@ -5403,6 +5405,13 @@ def api_dispatch_hothand():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()[:500]}), 500
+
+
+@app.route("/idos")
+def idos_calculator():
+    """Public IDOS stage calculator: the goal app's exact math chain,
+    client-side only. QR target for the FallCon talk (Oct 2026)."""
+    return render_template("idos.html")
 
 
 @app.route("/dispatch")
