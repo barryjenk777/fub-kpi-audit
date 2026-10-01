@@ -11111,29 +11111,14 @@ def _fub_process_webhook(event, uri, resource_ids):
                     # removes tags and the webhook never says which one was
                     # added, so fossils must not convert twice (Clarissa,
                     # Sep 2026).
-                    _fresh, _first_enc = _db.filter_new_desk_tags(
-                        pid, _present, with_first_flag=True)
+                    # The ledger baseline is COMPLETE (Oct 1: full 23k
+                    # cursor scan pushed 671 fossil tags across 530 leads,
+                    # verified count-for-count). A never-seen tag is now
+                    # genuinely news, so the age heuristic that briefly
+                    # over-silenced real conversions is gone.
+                    _fresh = _db.filter_new_desk_tags(pid, _present)
                     if not _fresh:
                         continue
-                    # Self-seeding (Sep 30, false-conversion cards): a lead
-                    # OLDER than 7 days meeting the ledger for the first
-                    # time is assumed to carry fossils — record silently,
-                    # route nothing. New leads can't have fossils, so their
-                    # first tags are genuine news. This removes all
-                    # dependence on the bulk seed surviving deploys.
-                    if _first_enc:
-                        try:
-                            _created = datetime.fromisoformat(
-                                (person.get("created") or "")
-                                .replace("Z", "+00:00"))
-                            if (datetime.now(timezone.utc) - _created
-                                    ).days > 7:
-                                logger.info("[DESK] ledger self-seeded %s "
-                                            "(old lead, first encounter, "
-                                            "tags recorded, not routed)", pid)
-                                continue
-                        except (ValueError, AttributeError, TypeError):
-                            continue
                     # Weekly key, not once-ever: a lead whose offer went
                     # terminal (or who re-converts weeks later) can route
                     # again. Once-ever silently blacklisted every lead the
