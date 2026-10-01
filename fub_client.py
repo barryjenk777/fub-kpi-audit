@@ -862,9 +862,45 @@ class FUBClient:
             logger.warning("get_people_since failed: %s", e)
             return []
 
+    def get_people_cursor(self, pond_id=None, assigned_user_id=None,
+                          tag=None, fields=None):
+        """People fetch that walks the WHOLE result set via created-cursor
+        pagination — immune to FUB's silent 2000-offset cap (found Oct
+        2026: the account holds 23k+ people and offset pagination sees
+        only the first 2000; Shark Tank alone has 3200+)."""
+        out, seen, after = [], set(), None
+        if fields and "created" not in fields:
+            fields = fields + ",created"
+        while True:
+            params = {"limit": 100, "sort": "created"}
+            if fields:
+                params["fields"] = fields
+            if pond_id is not None:
+                params["assignedPondId"] = pond_id
+            if assigned_user_id:
+                params["assignedUserId"] = assigned_user_id
+            if tag:
+                params["tag"] = tag
+            if after:
+                params["createdAfter"] = after
+            data = self._request("GET", "people", params=params)
+            people = (data or {}).get("people") or []
+            fresh = [p for p in people if p.get("id") not in seen]
+            for p in fresh:
+                seen.add(p.get("id"))
+            out.extend(fresh)
+            if len(people) < 100:
+                break
+            nxt = people[-1].get("created")
+            if not nxt or nxt == after:
+                break  # timestamp cluster bigger than a page — bail safely
+            after = nxt
+        return out
+
     def get_all_people(self):
         """Fetch all leads in FUB (no filter). Used for client-side tag filtering."""
-        return self._get_paginated("people", {"limit": 100})
+        # Cursor-based since Oct 2026 — offset pagination saw 2000 of 23k.
+        return self.get_people_cursor()
 
     def log_email_sent(self, person_id, subject, message, user_id=None,
                        sequence_num=None, lead_type=None, avatar_used=None,

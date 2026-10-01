@@ -723,7 +723,10 @@ class LeadScorer:
         # when they were last "updated" in FUB (resolves the 88/2303 problem
         # where only recently-updated pond leads showed up in the scoring pool)
         for pond_id in sorted(LEADSTREAM_ALLOWED_POND_IDS):
-            pond_people = self.client.get_people(pond_id=pond_id)
+            # Cursor fetch (Oct 2026): Shark Tank holds 3200+ leads and
+            # the offset-capped fetch silently ignored ~1200 of them for
+            # the entire life of pond scoring.
+            pond_people = self.client.get_people_cursor(pond_id=pond_id)
             logger.info("Pond %d: %d leads to score", pond_id, len(pond_people))
 
             for person in pond_people:
