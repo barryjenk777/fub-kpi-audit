@@ -854,3 +854,10 @@ DESK_GRACE_UNTIL = {
     "Jessica Mandley": "2026-10-28",
     "Mack Lancaster":  "2026-10-28",
 }
+
+# ── Friday Team Meeting Reminder ─────────────────────────────────────────
+# Every Friday: 8am email + 10am text to every active lead-working agent
+# (roster minus EXCLUDED_USERS and COACHING_TEXT_EXCLUDED_AGENTS).
+# Barry, Oct 2026: "everyone working leads, not Julz."
+FRIDAY_MEETING_ZOOM = "https://zoomwithbarry.com"
+FRIDAY_MEETING_TIME = "11:30am"

@@ -20554,6 +20554,186 @@ def api_command_sheet_status(job_id):
     return jsonify(job)
 
 
+# ── Friday Team Meeting Reminder ─────────────────────────────────────────
+# Barry, Oct 2026: every Friday, email at 8am and a friendly text at 10am
+# to everyone working leads (roster minus EXCLUDED_USERS minus
+# COACHING_TEXT_EXCLUDED_AGENTS), reminding them of the 11:30 meeting at
+# zoomwithbarry.com. Copy lives here in his voice; texts ride the Mac
+# iMessage courier (Android agents auto-reroute to email inside
+# queue_agent_imessage).
+
+def _friday_meeting_recipients():
+    """Active lead-working agents: profiles minus both exclusion lists."""
+    excluded = set(config.EXCLUDED_USERS) | config.COACHING_TEXT_EXCLUDED_AGENTS
+    out = []
+    for p in (_db.get_agent_profiles(active_only=True) or []):
+        if p["agent_name"] in excluded:
+            continue
+        out.append(p)
+    return out
+
+
+# Rotating text openers so the Friday nudge never reads like a robot on a
+# timer. Deterministic by ISO week: everyone gets the same flavor each week.
+_FRIDAY_MEETING_TEXTS = [
+    ("Hey {first}! Team meeting at {time} this morning: {zoom}. "
+     "Bring your best win from the week, see you in there."),
+    ("{first}! Friendly nudge, we're on Zoom at {time} today: {zoom}. "
+     "See you at {time}."),
+    ("Hey {first}, quick reminder before the day gets loud. {time} team "
+     "meeting on Zoom: {zoom}. Wouldn't be the same without you."),
+    ("Morning {first}! Zoom huddle at {time} today: {zoom}. Grab a coffee "
+     "and come hang with us."),
+]
+
+
+def _friday_meeting_text_for(agent_name):
+    week = datetime.now(timezone.utc).isocalendar()[1]
+    tmpl = _FRIDAY_MEETING_TEXTS[week % len(_FRIDAY_MEETING_TEXTS)]
+    return tmpl.format(first=agent_name.split()[0],
+                       time=config.FRIDAY_MEETING_TIME,
+                       zoom=config.FRIDAY_MEETING_ZOOM)
+
+
+def _friday_meeting_email_html(agent_name):
+    first = agent_name.split()[0]
+    return ("""
+<div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:520px;
+            margin:0 auto;color:#1c2733;line-height:1.6;padding:8px 4px">
+  <p>Hey %s,</p>
+  <p>Quick reminder that we've got our team meeting this morning at
+     <b>%s</b> on Zoom.</p>
+  <p style="margin:18px 0">
+    <a href="%s" style="background:#2ea44f;color:#ffffff;text-decoration:none;
+       font-weight:700;padding:12px 26px;border-radius:10px;display:inline-block">
+       Join at %s &rarr; zoomwithbarry.com</a>
+  </p>
+  <p>These Friday huddles are where the week comes together. Bring whatever
+     you're working through, a deal, a lead, a question, and we'll work it
+     together.</p>
+  <p>If something has you tied up and you can't make it, just shoot me a
+     text so I'm not looking for you.</p>
+  <p>See you at %s,<br>Barry</p>
+</div>""" % (first, config.FRIDAY_MEETING_TIME, config.FRIDAY_MEETING_ZOOM,
+             config.FRIDAY_MEETING_TIME, config.FRIDAY_MEETING_TIME))
+
+
+def scheduled_friday_meeting_email():
+    """Friday 8:00am ET — meeting reminder email to every lead-working agent."""
+    if _already_fired_recently("friday_meeting_email", within_hours=20):
+        print("[SCHEDULER] Friday meeting email: skipped — already sent within 20h")
+        return
+    if not _db.try_acquire_job_lock("friday_meeting_email"):
+        return
+    try:
+        import postmark_client as _pm
+        sent, failed = [], []
+        for p in _friday_meeting_recipients():
+            email = (p.get("email") or "").strip()
+            if not email:
+                failed.append("%s (no email on file)" % p["agent_name"])
+                continue
+            try:
+                _pm.send(to=email, from_email=config.EMAIL_FROM,
+                         subject="Team meeting at %s today, see you on Zoom"
+                                 % config.FRIDAY_MEETING_TIME,
+                         html=_friday_meeting_email_html(p["agent_name"]),
+                         reply_to=config.EMAIL_FROM)
+                sent.append(p["agent_name"])
+                _db.log_attention(p["agent_name"], "friday_meeting", "email")
+            except Exception as e:
+                failed.append("%s (%s)" % (p["agent_name"], str(e)[:80]))
+        print("[SCHEDULER] Friday meeting email: %d sent (%s)%s"
+              % (len(sent), ", ".join(sent),
+                 (" | FAILED: " + "; ".join(failed)) if failed else ""))
+        if failed:
+            _alert_on_job_failure("friday_meeting_email",
+                                  "some sends failed: " + "; ".join(failed))
+        _record_fired("friday_meeting_email")
+    except Exception as e:
+        _alert_on_job_failure("friday_meeting_email", str(e))
+        raise
+    finally:
+        _db.release_job_lock("friday_meeting_email")
+
+
+def scheduled_friday_meeting_text():
+    """Friday 10:00am ET — friendly meeting reminder text, same roster.
+    Queues through the Mac iMessage courier; Android agents fall back to
+    email inside queue_agent_imessage."""
+    if _already_fired_recently("friday_meeting_text", within_hours=20):
+        print("[SCHEDULER] Friday meeting text: skipped — already sent within 20h")
+        return
+    if not _db.try_acquire_job_lock("friday_meeting_text"):
+        return
+    try:
+        queued, failed = [], []
+        for p in _friday_meeting_recipients():
+            phone = (p.get("phone") or "").strip()
+            if not phone and p["agent_name"] not in getattr(
+                    config, "EMAIL_DELIVERY_AGENTS", set()):
+                failed.append("%s (no phone on file)" % p["agent_name"])
+                continue
+            rid = _db.queue_agent_imessage(
+                p["agent_name"], p.get("fub_user_id"), phone,
+                _friday_meeting_text_for(p["agent_name"]),
+                week_day="friday_meeting")
+            if rid:
+                queued.append(p["agent_name"])
+            else:
+                failed.append("%s (queue returned None)" % p["agent_name"])
+        print("[SCHEDULER] Friday meeting text: %d queued (%s)%s"
+              % (len(queued), ", ".join(queued),
+                 (" | FAILED: " + "; ".join(failed)) if failed else ""))
+        if failed:
+            _alert_on_job_failure("friday_meeting_text",
+                                  "some queues failed: " + "; ".join(failed))
+        _record_fired("friday_meeting_text")
+    except Exception as e:
+        _alert_on_job_failure("friday_meeting_text", str(e))
+        raise
+    finally:
+        _db.release_job_lock("friday_meeting_text")
+
+
+@app.route("/api/admin/friday-meeting/run", methods=["POST"])
+def api_friday_meeting_run():
+    """QA + manual fire for the Friday meeting reminders. Body:
+      {"which": "email"|"text", "dry_run": true|false}
+    dry_run (the default) sends NOTHING: it returns the recipient list and
+    the exact copy each person would get. With dry_run false it fires the
+    real job now (the 20h already-fired guard still applies)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    which = (body.get("which") or "both").lower()
+    dry_run = body.get("dry_run")
+    dry_run = True if dry_run is None else bool(dry_run)
+    recipients = _friday_meeting_recipients()
+    if dry_run:
+        return jsonify({
+            "ok": True, "dry_run": True, "which": which,
+            "recipients": [
+                {"agent": p["agent_name"], "email": p.get("email"),
+                 "phone": p.get("phone"),
+                 "text_copy": _friday_meeting_text_for(p["agent_name"])}
+                for p in recipients],
+            "email_subject": "Team meeting at %s today, see you on Zoom"
+                             % config.FRIDAY_MEETING_TIME,
+            "email_html_sample": _friday_meeting_email_html(
+                recipients[0]["agent_name"]) if recipients else None,
+        })
+    ran = []
+    if which in ("email", "both"):
+        scheduled_friday_meeting_email()
+        ran.append("email")
+    if which in ("text", "both"):
+        scheduled_friday_meeting_text()
+        ran.append("text")
+    return jsonify({"ok": True, "dry_run": False, "ran": ran,
+                    "recipients": [p["agent_name"] for p in recipients]})
+
+
 def scheduled_send_appointment_email():
     """Tuesday 9am ET — send appointment accountability email."""
     if _already_fired_recently("appt_email", within_hours=20):
@@ -22816,6 +22996,18 @@ def start_scheduler():
     # Emails Barry only; the module has no agent-facing send path.
     _scheduler.add_job(scheduled_friday_command_sheet, CronTrigger(day_of_week="fri", hour=6, minute=30, timezone=ET),
                        id="friday_command_sheet", name="Friday Command Sheet (Fri 6:30am)",
+                       max_instances=1, coalesce=True, misfire_grace_time=3600)
+
+    # Friday team meeting reminders: 8am email + 10am friendly text to every
+    # lead-working agent (Barry, Oct 2026). Meeting is 11:30am at
+    # zoomwithbarry.com; copy + roster logic live next to the jobs.
+    _scheduler.add_job(scheduled_friday_meeting_email,
+                       CronTrigger(day_of_week="fri", hour=8, minute=0, timezone=ET),
+                       id="friday_meeting_email", name="Friday meeting email (Fri 8am)",
+                       max_instances=1, coalesce=True, misfire_grace_time=3600)
+    _scheduler.add_job(scheduled_friday_meeting_text,
+                       CronTrigger(day_of_week="fri", hour=10, minute=0, timezone=ET),
+                       id="friday_meeting_text", name="Friday meeting text (Fri 10am)",
                        max_instances=1, coalesce=True, misfire_grace_time=3600)
 
     # Fast Track onboarding digest: daily 8am ET, only when there's something to say
