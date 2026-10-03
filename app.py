@@ -5843,6 +5843,105 @@ def _desk_intake_alarm(person_id, person_name, reason):
         logger.error("desk alarm email failed: %s", e)
 
 
+def scheduled_desk_sweep(window_min=40, _force=False):
+    """Every 10 min: the Lead Desk safety net. Finds people carrying a
+    conversion tag who were UPDATED recently, drops everyone the seen-tags
+    ledger already knows, and runs the survivors through the exact webhook
+    intake path. Catches every way a conversion can slip past the tag
+    event: leads created WITH their tags (FUB fires no tag event at birth
+    — Trenton/Jared, Oct 2026), webhook retries FUB gave up on, and
+    processing threads killed mid-deploy. Fossils cost one DB read, no
+    FUB calls."""
+    try:
+        if not _force:
+            live, _ = _db.get_app_state("dispatch_ai_live")
+            if (live or "").strip() != "1":
+                return
+        since = (datetime.now(timezone.utc) - timedelta(minutes=window_min)
+                 ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        client = FUBClient()
+        candidates = {}  # pid -> set of present desk tags
+        for t in DESK_CONVERSION_TAGS:
+            offset = 0
+            while offset < 500:
+                data = client._request("GET", "people", params={
+                    "tags": t, "updatedAfter": since,
+                    "fields": "id,tags", "limit": 100, "offset": offset})
+                ppl = (data or {}).get("people") or []
+                for p in ppl:
+                    pid = str(p.get("id"))
+                    tl = [x.lower() for x in (p.get("tags") or [])]
+                    candidates.setdefault(pid, set()).update(
+                        x for x in DESK_CONVERSION_TAGS if x in tl)
+                if len(ppl) < 100:
+                    break
+                offset += 100
+        if not candidates:
+            return
+        seen = _db.get_seen_desk_tag_pairs(list(candidates))
+        survivors = [pid for pid, tags in candidates.items()
+                     if any((pid, t) not in seen for t in tags)]
+        if survivors:
+            logger.info("[DESK SWEEP] %d candidate(s), %d with unseen "
+                        "conversion tags: %s", len(candidates),
+                        len(survivors), ", ".join(survivors))
+            _desk_intake_people(survivors, triggered_by="desk_sweep")
+        return {"candidates": len(candidates), "routed": survivors}
+    except Exception as e:
+        logger.warning("desk sweep failed: %s", e)
+        return {"error": str(e)}
+
+
+@app.route("/api/admin/desk/sweep", methods=["POST"])
+def api_desk_sweep():
+    """Manual/backfill run of the desk safety sweep. Body:
+    {"window_min": 40, "dry_run": true|false}. dry_run (default TRUE)
+    reports who WOULD route without touching anyone."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    window = int(body.get("window_min") or 40)
+    dry = body.get("dry_run")
+    dry = True if dry is None else bool(dry)
+    if dry:
+        try:
+            since = (datetime.now(timezone.utc) - timedelta(minutes=window)
+                     ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            client = FUBClient()
+            candidates = {}
+            for t in DESK_CONVERSION_TAGS:
+                offset = 0
+                while offset < 500:
+                    data = client._request("GET", "people", params={
+                        "tags": t, "updatedAfter": since,
+                        "fields": "id,name,tags", "limit": 100,
+                        "offset": offset})
+                    ppl = (data or {}).get("people") or []
+                    for p in ppl:
+                        pid = str(p.get("id"))
+                        tl = [x.lower() for x in (p.get("tags") or [])]
+                        candidates.setdefault(pid, {"name": p.get("name"),
+                                                    "tags": set()})
+                        candidates[pid]["tags"].update(
+                            x for x in DESK_CONVERSION_TAGS if x in tl)
+                    if len(ppl) < 100:
+                        break
+                    offset += 100
+            seen = _db.get_seen_desk_tag_pairs(list(candidates))
+            out = [{"person_id": pid, "name": c["name"],
+                    "unseen_tags": sorted(t for t in c["tags"]
+                                          if (pid, t) not in seen)}
+                   for pid, c in candidates.items()]
+            return jsonify({"ok": True, "dry_run": True,
+                            "window_min": window,
+                            "candidates": len(out),
+                            "would_route": [r for r in out if r["unseen_tags"]]})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+    res = scheduled_desk_sweep(window_min=window, _force=True) or {}
+    return jsonify({"ok": "error" not in res, "dry_run": False, **res})
+
+
 def scheduled_desk_watchdog():
     """Every 30 min while the desk routes live leads: two tripwires.
     1. Webhook silence: zero FUB webhooks for 60+ min in business hours
@@ -11094,6 +11193,185 @@ def _fub_instant_prep(appt):
         logger.info("instant prep queued for %s (appt %s)", agent_name, appt_id)
 
 
+# All six conversion tags the Lead Desk routes on. One constant, used by
+# the webhook intake and the safety sweep.
+DESK_CONVERSION_TAGS = ("ai_needs_follow_up",
+                        "ai_voice_needs_follow_up",
+                        "sms_conversion", "claude_text_converted",
+                        "isa_transfer_unsuccessful",
+                        "isa_attempted_transfer_realtor_unavailable")
+
+
+def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
+    """The Lead Desk front door, one person at a time: fetch, filter
+    against the seen-tags ledger, then offer (pond) or mirror + owner
+    ping (owned). Extracted Oct 2026 so the webhook branch and the
+    safety sweep run the IDENTICAL path."""
+    for pid in (resource_ids or []):
+        try:
+            person = FUBClient().get_person(pid) or {}
+            tags_l = [t.lower() for t in (person.get("tags") or [])]
+            # One front door, full parity with the retired Warm
+            # Handoff reassignment step (Barry's screenshot, Sep
+            # 2026): all six conversion tags plus Blue's
+            # sms_conversion route through the desk once live.
+            # Y_AI_PRIORITY removed (Barry, Sep 2026 go-live day):
+            # it is a browsing-intent rollup that Ylopo re-applies
+            # in sweeps, not a conversion. The old FUB automation
+            # muted that with once-per-lead-ever semantics; the desk
+            # rings only when the lead actually said yes to talking.
+            _desk_tags = ("ai_needs_follow_up",
+                          "ai_voice_needs_follow_up",
+                          "sms_conversion", "claude_text_converted",
+                          "isa_transfer_unsuccessful",
+                          "isa_attempted_transfer_realtor_unavailable")
+            _present = [t for t in _desk_tags if t in tags_l]
+            if not _present:
+                continue
+            # Route only on tags NEW to this lead — Ylopo never
+            # removes tags and the webhook never says which one was
+            # added, so fossils must not convert twice (Clarissa,
+            # Sep 2026).
+            # The ledger baseline is COMPLETE (Oct 1: full 23k
+            # cursor scan pushed 671 fossil tags across 530 leads,
+            # verified count-for-count). A never-seen tag is now
+            # genuinely news, so the age heuristic that briefly
+            # over-silenced real conversions is gone.
+            _fresh = _db.filter_new_desk_tags(pid, _present)
+            if not _fresh:
+                continue
+            # Weekly key, not once-ever: a lead whose offer went
+            # terminal (or who re-converts weeks later) can route
+            # again. Once-ever silently blacklisted every lead the
+            # desk ever saw (QA sweep, Sep 2026).
+            _wk = datetime.now(timezone.utc).strftime("%GW%V")
+            if not _db.claim_once("aidispatch_%s_%s" % (pid, _wk)):
+                continue
+            live, _ = _db.get_app_state("dispatch_ai_live")
+            # The old automation only assigned POND leads. Same
+            # guard here: a lead an agent already owns is never
+            # offered to a teammate — it logs to the mirror as
+            # re-engagement evidence for the first-right rule.
+            _own_name = (person.get("assignedTo") or "").strip()
+            _dark_owners = {"", "Fhalen Tendencia"} | set(
+                getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+            # A lead owned by a departing/paused agent is effectively
+            # unowned: no ping reaches anyone, so it routes to the claim
+            # board instead of vanishing (QA, Sep 2026).
+            _owned = (not person.get("assignedPondId")) and _own_name not in _dark_owners
+            if (live or "").strip() == "1" and not _owned:
+                import dispatch as _dp
+                src_kind = ("ai_voice" if any(t in _fresh for t in
+                            ("ai_voice_needs_follow_up",
+                             "isa_transfer_unsuccessful",
+                             "isa_attempted_transfer_realtor_unavailable"))
+                            else
+                            "blue_text" if ("sms_conversion" in _fresh
+                            or "claude_text_converted" in _fresh)
+                            and "ai_needs_follow_up" not in _fresh
+                            else "ai_text")
+                _city = next((a.get("city") for a in
+                              (person.get("addresses") or [])
+                              if isinstance(a, dict) and a.get("city")),
+                             None)
+                _res = _dp.make_offer(src_kind, pid,
+                               (person.get("name") or "").strip(),
+                               _city, notes=_desk_evidence(pid),
+                               audit=cache_get("audit") or {},
+                               lead_source=person.get("source"))
+                if _res:
+                    _db.log_automation_event(
+                        event_type="desk_intake", person_id=pid,
+                        person_name=person.get("name"),
+                        agent_name=_res.get("agent_name"),
+                        payload={"source": src_kind},
+                        triggered_by=triggered_by)
+                else:
+                    _desk_intake_alarm(pid, person.get("name"),
+                                       "no offer could be created "
+                                       "(no eligible agent?)")
+            else:
+                # Mirror-mode evidence for the Lead Desk decisions:
+                # owner + last-touch answer the re-engagement rule,
+                # the event timestamp answers the evening question.
+                _db.log_automation_event(
+                    event_type="ai_convert_seen", person_id=pid,
+                    person_name=person.get("name"), agent_name=None,
+                    payload={"tags": [t for t in (person.get("tags") or [])
+                                      if "FOLLOW_UP" in t.upper()],
+                             "assigned_to": (person.get("assignedTo") or "").strip() or None,
+                             "last_comm_at": ((person.get("lastCommunication") or {})
+                                              .get("createdAt")),
+                             "lead_created": person.get("created")},
+                    triggered_by=triggered_by)
+                _desk_mirror_card(
+                    "AI conversion",
+                    (person.get("name") or "").strip(),
+                    "voice" if "ai_voice_needs_follow_up" in _fresh
+                    else "text", person_id=pid)
+                # Owner ping (Clarissa gap, Sep 2026): an OWNED lead
+                # who engages the AI is protected from teammates but
+                # the owner must hear about it NOW. The old FUB
+                # automation was pond-only too, so this blind spot
+                # predates the desk; it ends here.
+                try:
+                    _owner = (person.get("assignedTo") or "").strip()
+                    _excl = set(config.EXCLUDED_USERS) | set(
+                        getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS",
+                                set()))
+                    if _owned and _owner and _owner not in _excl:
+                        _kind = ("voice" if "ai_voice_needs_follow_up"
+                                 in _fresh else "text")
+                        _lead1 = ((person.get("name") or "your lead")
+                                  .strip().split()[0])
+                        _flink = ("https://yourfriendlyagent."
+                                  "followupboss.com/2/people/view/%s"
+                                  % pid)
+                        _msg = ("\U0001f525 %s, your lead %s just "
+                                "engaged the AI (%s) and is ready for "
+                                "a human. Already yours, no button to "
+                                "tap. Call now: <%s|open %s in FUB>."
+                                % (_owner.split()[0], _lead1, _kind,
+                                   _flink, _lead1))
+                        import slack_client as _slo
+                        import dispatch as _dpo
+                        _sid = _dpo._slack_user_id(_owner)
+                        _sent_o = bool(_slo.is_available() and _sid
+                                       and _slo.dm_user(_sid, _msg))
+                        if not _sent_o:
+                            _prof = next(
+                                (p2 for p2 in
+                                 (_db.get_agent_profiles(active_only=True) or [])
+                                 if p2["agent_name"] == _owner), None)
+                            if _prof:
+                                import re as _reo
+                                _plain = _reo.sub(r"<[^|>]+\|([^>]+)>",
+                                                  r"\1 %s" % _flink,
+                                                  _msg)
+                                _db.queue_agent_imessage(
+                                    _owner, _prof.get("fub_user_id"),
+                                    _prof.get("phone") or "",
+                                    _plain, week_day="dispatch")
+                        _db.log_automation_event(
+                            event_type="desk_owner_ping",
+                            person_id=pid,
+                            person_name=person.get("name"),
+                            agent_name=_owner,
+                            payload={"kind": _kind},
+                            triggered_by=triggered_by)
+                        import escalation as _esc
+                        _esc.open_escalation(
+                            "owned_reengage", pid,
+                            person.get("name"), owner_agent=_owner,
+                            note="rung 1: owner Slack DM %s"
+                                 % ("sent" if _sent_o else
+                                    "FAILED, fallback queued"))
+                except Exception as _ope:
+                    logger.warning("owner ping failed: %s", _ope)
+        except Exception as e:
+            logger.warning("ai intake failed for %s: %s", pid, e)
+
+
 def _fub_process_webhook(event, uri, resource_ids):
     """Background processor: fetch what changed, apply it. Never trusts the
     payload beyond (event name, resource ids); data comes from the FUB API."""
@@ -11109,170 +11387,12 @@ def _fub_process_webhook(event, uri, resource_ids):
                             _fub_instant_prep(appt)
                         except Exception as e:
                             logger.warning("instant prep failed: %s", e)
-        elif event == "peopleTagsCreated":
-            for pid in (resource_ids or []):
-                try:
-                    person = FUBClient().get_person(pid) or {}
-                    tags_l = [t.lower() for t in (person.get("tags") or [])]
-                    # One front door, full parity with the retired Warm
-                    # Handoff reassignment step (Barry's screenshot, Sep
-                    # 2026): all six conversion tags plus Blue's
-                    # sms_conversion route through the desk once live.
-                    # Y_AI_PRIORITY removed (Barry, Sep 2026 go-live day):
-                    # it is a browsing-intent rollup that Ylopo re-applies
-                    # in sweeps, not a conversion. The old FUB automation
-                    # muted that with once-per-lead-ever semantics; the desk
-                    # rings only when the lead actually said yes to talking.
-                    _desk_tags = ("ai_needs_follow_up",
-                                  "ai_voice_needs_follow_up",
-                                  "sms_conversion", "claude_text_converted",
-                                  "isa_transfer_unsuccessful",
-                                  "isa_attempted_transfer_realtor_unavailable")
-                    _present = [t for t in _desk_tags if t in tags_l]
-                    if not _present:
-                        continue
-                    # Route only on tags NEW to this lead — Ylopo never
-                    # removes tags and the webhook never says which one was
-                    # added, so fossils must not convert twice (Clarissa,
-                    # Sep 2026).
-                    # The ledger baseline is COMPLETE (Oct 1: full 23k
-                    # cursor scan pushed 671 fossil tags across 530 leads,
-                    # verified count-for-count). A never-seen tag is now
-                    # genuinely news, so the age heuristic that briefly
-                    # over-silenced real conversions is gone.
-                    _fresh = _db.filter_new_desk_tags(pid, _present)
-                    if not _fresh:
-                        continue
-                    # Weekly key, not once-ever: a lead whose offer went
-                    # terminal (or who re-converts weeks later) can route
-                    # again. Once-ever silently blacklisted every lead the
-                    # desk ever saw (QA sweep, Sep 2026).
-                    _wk = datetime.now(timezone.utc).strftime("%GW%V")
-                    if not _db.claim_once("aidispatch_%s_%s" % (pid, _wk)):
-                        continue
-                    live, _ = _db.get_app_state("dispatch_ai_live")
-                    # The old automation only assigned POND leads. Same
-                    # guard here: a lead an agent already owns is never
-                    # offered to a teammate — it logs to the mirror as
-                    # re-engagement evidence for the first-right rule.
-                    _own_name = (person.get("assignedTo") or "").strip()
-                    _dark_owners = {"", "Fhalen Tendencia"} | set(
-                        getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
-                    # A lead owned by a departing/paused agent is effectively
-                    # unowned: no ping reaches anyone, so it routes to the claim
-                    # board instead of vanishing (QA, Sep 2026).
-                    _owned = (not person.get("assignedPondId")) and _own_name not in _dark_owners
-                    if (live or "").strip() == "1" and not _owned:
-                        import dispatch as _dp
-                        src_kind = ("ai_voice" if any(t in _fresh for t in
-                                    ("ai_voice_needs_follow_up",
-                                     "isa_transfer_unsuccessful",
-                                     "isa_attempted_transfer_realtor_unavailable"))
-                                    else
-                                    "blue_text" if ("sms_conversion" in _fresh
-                                    or "claude_text_converted" in _fresh)
-                                    and "ai_needs_follow_up" not in _fresh
-                                    else "ai_text")
-                        _city = next((a.get("city") for a in
-                                      (person.get("addresses") or [])
-                                      if isinstance(a, dict) and a.get("city")),
-                                     None)
-                        _res = _dp.make_offer(src_kind, pid,
-                                       (person.get("name") or "").strip(),
-                                       _city, notes=_desk_evidence(pid),
-                                       audit=cache_get("audit") or {},
-                                       lead_source=person.get("source"))
-                        if _res:
-                            _db.log_automation_event(
-                                event_type="desk_intake", person_id=pid,
-                                person_name=person.get("name"),
-                                agent_name=_res.get("agent_name"),
-                                payload={"source": src_kind},
-                                triggered_by="webhook_fub")
-                        else:
-                            _desk_intake_alarm(pid, person.get("name"),
-                                               "no offer could be created "
-                                               "(no eligible agent?)")
-                    else:
-                        # Mirror-mode evidence for the Lead Desk decisions:
-                        # owner + last-touch answer the re-engagement rule,
-                        # the event timestamp answers the evening question.
-                        _db.log_automation_event(
-                            event_type="ai_convert_seen", person_id=pid,
-                            person_name=person.get("name"), agent_name=None,
-                            payload={"tags": [t for t in (person.get("tags") or [])
-                                              if "FOLLOW_UP" in t.upper()],
-                                     "assigned_to": (person.get("assignedTo") or "").strip() or None,
-                                     "last_comm_at": ((person.get("lastCommunication") or {})
-                                                      .get("createdAt")),
-                                     "lead_created": person.get("created")},
-                            triggered_by="webhook_fub")
-                        _desk_mirror_card(
-                            "AI conversion",
-                            (person.get("name") or "").strip(),
-                            "voice" if "ai_voice_needs_follow_up" in _fresh
-                            else "text", person_id=pid)
-                        # Owner ping (Clarissa gap, Sep 2026): an OWNED lead
-                        # who engages the AI is protected from teammates but
-                        # the owner must hear about it NOW. The old FUB
-                        # automation was pond-only too, so this blind spot
-                        # predates the desk; it ends here.
-                        try:
-                            _owner = (person.get("assignedTo") or "").strip()
-                            _excl = set(config.EXCLUDED_USERS) | set(
-                                getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS",
-                                        set()))
-                            if _owned and _owner and _owner not in _excl:
-                                _kind = ("voice" if "ai_voice_needs_follow_up"
-                                         in _fresh else "text")
-                                _lead1 = ((person.get("name") or "your lead")
-                                          .strip().split()[0])
-                                _flink = ("https://yourfriendlyagent."
-                                          "followupboss.com/2/people/view/%s"
-                                          % pid)
-                                _msg = ("\U0001f525 %s, your lead %s just "
-                                        "engaged the AI (%s) and is ready for "
-                                        "a human. Already yours, no button to "
-                                        "tap. Call now: <%s|open %s in FUB>."
-                                        % (_owner.split()[0], _lead1, _kind,
-                                           _flink, _lead1))
-                                import slack_client as _slo
-                                import dispatch as _dpo
-                                _sid = _dpo._slack_user_id(_owner)
-                                _sent_o = bool(_slo.is_available() and _sid
-                                               and _slo.dm_user(_sid, _msg))
-                                if not _sent_o:
-                                    _prof = next(
-                                        (p2 for p2 in
-                                         (_db.get_agent_profiles(active_only=True) or [])
-                                         if p2["agent_name"] == _owner), None)
-                                    if _prof:
-                                        import re as _reo
-                                        _plain = _reo.sub(r"<[^|>]+\|([^>]+)>",
-                                                          r"\1 %s" % _flink,
-                                                          _msg)
-                                        _db.queue_agent_imessage(
-                                            _owner, _prof.get("fub_user_id"),
-                                            _prof.get("phone") or "",
-                                            _plain, week_day="dispatch")
-                                _db.log_automation_event(
-                                    event_type="desk_owner_ping",
-                                    person_id=pid,
-                                    person_name=person.get("name"),
-                                    agent_name=_owner,
-                                    payload={"kind": _kind},
-                                    triggered_by="webhook_fub")
-                                import escalation as _esc
-                                _esc.open_escalation(
-                                    "owned_reengage", pid,
-                                    person.get("name"), owner_agent=_owner,
-                                    note="rung 1: owner Slack DM %s"
-                                         % ("sent" if _sent_o else
-                                            "FAILED, fallback queued"))
-                        except Exception as _ope:
-                            logger.warning("owner ping failed: %s", _ope)
-                except Exception as e:
-                    logger.warning("ai intake failed for %s: %s", pid, e)
+        elif event in ("peopleTagsCreated", "peopleCreated"):
+            # peopleCreated too (Oct 2026): Ylopo creates live-transfer
+            # leads WITH their conversion tags already attached, and FUB
+            # fires no tag event for tags present at birth — two real
+            # conversions went invisible before this line existed.
+            _desk_intake_people(resource_ids)
         elif event in ("callsCreated", "textMessagesCreated"):
             seen = set()
             for r in _fub_fetch_webhook_resources(uri):
@@ -23255,6 +23375,13 @@ def start_scheduler():
     _scheduler.add_job(scheduled_desk_watchdog,
                        CronTrigger(minute="7,37", timezone=ET),
                        id="desk_watchdog", name="Desk watchdog (every 30 min)",
+                       max_instances=1, coalesce=True)
+
+    # Desk safety sweep: every 10 min, catches conversions the tag webhook
+    # can't see (leads born with tags, dropped deliveries, killed threads).
+    _scheduler.add_job(scheduled_desk_sweep,
+                       CronTrigger(minute="2,12,22,32,42,52", timezone=ET),
+                       id="desk_sweep", name="Desk safety sweep (every 10 min)",
                        max_instances=1, coalesce=True)
     # Ring group work order to Fhalen: Monday after the group push settles,
     # Tuesday re-check as the self-healing nag. DM only fires on a mismatch.

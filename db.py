@@ -10176,3 +10176,21 @@ def dispatch_today_score(source="fhalen"):
     except Exception as e:
         logger.warning("dispatch_today_score failed: %s", e)
         return {}
+
+
+def get_seen_desk_tag_pairs(person_ids):
+    """Read-only ledger check for the desk safety sweep: returns the set of
+    (person_id, tag) pairs already recorded, for the given people."""
+    if not is_available() or not person_ids:
+        return set()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, tag FROM desk_tag_seen
+                    WHERE person_id = ANY(%s)
+                """, ([str(p) for p in person_ids],))
+                return {(r[0], r[1]) for r in cur.fetchall()}
+    except Exception as e:
+        logger.warning("get_seen_desk_tag_pairs failed: %s", e)
+        return set()
