@@ -174,7 +174,7 @@ def _auth_role():
         role = None
     if role == "coach" and not coach_key:
         return None  # kill switch pulled: coach sessions are dead too
-    return role if role in ("owner", "coach") else None
+    return role if role in ("owner", "coach", "team") else None
 
 
 @app.before_request
@@ -206,6 +206,12 @@ def _global_auth_gate():
         if request.path.startswith("/api/"):
             return jsonify({"error": "Unauthorized"}), 401
         return redirect("/login")
+    # The team password is deliberately simple (Barry, Oct 2026), so the
+    # team role is READ-ONLY at the gate: pages and GET APIs render,
+    # nothing can be changed, and admin endpoints still require
+    # owner/coach via their own checks.
+    if role == "team" and request.method not in ("GET", "HEAD", "OPTIONS"):
+        return jsonify({"error": "read-only access"}), 403
     return None
 
 
@@ -275,6 +281,11 @@ def login_page():
         if coach_key and pw == coach_key:
             session.permanent = True
             session["role"] = "coach"
+            return redirect("/")
+        team_pw = (getattr(config, "TEAM_ACCESS_PASSWORD", "") or "").strip()
+        if team_pw and pw.lower() == team_pw.lower():
+            session.permanent = True
+            session["role"] = "team"
             return redirect("/")
         error = "That key does not match. Check it and try again."
         logger.warning("Failed login attempt from %s", request.remote_addr)
@@ -11253,7 +11264,10 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # offered to a teammate — it logs to the mirror as
             # re-engagement evidence for the first-right rule.
             _own_name = (person.get("assignedTo") or "").strip()
-            _dark_owners = {"", "Fhalen Tendencia"} | set(
+            # Barry added Oct 2026 ("I haven't claimed anything... we need
+            # to distribute"): a lead on his name has no working owner, so
+            # it goes to the claim board like a pond lead.
+            _dark_owners = {"", "Fhalen Tendencia", "Barry Jenkins"} | set(
                 getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
             # A lead owned by a departing/paused agent is effectively
             # unowned: no ping reaches anyone, so it routes to the claim
@@ -12046,7 +12060,7 @@ def _read_auth() -> bool:
     session). Use on GET surfaces both Barry and Danny should see. The
     global gate already 403s any coach non-GET before route code runs,
     so granting a coach here can never grant a write."""
-    return _perplexity_auth() or _auth_role() == "coach"
+    return _perplexity_auth() or _auth_role() in ("coach", "team")
 
 def _abbrev_name(full_name: str) -> str:
     """'James Greear' -> 'James G.'  Strips PII from lead names."""

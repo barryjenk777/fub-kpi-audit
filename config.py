@@ -861,3 +861,10 @@ DESK_GRACE_UNTIL = {
 # Barry, Oct 2026: "everyone working leads, not Julz."
 FRIDAY_MEETING_ZOOM = "https://zoomwithbarry.com"
 FRIDAY_MEETING_TIME = "11:30am"
+
+# ── Team Access Password ─────────────────────────────────────────────────
+# Dashboard password for the team (Barry, Oct 2026: /idos went public for
+# the FallCon talk, so the rest of Command Center gets a simple team
+# password). Grants READ-ONLY page access: the global gate blocks non-GET
+# for the team role, and admin endpoints still require owner or coach.
+TEAM_ACCESS_PASSWORD = _os.environ.get("TEAM_ACCESS_PASSWORD", "team")
