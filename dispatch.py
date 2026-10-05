@@ -220,6 +220,28 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
                              % _accept_url(offer_token)}]},
             ]
             if _sl.dm_user(sid, "New lead offer: %s" % lead_first, blocks=blocks):
+                # Dual delivery (Barry, Oct 2026: a weekend of offers died
+                # unseen in Slack). Every offer also sends a nudge TEXT with
+                # no link, pointing back to the Slack button, so an agent
+                # away from Slack still hears the bell. Claims stay in
+                # Slack only.
+                try:
+                    _prof = next((p for p in
+                                  (_db.get_agent_profiles(active_only=True) or [])
+                                  if p["agent_name"] == agent_name), None)
+                    if _prof:
+                        _nudge = ("%s, live one: %s converted %s%s and your "
+                                  "claim button is waiting in Slack. %d "
+                                  "minutes before it moves to the next agent."
+                                  % (first, who, lead_first, where,
+                                     OFFER_MINUTES))
+                        _db.queue_agent_imessage(
+                            agent_name, _prof.get("fub_user_id"),
+                            _prof.get("phone") or _prof.get("fub_phone"),
+                            _nudge, week_day="dispatch")
+                except Exception as _de:
+                    logger.warning("[DISPATCH] dual nudge failed for %s: %s",
+                                   agent_name, _de)
                 return True
     except Exception as e:
         logger.warning("[DISPATCH] slack offer failed for %s: %s", agent_name, e)

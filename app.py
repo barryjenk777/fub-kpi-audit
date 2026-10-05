@@ -6627,6 +6627,20 @@ def scheduled_dispatch_cascade():
                     note="cascaded through %d agents, none claimed" % offer["hop"])
             except Exception as _ee:
                 logger.warning("escalation open failed: %s", _ee)
+            # Say it in the room (Barry, Oct 2026: a weekend of leads died
+            # in silence). Factual and forward-looking, never a shame post.
+            try:
+                import slack_client as _slw
+                _wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
+                _lead1 = (offer["lead_name"] or "A lead").split()[0]
+                if _slw.is_available():
+                    _slw.post_message(_wins,
+                        ":raised_hand: %s converted and is still waiting on a "
+                        "human. The claim ran its course unclaimed, so Fhalen "
+                        "has the next call. Fastest recovery wins the lead."
+                        % _lead1)
+            except Exception as _we:
+                logger.warning("[DISPATCH] terminal room post failed: %s", _we)
             try:
                 import postmark_client as _pm
                 fhalen = getattr(config, "LIVE_CALLS_ADMIN_EMAIL", None)
