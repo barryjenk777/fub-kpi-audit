@@ -6303,7 +6303,7 @@ def api_desk_drill():
                      "action_id": "drill_claim", "value": _v},
                     {"type": "button",
                      "text": {"type": "plain_text", "text": "Pass"},
-                     "action_id": "drill_claim", "value": _v}]},
+                     "action_id": "drill_sample_pass", "value": _v}]},
                 {"type": "context", "elements": [
                     {"type": "mrkdwn",
                      "text": "Buttons not working? "
