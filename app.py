@@ -6273,6 +6273,7 @@ def api_desk_drill():
         m = {}
     excluded = set(config.EXCLUDED_USERS) \
         | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+    sample = bool((request.get_json(silent=True) or {}).get("sample"))
     sent, now_iso = [], datetime.now(timezone.utc).isoformat()
     for name, sid in m.items():
         if only:
@@ -6283,19 +6284,47 @@ def api_desk_drill():
         elif name in excluded:
             continue
         first = name.split()[0]
-        blocks = [
-            {"type": "section",
-             "text": {"type": "mrkdwn",
-                      "text": ("🔔 *Lead Desk bell check, %s.* When this hits "
-                               "your phone, tap the button. That's the whole "
-                               "drill.") % first}},
-            {"type": "actions",
-             "elements": [{"type": "button", "style": "primary",
-                           "text": {"type": "plain_text", "text": "I got it"},
-                           "action_id": "drill_claim",
-                           "value": json.dumps({"agent": name, "sent": now_iso})}]},
-        ]
-        if _sl.dm_user(sid, "Lead Desk bell check", blocks=blocks):
+        if sample:
+            # Screenshot mode (Barry, Oct 2026, onboarding course): the
+            # EXACT real offer card layout with an obviously fictional
+            # lead. Buttons log as drill taps; nothing cascades, nothing
+            # touches FUB, no offer row exists.
+            _v = json.dumps({"agent": name, "sent": now_iso})
+            blocks = [
+                {"type": "section", "text": {"type": "mrkdwn", "text":
+                    ("%s, The AI just converted Jordan in Virginia Beach. "
+                     "First tap is yours."
+                     "\n>_What we know: browsing 3 bed homes in Virginia "
+                     "Beach this week, asked about getting pre approved._")
+                    % first}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "style": "primary",
+                     "text": {"type": "plain_text", "text": "CLAIM"},
+                     "action_id": "drill_claim", "value": _v},
+                    {"type": "button",
+                     "text": {"type": "plain_text", "text": "Pass"},
+                     "action_id": "drill_claim", "value": _v}]},
+                {"type": "context", "elements": [
+                    {"type": "mrkdwn",
+                     "text": "Buttons not working? "
+                             "<https://www.legacycommandcenter.com/dispatch"
+                             "|Claim here instead>."}]},
+            ]
+        else:
+            blocks = [
+                {"type": "section",
+                 "text": {"type": "mrkdwn",
+                          "text": ("🔔 *Lead Desk bell check, %s.* When this hits "
+                                   "your phone, tap the button. That's the whole "
+                                   "drill.") % first}},
+                {"type": "actions",
+                 "elements": [{"type": "button", "style": "primary",
+                               "text": {"type": "plain_text", "text": "I got it"},
+                               "action_id": "drill_claim",
+                               "value": json.dumps({"agent": name, "sent": now_iso})}]},
+            ]
+        if _sl.dm_user(sid, "Sample lead offer" if sample
+                       else "Lead Desk bell check", blocks=blocks):
             sent.append(name)
             _db.log_automation_event(
                 event_type="desk_drill_sent", person_id=None, person_name=None,
