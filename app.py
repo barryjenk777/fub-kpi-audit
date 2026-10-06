@@ -4748,6 +4748,63 @@ def _ft_attempt_sync(row):
 _ft_last_good = {"payload": None, "at": None}
 
 
+def scheduled_fasttrack_relink():
+    """Daily 8:10am ET — every invited agent who has NEVER logged in to
+    Fast Track gets the invite again with a fresh magic link, until their
+    first login (Barry, Oct 2026: Damon's invite went missing for five
+    days and nobody knew). Skips anyone invited in the last 20 hours so
+    day-one agents don't get two invites in one day."""
+    if _already_fired_recently("fasttrack_relink", within_hours=20):
+        return
+    if not _db.try_acquire_job_lock("fasttrack_relink"):
+        return
+    try:
+        board = _ft_board_data() or {}
+        cc_active = {(p.get("email") or "").strip().lower(): p.get("agent_name")
+                     for p in (_db.get_agent_profiles(active_only=True) or [])}
+        now = datetime.now(timezone.utc)
+        resent, skipped = [], []
+        for row in (board.get("matched") or []):
+            email = (row.get("email") or "").strip().lower()
+            if not email or email not in cc_active:
+                continue
+            if row.get("first_login_at"):
+                continue
+            inv = row.get("invited_at")
+            if not inv:
+                continue
+            try:
+                inv_dt = datetime.fromisoformat(str(inv).replace("Z", "+00:00"))
+                if (now - inv_dt).total_seconds() < 20 * 3600:
+                    skipped.append("%s (invited today)" % email)
+                    continue
+            except (ValueError, TypeError):
+                pass
+            agent_name = cc_active[email]
+            try:
+                payload = _ft_build_payload(agent_name, email)
+                row_id = _db.enqueue_fasttrack_sync(agent_name, email, payload)
+                if row_id and _ft_attempt_sync({"id": row_id, "attempts": 0,
+                                                "payload": payload,
+                                                "email": email,
+                                                "agent_name": agent_name}):
+                    resent.append(agent_name)
+                else:
+                    skipped.append("%s (send failed, queued for retry sweep)"
+                                   % email)
+            except Exception as e:
+                skipped.append("%s (%s)" % (email, str(e)[:60]))
+        print("[SCHEDULER] Fast Track relink: %d resent (%s)%s"
+              % (len(resent), ", ".join(resent) or "nobody waiting",
+                 (" | skipped: " + "; ".join(skipped)) if skipped else ""))
+        _record_fired("fasttrack_relink")
+    except Exception as e:
+        _alert_on_job_failure("fasttrack_relink", str(e))
+        print(f"[SCHEDULER] Fast Track relink error: {e}")
+    finally:
+        _db.release_job_lock("fasttrack_relink")
+
+
 def _ft_board_data(force=False):
     """Join the Fast Track roster to the CC roster. Returns the full board dict.
     On a Fast Track error, serves the last good payload with stale=True."""
@@ -23186,6 +23243,13 @@ def start_scheduler():
                        CronTrigger(day_of_week="fri", hour=10, minute=0, timezone=ET),
                        id="friday_meeting_text", name="Friday meeting text (Fri 10am)",
                        max_instances=1, coalesce=True, misfire_grace_time=3600)
+
+    # Fast Track relink: daily 8:10am ET, re-invite anyone who never logged in
+    _scheduler.add_job(scheduled_fasttrack_relink,
+                       CronTrigger(hour=8, minute=10, timezone=ET),
+                       id="fasttrack_relink",
+                       name="Fast Track relink (daily 8:10am, until first login)",
+                       max_instances=1, coalesce=True)
 
     # Fast Track onboarding digest: daily 8am ET, only when there's something to say
     _scheduler.add_job(scheduled_onboarding_digest, CronTrigger(hour=8, minute=0, timezone=ET),
