@@ -62,6 +62,7 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
     "Julz Gat",        # accountability paused per Barry, Aug 2026
     "Ana Pena",        # transaction manager, was still getting agent texts (bug, Sep 2026)
     "Niella Davis",    # leaving the team per Barry, Sep 2026 — no texts, no emails
+    "Jessica Mandley", # decided not to join per Barry, Oct 2026 — full offboard
 }
 
 # Agents on Android phones. iMessage from Barry's personal cell does not reach
@@ -851,7 +852,6 @@ SAVEBOT_MAX_SCRIPTS_PER_RUN = 40
 # New hires get unconditional desk access through these dates (Barry,
 # Sep 2026: "Jessica and Mack are new so give them 30 day grace").
 DESK_GRACE_UNTIL = {
-    "Jessica Mandley": "2026-10-28",
     "Mack Lancaster":  "2026-10-28",
 }
 
@@ -868,3 +868,13 @@ FRIDAY_MEETING_TIME = "11:30am"
 # password). Grants READ-ONLY page access: the global gate blocks non-GET
 # for the team role, and admin endpoints still require owner or coach.
 TEAM_ACCESS_PASSWORD = _os.environ.get("TEAM_ACCESS_PASSWORD", "team")
+
+
+# ── Fast Track exemptions ────────────────────────────────────────────────
+# Veterans who were synced to the course but are already onboarded (Barry,
+# Oct 2026). Dropped from the onboarding board, the digest, and the daily
+# relink chase. Names as they appear in agent_profiles.
+FASTTRACK_EXEMPT = {
+    "Jon Mironchik",
+    "Salma Wahbi",
+}

@@ -4861,6 +4861,14 @@ def _ft_board_data(force=False):
         "stalled":      sum(1 for a in matched if a.get("status") == "stalled"),
         "graduated":    sum(1 for a in matched if a.get("status") == "graduated"),
     }
+    # Already-onboarded veterans are invisible to every course surface:
+    # board, digest, and the daily relink chase all read this function.
+    _exempt = set(getattr(config, "FASTTRACK_EXEMPT", set()) or set())
+    if _exempt:
+        matched = [r for r in matched if (r.get("cc_name") or "") not in _exempt]
+        not_synced = [r for r in not_synced
+                      if (r.get("cc_name") or r.get("agent_name") or "")
+                      not in _exempt]
     return {"ok": True, "error": err, "stale": stale,
             "last_good_at": _ft_last_good["at"],
             "generated_at": roster.get("generated_at"),
@@ -6256,6 +6264,43 @@ def api_ring_group_note():
             force=bool((request.get_json(silent=True) or {}).get("force")))
         out["fired"] = True
     return jsonify(out)
+
+
+@app.route("/api/admin/agents/offboard", methods=["POST"])
+def api_agent_offboard():
+    """One-call offboard (third departure made it a pattern, Oct 2026).
+    Body {"name": "Full Name"}: marks the profile inactive and clears the
+    desk Slack mapping. Config exclusions are code, FUB seat and Slack
+    workspace removal are Barry's, and the roster sync makes the inactive
+    flag permanent once the FUB seat is gone."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "error": "name required"}), 400
+    prof = next((p for p in (_db.get_agent_profiles(active_only=False) or [])
+                 if p.get("agent_name") == name), None)
+    if not prof:
+        return jsonify({"ok": False, "error": "no profile named %r" % name}), 404
+    _db.upsert_agent_profile(name, is_active=False)
+    raw, _ = _db.get_app_state("slack_user_map")
+    try:
+        m = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        m = {}
+    had_slack = bool(m.pop(name, None))
+    _db.set_app_state("slack_user_map", json.dumps(m))
+    _db.log_automation_event(event_type="agent_offboard", person_id=None,
+                             person_name=None, agent_name=name,
+                             payload={"slack_unmapped": had_slack},
+                             triggered_by="admin")
+    logger.info("[OFFBOARD] %s: profile inactive, slack unmapped=%s",
+                name, had_slack)
+    return jsonify({"ok": True, "agent": name, "profile_inactive": True,
+                    "slack_unmapped": had_slack,
+                    "note": "FUB seat + Slack workspace removal are manual; "
+                            "roster sync keeps this permanent once the FUB "
+                            "seat is gone."})
 
 
 @app.route("/api/admin/desk/slack-map", methods=["GET", "POST"])
