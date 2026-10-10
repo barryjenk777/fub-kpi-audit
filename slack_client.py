@@ -91,3 +91,31 @@ def signature_ok(headers, raw_body):
         return hmac.compare_digest(digest, headers.get("X-Slack-Signature", ""))
     except Exception:
         return False
+
+
+def group_dm(user_ids, text, blocks=None):
+    """One message both people see: conversations.open with multiple user
+    ids returns the group-DM channel, then post there. Falls back to
+    individual DMs if the workspace scope disallows mpim."""
+    ids = [u for u in (user_ids or []) if u]
+    if not is_available() or not ids:
+        return None
+    if len(ids) == 1:
+        return post_message(ids[0], text, blocks=blocks)
+    try:
+        r = requests.post(f"{_API}/conversations.open",
+                          headers={**_auth_header(),
+                                   "Content-Type": "application/json; charset=utf-8"},
+                          json={"users": ",".join(ids)}, timeout=15).json()
+        if r.get("ok"):
+            ch = ((r.get("channel") or {}).get("id"))
+            if ch:
+                return post_message(ch, text, blocks=blocks)
+        logger.warning("group dm open failed: %s — falling back to singles",
+                       r.get("error"))
+    except Exception as e:
+        logger.warning("group dm error: %s — falling back to singles", e)
+    ts = None
+    for u in ids:
+        ts = post_message(u, text, blocks=blocks) or ts
+    return ts

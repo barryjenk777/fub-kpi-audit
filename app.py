@@ -11392,15 +11392,22 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                     try:
                         import slack_client as _slc
                         import dispatch as _dpc
+                        # One message, both closers (Barry, Oct 2026):
+                        # Fhalen qualifies and books the slot, Ana takes
+                        # the negotiation call at that time.
                         _sidc = _dpc._slack_user_id(config.ISA_NAME)
-                        if _slc.is_available() and _sidc:
+                        _sida = _dpc._slack_user_id("Ana Pena")
+                        if _slc.is_available() and (_sidc or _sida):
                             _lead1c = ((person.get("name") or "a seller")
                                        .strip().split()[0])
-                            _slc.dm_user(_sidc,
+                            _slc.group_dm([_sidc, _sida],
                                 "\U0001f4b0 Cash lead: %s just came in from "
-                                "the cash offer site and is assigned to you. "
-                                "These sellers cost real money and close for "
-                                "real money, so first voice wins. "
+                                "the cash offer site and is assigned to "
+                                "Fhalen. Fhalen: first voice wins, call, "
+                                "qualify (condition, timeline, motivation, "
+                                "price), get the photo set, and book Ana's "
+                                "offer call. Ana: you take that call and "
+                                "negotiate the number to a contract. "
                                 "<https://yourfriendlyagent.followupboss.com"
                                 "/2/people/view/%s|Open %s in FUB>."
                                 % (_lead1c, pid, _lead1c))
