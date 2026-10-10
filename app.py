@@ -11367,6 +11367,47 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
         try:
             person = FUBClient().get_person(pid) or {}
             tags_l = [t.lower() for t in (person.get("tags") or [])]
+            # ── Cash lane (Barry, Oct 2026): hamptonroadshome.cash sellers
+            # go to Fhalen, who calls them, with Ana closing by phone.
+            # Assign ONCE per lead (claim_once), so a deliberate later
+            # reassignment by Barry is never yanked back by a fossil tag
+            # webhook. Under Contract leads are never touched.
+            try:
+                _src = (person.get("source") or "").strip().lower()
+                _is_cash = (_src == "hamptonroadshome.cash"
+                            or "cash offer site" in tags_l)
+                _stage = (person.get("stage") or "")
+                if (_is_cash and _stage != "Under Contract"
+                        and (person.get("assignedTo") or "").strip()
+                        != config.ISA_NAME
+                        and _db.claim_once("cashassign_%s" % pid)):
+                    FUBClient()._request(
+                        "PUT", "people/%s" % pid,
+                        json_data={"assignedUserId": config.ISA_USER_ID})
+                    _db.log_automation_event(
+                        event_type="cash_lane_assign", person_id=pid,
+                        person_name=person.get("name"),
+                        agent_name=config.ISA_NAME,
+                        payload={"source": _src}, triggered_by=triggered_by)
+                    try:
+                        import slack_client as _slc
+                        import dispatch as _dpc
+                        _sidc = _dpc._slack_user_id(config.ISA_NAME)
+                        if _slc.is_available() and _sidc:
+                            _lead1c = ((person.get("name") or "a seller")
+                                       .strip().split()[0])
+                            _slc.dm_user(_sidc,
+                                "\U0001f4b0 Cash lead: %s just came in from "
+                                "the cash offer site and is assigned to you. "
+                                "These sellers cost real money and close for "
+                                "real money, so first voice wins. "
+                                "<https://yourfriendlyagent.followupboss.com"
+                                "/2/people/view/%s|Open %s in FUB>."
+                                % (_lead1c, pid, _lead1c))
+                    except Exception as _ce:
+                        logger.warning("cash lane DM failed: %s", _ce)
+            except Exception as _cle:
+                logger.warning("cash lane check failed for %s: %s", pid, _cle)
             # One front door, full parity with the retired Warm
             # Handoff reassignment step (Barry's screenshot, Sep
             # 2026): all six conversion tags plus Blue's
