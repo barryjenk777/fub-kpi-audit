@@ -878,3 +878,13 @@ FASTTRACK_EXEMPT = {
     "Jon Mironchik",
     "Salma Wahbi",
 }
+
+# ── Text pause list ──────────────────────────────────────────────────────
+# Agents whose SYSTEM texts are paused (Barry, Oct 16 2026: "pause Damon's
+# text messages until I say otherwise"). Blocks everything that rides
+# queue_agent_imessage: coaching texts, Save-Bot prompts, Friday meeting
+# texts, Phoenix alerts, desk nudge texts. Emails and Slack are untouched.
+# Unpause = remove the name and deploy.
+TEXT_PAUSED_AGENTS = {
+    "Damon Parker",
+}

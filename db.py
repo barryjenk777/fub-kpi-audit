@@ -6664,6 +6664,14 @@ def queue_agent_imessage(agent_name, fub_user_id, phone, message,
     if not is_available():
         return None
     try:
+        import config as _cfgp
+        if agent_name in getattr(_cfgp, "TEXT_PAUSED_AGENTS", set()):
+            logger.info("text paused for %s — queue skipped (%s)",
+                        agent_name, week_day or "text")
+            return None
+    except Exception:
+        pass
+    try:
         log_attention(agent_name, (week_day or "text"),
                       "email" if agent_name in getattr(
                           __import__("config"), "EMAIL_DELIVERY_AGENTS", set())
@@ -6694,9 +6702,16 @@ def queue_agent_imessage(agent_name, fub_user_id, phone, message,
 
 
 def get_pending_agent_imessages(limit=50):
-    """Return pending coaching texts for the Mac listener to send."""
+    """Return pending coaching texts for the Mac listener to send.
+    Serve-time pause guard too (not just queue-time), so a pause also
+    freezes anything already sitting in the queue for that agent."""
     if not is_available():
         return []
+    try:
+        import config as _cfgp
+        paused = tuple(getattr(_cfgp, "TEXT_PAUSED_AGENTS", set()) or ())
+    except Exception:
+        paused = ()
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -6704,9 +6719,10 @@ def get_pending_agent_imessages(limit=50):
                     SELECT id, agent_name, phone, message, week_day, scheduled_at
                     FROM agent_imessage_queue
                     WHERE status = 'pending'
+                      AND NOT (agent_name = ANY(%s))
                     ORDER BY scheduled_at ASC
                     LIMIT %s
-                """, (limit,))
+                """, (list(paused), limit,))
                 rows = cur.fetchall()
         return [
             {
