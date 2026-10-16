@@ -5919,6 +5919,38 @@ def _desk_intake_alarm(person_id, person_name, reason):
         logger.error("desk alarm email failed: %s", e)
 
 
+def scheduled_maverick_watchdog():
+    """Daily 9:30am ET — Maverick silence tripwire (Barry, Oct 2026: the
+    courier on the always-on Mac died quietly and sat dark for a week
+    until agents noticed their numbers frozen). No call-grade data for 3
+    days pages Barry once a day until data flows again."""
+    try:
+        if _db.get_maverick_reports(days=3, limit=1):
+            return
+        if not _db.claim_once("maverick_watchdog_%s"
+                              % datetime.now(timezone.utc).strftime("%Y%m%d")):
+            return
+        msg = ("\U0001f6a8 Maverick has gone quiet: no call grades in 3+ "
+               "days, so agent coaching numbers are frozen. On the "
+               "always-on Mac: tail ~/maverick_courier.log. If it says "
+               "LOGIN_NEEDED, run maverick_courier.py --setup and log in. "
+               "This ping repeats daily until data flows.")
+        logger.error("[MAVERICK WATCHDOG] silent 3+ days")
+        try:
+            import slack_client as _sl
+            import dispatch as _dp
+            sid = _dp._slack_user_id("Barry Jenkins")
+            if _sl.is_available() and sid:
+                _sl.dm_user(sid, msg)
+            ops = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+            if ops:
+                _sl.post_message(ops, msg)
+        except Exception as e:
+            logger.warning("maverick watchdog slack failed: %s", e)
+    except Exception as e:
+        logger.warning("maverick watchdog failed: %s", e)
+
+
 def scheduled_desk_sweep(window_min=40, _force=False):
     """Every 10 min: the Lead Desk safety net. Finds people carrying a
     conversion tag who were UPDATED recently, drops everyone the seen-tags
@@ -23589,6 +23621,15 @@ def start_scheduler():
     _scheduler.add_job(scheduled_desk_watchdog,
                        CronTrigger(minute="7,37", timezone=ET),
                        id="desk_watchdog", name="Desk watchdog (every 30 min)",
+                       max_instances=1, coalesce=True)
+
+    # Maverick silence tripwire: daily 9:30am ET, pages Barry when call
+    # grades stop flowing for 3+ days (the courier lives on another Mac
+    # and has died silently before).
+    _scheduler.add_job(scheduled_maverick_watchdog,
+                       CronTrigger(hour=9, minute=30, timezone=ET),
+                       id="maverick_watchdog",
+                       name="Maverick silence watchdog (daily 9:30am)",
                        max_instances=1, coalesce=True)
 
     # Desk safety sweep: every 10 min, catches conversions the tag webhook
