@@ -287,6 +287,13 @@ def send_response_audit(
 
 def _send(subject: str, body: str):
     """Send audit email via SendGrid."""
+    # Retired by default (Barry, Oct 20 2026: "lead audit emails are not
+    # useful to me"). These were per-touch QA receipts for the pre-trust
+    # era. Set LEAD_AUDIT_EMAILS=1 in Railway (then Deploy the staged
+    # change) to turn them back on for a QA sprint.
+    if os.environ.get("LEAD_AUDIT_EMAILS", "0").strip() != "1":
+        logger.info("lead audit email suppressed (retired): %s", subject)
+        return
     try:
         import sendgrid
         from sendgrid.helpers.mail import Mail
