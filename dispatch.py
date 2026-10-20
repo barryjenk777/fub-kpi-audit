@@ -300,6 +300,10 @@ def _ordered_candidates(lead_city, audit, source, person_id, hop,
     base = eligible_agents(lead_city, audit=audit)
     if hop != 1 or not base:
         return base, "rotation"
+    # Experiment concluded Oct 20 2026: rotation only, unless the config
+    # flag re-opens the A/B.
+    if getattr(config, "DESK_HOP1_ARM", "rotation") != "experiment":
+        return base, "rotation"
     try:
         arm_merit = (int("".join(c for c in str(person_id)
                                  if c.isdigit()) or 0) % 2 == 0)
@@ -330,9 +334,21 @@ def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
         cands, route_path = _ordered_candidates(lead_city, audit, source,
                                                 person_id, hop,
                                                 lead_source=lead_source)
+        capped_fallback = []
         for cand in cands:
             if cand in prior:
                 continue
+            # Burst-day fairness (Barry, Oct 20 2026): an agent who already
+            # claimed today's cap rotates behind everyone who hasn't. If
+            # every candidate is capped, the cap yields — a waiting lead
+            # always beats fairness.
+            try:
+                _cap = int(getattr(config, "DESK_DAILY_CLAIM_CAP", 0) or 0)
+                if _cap and _db.count_agent_claims_today(cand) >= _cap:
+                    capped_fallback.append(cand)
+                    continue
+            except Exception:
+                pass
             # Open-claim cap: an agent already holding 2 live offers is
             # skipped, so one fast thumb can't vacuum a burst (Salma took
             # all 5 of a Ylopo tagging sweep on go-live day, Sep 2026).
@@ -351,6 +367,15 @@ def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
                 pass
             agent_name = cand
             break
+        if not agent_name:
+            for cand in capped_fallback:
+                try:
+                    if _db.count_open_dispatch_offers(cand) >= 2:
+                        continue
+                except Exception:
+                    pass
+                agent_name = cand
+                break
     if not agent_name:
         return None
     token = secrets.token_urlsafe(9)

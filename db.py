@@ -10210,3 +10210,23 @@ def get_seen_desk_tag_pairs(person_ids):
     except Exception as e:
         logger.warning("get_seen_desk_tag_pairs failed: %s", e)
         return set()
+
+
+def count_agent_claims_today(agent_name):
+    """Claims this agent has accepted so far today (ET). Feeds the desk's
+    burst-day fairness cap."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM dispatch_offers
+                    WHERE agent_name = %s AND accepted_at IS NOT NULL
+                      AND (accepted_at AT TIME ZONE 'America/New_York')::date
+                        = (NOW() AT TIME ZONE 'America/New_York')::date
+                """, (agent_name,))
+                return int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.warning("count_agent_claims_today failed: %s", e)
+        return 0

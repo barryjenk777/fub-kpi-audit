@@ -225,6 +225,9 @@ APT_TASK_TEMPLATE = "Update appointment outcome: {lead_name}"
 # (e.g., team leader who should always receive transfers as fallback)
 PROTECTED_AGENTS = [
     # "Barry Jenkins",
+    # Matt helps run the team (Barry, Oct 20 2026): permanently on the
+    # live transfer line and the desk claim rotation, audit pass or not.
+    "Matt Moubray",
 ]
 
 
@@ -888,3 +891,16 @@ FASTTRACK_EXEMPT = {
 TEXT_PAUSED_AGENTS = {
     "Damon Parker",
 }
+
+
+# ── Desk distribution fairness ───────────────────────────────────────────
+# Barry, Oct 20 2026 ("I don't want Mitch getting all of them"): the
+# merit-vs-rotation experiment is over. Verdict from 3 weeks of arms: the
+# merit arm concentrated hop-1 offers on the top scorer (9 of 12 leads to
+# one agent) without out-converting rotation. Hop-1 is pure rotation now;
+# set to "experiment" to resume the A/B.
+DESK_HOP1_ARM = "rotation"
+# An agent who already claimed this many leads today rotates to the back
+# of the line for new hop-1 offers (burst-day fairness; ignored when
+# everyone is capped so no lead ever waits on fairness).
+DESK_DAILY_CLAIM_CAP = 2
