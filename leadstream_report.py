@@ -379,6 +379,11 @@ def format_text_report(data):
 
 def send_email(html_content, report_date):
     """Send the report via SendGrid."""
+    # Retired Oct 2026 (Barry): the report lives on the dashboard; the
+    # inbox is for the daily brief and fire alarms only. Set
+    # LEADSTREAM_REPORT_EMAILS=1 in Railway to resume.
+    if os.getenv("LEADSTREAM_REPORT_EMAILS", "0").strip() != "1":
+        return 0
     sg_key = os.getenv("SENDGRID_API_KEY")
     if not sg_key:
         raise ValueError("SENDGRID_API_KEY not set in environment")

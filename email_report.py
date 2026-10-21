@@ -2030,7 +2030,22 @@ def send_impact_tracker_brief(date_label, entries, stats, analytics, dry_run=Fal
     subject = f"Impact Tracker: Joe met {met}" + (f", {flagged} need you" if flagged else "")
     if dry_run:
         return True   # built successfully; caller is self-testing
-    _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
-             subject=subject, html=html)
-    print(f"[IMPACT TRACKER] Brief emailed to Barry ({met} met)")
+    # Ops Slack, not inbox (Barry, Oct 2026). Email only when Slack is
+    # unavailable, so the signal never drops.
+    _posted = False
+    try:
+        import os as _os
+        import slack_client as _sl
+        _ops = _os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+        _line = ("\U0001f4cb " + subject + ". Full detail on the Sales "
+                 "Manager page: legacycommandcenter.com/")
+        _posted = bool(_sl.is_available() and _ops
+                       and _sl.post_message(_ops, _line))
+    except Exception as _se:
+        print(f"[IMPACT TRACKER] slack post failed: {_se}")
+    if not _posted:
+        _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+                 subject=subject, html=html)
+    print(f"[IMPACT TRACKER] Brief delivered via %s ({met} met)"
+          % ("slack" if _posted else "email"))
     return True

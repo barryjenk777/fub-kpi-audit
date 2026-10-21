@@ -383,14 +383,33 @@ def _compliance_recap(week_start, dry_run=False):
 {talk}
 <p style="margin:16px 0 0;font-size:12px;color:#888888">Verified against Maverick practice grades. New prescriptions go out tonight. Full board: legacycommandcenter.com/training</p></div>"""
     if not dry_run:
+        # Ops Slack line, not inbox (Barry, Oct 2026: email is for the
+        # daily brief and alarms). Email only as a fallback when Slack
+        # is unavailable.
+        _line = ("\U0001f94b Dojo compliance: %d/%d did their reps%s. "
+                 "Full board: legacycommandcenter.com/training" % (
+                     len(rows) - len(misses), len(rows),
+                     (", %d need Barry's voice (%s)" % (len(two_plus),
+                      ", ".join(r.get("agent", "?") for r in two_plus)))
+                     if two_plus else ""))
+        _posted = False
         try:
-            _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
-                     subject="Dojo compliance: %d/%d did their reps%s" % (
-                         len(rows) - len(misses), len(rows),
-                         (", %d need your voice" % len(two_plus)) if two_plus else ""),
-                     html=html)
+            import os as _os
+            import slack_client as _sl
+            _ops = _os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+            _posted = bool(_sl.is_available() and _ops
+                           and _sl.post_message(_ops, _line))
         except Exception as e:
-            logger.error("dojo recap email failed: %s", e)
+            logger.warning("dojo recap slack failed: %s", e)
+        if not _posted:
+            try:
+                _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+                         subject="Dojo compliance: %d/%d did their reps%s" % (
+                             len(rows) - len(misses), len(rows),
+                             (", %d need your voice" % len(two_plus)) if two_plus else ""),
+                         html=html)
+            except Exception as e:
+                logger.error("dojo recap email failed: %s", e)
     return {"rows": rows, "two_plus": two_plus}
 
 

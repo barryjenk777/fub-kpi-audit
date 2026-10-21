@@ -9402,8 +9402,21 @@ def api_goals_log_closing():
         deals = _db.get_deal_summary(agent_name=agent_name, year=year)
         closings = deals.get("closings", 0)
         if closings == 1:  # First closing of the year
+            # Celebrations belong in the room, not Barry's inbox
+            # (Barry, Oct 2026). Email only if Slack is down.
+            _celebrated = False
+            try:
+                import slack_client as _slfc
+                _wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
+                _celebrated = bool(_slfc.is_available() and _slfc.post_message(
+                    _wins,
+                    "\U0001f3c6 %s just logged their FIRST closing of %s. "
+                    "That first one is the hardest one. Make some noise."
+                    % (agent_name, year)))
+            except Exception as _fce:
+                logger.warning("first-closing slack post failed: %s", _fce)
             api_key = os.environ.get("SENDGRID_API_KEY")
-            if api_key:
+            if api_key and not _celebrated:
                 import sendgrid as _sg
                 from sendgrid.helpers.mail import Mail as _Mail
                 msg = _Mail(
@@ -22234,11 +22247,21 @@ def _fire_impact_brief(entries, start, today, dry_run=False):
             lines.append(f"- {e.get('agent')}: {st}. Commit: {e.get('commit') or '(none)'}")
         lines += ["", "The full brief could not render this time. Full detail is on the Sales Manager page."]
         body = "\n".join(lines)
-        import postmark_client as _pm2
-        _pm2.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
-                  subject=f"Impact Tracker: Joe submitted ({len(met)} met)",
-                  html=body.replace("\n", "<br>"), text=body)
-        logger.info("[IMPACT BRIEF] Fallback notice sent to Barry")
+        _sent_ops = False
+        try:
+            import slack_client as _slit
+            _opsit = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+            _sent_ops = bool(_slit.is_available() and _opsit
+                             and _slit.post_message(_opsit, body))
+        except Exception as _ite:
+            logger.warning("[IMPACT BRIEF] ops post failed: %s", _ite)
+        if not _sent_ops:
+            import postmark_client as _pm2
+            _pm2.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+                      subject=f"Impact Tracker: Joe submitted ({len(met)} met)",
+                      html=body.replace("\n", "<br>"), text=body)
+        logger.info("[IMPACT BRIEF] Fallback notice sent (%s)",
+                    "slack" if _sent_ops else "email")
         return True
     except Exception as _fb:
         logger.error("[IMPACT BRIEF] FALLBACK ALSO FAILED: %s", _fb)
@@ -22963,6 +22986,24 @@ def scheduled_owner_daily_brief():
                 )
             risk_html += "</ul>"
 
+        # Team Watch: gone-dark agents live in the brief now, not a
+        # separate Monday email (Barry, Oct 2026). Shows only when someone
+        # is actually dark.
+        gd_html = ""
+        try:
+            _gd = _db.get_agents_gone_dark(days=10) or []
+            if _gd:
+                gd_html = ("<h3 style='font-size:14px;text-transform:"
+                           "uppercase;color:#888;margin:20px 0 8px;"
+                           "border-bottom:1px solid #eee;padding-bottom:4px'>"
+                           "Team Watch</h3><ul style='margin:0;padding-left:20px'>"
+                           + "".join(
+                               f"<li style='font-size:13px'>{_g['agent_name']} "
+                               f"— no activity since "
+                               f"{_g['last_activity'] or 'ever'}</li>"
+                               for _g in _gd) + "</ul>")
+        except Exception as _gde:
+            logger.warning("brief gone-dark section failed: %s", _gde)
         html = f"""
 <div style='font-family:-apple-system,sans-serif;max-width:600px;margin:24px auto;color:#222'>
 <h2 style='margin:0 0 4px;font-size:20px'>Legacy Home Team — Owner Brief</h2>
@@ -22998,7 +23039,7 @@ def scheduled_owner_daily_brief():
 {_row('SMS used/cap', f"{th.get('pb_used_today','?')}/{th.get('pb_daily_cap','?')}")}
 {_row('HeyGen used/cap', f"{th.get('hg_used_today','?')}/{th.get('hg_daily_cap','?')}")}
 </table>
-
+{gd_html}
 <h3 style='font-size:14px;text-transform:uppercase;color:#888;margin:20px 0 8px;border-bottom:1px solid #eee;padding-bottom:4px'>Top 3 Actions Today</h3>
 <ol style='margin:0;padding-left:20px'>{action_html}</ol>
 
@@ -23444,13 +23485,14 @@ def start_scheduler():
             id="nudge_streak_break", name="Streak break check (7:15am ET)",
             max_instances=1, coalesce=True,
         )
-        # Weekly summary: Sunday 6pm ET
-        _scheduler.add_job(
-            lambda: _nudge.run_weekly_summary(),
-            CronTrigger(day_of_week="sun", hour=18, minute=0, timezone=ET),
-            id="nudge_weekly", name="Weekly summary email (Sunday 6pm)",
-            max_instances=1, coalesce=True,
-        )
+        # Weekly summary email RETIRED Oct 2026 (Barry): redundant with
+        # the Monday audit and Sunday hype. Re-register to resume.
+        # _scheduler.add_job(
+        #     lambda: _nudge.run_weekly_summary(),
+        #     CronTrigger(day_of_week="sun", hour=18, minute=0, timezone=ET),
+        #     id="nudge_weekly", name="Weekly summary email (Sunday 6pm)",
+        #     max_instances=1, coalesce=True,
+        # )
         # Plateau check: every Monday morning
         _scheduler.add_job(
             lambda: _nudge.run_plateau_check(),
@@ -23587,10 +23629,12 @@ def start_scheduler():
                        max_instances=1, coalesce=True)
 
     # Gone dark alert: Monday 7am ET
-    _scheduler.add_job(scheduled_gone_dark_alert,
-                       CronTrigger(day_of_week="mon", hour=7, minute=0, timezone=ET),
-                       id="gone_dark", name="Gone dark alert (Mon 7am)",
-                       max_instances=1, coalesce=True)
+    # Gone-dark email RETIRED Oct 2026 (Barry): folded into the Owner
+    # Brief's Team Watch section, which shows daily whenever anyone is dark.
+    # _scheduler.add_job(scheduled_gone_dark_alert,
+    #                    CronTrigger(day_of_week="mon", hour=7, minute=0, timezone=ET),
+    #                    id="gone_dark", name="Gone dark alert (Mon 7am)",
+    #                    max_instances=1, coalesce=True)
 
     # Calls cache incremental sync: every 30 minutes
     # Fetches only records newer than the watermark — stays well inside
