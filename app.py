@@ -21222,6 +21222,17 @@ def sync_fub_roster():
                 _db.mark_onboarding_sent(name)
                 onboarded.append({"name": name, "email": agent["email"]})
                 print(f"[ROSTER SYNC] Onboarding email sent → {name} <{agent['email']}>")
+                # Day One Pipeline too (Cynthia gap, Oct 2026): marking
+                # onboarding_sent here made the daily job skip the pipeline
+                # seed, so sync-detected hires got the goal email but Ana
+                # never got her dotloop work order. Seed it in the same
+                # breath.
+                try:
+                    _onboard_new_hire(name, agent["email"],
+                                      os.environ.get("BASE_URL", "").rstrip("/"))
+                    print(f"[ROSTER SYNC] Day One Pipeline seeded for {name}")
+                except Exception as _pse:
+                    print(f"[ROSTER SYNC] pipeline seed failed for {name}: {_pse}")
             else:
                 skipped.append(name)
                 print(f"[ROSTER SYNC] New agent {name} — no setup URL or email, skipping email")
