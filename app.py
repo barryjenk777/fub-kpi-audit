@@ -5182,6 +5182,37 @@ def api_onboarding_task_done():
     return jsonify({"ok": True, **r})
 
 
+@app.route("/api/admin/onboarding/resend-goal-email", methods=["POST"])
+def api_onboarding_resend_goal_email():
+    """Re-send one agent's Day 1 goal-setup invite (Cynthia, Oct 2026: the
+    automatic one landed in spam and nothing could re-fire it). Returns the
+    setup URL too, so Barry can text the link directly as a belt."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    name = ((request.get_json(silent=True) or {}).get("agent_name") or "").strip()
+    if not name:
+        return jsonify({"error": "agent_name required"}), 400
+    profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
+                    if p["agent_name"] == name), None)
+    if not profile or not profile.get("email"):
+        return jsonify({"ok": False, "error": "no active profile with an "
+                                              "email for %r" % name}), 404
+    token = _db.get_token_for_agent(name)
+    if not token:
+        _db.create_goal_token(name)
+        token = _db.get_token_for_agent(name)
+    base = (os.environ.get("BASE_URL") or "").rstrip("/")
+    setup_url = "%s/goals/setup/%s" % (base, token)
+    dashboard_url = "%s/my-goals/%s" % (base, token)
+    from email_report import send_goal_onboarding_email
+    first = name.split()[0]
+    send_goal_onboarding_email(name, first, profile["email"], setup_url,
+                               dashboard_url=dashboard_url)
+    _db.mark_onboarding_sent(name)
+    return jsonify({"ok": True, "emailed": profile["email"],
+                    "setup_url": setup_url})
+
+
 @app.route("/api/admin/onboarding/seed", methods=["POST"])
 def api_onboarding_seed():
     """Manually start the pipeline for a hire (or backfill a recent one)."""
