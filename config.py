@@ -856,6 +856,11 @@ SAVEBOT_MAX_SCRIPTS_PER_RUN = 40
 # Sep 2026: "Jessica and Mack are new so give them 30 day grace").
 DESK_GRACE_UNTIL = {
     "Mack Lancaster":  "2026-10-28",
+    # First-30-days desk access, the standard the onboarding course
+    # promises every new hire (dates = start_date + 30):
+    "Damon Parker":    "2026-10-31",
+    "Jullan Hernandez": "2026-11-20",
+    "Cynthia Molina":  "2026-11-22",
 }
 
 # ── Friday Team Meeting Reminder ─────────────────────────────────────────
