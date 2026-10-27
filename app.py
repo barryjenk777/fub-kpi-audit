@@ -20685,6 +20685,19 @@ def api_courier_script():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/admin/maverick/calls", methods=["GET"])
+def api_maverick_calls():
+    """Structured call data (Phase 2): ?days=14&agent=Name&transcript=1."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    rows = _db.get_maverick_calls(
+        days=request.args.get("days", default=14, type=int),
+        agent_name=(request.args.get("agent") or "").strip() or None,
+        limit=request.args.get("limit", default=200, type=int),
+        with_transcript=request.args.get("transcript") == "1")
+    return jsonify({"ok": True, "count": len(rows), "calls": rows})
+
+
 @app.route("/api/admin/maverick/ingest", methods=["GET"])
 def api_maverick_ingest_probe():
     """Diagnostics only (Oct 2026 key rollout): says whether the scoped key
@@ -20712,6 +20725,64 @@ def api_maverick_ingest():
     if not ((_scoped and _given == _scoped) or _perplexity_auth()):
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(silent=True) or {}
+    # ── Phase 2 (Oct 2026): structured per-call ingest from Grok Bot.
+    # Body {"calls": [<call objects per the Phase 2 contract>], "source":
+    # "grokbot"}. Idempotent on Maverick call_id; each NEW call also
+    # bridges one legacy maverick_reports row (claim_once-deduped) so
+    # Tape of the Week, coaching texts, and the status board keep
+    # working unchanged.
+    if isinstance(body.get("calls"), list):
+        _db.ensure_maverick_calls_table()
+        stored, new_rows, bridged, failed = 0, 0, 0, []
+        for c in body["calls"][:200]:
+            if not isinstance(c, dict):
+                continue
+            cid, is_new = _db.upsert_maverick_call(c)
+            if cid is None:
+                failed.append(str(c.get("call_id")))
+                continue
+            stored += 1
+            if is_new:
+                new_rows += 1
+            try:
+                if (c.get("agent_name") and c.get("call_grade") is not None
+                        and _db.claim_once("mavcall_%s" % cid)):
+                    _legacy = (
+                        "AI Grading call (grokbot structured)
+"
+                        "Agent: %s
+Lead: %s (%s)
+Date: %s
+Outcome: %s
+"
+                        "Grade: %s
+Talk time agent/lead: %s/%s
+"
+                        "Objections: %s
+Coaching: %s" % (
+                            c.get("agent_name"), c.get("lead_name"),
+                            c.get("lead_crm_stage"), c.get("call_time"),
+                            c.get("outcome"), c.get("call_grade"),
+                            c.get("agent_talk_time_percent"),
+                            c.get("lead_talk_time_percent"),
+                            (c.get("objections") or "")[:300],
+                            (c.get("coaching_tips") or "")[:400]))
+                    _rd = (str(c.get("call_time") or "")[:10]) or None
+                    _db.save_maverick_report(
+                        _legacy, agent_name=c.get("agent_name"),
+                        grade=str(c.get("call_grade")), report_date=_rd,
+                        source="grokbot_v2")
+                    bridged += 1
+            except Exception as _be:
+                logger.warning("maverick legacy bridge failed for %s: %s",
+                               cid, _be)
+        return jsonify({"ok": True, "stored": stored, "new": new_rows,
+                        "legacy_bridged": bridged, "failed": failed})
+    if body.get("delete_call_id"):
+        if not _perplexity_auth():
+            return jsonify({"error": "delete requires the owner key"}), 401
+        return jsonify({"ok": True, "deleted":
+                        _db.delete_maverick_call(body["delete_call_id"])})
     if body.get("delete_id"):
         if not _perplexity_auth():
             return jsonify({"error": "delete requires the owner key"}), 401

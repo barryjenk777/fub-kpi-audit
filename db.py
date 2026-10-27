@@ -10230,3 +10230,155 @@ def count_agent_claims_today(agent_name):
     except Exception as e:
         logger.warning("count_agent_claims_today failed: %s", e)
         return 0
+
+
+# ── Maverick Phase 2: structured per-call storage ────────────────────────
+
+def ensure_maverick_calls_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS maverick_calls (
+                        call_id        BIGINT PRIMARY KEY,
+                        grade_id       BIGINT,
+                        call_fub_id    BIGINT,
+                        agent_name     TEXT,
+                        agent_fub_id   BIGINT,
+                        agent_email    TEXT,
+                        lead_name      TEXT,
+                        lead_fub_id    BIGINT,
+                        lead_type      TEXT,
+                        lead_crm_stage TEXT,
+                        call_crm_stage TEXT,
+                        recommended_lead_stage TEXT,
+                        call_time      TIMESTAMPTZ,
+                        duration_sec   INTEGER,
+                        outcome        TEXT,
+                        appointment_date TEXT,
+                        appointment_set BOOLEAN,
+                        call_grade     NUMERIC,
+                        questions_asked_ratio NUMERIC,
+                        questions_filled_ratio NUMERIC,
+                        agent_talk_time_percent NUMERIC,
+                        lead_talk_time_percent NUMERIC,
+                        objections     TEXT,
+                        objection_handling TEXT,
+                        transcript     TEXT,
+                        summary        TEXT,
+                        coaching_tips  TEXT,
+                        follow_ups     TEXT,
+                        feedback       JSONB,
+                        recording_path TEXT,
+                        raw            JSONB,
+                        ingested_at    TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_mavcalls_agent_time
+                        ON maverick_calls (agent_name, call_time DESC);
+                    CREATE INDEX IF NOT EXISTS idx_mavcalls_lead
+                        ON maverick_calls (lead_fub_id);
+                """)
+    except Exception as e:
+        logger.warning("ensure_maverick_calls_table failed: %s", e)
+
+
+_MAVCALL_COLS = (
+    "grade_id", "call_fub_id", "agent_name", "agent_fub_id", "agent_email",
+    "lead_name", "lead_fub_id", "lead_type", "lead_crm_stage",
+    "call_crm_stage", "recommended_lead_stage", "call_time", "duration_sec",
+    "outcome", "appointment_date", "appointment_set", "call_grade",
+    "questions_asked_ratio", "questions_filled_ratio",
+    "agent_talk_time_percent", "lead_talk_time_percent", "objections",
+    "objection_handling", "transcript", "summary", "coaching_tips",
+    "follow_ups", "recording_path",
+)
+
+
+def upsert_maverick_call(call):
+    """Idempotent per-call upsert keyed on Maverick's call id. `call` is the
+    Phase 2 JSON object from the Grok Bot contract. Returns (call_id, new)
+    or (None, False)."""
+    if not is_available():
+        return None, False
+    cid = call.get("call_id")
+    if not cid:
+        return None, False
+    rec = (call.get("recording") or {})
+    vals = {k: call.get(k) for k in _MAVCALL_COLS}
+    vals["recording_path"] = vals.get("recording_path") or rec.get("path")
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cols = ", ".join(_MAVCALL_COLS)
+                ph = ", ".join(["%s"] * len(_MAVCALL_COLS))
+                sets = ", ".join("%s = EXCLUDED.%s" % (c, c)
+                                 for c in _MAVCALL_COLS)
+                cur.execute("""
+                    INSERT INTO maverick_calls (call_id, %s, feedback, raw)
+                    VALUES (%%s, %s, %%s, %%s)
+                    ON CONFLICT (call_id) DO UPDATE SET %s,
+                        feedback = EXCLUDED.feedback, raw = EXCLUDED.raw
+                    RETURNING (xmax = 0)
+                """ % (cols, ph, sets),
+                    [int(cid)] + [vals[c] for c in _MAVCALL_COLS]
+                    + [json.dumps(call.get("feedback") or {}),
+                       json.dumps(call)])
+                new = bool(cur.fetchone()[0])
+                return int(cid), new
+    except Exception as e:
+        logger.warning("upsert_maverick_call failed for %s: %s", cid, e)
+        return None, False
+
+
+def get_maverick_calls(days=14, agent_name=None, limit=200,
+                       with_transcript=False):
+    """Recent structured calls, newest first. Transcript omitted by default
+    (they are large)."""
+    if not is_available():
+        return []
+    cols = [c for c in ("call_id",) + _MAVCALL_COLS
+            if with_transcript or c != "transcript"]
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                q = ("SELECT %s FROM maverick_calls WHERE call_time >= "
+                     "NOW() - make_interval(days => %%s)" % ", ".join(cols))
+                args = [int(days)]
+                if agent_name:
+                    q += " AND agent_name = %s"
+                    args.append(agent_name)
+                q += " ORDER BY call_time DESC LIMIT %s"
+                args.append(int(limit))
+                cur.execute(q, args)
+                rows = cur.fetchall()
+        out = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            if d.get("call_time"):
+                d["call_time"] = d["call_time"].isoformat()
+            for k in ("call_grade", "questions_asked_ratio",
+                      "questions_filled_ratio", "agent_talk_time_percent",
+                      "lead_talk_time_percent"):
+                if d.get(k) is not None:
+                    d[k] = float(d[k])
+            out.append(d)
+        return out
+    except Exception as e:
+        logger.warning("get_maverick_calls failed: %s", e)
+        return []
+
+
+def delete_maverick_call(call_id):
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM maverick_calls WHERE call_id = %s",
+                            (int(call_id),))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("delete_maverick_call failed: %s", e)
+        return 0
