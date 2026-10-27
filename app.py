@@ -20747,26 +20747,20 @@ def api_maverick_ingest():
             try:
                 if (c.get("agent_name") and c.get("call_grade") is not None
                         and _db.claim_once("mavcall_%s" % cid)):
-                    _legacy = (
-                        "AI Grading call (grokbot structured)
-"
-                        "Agent: %s
-Lead: %s (%s)
-Date: %s
-Outcome: %s
-"
-                        "Grade: %s
-Talk time agent/lead: %s/%s
-"
-                        "Objections: %s
-Coaching: %s" % (
+                    _nl = chr(10)
+                    _legacy = _nl.join((
+                        "AI Grading call (grokbot structured)",
+                        "Agent: %s", "Lead: %s (%s)", "Date: %s",
+                        "Outcome: %s", "Grade: %s",
+                        "Talk time agent/lead: %s/%s",
+                        "Objections: %s", "Coaching: %s")) % (
                             c.get("agent_name"), c.get("lead_name"),
                             c.get("lead_crm_stage"), c.get("call_time"),
                             c.get("outcome"), c.get("call_grade"),
                             c.get("agent_talk_time_percent"),
                             c.get("lead_talk_time_percent"),
                             (c.get("objections") or "")[:300],
-                            (c.get("coaching_tips") or "")[:400]))
+                            (c.get("coaching_tips") or "")[:400])
                     _rd = (str(c.get("call_time") or "")[:10]) or None
                     _db.save_maverick_report(
                         _legacy, agent_name=c.get("agent_name"),
