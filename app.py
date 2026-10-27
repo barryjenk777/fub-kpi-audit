@@ -5502,6 +5502,21 @@ def api_dispatch_hothand():
                            "sort": {"HOT HAND": 0, "STEADY": 1, "STRETCHED": 2,
                                     "QUIET": 3, "WARMING UP": 4}[v]})
         agents.sort(key=lambda a: (a["sort"], a["agent"]))
+        # Call quality from Maverick (Phase A): grade average and, once
+        # Grok sends per-call ask flags, the ask rate.
+        try:
+            _cq = _db.get_maverick_agent_rollup(days=14)
+            for a in agents:
+                q = _cq.get(a["agent"])
+                if q and q.get("avg_grade") is not None:
+                    extra = (" Calls: %d graded, avg %.1f."
+                             % (q["graded"], q["avg_grade"]))
+                    if q.get("ask_known"):
+                        extra += (" Asked for the appointment on %d of %d."
+                                  % (q["asks"], q["ask_known"]))
+                    a["line"] = (a.get("line") or "") + extra
+        except Exception as _cqe:
+            logger.warning("hothand call quality merge failed: %s", _cqe)
         out["agents"] = agents
         out["head"] = {
             "leads_7d": int(h[0] or 0), "claimed_7d": int(h[1] or 0),
@@ -5986,6 +6001,141 @@ def scheduled_maverick_watchdog():
         logger.warning("maverick watchdog failed: %s", e)
 
 
+def _maverick_call_effects(c, cid):
+    """Phase A (Oct 2026): real-time effects of a newly ingested graded
+    call. Only fires for calls from the last 48h so historical backfills
+    never text anyone about old games."""
+    try:
+        ct = str(c.get("call_time") or "")
+        try:
+            _age = (datetime.now(timezone.utc)
+                    - datetime.fromisoformat(ct.replace("Z", "+00:00")))
+            if _age > timedelta(hours=48):
+                return
+        except (ValueError, TypeError):
+            return
+        grade = c.get("call_grade")
+        pid = c.get("lead_fub_id")
+        lead1 = (c.get("lead_name") or "the lead").split()[0]
+        agent = (c.get("agent_name") or "").strip()
+
+        # Full-story wins post: claim, call, grade, outcome in one line.
+        # Celebration only (grade 7+ or appointment), never a shame post.
+        if pid and agent and grade is not None \
+                and (grade >= 7 or c.get("appointment_set")):
+            off = _db.get_claimed_offer_for_person(pid)
+            if off and off.get("agent_name") == agent \
+                    and _db.claim_once("mavwin_%s" % cid):
+                import dispatch as _dpw
+                import slack_client as _slw
+                bits = ["\U0001f3ac %s claimed %s" % (agent.split()[0], lead1)]
+                if off.get("claim_to_call_sec") and off["claim_to_call_sec"] > 0:
+                    bits.append("called in %s"
+                                % _dpw.fmt_secs(int(off["claim_to_call_sec"])))
+                bits.append("call graded %g" % grade)
+                if c.get("appointment_set"):
+                    bits.append("appointment set")
+                if _slw.is_available():
+                    _slw.post_message(
+                        os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk"),
+                        ", ".join(bits) + ". The whole story, start to finish.")
+
+        # Same-day save: hot lead, rough call, no appointment. Private
+        # text to the agent with one concrete recovery move.
+        if (grade is not None and grade <= 4 and agent and pid
+                and str(c.get("lead_crm_stage") or "").startswith("A -")
+                and not c.get("appointment_set")):
+            _excl = set(config.EXCLUDED_USERS) | set(
+                getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+            if agent not in _excl and _db.claim_once("mavsave_%s" % cid):
+                prof = next((p for p in
+                             (_db.get_agent_profiles(active_only=True) or [])
+                             if p["agent_name"] == agent), None)
+                if prof:
+                    msg = ("%s, quick save play. Today's call with %s was a "
+                           "tough one and they are a hot lead, so the door "
+                           "is still open. One text tonight keeps it that "
+                           "way: a specific next step with a date, nothing "
+                           "salesy. https://yourfriendlyagent.followupboss"
+                           ".com/2/people/view/%s"
+                           % (agent.split()[0], lead1, pid))
+                    _db.queue_agent_imessage(agent, prof.get("fub_user_id"),
+                                             prof.get("phone") or "", msg,
+                                             week_day="callsave")
+    except Exception as e:
+        logger.warning("maverick call effects failed for %s: %s", cid, e)
+
+
+def scheduled_call_coaching():
+    """Weekdays 8:20am ET — game-film texts from yesterday's graded calls.
+    One text per agent, maximum: either an objection replay from their
+    most instructive low call, or specific praise for their best. Grades
+    are never broadcast; the text goes only to that agent (never-shame)."""
+    if _already_fired_recently("call_coaching", within_hours=20):
+        return
+    if not _db.try_acquire_job_lock("call_coaching"):
+        return
+    try:
+        _eh = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+        _ET = timezone(timedelta(hours=_eh))
+        y0 = (datetime.now(_ET) - timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        calls = _db.get_maverick_calls_since(y0.isoformat())
+        excl = set(config.EXCLUDED_USERS) | set(
+            getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+        profiles = {p["agent_name"]: p for p in
+                    (_db.get_agent_profiles(active_only=True) or [])}
+        by_agent = {}
+        for c in calls:
+            a = c.get("agent_name")
+            if a and a not in excl and a in profiles:
+                by_agent.setdefault(a, []).append(c)
+        sent = []
+        for agent, rows in by_agent.items():
+            low = [c for c in rows if (c.get("call_grade") or 0) <= 6
+                   and (c.get("objections") or "").strip()]
+            high = [c for c in rows if (c.get("call_grade") or 0) >= 8]
+            first = agent.split()[0]
+            pick, msg = None, None
+            if low:
+                pick = min(low, key=lambda c: c.get("call_grade") or 0)
+                obj = " ".join((pick.get("objections") or "").split())[:110]
+                lead1 = (pick.get("lead_name") or "the lead").split()[0]
+                msg = ("%s, game film from yesterday. On your call with %s, "
+                       "the lead gave you this: \"%s\". That moment is "
+                       "winnable. Tonight's 5 minute rep: call the practice "
+                       "bot at 1-337-486-3563 and run that exact objection "
+                       "twice. Next time it shows up live, you own it."
+                       % (first, lead1, obj))
+            elif high:
+                pick = max(high, key=lambda c: c.get("call_grade") or 0)
+                lead1 = (pick.get("lead_name") or "the lead").split()[0]
+                extra = " and the appointment is on the calendar" \
+                    if pick.get("appointment_set") else ""
+                msg = ("%s, watched your film from yesterday. The %s call "
+                       "was the real thing%s. That's the standard on this "
+                       "team. Keep your pace."
+                       % (first, lead1, extra))
+            if not pick or not msg:
+                continue
+            if not _db.claim_once("mavcoach_%s" % pick["call_id"]):
+                continue
+            prof = profiles[agent]
+            rid = _db.queue_agent_imessage(agent, prof.get("fub_user_id"),
+                                           prof.get("phone") or "", msg,
+                                           week_day="callfilm")
+            if rid:
+                sent.append(agent)
+        print("[CALL FILM] %d game-film text(s): %s"
+              % (len(sent), ", ".join(sent) or "nothing instructive"))
+        _record_fired("call_coaching")
+    except Exception as e:
+        _alert_on_job_failure("call_coaching", str(e))
+        print(f"[CALL FILM] error: {e}")
+    finally:
+        _db.release_job_lock("call_coaching")
+
+
 def scheduled_desk_sweep(window_min=40, _force=False):
     """Every 10 min: the Lead Desk safety net. Finds people carrying a
     conversion tag who were UPDATED recently, drops everyone the seen-tags
@@ -6232,7 +6382,16 @@ def _desk_evidence(person_id):
     text, verbatim (works once FUB's API privacy toggle exposes message
     bodies); (2) the CALL OPENER's SAY line, labeled as an opener, since it
     is built from the lead's real behavior; (3) nothing. Never scraped note
-    boilerplate — the first two live cards quoted junk (Sep 2026)."""
+    boilerplate — the first two live cards quoted junk (Sep 2026).
+    Phase A (Oct 2026): a Maverick call summary outranks everything, since
+    it is the lead's actual last conversation with this team."""
+    try:
+        mv = _db.get_latest_maverick_summary(person_id)
+        if mv and (mv.get("summary") or "").strip():
+            _s = " ".join(mv["summary"].split())[:260]
+            return "From their last call with us: %s" % _s
+    except Exception as _mve:
+        logger.warning("evidence maverick summary failed: %s", _mve)
     try:
         client = FUBClient()
         # 1. Their own words from the AI conversation (FUB text messages)
@@ -20752,6 +20911,7 @@ def api_maverick_ingest():
     # working unchanged.
     if isinstance(body.get("calls"), list):
         _db.ensure_maverick_calls_table()
+        _db.ensure_maverick_calls_phase_a()
         stored, new_rows, bridged, failed = 0, 0, 0, []
         for c in body["calls"][:200]:
             if not isinstance(c, dict):
@@ -20763,6 +20923,10 @@ def api_maverick_ingest():
             stored += 1
             if is_new:
                 new_rows += 1
+                try:
+                    _maverick_call_effects(c, cid)
+                except Exception as _me:
+                    logger.warning("call effects failed for %s: %s", cid, _me)
             try:
                 if (c.get("agent_name") and c.get("call_grade") is not None
                         and _db.claim_once("mavcall_%s" % cid)):
@@ -23834,6 +23998,15 @@ def start_scheduler():
     _scheduler.add_job(scheduled_desk_watchdog,
                        CronTrigger(minute="7,37", timezone=ET),
                        id="desk_watchdog", name="Desk watchdog (every 30 min)",
+                       max_instances=1, coalesce=True)
+
+    # Game-film coaching texts: weekdays 8:20am ET, one text per agent
+    # anchored to yesterday's real graded calls (Phase A, Oct 2026).
+    _scheduler.add_job(scheduled_call_coaching,
+                       CronTrigger(day_of_week="mon-fri", hour=8, minute=20,
+                                   timezone=ET),
+                       id="call_coaching",
+                       name="Game-film coaching texts (weekdays 8:20am)",
                        max_instances=1, coalesce=True)
 
     # Maverick silence tripwire: daily 9:30am ET, pages Barry when call

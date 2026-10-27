@@ -10292,7 +10292,7 @@ _MAVCALL_COLS = (
     "questions_asked_ratio", "questions_filled_ratio",
     "agent_talk_time_percent", "lead_talk_time_percent", "objections",
     "objection_handling", "transcript", "summary", "coaching_tips",
-    "follow_ups", "recording_path",
+    "follow_ups", "recording_path", "offered_to_meet",
 )
 
 
@@ -10316,14 +10316,18 @@ def upsert_maverick_call(call):
                 sets = ", ".join("%s = EXCLUDED.%s" % (c, c)
                                  for c in _MAVCALL_COLS)
                 cur.execute("""
-                    INSERT INTO maverick_calls (call_id, %s, feedback, raw)
-                    VALUES (%%s, %s, %%s, %%s)
+                    INSERT INTO maverick_calls (call_id, %s, feedback,
+                        asked_flags, raw)
+                    VALUES (%%s, %s, %%s, %%s, %%s)
                     ON CONFLICT (call_id) DO UPDATE SET %s,
-                        feedback = EXCLUDED.feedback, raw = EXCLUDED.raw
+                        feedback = EXCLUDED.feedback,
+                        asked_flags = EXCLUDED.asked_flags,
+                        raw = EXCLUDED.raw
                     RETURNING (xmax = 0)
                 """ % (cols, ph, sets),
                     [int(cid)] + [vals[c] for c in _MAVCALL_COLS]
                     + [json.dumps(call.get("feedback") or {}),
+                       json.dumps(call.get("asked_flags") or {}),
                        json.dumps(call)])
                 new = bool(cur.fetchone()[0])
                 return int(cid), new
@@ -10382,3 +10386,151 @@ def delete_maverick_call(call_id):
     except Exception as e:
         logger.warning("delete_maverick_call failed: %s", e)
         return 0
+
+
+def ensure_maverick_calls_phase_a():
+    """Phase A columns: per-call ask flags arrive once Grok adds them."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    ALTER TABLE maverick_calls
+                        ADD COLUMN IF NOT EXISTS offered_to_meet BOOLEAN,
+                        ADD COLUMN IF NOT EXISTS asked_flags JSONB
+                """)
+    except Exception as e:
+        logger.warning("ensure_maverick_calls_phase_a failed: %s", e)
+
+
+def get_latest_maverick_summary(lead_fub_id):
+    """Newest graded-call intel for a lead: feeds desk cards and prep."""
+    if not is_available() or not lead_fub_id:
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT summary, call_time, agent_name, call_grade,
+                           objections, outcome
+                    FROM maverick_calls
+                    WHERE lead_fub_id = %s AND summary IS NOT NULL
+                    ORDER BY call_time DESC LIMIT 1
+                """, (int(lead_fub_id),))
+                r = cur.fetchone()
+        if not r:
+            return None
+        return {"summary": r[0],
+                "call_time": r[1].isoformat() if r[1] else None,
+                "agent_name": r[2],
+                "call_grade": float(r[3]) if r[3] is not None else None,
+                "objections": r[4], "outcome": r[5]}
+    except Exception as e:
+        logger.warning("get_latest_maverick_summary failed: %s", e)
+        return None
+
+
+def get_maverick_agent_rollup(days=14):
+    """Per-agent call-quality rollup for the boards: graded count, average
+    grade, appointment-set rate, average talk share, and ask rate when
+    offered_to_meet data exists."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, COUNT(*),
+                           ROUND(AVG(call_grade)::numeric, 1),
+                           COUNT(*) FILTER (WHERE appointment_set),
+                           ROUND(AVG(agent_talk_time_percent)::numeric, 2),
+                           COUNT(*) FILTER (WHERE offered_to_meet),
+                           COUNT(*) FILTER (WHERE offered_to_meet IS NOT NULL)
+                    FROM maverick_calls
+                    WHERE call_time >= NOW() - make_interval(days => %s)
+                      AND agent_name IS NOT NULL AND call_grade IS NOT NULL
+                    GROUP BY agent_name
+                """, (int(days),))
+                rows = cur.fetchall()
+        out = {}
+        for r in rows:
+            out[r[0]] = {
+                "graded": int(r[1]),
+                "avg_grade": float(r[2]) if r[2] is not None else None,
+                "appts_set": int(r[3]),
+                "avg_talk_pct": float(r[4]) if r[4] is not None else None,
+                "asks": int(r[5]), "ask_known": int(r[6]),
+            }
+        return out
+    except Exception as e:
+        logger.warning("get_maverick_agent_rollup failed: %s", e)
+        return {}
+
+
+def get_claimed_offer_for_person(person_id, days=7):
+    """Most recent ACCEPTED desk offer for this lead, with the latency
+    receipts, for the full-story wins post."""
+    if not is_available() or not person_id:
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, accepted_at, first_call_at,
+                           EXTRACT(EPOCH FROM (first_call_at - accepted_at))
+                    FROM dispatch_offers
+                    WHERE person_id = %s AND accepted_at IS NOT NULL
+                      AND accepted_at >= NOW() - make_interval(days => %s)
+                    ORDER BY accepted_at DESC LIMIT 1
+                """, (str(person_id), int(days)))
+                r = cur.fetchone()
+        if not r:
+            return None
+        return {"agent_name": r[0],
+                "accepted_at": r[1].isoformat() if r[1] else None,
+                "first_call_at": r[2].isoformat() if r[2] else None,
+                "claim_to_call_sec": int(r[3]) if r[3] is not None else None}
+    except Exception as e:
+        logger.warning("get_claimed_offer_for_person failed: %s", e)
+        return None
+
+
+def get_maverick_calls_since(since_iso, graded_only=True):
+    """Calls ingested after a moment, for the daily game-film coaching job."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT call_id, agent_name, lead_name, lead_fub_id,
+                           call_time, call_grade, outcome, appointment_set,
+                           objections, coaching_tips,
+                           agent_talk_time_percent, lead_crm_stage,
+                           duration_sec, summary
+                    FROM maverick_calls
+                    WHERE call_time >= %s
+                      AND agent_name IS NOT NULL
+                      AND (NOT %s OR call_grade IS NOT NULL)
+                    ORDER BY call_time
+                """, (since_iso, bool(graded_only)))
+                cols = ("call_id", "agent_name", "lead_name", "lead_fub_id",
+                        "call_time", "call_grade", "outcome",
+                        "appointment_set", "objections", "coaching_tips",
+                        "agent_talk_time_percent", "lead_crm_stage",
+                        "duration_sec", "summary")
+                out = []
+                for r in cur.fetchall():
+                    d = dict(zip(cols, r))
+                    if d["call_time"]:
+                        d["call_time"] = d["call_time"].isoformat()
+                    if d["call_grade"] is not None:
+                        d["call_grade"] = float(d["call_grade"])
+                    if d["agent_talk_time_percent"] is not None:
+                        d["agent_talk_time_percent"] = float(d["agent_talk_time_percent"])
+                    out.append(d)
+                return out
+    except Exception as e:
+        logger.warning("get_maverick_calls_since failed: %s", e)
+        return []
