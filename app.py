@@ -20706,9 +20706,28 @@ def api_maverick_ingest_probe():
         return jsonify({"error": "Unauthorized"}), 401
     import hashlib
     v = (os.environ.get("MAVERICK_INGEST_KEY") or "").strip()
-    return jsonify({"scoped_key_set": bool(v), "scoped_key_len": len(v),
-                    "fingerprint": hashlib.sha256(v.encode()).hexdigest()[:8]
-                    if v else None, "build_marker": "ingest-probe-v1"})
+    out = {"scoped_key_set": bool(v), "scoped_key_len": len(v),
+           "fingerprint": hashlib.sha256(v.encode()).hexdigest()[:8]
+           if v else None, "build_marker": "ingest-probe-v2"}
+    n = request.args.get("recent", type=int)
+    if n:
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id, agent_name, grade, report_date, source,
+                               created_at
+                        FROM maverick_reports
+                        ORDER BY id DESC LIMIT %s
+                    """, (min(n, 50),))
+                    out["recent"] = [
+                        {"id": r[0], "agent": r[1], "grade": r[2],
+                         "date": str(r[3]), "source": r[4],
+                         "ingested": r[5].isoformat() if r[5] else None}
+                        for r in cur.fetchall()]
+        except Exception as e:
+            out["recent_error"] = str(e)[:200]
+    return jsonify(out)
 
 
 @app.route("/api/admin/maverick/ingest", methods=["POST"])
