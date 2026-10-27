@@ -107,6 +107,10 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         # Slack interactivity: HMAC signature verified inside the route
         # (found Sep 2026 — Barry's drill tap died here at the global gate)
         "/api/slack/",
+        # Maverick ingest: scoped MAVERICK_INGEST_KEY or owner key checked
+        # inside the route (Oct 2026 — Grokbot's posts died here at the
+        # gate, same trap as /api/slack/)
+        "/api/admin/maverick/ingest",
         # Vercel course endpoints check COURSE_API_KEY internally
         "/api/course/",
         # Social Engine recruiting sync checks RECRUITING_EXPORT_TOKEN
