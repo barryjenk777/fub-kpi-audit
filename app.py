@@ -20683,12 +20683,21 @@ def api_courier_script():
 
 @app.route("/api/admin/maverick/ingest", methods=["POST"])
 def api_maverick_ingest():
-    """Programmatic ingest (the always-on Mac courier, or a future email
-    webhook). Body: {"raw": "...", "source": "email"|"courier"}."""
-    if not _perplexity_auth():
+    """Programmatic ingest (the always-on Mac courier, a third-party
+    scraper like Grokbot, or a future email webhook). Body:
+    {"raw": "...", "source": "email"|"courier"|"grokbot"}.
+    Accepts the owner key, OR the scoped MAVERICK_INGEST_KEY (Railway env),
+    which can do nothing anywhere else in the app — so an external scraper
+    never holds the master key."""
+    _scoped = (os.environ.get("MAVERICK_INGEST_KEY") or "").strip()
+    _given = (request.args.get("key", "").strip()
+              or request.headers.get("X-Api-Key", "").strip())
+    if not ((_scoped and _given == _scoped) or _perplexity_auth()):
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(silent=True) or {}
     if body.get("delete_id"):
+        if not _perplexity_auth():
+            return jsonify({"error": "delete requires the owner key"}), 401
         try:
             with _db.get_conn() as conn:
                 with conn.cursor() as cur:
