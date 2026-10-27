@@ -20681,6 +20681,19 @@ def api_courier_script():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/admin/maverick/ingest", methods=["GET"])
+def api_maverick_ingest_probe():
+    """Diagnostics only (Oct 2026 key rollout): says whether the scoped key
+    env var is visible to the serving build, without revealing it."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import hashlib
+    v = (os.environ.get("MAVERICK_INGEST_KEY") or "").strip()
+    return jsonify({"scoped_key_set": bool(v), "scoped_key_len": len(v),
+                    "fingerprint": hashlib.sha256(v.encode()).hexdigest()[:8]
+                    if v else None, "build_marker": "ingest-probe-v1"})
+
+
 @app.route("/api/admin/maverick/ingest", methods=["POST"])
 def api_maverick_ingest():
     """Programmatic ingest (the always-on Mac courier, a third-party
