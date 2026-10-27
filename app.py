@@ -23072,6 +23072,23 @@ def scheduled_owner_daily_brief():
                                for _g in _gd) + "</ul>")
         except Exception as _gde:
             logger.warning("brief gone-dark section failed: %s", _gde)
+        # Slack invite link age (Oct 2026: the link lapsed silently on day
+        # 29 and new hires stopped getting the join line). Warn from day 26.
+        try:
+            _raw_il, _ = _db.get_app_state("slack_invite_link")
+            _il = json.loads(_raw_il or "{}")
+            if _il.get("set_at"):
+                _il_days = (datetime.now(timezone.utc)
+                            - datetime.fromisoformat(_il["set_at"])).days
+                if _il_days >= 26:
+                    _warn = ("<p style='font-size:13px;color:#b00020;"
+                             "font-weight:600'>Slack invite link is %d days "
+                             "old (dies at 30): new hires stop getting the "
+                             "join line. Generate a fresh invite link in "
+                             "Slack and send it to Claude.</p>" % _il_days)
+                    gd_html = _warn + gd_html
+        except Exception as _ile:
+            logger.warning("brief invite-link check failed: %s", _ile)
         html = f"""
 <div style='font-family:-apple-system,sans-serif;max-width:600px;margin:24px auto;color:#222'>
 <h2 style='margin:0 0 4px;font-size:20px'>Legacy Home Team — Owner Brief</h2>
