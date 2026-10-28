@@ -21862,6 +21862,9 @@ def api_maverick_ingest_probe():
         except Exception as e:
             out["status_error"] = str(e)[:200]
         return jsonify(out)
+    if request.args.get("dash") == "1":
+        out["dashboard"] = _db.get_latest_maverick_dashboard() or {}
+        return jsonify(out)
     n = request.args.get("recent", type=int)
     if n:
         try:
