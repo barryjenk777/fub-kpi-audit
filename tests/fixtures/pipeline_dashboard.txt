@@ -1,0 +1,80 @@
+Business Reports
+Sales Reports
+Agent Reports
+AI Call Tools
+ProDispatch
+ISA Reports
+Learning Center
+BJ
+DASHBOARD
+
+Monitor your company's top line performance
+
+Sales Pipeline Health
+Lead Response Metrics
+Best Lead Source
+Sales Pipeline Health
+You have more new non-staged leads after 48 hours than top performing teams. Maverick can help remind your agents of necessary outreach and increase your CRM hygiene through the Rules and Alerts feature, which you can access in the menu above.
+78% New, Non-Staged After 48 Hours
+444 New Leads
+
+09/28/2026 - 10/28/2026
+
+New / No Contact Made
+
+345
+
+78%
+
+Attempted Contact / Unresponsive
+
+26
+
+6%
+
+Appointment Outstanding
+
+0
+
+0%
+
+Short Term Nurture
+
+0
+
+0%
+
+Long Term Nurture
+
+35
+
+8%
+
+Actively Listed / Showing Homes
+
+38
+
+9%
+
+Closed / Under Contract
+
+0
+
+0%
+
+Rejected / Trash
+
+0
+
+0%
+
+77.7%
+5.9%
+7.9%
+8.6%
+It looks like you've already used the MaverickRE Rules & Alerts this month, which helped your agents move 12 extra leads from your top of funnel into nurture/active stages this month and helped keep your pipeline moving. Great work!
+AI Coach Numbers
+AI Grading Dashboard
+AI Grading Call History
+AI Grading Agent Overview
+AI Grading Preferences

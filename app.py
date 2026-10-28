@@ -21966,12 +21966,15 @@ def api_maverick_ingest():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
     raw = (body.get("raw") or "").strip()
-    if len(raw) < 40:
+    import maverick_parsers as _mvp
+    kind = _mvp.detect_kind(raw)
+    if len(raw) < 40 and kind != "status":
         return jsonify({"error": "raw too short"}), 400
     agent, grade, rdate = _maverick_parse(raw)
     rid = _db.save_maverick_report(raw, agent_name=agent, grade=grade,
                                    report_date=rdate,
                                    source=body.get("source", "courier"))
+    warnings = []
     stats_rows = 0
     dashboard_saved = False
     try:
@@ -21982,17 +21985,55 @@ def api_maverick_ingest():
         dashboard_saved = bool(_maverick_parse_dashboard(raw))
     except Exception as e:
         logger.warning("maverick dashboard parse failed: %s", e)
+    pipeline_rows = 0
+    if kind == "pipeline_dashboard" and not dashboard_saved:
+        try:
+            pdata, pkeys, pw = _mvp.parse_pipeline_dashboard(raw)
+            warnings.extend(pw)
+            if pdata:
+                merged = _db.get_latest_maverick_dashboard() or {}
+                if str(merged.get("snapshot_date")) != str(_date.today()):
+                    merged = {}
+                merged.pop("snapshot_date", None)
+                merged["pipeline_health"] = pdata
+                dashboard_saved = bool(
+                    _db.save_maverick_dashboard(_date.today(), merged))
+                pipeline_rows = len(pdata.get("stages") or []) or len(pkeys)
+        except Exception as e:
+            logger.warning("pipeline dashboard parse failed: %s", e)
+            warnings.append("pipeline parse error: %s" % e)
+        if not dashboard_saved:
+            warnings.append("dashboard post recognized but 0 metrics "
+                            "parsed; nothing saved (raw stored, id %s)" % rid)
     rules_rows = 0
     try:
         rules_rows = _maverick_parse_rules(raw)
     except Exception as e:
         logger.warning("maverick rules parse failed: %s", e)
+    if kind == "rules" and not rules_rows:
+        try:
+            rdata, _rk, rw = _mvp.parse_rules_page(raw)
+            warnings.extend(rw)
+            rules_rows = (len(rdata.get("groups") or [])
+                          + len(rdata.get("rule_rows") or []))
+        except Exception as e:
+            logger.warning("rules parse failed: %s", e)
     call_grade_rows = 0
     try:
         call_grade_rows = _maverick_parse_call_history(raw)
     except Exception as e:
         logger.warning("maverick call history parse failed: %s", e)
-    return jsonify({"ok": True, "id": rid, "agent": agent, "grade": grade,
+    parsed_rows = (stats_rows + rules_rows + call_grade_rows
+                   + pipeline_rows + (1 if kind == "status" else 0))
+    nonempty = len([ln for ln in raw.splitlines() if ln.strip()])
+    skipped_lines = max(0, nonempty - parsed_rows * 3) \
+        if kind == "unknown" else 0
+    if kind == "unknown" and not parsed_rows:
+        warnings.append("page kind not recognized; raw stored only")
+    return jsonify({"ok": True, "id": rid, "kind": kind,
+                    "parsed_rows": parsed_rows,
+                    "skipped_lines": skipped_lines, "warnings": warnings,
+                    "agent": agent, "grade": grade,
                     "stats_rows": stats_rows, "dashboard_saved": dashboard_saved,
                     "rules_rows": rules_rows, "call_grade_rows": call_grade_rows})
 

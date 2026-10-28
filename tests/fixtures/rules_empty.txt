@@ -1,0 +1,39 @@
+Business Reports
+Sales Reports
+Agent Reports
+AI Call Tools
+ProDispatch
+ISA Reports
+Learning Center
+BJ
+AGENT RULES & ALERTS
+
+Set expectations, alert agents, and re-assign leads
+
+Create New Rule
+LEAD
+TRIGGER
+ELIGIBILITY
+TIMEFRAME
+AGENT
+ACTION
+AGENT
+ACTION TIME
+AUTO
+NUDGE/
+REASSIGN
+STATUS
+ACTIONS
+LEAD
+TRIGGER
+ELIGIBILITY
+TIMEFRAME
+AGENT
+ACTION
+AGENT
+ACTION TIME
+AUTO
+NUDGE/
+REASSIGN
+STATUS
+ACTIONS

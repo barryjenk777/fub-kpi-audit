@@ -10334,15 +10334,21 @@ def upsert_maverick_call(call):
             with conn.cursor() as cur:
                 cols = ", ".join(_MAVCALL_COLS)
                 ph = ", ".join(["%s"] * len(_MAVCALL_COLS))
-                sets = ", ".join("%s = EXCLUDED.%s" % (c, c)
-                                 for c in _MAVCALL_COLS)
+                # Null-safe merge (Grok request, Oct 2026): a later
+                # partial post must never wipe a value an earlier full
+                # post delivered.
+                sets = ", ".join(
+                    "%s = COALESCE(EXCLUDED.%s, maverick_calls.%s)"
+                    % (c, c, c) for c in _MAVCALL_COLS)
                 cur.execute("""
                     INSERT INTO maverick_calls (call_id, %s, feedback,
                         asked_flags, raw)
                     VALUES (%%s, %s, %%s, %%s, %%s)
                     ON CONFLICT (call_id) DO UPDATE SET %s,
-                        feedback = EXCLUDED.feedback,
-                        asked_flags = EXCLUDED.asked_flags,
+                        feedback = COALESCE(NULLIF(EXCLUDED.feedback,
+                            '{}'::jsonb), maverick_calls.feedback),
+                        asked_flags = COALESCE(NULLIF(EXCLUDED.asked_flags,
+                            '{}'::jsonb), maverick_calls.asked_flags),
                         raw = EXCLUDED.raw
                     RETURNING (xmax = 0)
                 """ % (cols, ph, sets),
