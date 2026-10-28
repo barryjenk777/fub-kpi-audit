@@ -6001,6 +6001,252 @@ def scheduled_maverick_watchdog():
         logger.warning("maverick watchdog failed: %s", e)
 
 
+# ── Phase C: objection taxonomy, receipts, openers, the Friday pack ──────
+
+_OBJECTION_BUCKETS = (
+    ("Rates", ("rate", "interest")),
+    ("Price and fees", ("commission", "fee", "price", "afford", "expensive",
+                        "cost")),
+    ("Already has an agent", ("have an agent", "has an agent", "my agent",
+                              "realtor already", "working with")),
+    ("Timing", ("not ready", "next year", "few months", "down the road",
+                "wait", "holding off", "later")),
+    ("Needs to talk to someone", ("wife", "husband", "spouse", "partner",
+                                  "family", "brother", "sister")),
+    ("Just browsing", ("just looking", "just browsing", "curious",
+                       "window shopping")),
+    ("Financing and credit", ("credit", "pre-approv", "preapprov", "loan",
+                              "lender", "bank", "qualify")),
+    ("Sell before buying", ("sell first", "sell before", "sell my house",
+                            "sell our house")),
+    ("Trust", ("scam", "trust", "spam", "who is this")),
+)
+
+
+def _classify_objections(text):
+    """Deterministic bucket tags for a call's free-text objections. A call
+    can carry several. Transparent keyword rules, never invented."""
+    t = (text or "").lower()
+    if not t.strip():
+        return []
+    hits = [name for name, keys in _OBJECTION_BUCKETS
+            if any(k in t for k in keys)]
+    return hits or ["Other"]
+
+
+def _objection_trend(days=7):
+    """Bucket counts plus the best-handled example per bucket."""
+    calls = _db.get_maverick_calls(days=days, limit=500)
+    counts, best = {}, {}
+    for c in calls:
+        for b in _classify_objections(c.get("objections")):
+            counts[b] = counts.get(b, 0) + 1
+            g = c.get("call_grade") or 0
+            if b not in best or g > (best[b].get("call_grade") or 0):
+                best[b] = c
+    ranked = sorted(counts.items(), key=lambda x: -x[1])
+    return ranked, best
+
+
+@app.route("/api/objections")
+def api_objections():
+    """Objection taxonomy trend: ?days=30."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = request.args.get("days", default=30, type=int)
+    ranked, best = _objection_trend(days)
+    return jsonify({"ok": True, "days": days,
+                    "buckets": [{"bucket": b, "count": n,
+                                 "best_handled": {
+                                     "agent": (best[b] or {}).get("agent_name"),
+                                     "lead": (best[b] or {}).get("lead_name"),
+                                     "grade": (best[b] or {}).get("call_grade"),
+                                     "call_id": (best[b] or {}).get("call_id")}}
+                                for b, n in ranked]})
+
+
+@app.route("/api/coaching/receipts")
+def api_coaching_receipts():
+    """Coaching with receipts: per agent, call quality in the last 14 days
+    against the 14 before, beside how many game-film texts they received.
+    Honest about thin data: trends need at least 3 graded calls per side."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    cur = _db.get_maverick_agent_rollup(days=14)
+    prior_all = _db.get_maverick_agent_rollup(days=28)
+    out = []
+    for agent, now in cur.items():
+        both = prior_all.get(agent) or {}
+        pg, pn = both.get("graded", 0) - now.get("graded", 0), None
+        if pg >= 3 and both.get("avg_grade") is not None \
+                and now.get("avg_grade") is not None and now["graded"] >= 3:
+            # prior-window average backed out of the 28d blend
+            try:
+                pn = round((both["avg_grade"] * both["graded"]
+                            - now["avg_grade"] * now["graded"]) / pg, 1)
+            except ZeroDivisionError:
+                pn = None
+        film = 0
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as c2:
+                    c2.execute("""
+                        SELECT COUNT(*) FROM agent_imessage_queue
+                        WHERE agent_name = %s AND week_day = 'callfilm'
+                          AND created_at >= NOW() - INTERVAL '14 days'
+                    """, (agent,))
+                    film = int(c2.fetchone()[0] or 0)
+        except Exception:
+            pass
+        out.append({"agent": agent, "graded_14d": now.get("graded", 0),
+                    "avg_grade_14d": now.get("avg_grade"),
+                    "avg_grade_prior_14d": pn,
+                    "delta": round(now["avg_grade"] - pn, 1)
+                    if pn is not None and now.get("avg_grade") is not None
+                    else None,
+                    "film_texts_14d": film,
+                    "ask_rate_14d": round(100.0 * now["asks"]
+                                          / now["ask_known"])
+                    if now.get("ask_known") else None})
+    out.sort(key=lambda r: -(r["graded_14d"] or 0))
+    return jsonify({"ok": True, "agents": out,
+                    "note": "delta appears once both windows hold 3+ "
+                            "graded calls"})
+
+
+def _opener_samples(days=7):
+    """Real opener snippets: how 8+ calls started versus 4-and-under.
+    Pulled verbatim from transcripts, never summarized into fiction."""
+    calls = _db.get_maverick_calls(days=days, limit=200,
+                                   with_transcript=True)
+    def _head(c):
+        t = " ".join((c.get("transcript") or "").split())
+        return (t[:220] + "...") if len(t) > 220 else t
+    hi = [c for c in calls if (c.get("call_grade") or 0) >= 8
+          and c.get("transcript")]
+    lo = [c for c in calls if 0 < (c.get("call_grade") or 0) <= 4
+          and c.get("transcript")]
+    hi.sort(key=lambda c: -(c.get("call_grade") or 0))
+    lo.sort(key=lambda c: (c.get("call_grade") or 0))
+    return ([{"agent": c["agent_name"], "grade": c["call_grade"],
+              "opener": _head(c)} for c in hi[:2]],
+            [{"agent": c["agent_name"], "grade": c["call_grade"],
+              "opener": _head(c)} for c in lo[:2]])
+
+
+def scheduled_friday_autopack(dry_run=False):
+    """Thursday 7pm ET — the Friday meeting pack, built from the week's
+    real calls: Tape of the Week, Objection of the Week with the best
+    handling, ask-rate celebration (top 3 only, never-shame), opener film,
+    the cash desk count, and one teach from the Sales Floor constraint.
+    Emailed to Barry: it is a report, and email is for reports."""
+    if not dry_run and _already_fired_recently("friday_autopack",
+                                               within_hours=20):
+        return
+    if not _db.try_acquire_job_lock("friday_autopack"):
+        return
+    try:
+        calls = _db.get_maverick_calls(days=7, limit=300)
+        graded = [c for c in calls if c.get("call_grade") is not None]
+        best = max(graded, key=lambda c: c["call_grade"], default=None)
+        ranked, besth = _objection_trend(days=7)
+        roll = _db.get_maverick_agent_rollup(days=7)
+        askers = sorted(((a, round(100.0 * v["asks"] / v["ask_known"]))
+                         for a, v in roll.items() if v.get("ask_known", 0) >= 3),
+                        key=lambda x: -x[1])[:3]
+        hi_open, lo_open = _opener_samples(days=7)
+        floor = cache_get("salesfloor") or {}
+        constraint = floor.get("constraint")
+        # Cash desk lane: graded calls on cash-offer leads this week
+        cash_n = 0
+        try:
+            client = FUBClient()
+            cash_ids = {p.get("id") for p in
+                        client.get_people_cursor(tag="Cash Offer Site",
+                                                 fields="id")}
+            cash_n = sum(1 for c in graded
+                         if c.get("lead_fub_id") in cash_ids)
+        except Exception as _ce:
+            logger.warning("autopack cash count failed: %s", _ce)
+
+        base = (os.environ.get("BASE_URL") or
+                "https://www.legacycommandcenter.com").rstrip("/")
+        L = []
+        L.append("FRIDAY PACK, built from this week's real calls")
+        L.append("")
+        if best:
+            L.append("TAPE OF THE WEEK: %s on %s, graded %g%s."
+                     % (best["agent_name"], best["lead_name"],
+                        best["call_grade"],
+                        ", appointment set" if best.get("appointment_set")
+                        else ""))
+            if best.get("summary"):
+                L.append("  " + " ".join(best["summary"].split())[:220])
+            L.append("  Transcript: %s/calls" % base)
+            L.append("")
+        if ranked:
+            b, n = ranked[0]
+            L.append("OBJECTION OF THE WEEK: %s (%d call%s this week)."
+                     % (b, n, "" if n == 1 else "s"))
+            bh = besth.get(b) or {}
+            if bh.get("agent_name"):
+                L.append("  Best handling: %s with %s (graded %g). Play "
+                         "it Friday." % (bh["agent_name"], bh["lead_name"],
+                                         bh.get("call_grade") or 0))
+            L.append("")
+        if askers:
+            L.append("ASK RATE, this week's top: "
+                     + ", ".join("%s %d%%" % a for a in askers)
+                     + ". Celebrate them by name.")
+            L.append("")
+        if hi_open:
+            L.append("HOW THE 8s OPENED:")
+            for o in hi_open:
+                L.append("  [%s, %g] %s" % (o["agent"], o["grade"],
+                                            o["opener"]))
+            L.append("")
+        if lo_open:
+            L.append("HOW THE TOUGH ONES OPENED (teach, no names Friday):")
+            for o in lo_open:
+                L.append("  [graded %g] %s" % (o["grade"], o["opener"]))
+            L.append("")
+        if cash_n:
+            L.append("CASH DESK: %d graded negotiation call%s this week. "
+                     "Same film, same coaching." % (cash_n,
+                     "" if cash_n == 1 else "s"))
+            L.append("")
+        if constraint:
+            L.append("ONE TEACH: the Sales Floor names %s as this week's "
+                     "constraint. Open %s/salesfloor on screen and work it."
+                     % (constraint, base))
+        body = chr(10).join(L)
+        if dry_run:
+            return {"ok": True, "body": body}
+        import postmark_client as _pm
+        _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+                 subject="Friday Pack: tape, objection, asks, openers",
+                 html="<pre style='font-family:-apple-system,sans-serif;"
+                      "white-space:pre-wrap;font-size:14px'>%s</pre>" % body,
+                 text=body)
+        print("[FRIDAY PACK] sent")
+        _record_fired("friday_autopack")
+        return {"ok": True}
+    except Exception as e:
+        _alert_on_job_failure("friday_autopack", str(e))
+        print(f"[FRIDAY PACK] error: {e}")
+    finally:
+        _db.release_job_lock("friday_autopack")
+
+
+@app.route("/api/admin/friday-pack/preview")
+def api_friday_pack_preview():
+    """Dry-run the Friday pack now, nothing sends."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    res = scheduled_friday_autopack(dry_run=True) or {}
+    return jsonify(res if res else {"ok": False})
+
+
 def _maverick_call_effects(c, cid):
     """Phase A (Oct 2026): real-time effects of a newly ingested graded
     call. Only fires for calls from the last 48h so historical backfills
@@ -24178,6 +24424,16 @@ def start_scheduler():
                        CronTrigger(minute="7,37", timezone=ET),
                        id="desk_watchdog", name="Desk watchdog (every 30 min)",
                        max_instances=1, coalesce=True)
+
+    # Friday meeting auto-pack: Thursday 7pm ET, Barry's meeting prep
+    # built from the week's real calls (Phase C, Oct 2026).
+    _scheduler.add_job(scheduled_friday_autopack,
+                       CronTrigger(day_of_week="thu", hour=19, minute=0,
+                                   timezone=ET),
+                       id="friday_autopack",
+                       name="Friday meeting auto-pack (Thu 7pm)",
+                       max_instances=1, coalesce=True,
+                       misfire_grace_time=3600)
 
     # Game-film coaching texts: weekdays 8:20am ET, one text per agent
     # anchored to yesterday's real graded calls (Phase A, Oct 2026).
