@@ -21194,7 +21194,10 @@ def api_today():
     items, one team verdict line, calm when calm. Cached 5 minutes."""
     if not _read_auth():
         return jsonify({"error": "Unauthorized"}), 401
-    cached = cache_get("today_page")
+    try:
+        cached = cache_get("today_page")
+    except Exception:
+        cached = None
     if cached and request.args.get("refresh") != "1":
         return jsonify(cached)
     items = []
@@ -21310,7 +21313,7 @@ def scheduled_escalation_reconcile():
         print("[GUARANTEE RECONCILE] %d stale, %d closed by call log"
               % (len(stale), closed))
         try:
-            cache_set("today_page", None)
+            cache_set("today_page", {})  # {} invalidates; None poisons
         except Exception:
             pass
     except Exception as e:
