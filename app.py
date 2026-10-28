@@ -10061,6 +10061,53 @@ def api_sync_ytd_cache():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/admin/deals/import", methods=["POST"])
+def api_deals_import():
+    """Bulk dotloop import (Oct 2026): body {"rows": [{agent, deal_name,
+    sale_price, gci, close_date, stage, lead_source}]}. Dedupes on
+    (deal_name, close_date); exact GCI from the intake forms."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    rows = (request.get_json(silent=True) or {}).get("rows") or []
+    imported, skipped, failed = [], [], []
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                for r in rows[:100]:
+                    try:
+                        cur.execute("""
+                            SELECT 1 FROM deal_log
+                            WHERE deal_name = %s
+                              AND (close_date = %s OR (close_date IS NULL
+                                   AND %s IS NULL))
+                        """, (r.get("deal_name"), r.get("close_date"),
+                              r.get("close_date")))
+                        if cur.fetchone():
+                            skipped.append(r.get("deal_name"))
+                            continue
+                        _yr = int(str(r.get("close_date") or "2026")[:4])
+                        cur.execute("""
+                            INSERT INTO deal_log
+                                (agent_name, deal_name, sale_price, stage,
+                                 stage_raw, close_date, year, gci_estimated,
+                                 source, lead_source)
+                            VALUES (%s,%s,%s,%s,'Dotloop Import',%s,%s,%s,
+                                    'dotloop_import',%s)
+                        """, (r.get("agent"), r.get("deal_name"),
+                              r.get("sale_price"),
+                              r.get("stage") or "closing",
+                              r.get("close_date"), _yr, r.get("gci"),
+                              r.get("lead_source")))
+                        imported.append(r.get("deal_name"))
+                    except Exception as e:
+                        failed.append("%s (%s)" % (r.get("deal_name"),
+                                                   str(e)[:60]))
+        return jsonify({"ok": True, "imported": len(imported),
+                        "skipped_existing": skipped, "failed": failed})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
 @app.route("/api/goals/log-closing", methods=["POST"])
 def api_goals_log_closing():
     """Manually log a closing. Body: {agent_name, deal_name, sale_price, close_date?}"""
