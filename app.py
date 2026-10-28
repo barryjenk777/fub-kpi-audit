@@ -6091,12 +6091,22 @@ def _followup_depth():
                      "touches": counts.get(int(p["id"]), 0)})
     rows.sort(key=lambda r: r["touches"])
     n = len(rows)
-    under6 = [r for r in rows if r["touches"] < 6]
     med = sorted(r["touches"] for r in rows)[n // 2] if n else None
+    # The honest split (first run, Oct 2026): this team is AI-first, so a
+    # pond or house lead with zero dials is riding the machine by design.
+    # The accusable set is AGENT-ASSIGNED leads with no human dials.
+    _house = {"", "Barry Jenkins", "Fhalen Tendencia"} | set(
+        getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+    assigned = [r for r in rows
+                if (r.get("agent") or "").strip() not in _house]
+    a_n = len(assigned)
+    a_under = [r for r in assigned if r["touches"] < 6]
     return {"window_leads": n, "median_touches": med,
-            "under_6_touches": len(under6),
-            "pct_under_6": round(100.0 * len(under6) / n) if n else None,
-            "most_abandoned": under6[:10]}
+            "assigned_leads": a_n,
+            "assigned_under_6": len(a_under),
+            "assigned_pct_under_6": round(100.0 * len(a_under) / a_n)
+            if a_n else None,
+            "most_abandoned": a_under[:10]}
 
 
 @app.route("/api/followup-depth")
@@ -6312,12 +6322,14 @@ def scheduled_friday_autopack(dry_run=False):
             fd = cache_get("followup_depth") or {}
             if not fd:
                 fd = _followup_depth()
-            if fd.get("window_leads"):
-                L.append("PERSISTENCE: of %d leads now past their first two "
-                         "weeks, %d%% got fewer than 6 call attempts "
-                         "(median %s). PPC money dies on attempt three."
-                         % (fd["window_leads"], fd.get("pct_under_6") or 0,
-                            fd.get("median_touches")))
+            if fd.get("assigned_leads"):
+                L.append("PERSISTENCE: %d agent-assigned leads are past "
+                         "their first two weeks; %d%% got fewer than 6 call "
+                         "attempts. PPC money dies on attempt three. (House "
+                         "and pond leads ride the AI by design and are not "
+                         "counted here.)"
+                         % (fd["assigned_leads"],
+                            fd.get("assigned_pct_under_6") or 0))
                 worst = fd.get("most_abandoned") or []
                 if worst:
                     L.append("  Least worked: " + ", ".join(
@@ -21479,9 +21491,11 @@ def api_today():
         pass
     try:
         fd = cache_get("followup_depth") or {}
-        if (fd.get("pct_under_6") or 0) >= 50 and fd.get("window_leads", 0) >= 10:
-            items.append({"sev": 2, "what": "%d%% of recent leads got "
-                          "fewer than 6 call attempts" % fd["pct_under_6"],
+        if (fd.get("assigned_pct_under_6") or 0) >= 50 \
+                and fd.get("assigned_leads", 0) >= 10:
+            items.append({"sev": 2, "what": "%d%% of agents' new leads got "
+                          "fewer than 6 call attempts"
+                          % fd["assigned_pct_under_6"],
                           "do": "Persistence teach Friday; the least-worked "
                                 "names are in the pack",
                           "link": "/salesfloor"})
