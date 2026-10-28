@@ -21834,6 +21834,34 @@ def api_maverick_ingest_probe():
            "fingerprint": hashlib.sha256(v.encode()).hexdigest()[:8]
            if v else None, "build_marker": "ingest-probe-v2",
            "commit": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or "")[:7]}
+    rid = request.args.get("raw_id", type=int)
+    if rid:
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT raw FROM maverick_reports WHERE "
+                                "id = %s", (rid,))
+                    r = cur.fetchone()
+            out["raw"] = (r[0] if r else None)
+        except Exception as e:
+            out["raw_error"] = str(e)[:200]
+        return jsonify(out)
+    if request.args.get("status") == "1":
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT id, created_at, LEFT(raw, 160)
+                        FROM maverick_reports
+                        WHERE raw LIKE 'GROKBOT STATUS:%%'
+                        ORDER BY id DESC LIMIT 10
+                    """)
+                    out["status_lines"] = [
+                        {"id": r[0], "at": r[1].isoformat() if r[1] else None,
+                         "line": r[2]} for r in cur.fetchall()]
+        except Exception as e:
+            out["status_error"] = str(e)[:200]
+        return jsonify(out)
     n = request.args.get("recent", type=int)
     if n:
         try:
