@@ -21988,6 +21988,7 @@ def api_maverick_ingest():
     pipeline_rows = 0
     if kind == "pipeline_dashboard" and not dashboard_saved:
         try:
+            from datetime import date as _date
             pdata, pkeys, pw = _mvp.parse_pipeline_dashboard(raw)
             warnings.extend(pw)
             if pdata:
