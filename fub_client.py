@@ -880,7 +880,7 @@ class FUBClient:
             if assigned_user_id:
                 params["assignedUserId"] = assigned_user_id
             if tag:
-                params["tag"] = tag
+                params["tags"] = tag  # FUB's filter param is plural
             if after:
                 params["createdAfter"] = after
             data = self._request("GET", "people", params=params)

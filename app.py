@@ -6161,9 +6161,10 @@ def scheduled_friday_autopack(dry_run=False):
         cash_n = 0
         try:
             client = FUBClient()
-            cash_ids = {p.get("id") for p in
-                        client.get_people_cursor(tag="Cash Offer Site",
-                                                 fields="id")}
+            _cp = client._request("GET", "people", params={
+                "tags": "Cash Offer Site", "fields": "id", "limit": 100})
+            cash_ids = {p.get("id")
+                        for p in ((_cp or {}).get("people") or [])}
             cash_n = sum(1 for c in graded
                          if c.get("lead_fub_id") in cash_ids)
         except Exception as _ce:
