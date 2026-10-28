@@ -21151,6 +21151,7 @@ def api_courier_script():
 
 
 _FLIGHT_MILESTONES = (
+    ("slack_joined", "a Slack join", 2),
     ("course_started", "a first Fast Track login", 3),
     ("first_claim", "a first claimed lead", 14),
     ("first_appt", "a first appointment set", 21),
@@ -21190,7 +21191,12 @@ def _flightplan_status():
         n = p["agent_name"]
         f = firsts.get(n) or {}
         b = board.get(n) or {}
-        hit = {"course_started": bool(b.get("first_login_at")),
+        try:
+            _in_slack = bool(_db._slack_id_for_agent(n))
+        except Exception:
+            _in_slack = False
+        hit = {"slack_joined": _in_slack,
+               "course_started": bool(b.get("first_login_at")),
                "first_claim": bool(f.get("first_claim")),
                "first_appt": bool(f.get("first_appt"))}
         slips = []
