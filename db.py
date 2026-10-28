@@ -10621,3 +10621,91 @@ def _record_slack_delivery(agent_name, fub_user_id, message, week_day):
     except Exception as e:
         logger.warning("_record_slack_delivery failed: %s", e)
         return None
+
+
+def salesfloor_counts(days=7):
+    """Money-chain volume for the Sales Floor page: appointments set
+    (created in window), appointments met (outcome showed, in window),
+    plus per-agent splits."""
+    empty = {"appts_set": 0, "appts_met": 0, "by_agent": {}}
+    if not is_available():
+        return empty
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COUNT(*) FILTER (WHERE created_at >= NOW()
+                               - make_interval(days => %s)),
+                           COUNT(*) FILTER (WHERE outcome = 'showed'
+                               AND COALESCE(outcome_logged_at, start_time)
+                                   >= NOW() - make_interval(days => %s))
+                    FROM appointments
+                    WHERE status IS DISTINCT FROM 'canceled'
+                    GROUP BY agent_name
+                """, (int(days), int(days)))
+                rows = cur.fetchall()
+        out = {"appts_set": 0, "appts_met": 0, "by_agent": {}}
+        for agent, aset, amet in rows:
+            out["appts_set"] += int(aset or 0)
+            out["appts_met"] += int(amet or 0)
+            if agent:
+                out["by_agent"][agent] = {"set": int(aset or 0),
+                                          "met": int(amet or 0)}
+        return out
+    except Exception as e:
+        logger.warning("salesfloor_counts failed: %s", e)
+        return empty
+
+
+def search_maverick_calls(q=None, agent=None, min_grade=None, days=90,
+                          limit=50):
+    """Call Library search: free text matches lead, objections, summary,
+    or transcript. Returns rows WITH transcript."""
+    if not is_available():
+        return []
+    try:
+        where = ["call_time >= NOW() - make_interval(days => %s)",
+                 "call_grade IS NOT NULL"]
+        args = [int(days)]
+        if agent:
+            where.append("agent_name = %s")
+            args.append(agent)
+        if min_grade is not None:
+            where.append("call_grade >= %s")
+            args.append(float(min_grade))
+        if q:
+            where.append("(lead_name ILIKE %s OR objections ILIKE %s "
+                         "OR summary ILIKE %s OR transcript ILIKE %s)")
+            pat = "%%" + q.strip() + "%%"
+            args += [pat, pat, pat, pat]
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT call_id, agent_name, lead_name, lead_fub_id,
+                           call_time, duration_sec, outcome,
+                           appointment_set, call_grade,
+                           agent_talk_time_percent, objections, summary,
+                           coaching_tips, transcript
+                    FROM maverick_calls
+                    WHERE %s
+                    ORDER BY call_time DESC LIMIT %%s
+                """ % " AND ".join(where), args + [int(limit)])
+                cols = ("call_id", "agent_name", "lead_name", "lead_fub_id",
+                        "call_time", "duration_sec", "outcome",
+                        "appointment_set", "call_grade",
+                        "agent_talk_time_percent", "objections", "summary",
+                        "coaching_tips", "transcript")
+                out = []
+                for r in cur.fetchall():
+                    d = dict(zip(cols, r))
+                    if d["call_time"]:
+                        d["call_time"] = d["call_time"].isoformat()
+                    for k in ("call_grade", "agent_talk_time_percent"):
+                        if d.get(k) is not None:
+                            d[k] = float(d[k])
+                    out.append(d)
+                return out
+    except Exception as e:
+        logger.warning("search_maverick_calls failed: %s", e)
+        return []

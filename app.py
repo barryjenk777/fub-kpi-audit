@@ -20879,6 +20879,148 @@ def api_courier_script():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/salesfloor")
+def salesfloor_page():
+    if not _read_auth():
+        return redirect("/login")
+    return render_template("salesfloor.html")
+
+
+@app.route("/calls")
+def call_library_page():
+    if not _read_auth():
+        return redirect("/login")
+    return render_template("call_library.html")
+
+
+@app.route("/api/salesfloor")
+def api_salesfloor():
+    """The money chain, this week against the trailing 90 days, with the
+    constraint named and per-agent cards. Cached 10 minutes."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    cached = cache_get("salesfloor")
+    if cached and request.args.get("refresh") != "1":
+        return jsonify(cached)
+    try:
+        wk = _db.salesfloor_counts(days=7)
+        q90 = _db.salesfloor_counts(days=90)
+        mav7 = _db.get_maverick_agent_rollup(days=7)
+        mav30 = _db.get_maverick_agent_rollup(days=30)
+        deals_wk = len(_db.get_deals_in_range(
+            (datetime.now(timezone.utc) - timedelta(days=7)).date().isoformat(),
+            datetime.now(timezone.utc).date().isoformat(), stage="contract") or [])
+        deals_90 = len(_db.get_deals_in_range(
+            (datetime.now(timezone.utc) - timedelta(days=90)).date().isoformat(),
+            datetime.now(timezone.utc).date().isoformat(), stage="contract") or [])
+        g7 = sum(v.get("graded", 0) for v in mav7.values())
+        g30 = sum(v.get("graded", 0) for v in mav30.values())
+        asks7 = sum(v.get("asks", 0) for v in mav7.values())
+        known7 = sum(v.get("ask_known", 0) for v in mav7.values())
+        audit = cache_get("audit") or {}
+        convos_wk = 0
+        for a in (audit.get("agents") or []):
+            k = a.get("kpis") if isinstance(a.get("kpis"), dict) else a
+            try:
+                convos_wk += int(k.get("conversations") or k.get("convos") or 0)
+            except (TypeError, ValueError):
+                pass
+
+        def _stage(label, now, avg, note=""):
+            ratio = (now / avg) if avg else None
+            return {"label": label, "week": now,
+                    "weekly_avg_90d": round(avg, 1) if avg else None,
+                    "ratio": round(ratio, 2) if ratio is not None else None,
+                    "note": note}
+
+        chain = [
+            _stage("Conversations", convos_wk, None,
+                   "from this week's audit window"),
+            _stage("Graded calls", g7, g30 / (30 / 7) if g30 else None),
+            _stage("Appointment asks", asks7,
+                   None, "" if known7 else
+                   "awaiting ask flags from the call pipeline"),
+            _stage("Appointments set", wk["appts_set"],
+                   q90["appts_set"] / (90 / 7) if q90["appts_set"] else None),
+            _stage("Appointments met", wk["appts_met"],
+                   q90["appts_met"] / (90 / 7) if q90["appts_met"] else None),
+            _stage("Contracts", deals_wk,
+                   deals_90 / (90 / 7) if deals_90 else None),
+        ]
+        measurable = [s for s in chain if s["ratio"] is not None]
+        constraint = min(measurable, key=lambda s: s["ratio"]) \
+            if measurable else None
+        actions = []
+        if constraint:
+            if constraint["label"] in ("Appointments set", "Appointment asks"):
+                worst = sorted([(n, v) for n, v in mav30.items()
+                                if v.get("ask_known")],
+                               key=lambda x: x[1]["asks"] / max(x[1]["ask_known"], 1))
+                if worst:
+                    actions.append("Lowest ask rate: %s. One roleplay rep "
+                                   "on the ask today." % worst[0][0])
+                actions.append("Pull two graded calls from the Call "
+                               "Library where the appointment never got "
+                               "asked for. Friday teach material.")
+            elif constraint["label"] == "Appointments met":
+                actions.append("Check the morning-of reminder flow and "
+                               "yesterday's no-shows by name.")
+            elif constraint["label"] == "Contracts":
+                actions.append("The table again: this week's met "
+                               "appointments with no contract, one by one.")
+            else:
+                actions.append("Volume week: dials and claims, check the "
+                               "Hot Hand board for who has capacity.")
+
+        # Agent cards
+        cards = []
+        profiles = _db.get_agent_profiles(active_only=True) or []
+        excl = set(config.EXCLUDED_USERS) | set(
+            getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+        for p in profiles:
+            n = p["agent_name"]
+            if n in excl:
+                continue
+            m7, m30 = mav7.get(n) or {}, mav30.get(n) or {}
+            ap = (wk["by_agent"].get(n) or {})
+            card = {"agent": n,
+                    "appts_set_wk": ap.get("set", 0),
+                    "appts_met_wk": ap.get("met", 0),
+                    "graded_30d": m30.get("graded", 0),
+                    "avg_grade_30d": m30.get("avg_grade"),
+                    "avg_talk_pct_30d": m30.get("avg_talk_pct"),
+                    "ask_rate_30d": round(
+                        100.0 * m30["asks"] / m30["ask_known"])
+                        if m30.get("ask_known") else None}
+            cards.append(card)
+        cards.sort(key=lambda c: -(c["appts_set_wk"] or 0))
+        out = {"ok": True, "generated_at":
+               datetime.now(timezone.utc).isoformat(),
+               "chain": chain,
+               "constraint": constraint["label"] if constraint else None,
+               "actions": actions, "cards": cards}
+        cache_set("salesfloor", out)
+        return jsonify(out)
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e),
+                        "traceback": traceback.format_exc()[:600]}), 500
+
+
+@app.route("/api/maverick/library")
+def api_maverick_library():
+    """Call Library search behind the page."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    rows = _db.search_maverick_calls(
+        q=(request.args.get("q") or "").strip() or None,
+        agent=(request.args.get("agent") or "").strip() or None,
+        min_grade=request.args.get("min_grade", type=float),
+        days=request.args.get("days", default=90, type=int),
+        limit=request.args.get("limit", default=50, type=int))
+    return jsonify({"ok": True, "count": len(rows), "calls": rows})
+
+
 @app.route("/api/admin/maverick/calls", methods=["GET"])
 def api_maverick_calls():
     """Structured call data (Phase 2): ?days=14&agent=Name&transcript=1."""

@@ -1,0 +1,67 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Sales Floor</title>
+<style>
+body{margin:0;background:#0d1117;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;line-height:1.5}
+.wrap{max-width:860px;margin:0 auto;padding:1.6rem 1rem 3rem}
+.kick{font-size:.62rem;font-weight:800;letter-spacing:.18em;color:#f5a623;text-transform:uppercase}
+h1{font-size:1.45rem;font-weight:850;margin:.25rem 0 1rem}
+.constraint{background:#1d1406;border:2px solid #f5a623;border-radius:14px;padding:1rem 1.2rem;margin-bottom:1rem;display:none}
+.constraint b{color:#f5a623;font-size:1.05rem}
+.constraint .act{font-size:.9rem;color:#e8edf8;margin-top:.4rem}
+.chain{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.55rem;margin-bottom:1.4rem}
+.st{background:#151b24;border:1px solid #232c3a;border-radius:12px;padding:.75rem .85rem;position:relative}
+.st.worst{border-color:#f5a623;background:#1d1406}
+.st b{display:block;font-size:1.5rem;font-weight:900}
+.st span{font-size:.68rem;color:#8b98ab}
+.st .avg{font-size:.66rem;color:#5c6a80;margin-top:.15rem;display:block}
+.st .up{color:#7ee2a8}.st .dn{color:#ffb454}
+h2{font-size:.78rem;font-weight:800;letter-spacing:.14em;color:#8b98ab;text-transform:uppercase;margin:1.3rem 0 .6rem}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:.6rem}
+.card{background:#151b24;border:1px solid #232c3a;border-radius:12px;padding:.8rem .95rem}
+.card .nm{font-weight:850;margin-bottom:.35rem}
+.card .row{display:flex;justify-content:space-between;font-size:.8rem;color:#aab6c8;padding:.12rem 0}
+.card .row b{color:#fff;font-weight:800}
+.stamp{font-size:.68rem;color:#5c6a80;margin-top:1.2rem}
+a{color:#f5a623}
+</style></head><body><div class="wrap">
+<div class="kick">Legacy Command Center</div>
+<h1>Sales Floor</h1>
+<div class="constraint" id="con"></div>
+<div class="chain" id="chain"></div>
+<h2>Agents</h2>
+<div class="cards" id="cards"></div>
+<div class="stamp" id="stamp"><a href="/calls">Open the Call Library</a> &middot; refreshes every 5 min</div>
+<script>
+async function load(){
+  try{
+    const d = await (await fetch("/api/salesfloor")).json();
+    if(!d.ok) return;
+    document.getElementById("chain").innerHTML = (d.chain||[]).map(s=>{
+      const worst = d.constraint === s.label;
+      let avg = "";
+      if(s.weekly_avg_90d != null){
+        const cls = s.ratio >= 1 ? "up" : "dn";
+        avg = `<span class="avg">90d pace ${s.weekly_avg_90d}/wk <span class="${cls}">${s.ratio>=1?"+":""}${Math.round((s.ratio-1)*100)}%</span></span>`;
+      } else if(s.note){ avg = `<span class="avg">${s.note}</span>`; }
+      return `<div class="st${worst?" worst":""}"><b>${s.week}</b><span>${s.label}</span>${avg}</div>`;
+    }).join("");
+    if(d.constraint){
+      const c = document.getElementById("con");
+      c.innerHTML = `<b>This week's constraint: ${d.constraint}</b>` +
+        (d.actions||[]).map(a=>`<div class="act">&rarr; ${a}</div>`).join("");
+      c.style.display = "block";
+    }
+    document.getElementById("cards").innerHTML = (d.cards||[]).map(c=>`
+      <div class="card"><div class="nm">${c.agent}</div>
+        <div class="row"><span>Appointments set / met (wk)</span><b>${c.appts_set_wk} / ${c.appts_met_wk}</b></div>
+        <div class="row"><span>Graded calls (30d)</span><b>${c.graded_30d}</b></div>
+        <div class="row"><span>Avg grade</span><b>${c.avg_grade_30d ?? "&mdash;"}</b></div>
+        <div class="row"><span>Ask rate</span><b>${c.ask_rate_30d != null ? c.ask_rate_30d + "%" : "&mdash;"}</b></div>
+        <div class="row"><span>Talk share</span><b>${c.avg_talk_pct_30d != null ? Math.round(c.avg_talk_pct_30d*100) + "%" : "&mdash;"}</b></div>
+      </div>`).join("");
+  }catch(e){}
+}
+load(); setInterval(load, 300000);
+</script></div></body></html>

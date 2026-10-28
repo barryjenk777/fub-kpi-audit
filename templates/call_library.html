@@ -1,0 +1,74 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Call Library</title>
+<style>
+body{margin:0;background:#0d1117;color:#e8edf8;font-family:-apple-system,'Segoe UI',sans-serif;line-height:1.5}
+.wrap{max-width:860px;margin:0 auto;padding:1.6rem 1rem 3rem}
+.kick{font-size:.62rem;font-weight:800;letter-spacing:.18em;color:#f5a623;text-transform:uppercase}
+h1{font-size:1.45rem;font-weight:850;margin:.25rem 0 1rem}
+.bar{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem}
+input,select{background:#151b24;border:1px solid #2b3a50;border-radius:10px;color:#fff;padding:.5rem .7rem;font-size:.9rem}
+input[type=text]{flex:1;min-width:180px}
+button{background:#f5a623;color:#0d1117;border:none;border-radius:10px;font-weight:800;padding:.5rem 1.1rem;cursor:pointer}
+.call{background:#151b24;border:1px solid #232c3a;border-radius:12px;padding:.8rem 1rem;margin-bottom:.55rem}
+.call .top{display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap;cursor:pointer}
+.g{font-weight:900;font-size:1.15rem;min-width:2ch}
+.g.hi{color:#7ee2a8}.g.mid{color:#ffd75e}.g.lo{color:#ff9d9d}
+.nm{font-weight:800}
+.meta{font-size:.74rem;color:#8b98ab}
+.chip{font-size:.66rem;background:#12251a;color:#7ee2a8;border-radius:99px;padding:.1rem .5rem}
+.obj{font-size:.82rem;color:#c0cbdb;margin-top:.35rem;font-style:italic}
+.body{display:none;margin-top:.6rem;border-top:1px solid #232c3a;padding-top:.6rem}
+.body h4{font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;color:#8b98ab;margin:.5rem 0 .2rem}
+.body pre{white-space:pre-wrap;font-family:inherit;font-size:.82rem;color:#aab6c8;max-height:340px;overflow-y:auto;background:#0d1117;border-radius:8px;padding:.6rem;margin:0}
+a{color:#f5a623}
+.stamp{font-size:.68rem;color:#5c6a80;margin-top:1rem}
+</style></head><body><div class="wrap">
+<div class="kick">Legacy Command Center</div>
+<h1>Call Library</h1>
+<div class="bar">
+  <input type="text" id="q" placeholder="Search leads, objections, transcripts...">
+  <select id="agent"><option value="">All agents</option></select>
+  <select id="min"><option value="">Any grade</option><option value="8">8+</option><option value="7">7+</option><option value="5">5 and under</option></select>
+  <button onclick="load()">Search</button>
+</div>
+<div id="rows"></div>
+<div class="stamp"><a href="/salesfloor">Back to the Sales Floor</a> &middot; audio lives in Maverick; transcripts live here</div>
+<script>
+function esc(s){return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");}
+async function load(){
+  const q = encodeURIComponent(document.getElementById("q").value||"");
+  const agent = encodeURIComponent(document.getElementById("agent").value||"");
+  const min = document.getElementById("min").value;
+  let url = `/api/maverick/library?q=${q}&agent=${agent}`;
+  if(min === "5") url += "&days=90"; else if(min) url += `&min_grade=${min}`;
+  const d = await (await fetch(url)).json();
+  let calls = d.calls||[];
+  if(min === "5") calls = calls.filter(c=>c.call_grade<=5);
+  const agents = [...new Set(calls.map(c=>c.agent_name))].sort();
+  const sel = document.getElementById("agent");
+  if(sel.options.length <= 1)
+    agents.forEach(a=>{const o=document.createElement("option");o.value=o.textContent=a;sel.appendChild(o);});
+  document.getElementById("rows").innerHTML = calls.map((c,i)=>{
+    const g = c.call_grade, cls = g>=8?"hi":g>=6?"mid":"lo";
+    const mins = c.duration_sec?Math.round(c.duration_sec/60):null;
+    return `<div class="call">
+      <div class="top" onclick="document.getElementById('b${i}').style.display=document.getElementById('b${i}').style.display==='block'?'none':'block'">
+        <span class="g ${cls}">${g??"?"}</span>
+        <span class="nm">${esc(c.agent_name)} &times; ${esc(c.lead_name)}</span>
+        <span class="meta">${(c.call_time||"").slice(0,10)}${mins?" &middot; "+mins+" min":""}${c.agent_talk_time_percent!=null?" &middot; talked "+Math.round(c.agent_talk_time_percent*100)+"%":""}</span>
+        ${c.appointment_set?'<span class="chip">appointment set</span>':""}
+      </div>
+      ${c.objections?`<div class="obj">"${esc(c.objections).slice(0,200)}"</div>`:""}
+      <div class="body" id="b${i}">
+        ${c.summary?`<h4>Summary</h4><pre>${esc(c.summary)}</pre>`:""}
+        ${c.coaching_tips?`<h4>Coaching</h4><pre>${esc(c.coaching_tips.split(">>").join("\n"))}</pre>`:""}
+        ${c.transcript?`<h4>Transcript</h4><pre>${esc(c.transcript)}</pre>`:""}
+        ${c.lead_fub_id?`<a href="https://yourfriendlyagent.followupboss.com/2/people/view/${c.lead_fub_id}" target="_blank">Open lead in FUB</a>`:""}
+      </div>
+    </div>`;
+  }).join("") || "<div class='meta'>No graded calls match.</div>";
+}
+load();
+</script></div></body></html>
