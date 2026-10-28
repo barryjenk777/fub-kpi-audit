@@ -59,7 +59,7 @@ async function load(){
         <div class="row"><span>Graded calls (30d)</span><b>${c.graded_30d}</b></div>
         <div class="row"><span>Avg grade</span><b>${c.avg_grade_30d ?? "&mdash;"}</b></div>
         <div class="row"><span>Ask rate</span><b>${c.ask_rate_30d != null ? c.ask_rate_30d + "%" : "&mdash;"}</b></div>
-        <div class="row"><span>Talk share</span><b>${c.avg_talk_pct_30d != null ? Math.round(c.avg_talk_pct_30d*100) + "%" : "&mdash;"}</b></div>
+        <div class="row"><span>Talk share</span><b>${c.avg_talk_pct_30d != null ? Math.round(c.avg_talk_pct_30d > 1.5 ? c.avg_talk_pct_30d : c.avg_talk_pct_30d*100) + "%" : "&mdash;"}</b></div>
       </div>`).join("");
   }catch(e){}
 }

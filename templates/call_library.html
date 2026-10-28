@@ -57,7 +57,7 @@ async function load(){
       <div class="top" onclick="document.getElementById('b${i}').style.display=document.getElementById('b${i}').style.display==='block'?'none':'block'">
         <span class="g ${cls}">${g??"?"}</span>
         <span class="nm">${esc(c.agent_name)} &times; ${esc(c.lead_name)}</span>
-        <span class="meta">${(c.call_time||"").slice(0,10)}${mins?" &middot; "+mins+" min":""}${c.agent_talk_time_percent!=null?" &middot; talked "+Math.round(c.agent_talk_time_percent*100)+"%":""}</span>
+        <span class="meta">${(c.call_time||"").slice(0,10)}${mins?" &middot; "+mins+" min":""}${c.agent_talk_time_percent!=null?" &middot; talked "+Math.round(c.agent_talk_time_percent>1.5?c.agent_talk_time_percent:c.agent_talk_time_percent*100)+"%":""}</span>
         ${c.appointment_set?'<span class="chip">appointment set</span>':""}
       </div>
       ${c.objections?`<div class="obj">"${esc(c.objections).slice(0,200)}"</div>`:""}
