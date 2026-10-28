@@ -247,6 +247,51 @@ button{cursor:pointer;border:none;font-family:inherit}
   </div>
 </div>
 
+<!-- ── COCKPIT: this week on the floor (theirs, not surveillance) ── -->
+<div id="cockpit-card" style="max-width:540px;margin:0 auto;padding:.6rem 1rem 0;display:none">
+  <div style="background:#151b24;border:1px solid #232c3a;border-radius:14px;padding:.9rem 1.05rem">
+    <div style="font-size:.62rem;font-weight:800;letter-spacing:.16em;color:#f5a623;text-transform:uppercase;margin-bottom:.45rem">This week on the floor</div>
+    <div id="ck-desk" style="font-size:.88rem;color:#e8edf8;padding:.12rem 0"></div>
+    <div id="ck-film" style="font-size:.88rem;color:#e8edf8;padding:.12rem 0"></div>
+    <div id="ck-best" style="font-size:.84rem;color:#7ee2a8;padding:.12rem 0;display:none"></div>
+    <div id="ck-picks" style="margin-top:.45rem;display:none">
+      <div style="font-size:.62rem;font-weight:800;letter-spacing:.14em;color:#8b98ab;text-transform:uppercase;margin-bottom:.25rem">Your names today</div>
+      <div id="ck-picks-list" style="font-size:.86rem"></div>
+    </div>
+  </div>
+</div>
+<script>
+(async function(){
+  try{
+    const tk = location.pathname.split("/").pop();
+    const d = await (await fetch("/api/goals/my-goals/"+tk+"/cockpit")).json();
+    if(!d.ok) return;
+    const fmt=(s)=>s<120?s+" sec":Math.round(s/60)+" min";
+    let desk = "🟢 Claim desk: "+d.desk.claims+" of "+d.desk.offers+" offers claimed";
+    if(d.desk.avg_claim_secs!=null) desk += ", avg "+fmt(d.desk.avg_claim_secs)+" to tap";
+    if(!d.desk.offers) desk = "🟢 Claim desk: no offers reached you this week. Your turn is coming, keep notifications on.";
+    document.getElementById("ck-desk").textContent = desk;
+    const f = d.film||{};
+    let film = "🎧 Call film: "+(f.graded_14d||0)+" graded";
+    if(f.avg_grade!=null) film += ", averaging "+f.avg_grade;
+    if(f.ask_rate!=null) film += ", asking for the appointment "+f.ask_rate+"% of the time";
+    document.getElementById("ck-film").textContent = film;
+    if(f.best_call && f.best_call.grade!=null){
+      const b=f.best_call;
+      document.getElementById("ck-best").textContent =
+        "⭐ Your best tape: "+(b.lead||"a lead")+" graded "+b.grade+(b.appointment_set?", appointment set":"")+". That call is your standard.";
+      document.getElementById("ck-best").style.display="block";
+    }
+    if((d.today_picks||[]).length){
+      document.getElementById("ck-picks-list").innerHTML = d.today_picks.map(p=>
+        '<div style="padding:.14rem 0"><a style="color:#f5a623;font-weight:700;text-decoration:none" target="_blank" href="https://yourfriendlyagent.followupboss.com/2/people/view/'+p.person_id+'">'+(p.lead_name||"Lead")+'</a> <span style="color:#8b98ab">'+(p.reason||"")+'</span></div>').join("");
+      document.getElementById("ck-picks").style.display="block";
+    }
+    document.getElementById("cockpit-card").style.display="block";
+  }catch(e){}
+})();
+</script>
+
 <div class="container">
 
   <!-- ── DAILY VIEW ── -->

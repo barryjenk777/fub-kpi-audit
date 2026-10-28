@@ -10793,3 +10793,50 @@ def terminal_uncalled_24h():
     except Exception as e:
         logger.warning("terminal_uncalled_24h failed: %s", e)
         return []
+
+
+def get_today_hotsheet_picks(agent_name):
+    """This agent's hot-sheet picks for today (ET), for the cockpit."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, lead_name, reason
+                    FROM hotsheet_log
+                    WHERE agent_name = %s
+                      AND sheet_date = (NOW() AT TIME ZONE
+                                        'America/New_York')::date
+                    ORDER BY id
+                """, (agent_name,))
+                return [{"person_id": r[0], "lead_name": r[1],
+                         "reason": r[2]} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_today_hotsheet_picks failed: %s", e)
+        return []
+
+
+def agent_desk_week(agent_name, days=7):
+    """One agent's claim-desk week for the cockpit."""
+    out = {"offers": 0, "claims": 0, "avg_claim_secs": None}
+    if not is_available():
+        return out
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*),
+                           COUNT(*) FILTER (WHERE accepted_at IS NOT NULL),
+                           AVG(EXTRACT(EPOCH FROM accepted_at - created_at))
+                               FILTER (WHERE accepted_at IS NOT NULL)
+                    FROM dispatch_offers
+                    WHERE agent_name = %s
+                      AND created_at >= NOW() - make_interval(days => %s)
+                """, (agent_name, int(days)))
+                r = cur.fetchone()
+        return {"offers": int(r[0] or 0), "claims": int(r[1] or 0),
+                "avg_claim_secs": int(r[2]) if r[2] is not None else None}
+    except Exception as e:
+        logger.warning("agent_desk_week failed: %s", e)
+        return out

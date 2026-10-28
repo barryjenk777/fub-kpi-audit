@@ -8570,6 +8570,40 @@ def api_agent_dashboard(token):
     })
 
 
+@app.route("/api/goals/my-goals/<token>/cockpit")
+def api_agent_cockpit(token):
+    """The agent's own floor numbers (Cockpit, Oct 2026): their desk week,
+    their call film, their three names for today. Ownership, not
+    surveillance: this is THEIR scoreboard, no teammate comparisons."""
+    agent_name = _db.resolve_goal_token(token)
+    if not agent_name:
+        return jsonify({"error": "Invalid token"}), 403
+    desk = _db.agent_desk_week(agent_name, days=7)
+    film = (_db.get_maverick_agent_rollup(days=14) or {}).get(agent_name) or {}
+    best = None
+    try:
+        rows = _db.get_maverick_calls(days=14, agent_name=agent_name,
+                                      limit=50)
+        graded = [c for c in rows if c.get("call_grade") is not None]
+        if graded:
+            b = max(graded, key=lambda c: c["call_grade"])
+            best = {"lead": b.get("lead_name"), "grade": b.get("call_grade"),
+                    "outcome": b.get("outcome"),
+                    "appointment_set": bool(b.get("appointment_set"))}
+    except Exception:
+        pass
+    picks = _db.get_today_hotsheet_picks(agent_name)
+    return jsonify({"ok": True, "agent": agent_name,
+                    "desk": desk,
+                    "film": {"graded_14d": film.get("graded", 0),
+                             "avg_grade": film.get("avg_grade"),
+                             "ask_rate": round(100.0 * film["asks"]
+                                               / film["ask_known"])
+                             if film.get("ask_known") else None,
+                             "best_call": best},
+                    "today_picks": picks})
+
+
 @app.route("/api/goals/my-goals/<token>/hero")
 def api_agent_hero(token):
     """
