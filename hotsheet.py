@@ -438,12 +438,36 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
         if not _db.claim_once("hotsheet_%s_%s" % (today.isoformat(), agent)):
             summary["skipped_claimed"] += 1
             continue
-        phone = profile.get("phone") or profile.get("fub_phone")
-        if not phone:
-            summary["skipped_no_phone"] += 1
-            continue
-        rid = _db.queue_agent_imessage(agent, uid, phone, message,
-                                       week_day="hotsheet")
+        # Slack is the clipboard (Barry, Oct 28 2026): the hot sheet is
+        # lists and links, so it delivers as a Slack DM card with tappable
+        # FUB links. The text queue is only the fallback for unmapped
+        # agents (where the governor and Android reroute still apply).
+        rid = None
+        try:
+            import slack_client as _sl
+            _sid = _db._slack_id_for_agent(agent)
+            if _sl.is_available() and _sid:
+                _links = " \u00b7 ".join(
+                    "<https://yourfriendlyagent.followupboss.com/2/people/"
+                    "view/%s|%s>" % (pid, _usable_name(nm) or "lead")
+                    for pid, nm, _r in picks)
+                _card = message
+                if _links:
+                    _card += chr(10) * 2 + "Open in FUB: " + _links
+                if _sl.dm_user(_sid, _card):
+                    rid = _db._record_slack_delivery(agent, uid, message,
+                                                     "hotsheet")
+        except Exception as _se:
+            logger.warning("[HOT SHEET] slack delivery failed for %s: %s",
+                           agent, _se)
+        if not rid:
+            phone = profile.get("phone") or profile.get("fub_phone")
+            if not phone and agent not in getattr(
+                    __import__("config"), "EMAIL_DELIVERY_AGENTS", set()):
+                summary["skipped_no_phone"] += 1
+                continue
+            rid = _db.queue_agent_imessage(agent, uid, phone or "", message,
+                                           week_day="hotsheet")
         if rid:
             summary["queued"] += 1
             for pid, lead_name, reason in picks:

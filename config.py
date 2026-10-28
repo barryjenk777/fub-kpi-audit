@@ -72,6 +72,7 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
 EMAIL_DELIVERY_AGENTS = {
     "Mack Lancaster",
     "Christopher August",
+    "Cynthia Molina",   # Android (Barry, Oct 28 2026)
 }
 
 # Key the Fast Track onboarding course (Vercel) uses to look up an agent's
@@ -909,3 +910,11 @@ DESK_HOP1_ARM = "rotation"
 # of the line for new hop-1 offers (burst-day fairness; ignored when
 # everyone is capped so no lead ever waits on fairness).
 DESK_DAILY_CLAIM_CAP = 2
+
+
+# ── Message governor ────────────────────────
+# Barry, Oct 28 2026 (Matt's four-text morning): each agent gets ONE
+# coaching-class text per day. Overflow becomes a Slack DM instead.
+# Urgent/operational kinds are exempt and always deliver.
+DAILY_COACHING_TEXT_BUDGET = 1
+TEXT_BUDGET_EXEMPT_KINDS = {"dispatch", "callsave", "savebot"}

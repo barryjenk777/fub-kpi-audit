@@ -24358,13 +24358,9 @@ def _generate_agent_coaching_text(agent_first, kpi, week_day="monday"):
             ]
             rank_line = rank_lines_top[seed]
         else:
-            rank_lines_enc = [
-                f" You're #{rank} on the team in calls this week. There's more in you. Let's see it.",
-                f" You're #{rank} on the board in calls. Let's climb that before the week is out.",
-                f" #{rank} on calls this week. You're capable of more and we both know it.",
-                f" You're #{rank} on the team in calls this week. Let's push that number up.",
-            ]
-            rank_line = rank_lines_enc[seed]
+            # Never-shame (Barry, Oct 2026): rankings appear only as
+            # celebration. Below top 3, the rank line is silence.
+            rank_line = ""
 
     # ── AI Coach prompt: calling but not converting to appointments ───────────
     # Fires when: meaningful call volume but appointments are low.
@@ -24611,8 +24607,8 @@ def _build_coaching_message(agent_name, profile, goals, ytd, rec, week_day,
             _line = ("Maverick check: your graded calls average %.1f out of 10, "
                      "and you ask for the appointment %d%% of the time"
                      % (_mine.get("avg_grade") or 0, round(_mine["appt_ask"])))
-            if _team.get("appt_ask") is not None:
-                _line += " (team average %d%%)" % round(_team["appt_ask"])
+            # Team-average comparison removed (never-shame, Oct 2026):
+            # an agent's own number coaches, a comparison ranks.
             _line += ". The ask is where the money is."
             coaching += "\n\n" + _line
     except Exception as _me:

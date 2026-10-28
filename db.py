@@ -6678,6 +6678,27 @@ def queue_agent_imessage(agent_name, fub_user_id, phone, message,
                       else "text")
     except Exception:
         pass
+    # Message governor (Barry, Oct 28 2026): one coaching-class text per
+    # agent per day. Overflow becomes a Slack DM so the phone stays the
+    # coach's voice and Slack stays the clipboard. Fails open: no Slack
+    # mapping means the message still delivers on its normal path.
+    try:
+        import config as _cfgb
+        _kind = (week_day or "text")
+        _exempt = getattr(_cfgb, "TEXT_BUDGET_EXEMPT_KINDS", set()) or set()
+        _budget = int(getattr(_cfgb, "DAILY_COACHING_TEXT_BUDGET", 0) or 0)
+        if _budget and _kind not in _exempt:
+            if count_agent_coaching_texts_today(agent_name, _exempt) >= _budget:
+                _sid = _slack_id_for_agent(agent_name)
+                if _sid:
+                    import slack_client as _slb
+                    if _slb.is_available() and _slb.dm_user(_sid, message):
+                        logger.info("governor: %s over text budget, %s "
+                                    "delivered via Slack", agent_name, _kind)
+                        return _record_slack_delivery(
+                            agent_name, fub_user_id, message, week_day)
+    except Exception as _ge:
+        logger.warning("message governor failed for %s: %s", agent_name, _ge)
     try:
         import config as _cfg
         if agent_name in getattr(_cfg, "EMAIL_DELIVERY_AGENTS", set()):
@@ -10551,3 +10572,52 @@ def was_claimed(guard_key):
     except Exception as e:
         logger.warning("was_claimed(%s) failed: %s", guard_key, e)
         return False
+
+
+def count_agent_coaching_texts_today(agent_name, exempt_kinds):
+    """Budget counter: today's (ET) queued messages for an agent,
+    excluding exempt operational kinds."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM agent_imessage_queue
+                    WHERE agent_name = %s
+                      AND (created_at AT TIME ZONE 'America/New_York')::date
+                        = (NOW() AT TIME ZONE 'America/New_York')::date
+                      AND (week_day IS NULL
+                           OR NOT week_day = ANY(%s))
+                """, (agent_name, list(exempt_kinds or [])))
+                return int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.warning("count_agent_coaching_texts_today failed: %s", e)
+        return 0
+
+
+def _slack_id_for_agent(agent_name):
+    """Desk Slack map lookup, read-only."""
+    try:
+        raw, _ = get_app_state("slack_user_map")
+        return (json.loads(raw or '{}') or {}).get(agent_name)
+    except Exception:
+        return None
+
+
+def _record_slack_delivery(agent_name, fub_user_id, message, week_day):
+    """Audit row for a governor reroute, status sent_slack."""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO agent_imessage_queue
+                        (agent_name, fub_user_id, phone, message, week_day,
+                         status, sent_at)
+                    VALUES (%s, %s, '', %s, %s, 'sent_slack', NOW())
+                    RETURNING id
+                """, (agent_name, fub_user_id, message, week_day))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("_record_slack_delivery failed: %s", e)
+        return None
