@@ -10534,3 +10534,20 @@ def get_maverick_calls_since(since_iso, graded_only=True):
     except Exception as e:
         logger.warning("get_maverick_calls_since failed: %s", e)
         return []
+
+
+def was_claimed(guard_key):
+    """Read-only check of the idempotency guard: True when the key has
+    already been claimed. Fails CLOSED (False) on DB trouble, so callers
+    using it to SUPPRESS a message err on the side of sending."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM idempotency_guard WHERE "
+                            "guard_key = %s", (str(guard_key),))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("was_claimed(%s) failed: %s", guard_key, e)
+        return False

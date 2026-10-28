@@ -6066,6 +6066,30 @@ def _maverick_call_effects(c, cid):
         logger.warning("maverick call effects failed for %s: %s", cid, e)
 
 
+def _clean_objection_text(raw, max_len=110):
+    """Maverick's objections field can arrive as JSON-ish text. Return ONE
+    clean human sentence, cut at a word boundary, or empty string."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    for ch in "{}[]":
+        s = s.replace(ch, "")
+    parts = []
+    for piece in s.split('","'):
+        piece = piece.strip().strip('"').strip()
+        if piece:
+            parts.append(piece)
+    if not parts:
+        return ""
+    best = max(parts, key=len)
+    best = " ".join(best.split())
+    if len(best) < 15:
+        return ""
+    if len(best) > max_len:
+        best = best[:max_len].rsplit(" ", 1)[0].rstrip(",.;") + "..."
+    return best
+
+
 def scheduled_call_coaching():
     """Weekdays 8:20am ET — game-film texts from yesterday's graded calls.
     One text per agent, maximum: either an objection replay from their
@@ -6098,16 +6122,27 @@ def scheduled_call_coaching():
             first = agent.split()[0]
             pick, msg = None, None
             if low:
+                # One call, one touch: a call that already got a same-day
+                # save text never also gets a game-film replay (Matt got
+                # both for Robert, Oct 2026).
+                low = [c for c in low
+                       if not _db.was_claimed("mavsave_%s" % c["call_id"])]
+                if not low:
+                    low = []
+            if low:
                 pick = min(low, key=lambda c: c.get("call_grade") or 0)
-                obj = " ".join((pick.get("objections") or "").split())[:110]
+                obj = _clean_objection_text(pick.get("objections"))
                 lead1 = (pick.get("lead_name") or "the lead").split()[0]
-                msg = ("%s, game film from yesterday. On your call with %s, "
-                       "the lead gave you this: \"%s\". That moment is "
-                       "winnable. Tonight's 5 minute rep: call the practice "
-                       "bot at 1-337-486-3563 and run that exact objection "
-                       "twice. Next time it shows up live, you own it."
-                       % (first, lead1, obj))
-            elif high:
+                if obj:
+                    msg = ("%s, game film from yesterday. On your call with "
+                           "%s, the lead gave you this: \"%s\". That moment "
+                           "is winnable. Tonight's 5 minute rep: call the "
+                           "practice bot at 1-337-486-3563 and run that "
+                           "exact objection twice. Next time it shows up "
+                           "live, you own it." % (first, lead1, obj))
+                else:
+                    pick = None
+            if pick is None and high:
                 pick = max(high, key=lambda c: c.get("call_grade") or 0)
                 lead1 = (pick.get("lead_name") or "the lead").split()[0]
                 extra = " and the appointment is on the calendar" \
