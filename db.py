@@ -10711,3 +10711,85 @@ def search_maverick_calls(q=None, agent=None, min_grade=None, days=90,
     except Exception as e:
         logger.warning("search_maverick_calls failed: %s", e)
         return []
+
+
+# ── Today page + flight plan helpers ─────────────────────────────────────
+
+def agent_firsts(agent_names):
+    """First-ever claim and first-ever appointment per agent, for the new
+    hire flight plan."""
+    out = {n: {} for n in (agent_names or [])}
+    if not is_available() or not agent_names:
+        return out
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, MIN(accepted_at)
+                    FROM dispatch_offers
+                    WHERE accepted_at IS NOT NULL AND agent_name = ANY(%s)
+                    GROUP BY agent_name
+                """, (list(agent_names),))
+                for n, t in cur.fetchall():
+                    out.setdefault(n, {})["first_claim"] = \
+                        t.isoformat() if t else None
+                cur.execute("""
+                    SELECT agent_name, MIN(created_at)
+                    FROM appointments
+                    WHERE agent_name = ANY(%s)
+                    GROUP BY agent_name
+                """, (list(agent_names),))
+                for n, t in cur.fetchall():
+                    out.setdefault(n, {})["first_appt"] = \
+                        t.isoformat() if t else None
+        return out
+    except Exception as e:
+        logger.warning("agent_firsts failed: %s", e)
+        return out
+
+
+def open_desk_escalations(older_than_min=30):
+    """Unresolved Guarantee incidents past the given age."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, lead_name, owner_agent, rung,
+                           EXTRACT(EPOCH FROM NOW() - opened_at)::int / 60
+                    FROM desk_escalations
+                    WHERE resolved_at IS NULL
+                      AND opened_at < NOW() - make_interval(mins => %s)
+                    ORDER BY opened_at
+                """, (int(older_than_min),))
+                return [{"person_id": r[0], "lead_name": r[1],
+                         "owner_agent": r[2], "rung": r[3],
+                         "age_min": int(r[4])} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("open_desk_escalations failed: %s", e)
+        return []
+
+
+def terminal_uncalled_24h():
+    """Leads whose cascade ran out in the last 24h with no first call."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT ON (person_id) person_id, lead_name
+                    FROM dispatch_offers o
+                    WHERE expired_at >= NOW() - INTERVAL '24 hours'
+                      AND NOT EXISTS (SELECT 1 FROM dispatch_offers o2
+                                      WHERE o2.person_id = o.person_id
+                                        AND (o2.accepted_at IS NOT NULL
+                                             OR o2.first_call_at IS NOT NULL))
+                    ORDER BY person_id, expired_at DESC
+                """)
+                return [{"person_id": r[0], "lead_name": r[1]}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("terminal_uncalled_24h failed: %s", e)
+        return []

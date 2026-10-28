@@ -23,6 +23,8 @@ h2{font-size:.78rem;font-weight:800;letter-spacing:.14em;color:#8b98ab;text-tran
 .card .nm{font-weight:850;margin-bottom:.35rem}
 .card .row{display:flex;justify-content:space-between;font-size:.8rem;color:#aab6c8;padding:.12rem 0}
 .card .row b{color:#fff;font-weight:800}
+.card .vd{font-size:.85rem;color:#e8edf8;margin-bottom:.3rem}
+.card details summary{font-size:.7rem;color:#5c6a80;cursor:pointer;margin:.2rem 0}
 .stamp{font-size:.68rem;color:#5c6a80;margin-top:1.2rem}
 a{color:#f5a623}
 </style></head><body><div class="wrap">
@@ -55,11 +57,14 @@ async function load(){
     }
     document.getElementById("cards").innerHTML = (d.cards||[]).map(c=>`
       <div class="card"><div class="nm">${c.agent}</div>
+        <div class="vd">${c.verdict||""}</div>
+        <details><summary>numbers</summary>
         <div class="row"><span>Appointments set / met (wk)</span><b>${c.appts_set_wk} / ${c.appts_met_wk}</b></div>
         <div class="row"><span>Graded calls (30d)</span><b>${c.graded_30d}</b></div>
         <div class="row"><span>Avg grade</span><b>${c.avg_grade_30d ?? "&mdash;"}</b></div>
         <div class="row"><span>Ask rate</span><b>${c.ask_rate_30d != null ? c.ask_rate_30d + "%" : "&mdash;"}</b></div>
         <div class="row"><span>Talk share</span><b>${c.avg_talk_pct_30d != null ? Math.round(c.avg_talk_pct_30d > 1.5 ? c.avg_talk_pct_30d : c.avg_talk_pct_30d*100) + "%" : "&mdash;"}</b></div>
+        </details>
       </div>`).join("");
   }catch(e){}
 }

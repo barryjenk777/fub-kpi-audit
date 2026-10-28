@@ -21126,6 +21126,181 @@ def api_courier_script():
         return jsonify({"error": str(e)}), 500
 
 
+_FLIGHT_MILESTONES = (
+    ("course_started", "a first Fast Track login", 3),
+    ("first_claim", "a first claimed lead", 14),
+    ("first_appt", "a first appointment set", 21),
+)
+
+
+def _flightplan_status():
+    """First 30 Days flight plan: per new hire, milestone state and any
+    slips that need a human. A slip is a milestone 2+ days past its
+    expected day."""
+    from datetime import date as _d
+    today = _d.today()
+    hires = []
+    profiles = _db.get_agent_profiles(active_only=True) or []
+    excl = set(config.EXCLUDED_USERS) | set(
+        getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+    fresh = []
+    for p in profiles:
+        sd = p.get("start_date")
+        if not sd or p["agent_name"] in excl:
+            continue
+        try:
+            days_in = (today - _d.fromisoformat(str(sd)[:10])).days
+        except (ValueError, TypeError):
+            continue
+        if 0 <= days_in <= 35:
+            fresh.append((p, days_in))
+    if not fresh:
+        return []
+    firsts = _db.agent_firsts([p["agent_name"] for p, _ in fresh])
+    try:
+        board = {r.get("cc_name"): r for r in
+                 (_ft_board_data() or {}).get("matched") or []}
+    except Exception:
+        board = {}
+    for p, days_in in fresh:
+        n = p["agent_name"]
+        f = firsts.get(n) or {}
+        b = board.get(n) or {}
+        hit = {"course_started": bool(b.get("first_login_at")),
+               "first_claim": bool(f.get("first_claim")),
+               "first_appt": bool(f.get("first_appt"))}
+        slips = []
+        for key, label, due in _FLIGHT_MILESTONES:
+            if not hit[key] and days_in >= due + 2:
+                slips.append({"milestone": key, "label": label,
+                              "days_late": days_in - due})
+                break  # the earliest unmet milestone is the one that matters
+        hires.append({"agent": n, "days_in": days_in,
+                      "milestones": hit, "slip": slips[0] if slips else None,
+                      "days_dark": b.get("days_since_active")})
+    return hires
+
+
+@app.route("/today")
+def today_page():
+    if not _read_auth():
+        return redirect("/login")
+    return render_template("today.html")
+
+
+@app.route("/api/today")
+def api_today():
+    """Barry's home: the decisions, already made. At most five needs-you
+    items, one team verdict line, calm when calm. Cached 5 minutes."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    cached = cache_get("today_page")
+    if cached and request.args.get("refresh") != "1":
+        return jsonify(cached)
+    items = []
+    fub = "https://yourfriendlyagent.followupboss.com/2/people/view/%s"
+    try:
+        for e in _db.open_desk_escalations(older_than_min=30):
+            items.append({"sev": 0, "what": "%s has waited %d minutes for "
+                          "a human" % ((e["lead_name"] or "A lead").split()[0],
+                                       e["age_min"]),
+                          "do": "Call them or assign the call",
+                          "link": fub % e["person_id"]})
+    except Exception:
+        pass
+    try:
+        for t in _db.terminal_uncalled_24h()[:3]:
+            items.append({"sev": 1, "what": "%s converted, cascaded through "
+                          "the roster, nobody called"
+                          % ((t["lead_name"] or "A lead").split()[0]),
+                          "do": "Re-route or call", "link": fub % t["person_id"]})
+    except Exception:
+        pass
+    try:
+        for h in _flightplan_status():
+            if h.get("slip"):
+                items.append({"sev": 1, "what": "%s is %d days in with no %s"
+                              % (h["agent"].split()[0], h["days_in"],
+                                 h["slip"]["label"]),
+                              "do": "Call them today, human voice beats "
+                                    "another nudge", "link": "/team/onboarding"})
+    except Exception as _fe:
+        logger.warning("today flightplan failed: %s", _fe)
+    try:
+        from datetime import date as _d
+        for name, until in (getattr(config, "DESK_GRACE_UNTIL", {}) or {}).items():
+            try:
+                dd = (_d.today() - _d.fromisoformat(until)).days
+            except (ValueError, TypeError):
+                continue
+            if 0 <= dd <= 7:
+                items.append({"sev": 2, "what": "%s's new-hire grace ended "
+                              "%s" % (name.split()[0],
+                                      "today" if dd == 0 else
+                                      "%d days ago" % dd),
+                              "do": "Decide: earning now, extend, or coach",
+                              "link": "/salesfloor"})
+    except Exception:
+        pass
+    try:
+        floor = cache_get("salesfloor") or {}
+        worst = None
+        for s in floor.get("chain") or []:
+            if s.get("ratio") is not None and s["ratio"] < 0.75:
+                if worst is None or s["ratio"] < worst["ratio"]:
+                    worst = s
+        if worst:
+            items.append({"sev": 2, "what": "%s running at %d%% of your "
+                          "90 day pace" % (worst["label"],
+                                           round(worst["ratio"] * 100)),
+                          "do": (floor.get("actions") or ["Open the Sales "
+                                 "Floor"])[0], "link": "/salesfloor"})
+    except Exception:
+        pass
+    try:
+        if not _db.get_maverick_reports(days=3, limit=1):
+            items.append({"sev": 1, "what": "Call grading has been silent "
+                          "3+ days", "do": "Check the Grok pipeline",
+                          "link": "/calls"})
+    except Exception:
+        pass
+    items.sort(key=lambda i: i["sev"])
+    items = items[:5]
+    verdict = "The machine is working. Nothing needs you right now."
+    if items:
+        verdict = "%d thing%s need%s you today." % (
+            len(items), "" if len(items) == 1 else "s",
+            "s" if len(items) == 1 else "")
+    out = {"ok": True, "verdict": verdict, "items": items,
+           "generated_at": datetime.now(timezone.utc).isoformat()}
+    cache_set("today_page", out)
+    return jsonify(out)
+
+
+def scheduled_flightplan_ping():
+    """Daily 8:05am ET — a NEW flight plan slip DMs Barry once (then it
+    lives on the Today page until resolved)."""
+    try:
+        slips = [h for h in _flightplan_status() if h.get("slip")]
+        if not slips:
+            return
+        import slack_client as _sl
+        import dispatch as _dp
+        sid = _dp._slack_user_id("Barry Jenkins")
+        for h in slips:
+            key = "flightslip_%s_%s" % (h["agent"], h["slip"]["milestone"])
+            if not _db.claim_once(key):
+                continue
+            if _sl.is_available() and sid:
+                _sl.dm_user(sid, "\U0001f6eb %s is %d days in with no %s. "
+                            "The machine has done its part; this one needs "
+                            "your voice today."
+                            % (h["agent"].split()[0], h["days_in"],
+                               h["slip"]["label"]))
+    except Exception as e:
+        logger.warning("flightplan ping failed: %s", e)
+
+
 @app.route("/salesfloor")
 def salesfloor_page():
     if not _read_auth():
@@ -21240,6 +21415,28 @@ def api_salesfloor():
                     "ask_rate_30d": round(
                         100.0 * m30["asks"] / m30["ask_known"])
                         if m30.get("ask_known") else None}
+            # The verdict pass (Barry, Oct 2026: "make the decisions"):
+            # one sentence the system concluded, stats behind a tap.
+            g, ar = card["avg_grade_30d"], card["ask_rate_30d"]
+            if not card["graded_30d"]:
+                v = ("No graded calls this month. Can't coach what we "
+                     "can't hear.")
+            elif ar is not None and ar >= 80 and g is not None and g < 6:
+                v = ("Asks every time, calls grade mid. This month is "
+                     "discovery depth.")
+            elif ar is not None and ar < 50:
+                v = ("The ask is missing. End every call with a proposed "
+                     "time.")
+            elif g is not None and g >= 7 and not card["appts_set_wk"]:
+                v = ("Calls grade well, no appointments this week. It's "
+                     "volume, not skill.")
+            elif g is not None and g >= 7:
+                v = "Calls grading well and appointments flowing. Feed them."
+            elif g is not None and g < 5:
+                v = "Calls grading low. Pull two tapes before coaching."
+            else:
+                v = "Steady. Watch the ask."
+            card["verdict"] = v
             cards.append(card)
         cards.sort(key=lambda c: -(c["appts_set_wk"] or 0))
         out = {"ok": True, "generated_at":
@@ -24424,6 +24621,14 @@ def start_scheduler():
     _scheduler.add_job(scheduled_desk_watchdog,
                        CronTrigger(minute="7,37", timezone=ET),
                        id="desk_watchdog", name="Desk watchdog (every 30 min)",
+                       max_instances=1, coalesce=True)
+
+    # Flight plan slips: daily 8:05am ET, a stalled new hire DMs Barry
+    # once with "this one needs your voice" (First 30 Days, Oct 2026).
+    _scheduler.add_job(scheduled_flightplan_ping,
+                       CronTrigger(hour=8, minute=5, timezone=ET),
+                       id="flightplan_ping",
+                       name="New-hire flight plan slips (daily 8:05am)",
                        max_instances=1, coalesce=True)
 
     # Friday meeting auto-pack: Thursday 7pm ET, Barry's meeting prep
