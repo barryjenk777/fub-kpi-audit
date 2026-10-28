@@ -6426,6 +6426,16 @@ def scheduled_call_coaching():
                 continue
             if not _db.claim_once("mavcoach_%s" % pick["call_id"]):
                 continue
+            # Every film text lands on THEIR board (Cockpit, Oct 2026).
+            try:
+                _tk = _db.get_token_for_agent(agent)
+                if _tk:
+                    msg += (" Your board: %s/my-goals/%s"
+                            % ((os.environ.get("BASE_URL")
+                                or "https://www.legacycommandcenter.com"
+                                ).rstrip("/"), _tk))
+            except Exception:
+                pass
             prof = profiles[agent]
             rid = _db.queue_agent_imessage(agent, prof.get("fub_user_id"),
                                            prof.get("phone") or "", msg,

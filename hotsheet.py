@@ -454,6 +454,17 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
                 _card = message
                 if _links:
                     _card += chr(10) * 2 + "Open in FUB: " + _links
+                try:
+                    _tk = _db.get_token_for_agent(agent)
+                    if _tk:
+                        import os as _os2
+                        _card += (chr(10) + "<%s/my-goals/%s|Your board: "
+                                  "goals, film, and today's names>"
+                                  % ((_os2.environ.get("BASE_URL")
+                                      or "https://www.legacycommandcenter.com"
+                                      ).rstrip("/"), _tk))
+                except Exception:
+                    pass
                 if _sl.dm_user(_sid, _card):
                     rid = _db._record_slack_delivery(agent, uid, message,
                                                      "hotsheet")
