@@ -21201,9 +21201,12 @@ def api_today():
     fub = "https://yourfriendlyagent.followupboss.com/2/people/view/%s"
     try:
         for e in _db.open_desk_escalations(older_than_min=30):
-            items.append({"sev": 0, "what": "%s has waited %d minutes for "
-                          "a human" % ((e["lead_name"] or "A lead").split()[0],
-                                       e["age_min"]),
+            m = e["age_min"]
+            age = ("%d minutes" % m if m < 120 else
+                   "%d hours" % round(m / 60) if m < 2880 else
+                   "%d days" % round(m / 1440))
+            items.append({"sev": 0, "what": "%s has waited %s for a human"
+                          % ((e["lead_name"] or "A lead").split()[0], age),
                           "do": "Call them or assign the call",
                           "link": fub % e["person_id"]})
     except Exception:
@@ -21275,6 +21278,58 @@ def api_today():
            "generated_at": datetime.now(timezone.utc).isoformat()}
     cache_set("today_page", out)
     return jsonify(out)
+
+
+def scheduled_escalation_reconcile():
+    """Daily 7:50am ET — zombie Guarantee cleanup. An incident open 24h+
+    gets its lead's FUB call log checked; any outbound call since the
+    incident opened resolves it as reconciled (the live webhook missed or
+    predated it). What survives reconciliation is genuinely unreached and
+    stays on the Today page."""
+    try:
+        stale = [e for e in _db.open_desk_escalations(older_than_min=0)
+                 if e["age_min"] >= 1440]
+        if not stale:
+            return
+        import escalation as _esc
+        client = FUBClient()
+        closed = 0
+        for e in stale:
+            try:
+                calls = (client._request("GET", "calls", params={
+                    "personId": e["person_id"], "limit": 20}) or {}
+                ).get("calls") or []
+                hit = any(not c.get("isIncoming") for c in calls[:20])
+                if hit and _esc.resolve_for_person(
+                        e["person_id"],
+                        how="reconciled: outbound call found in FUB"):
+                    closed += 1
+            except Exception as _re:
+                logger.warning("reconcile failed for %s: %s",
+                               e["person_id"], _re)
+        print("[GUARANTEE RECONCILE] %d stale, %d closed by call log"
+              % (len(stale), closed))
+        try:
+            cache_set("today_page", None)
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning("escalation reconcile failed: %s", e)
+
+
+@app.route("/api/admin/desk/reconcile-escalations", methods=["POST"])
+def api_reconcile_escalations():
+    """Run the zombie cleanup now."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    before = len(_db.open_desk_escalations(older_than_min=0))
+    scheduled_escalation_reconcile()
+    after = _db.open_desk_escalations(older_than_min=0)
+    return jsonify({"ok": True, "open_before": before,
+                    "open_after": len(after),
+                    "still_open": [{"lead": e["lead_name"],
+                                    "age_days": round(e["age_min"] / 1440, 1)}
+                                   for e in after]})
 
 
 def scheduled_flightplan_ping():
@@ -24621,6 +24676,14 @@ def start_scheduler():
     _scheduler.add_job(scheduled_desk_watchdog,
                        CronTrigger(minute="7,37", timezone=ET),
                        id="desk_watchdog", name="Desk watchdog (every 30 min)",
+                       max_instances=1, coalesce=True)
+
+    # Guarantee reconcile: daily 7:50am ET, zombie incidents closed by
+    # the FUB call log before the Today page builds.
+    _scheduler.add_job(scheduled_escalation_reconcile,
+                       CronTrigger(hour=7, minute=50, timezone=ET),
+                       id="escalation_reconcile",
+                       name="Guarantee reconcile (daily 7:50am)",
                        max_instances=1, coalesce=True)
 
     # Flight plan slips: daily 8:05am ET, a stalled new hire DMs Barry
