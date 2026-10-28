@@ -281,16 +281,16 @@ def login_page():
         if owner_key and pw == owner_key:
             session.permanent = True
             session["role"] = "owner"
-            return redirect("/")
+            return redirect("/today")
         if coach_key and pw == coach_key:
             session.permanent = True
             session["role"] = "coach"
-            return redirect("/")
+            return redirect("/today")
         team_pw = (getattr(config, "TEAM_ACCESS_PASSWORD", "") or "").strip()
         if team_pw and pw.lower() == team_pw.lower():
             session.permanent = True
             session["role"] = "team"
-            return redirect("/")
+            return redirect("/today")
         error = "That key does not match. Check it and try again."
         logger.warning("Failed login attempt from %s", request.remote_addr)
     status = 401 if error else 200
@@ -6048,6 +6048,74 @@ def _objection_trend(days=7):
     return ranked, best
 
 
+def _followup_depth():
+    """PPC persistence truth: leads created 7 to 21 days ago (their first
+    two weeks are complete or nearly so) scored by outbound call attempts
+    from the local calls cache. The silent killer is the lead abandoned
+    after two tries."""
+    from fub_client import FUBClient
+    client = FUBClient()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=21)
+              ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    leads, seen, after = [], set(), cutoff
+    for _page in range(6):
+        params = {"limit": 100, "sort": "created", "createdAfter": after,
+                  "fields": "id,name,created,assignedTo,source"}
+        data = client._request("GET", "people", params=params) or {}
+        ppl = data.get("people") or []
+        fresh = [p for p in ppl if p.get("id") not in seen]
+        for p in fresh:
+            seen.add(p.get("id"))
+        leads.extend(fresh)
+        if len(ppl) < 100:
+            break
+        after = ppl[-1].get("created") or after
+    now = datetime.now(timezone.utc)
+    window = []
+    for p in leads:
+        nm = (p.get("name") or "").strip()
+        if not nm or nm.upper().startswith(("AUDIT", "DBG", "TEST")):
+            continue
+        try:
+            age = (now - datetime.fromisoformat(
+                (p.get("created") or "").replace("Z", "+00:00"))).days
+        except (ValueError, TypeError):
+            continue
+        if 7 <= age <= 21:
+            window.append(p)
+    counts = _db.outbound_call_counts([p["id"] for p in window])
+    rows = []
+    for p in window:
+        rows.append({"person_id": p["id"], "name": p.get("name"),
+                     "agent": p.get("assignedTo"), "source": p.get("source"),
+                     "touches": counts.get(int(p["id"]), 0)})
+    rows.sort(key=lambda r: r["touches"])
+    n = len(rows)
+    under6 = [r for r in rows if r["touches"] < 6]
+    med = sorted(r["touches"] for r in rows)[n // 2] if n else None
+    return {"window_leads": n, "median_touches": med,
+            "under_6_touches": len(under6),
+            "pct_under_6": round(100.0 * len(under6) / n) if n else None,
+            "most_abandoned": under6[:10]}
+
+
+@app.route("/api/followup-depth")
+def api_followup_depth():
+    """Follow-up depth report, cached 2 hours."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    cached = cache_get("followup_depth")
+    if cached and request.args.get("refresh") != "1":
+        return jsonify(cached)
+    try:
+        out = {"ok": True, **_followup_depth(),
+               "generated_at": datetime.now(timezone.utc).isoformat()}
+        cache_set("followup_depth", out)
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
 @app.route("/api/objections")
 def api_objections():
     """Objection taxonomy trend: ?days=30."""
@@ -6240,6 +6308,24 @@ def scheduled_friday_autopack(dry_run=False):
                 L.append("")
         except Exception as _ble:
             logger.warning("autopack bell line failed: %s", _ble)
+        try:
+            fd = cache_get("followup_depth") or {}
+            if not fd:
+                fd = _followup_depth()
+            if fd.get("window_leads"):
+                L.append("PERSISTENCE: of %d leads now past their first two "
+                         "weeks, %d%% got fewer than 6 call attempts "
+                         "(median %s). PPC money dies on attempt three."
+                         % (fd["window_leads"], fd.get("pct_under_6") or 0,
+                            fd.get("median_touches")))
+                worst = fd.get("most_abandoned") or []
+                if worst:
+                    L.append("  Least worked: " + ", ".join(
+                        "%s (%d)" % ((w.get("name") or "?").split()[0],
+                                     w["touches"]) for w in worst[:5]))
+                L.append("")
+        except Exception as _fde:
+            logger.warning("autopack persistence failed: %s", _fde)
         if constraint:
             L.append("ONE TEACH: the Sales Floor names %s as this week's "
                      "constraint. Open %s/salesfloor on screen and work it."
@@ -8578,6 +8664,60 @@ def api_agent_dashboard(token):
         "pace":        pace,
         "start_date":  _start_date,
     })
+
+
+@app.route("/api/admin/cockpit-announce", methods=["POST"])
+def api_cockpit_announce():
+    """One-shot personalized Cockpit announcement to every active agent,
+    each with their own board link. Body {"dry_run": true} previews."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    dry = bool((request.get_json(silent=True) or {}).get("dry_run"))
+    base = (os.environ.get("BASE_URL")
+            or "https://www.legacycommandcenter.com").rstrip("/")
+    excl = set(config.EXCLUDED_USERS) | set(
+        getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+    sent, skipped = [], []
+    import postmark_client as _pm
+    for p in (_db.get_agent_profiles(active_only=True) or []):
+        n = p["agent_name"]
+        if n in excl or not p.get("email"):
+            skipped.append(n)
+            continue
+        tk = _db.get_token_for_agent(n)
+        if not tk:
+            skipped.append(n)
+            continue
+        first = n.split()[0]
+        link = "%s/my-goals/%s" % (base, tk)
+        body = ("%s,\n\nQuick one. The page where you set your income goal "
+                "just became your whole scoreboard.\n\nOpen it and you'll "
+                "see your week on the floor: how fast you're claiming "
+                "leads, what your calls are grading, your best tape of the "
+                "month called out by name, and your top names to call "
+                "today, picked by the system that scores every lead we "
+                "own.\n\nHere's the part that matters: nobody else sees "
+                "this page. It's not a leaderboard and it's not me watching "
+                "you. It's your number, your film, your names. The same "
+                "link is at the bottom of your morning card every day, so "
+                "it's always one tap away.\n\nYour page: %s\n\nCheck it "
+                "tomorrow with your coffee. Then go make the numbers on it "
+                "move.\n\nBarry" % (first, link))
+        body = body.replace("\\n", chr(10))
+        if not dry:
+            try:
+                _pm.send(to=p["email"], from_email=config.EMAIL_FROM,
+                         subject="Your scoreboard is live",
+                         html="<div style='font-family:-apple-system,"
+                              "sans-serif;font-size:15px;line-height:1.7;"
+                              "white-space:pre-wrap'>%s</div>" % body,
+                         text=body)
+            except Exception as e:
+                skipped.append("%s (%s)" % (n, str(e)[:60]))
+                continue
+        sent.append(n)
+    return jsonify({"ok": True, "dry_run": dry, "sent": sent,
+                    "skipped": skipped})
 
 
 @app.route("/api/goals/my-goals/<token>/cockpit")
@@ -21335,6 +21475,16 @@ def api_today():
                                            round(worst["ratio"] * 100)),
                           "do": (floor.get("actions") or ["Open the Sales "
                                  "Floor"])[0], "link": "/salesfloor"})
+    except Exception:
+        pass
+    try:
+        fd = cache_get("followup_depth") or {}
+        if (fd.get("pct_under_6") or 0) >= 50 and fd.get("window_leads", 0) >= 10:
+            items.append({"sev": 2, "what": "%d%% of recent leads got "
+                          "fewer than 6 call attempts" % fd["pct_under_6"],
+                          "do": "Persistence teach Friday; the least-worked "
+                                "names are in the pack",
+                          "link": "/salesfloor"})
     except Exception:
         pass
     try:

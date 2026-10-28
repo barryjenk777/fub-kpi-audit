@@ -10840,3 +10840,23 @@ def agent_desk_week(agent_name, days=7):
     except Exception as e:
         logger.warning("agent_desk_week failed: %s", e)
         return out
+
+
+def outbound_call_counts(person_ids):
+    """Outbound call attempts per lead from the local calls cache, for the
+    follow-up depth metric."""
+    if not is_available() or not person_ids:
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, COUNT(*)
+                    FROM calls_cache
+                    WHERE person_id = ANY(%s) AND is_outbound
+                    GROUP BY person_id
+                """, ([int(p) for p in person_ids],))
+                return {int(r[0]): int(r[1]) for r in cur.fetchall()}
+    except Exception as e:
+        logger.warning("outbound_call_counts failed: %s", e)
+        return {}
