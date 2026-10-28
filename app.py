@@ -20919,10 +20919,11 @@ def api_salesfloor():
         known7 = sum(v.get("ask_known", 0) for v in mav7.values())
         audit = cache_get("audit") or {}
         convos_wk = 0
-        for a in (audit.get("agents") or []):
-            k = a.get("kpis") if isinstance(a.get("kpis"), dict) else a
+        for _ag in (audit.get("agents") or []):
+            _m = _ag.get("metrics") if isinstance(_ag.get("metrics"), dict) \
+                else {}
             try:
-                convos_wk += int(k.get("conversations") or k.get("convos") or 0)
+                convos_wk += int(_m.get("conversations") or 0)
             except (TypeError, ValueError):
                 pass
 
@@ -20935,7 +20936,7 @@ def api_salesfloor():
 
         chain = [
             _stage("Conversations", convos_wk, None,
-                   "from this week's audit window"),
+                   "from the current audit week"),
             _stage("Graded calls", g7, g30 / (30 / 7) if g30 else None),
             _stage("Appointment asks", asks7,
                    None, "" if known7 else

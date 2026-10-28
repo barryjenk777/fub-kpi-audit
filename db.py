@@ -10637,7 +10637,9 @@ def salesfloor_counts(days=7):
                     SELECT agent_name,
                            COUNT(*) FILTER (WHERE created_at >= NOW()
                                - make_interval(days => %s)),
-                           COUNT(*) FILTER (WHERE outcome = 'showed'
+                           COUNT(*) FILTER (WHERE
+                               (status = 'showed'
+                                OR outcome = 'Met with Client')
                                AND COALESCE(outcome_logged_at, start_time)
                                    >= NOW() - make_interval(days => %s))
                     FROM appointments
