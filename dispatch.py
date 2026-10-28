@@ -230,11 +230,32 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
                                   (_db.get_agent_profiles(active_only=True) or [])
                                   if p["agent_name"] == agent_name), None)
                     if _prof:
-                        _nudge = ("%s, live one: %s converted %s%s and your "
-                                  "claim button is waiting in Slack. %d "
-                                  "minutes before it moves to the next agent."
+                        # Deep link straight to the bot DM so the card is
+                        # one tap away (Barry, Oct 2026: hop-1 offers were
+                        # expiring while agents hunted for the message).
+                        _dml = ""
+                        try:
+                            import json as _json2
+                            _raw, _unused = _db.get_app_state("slack_dm_channels")
+                            _chm = _json2.loads(_raw or "{}")
+                            _ch = _chm.get(agent_name)
+                            if not _ch:
+                                _ch = _sl.open_dm_channel(sid)
+                                if _ch:
+                                    _chm[agent_name] = _ch
+                                    _db.set_app_state("slack_dm_channels",
+                                                      _json2.dumps(_chm))
+                            if _ch:
+                                _dml = (" Tap here, the button is on your "
+                                        "screen: https://app.slack.com/"
+                                        "client/T1LDE7TCG/%s" % _ch)
+                        except Exception:
+                            pass
+                        _nudge = ("%s, live one: %s converted %s%s. First "
+                                  "tap wins and it moves to the next agent "
+                                  "in %d minutes.%s"
                                   % (first, who, lead_first, where,
-                                     OFFER_MINUTES))
+                                     OFFER_MINUTES, _dml))
                         _db.queue_agent_imessage(
                             agent_name, _prof.get("fub_user_id"),
                             _prof.get("phone") or _prof.get("fub_phone"),

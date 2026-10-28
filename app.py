@@ -6216,6 +6216,30 @@ def scheduled_friday_autopack(dry_run=False):
                      "Same film, same coaching." % (cash_n,
                      "" if cash_n == 1 else "s"))
             L.append("")
+        # The bell: first-look offers against expiries (Barry, Oct 2026:
+        # claims were all happening at hop 3).
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT COUNT(*),
+                               COUNT(*) FILTER (WHERE expired_at IS NOT NULL),
+                               COUNT(*) FILTER (WHERE accepted_at IS NOT NULL
+                                                AND hop > 1)
+                        FROM dispatch_offers
+                        WHERE created_at >= NOW() - INTERVAL '7 days'
+                    """)
+                    tot, exp, late = cur.fetchone()
+            if tot:
+                L.append("THE BELL: %d offer%s went out this week, %d "
+                         "expired untouched, %d claim%s only happened "
+                         "after someone ahead passed. The button pays the "
+                         "fastest thumb." % (tot, "" if tot == 1 else "s",
+                                             exp, late,
+                                             "" if late == 1 else "s"))
+                L.append("")
+        except Exception as _ble:
+            logger.warning("autopack bell line failed: %s", _ble)
         if constraint:
             L.append("ONE TEACH: the Sales Floor names %s as this week's "
                      "constraint. Open %s/salesfloor on screen and work it."

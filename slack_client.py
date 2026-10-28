@@ -119,3 +119,20 @@ def group_dm(user_ids, text, blocks=None):
     for u in ids:
         ts = post_message(u, text, blocks=blocks) or ts
     return ts
+
+
+def open_dm_channel(user_id):
+    """conversations.open for one user: returns the DM channel id, for
+    deep links that land the agent directly on their claim card."""
+    if not is_available() or not user_id:
+        return None
+    try:
+        r = requests.post(f"{_API}/conversations.open",
+                          headers={**_auth_header(),
+                                   "Content-Type": "application/json; charset=utf-8"},
+                          json={"users": user_id}, timeout=15).json()
+        if r.get("ok"):
+            return ((r.get("channel") or {}).get("id"))
+    except Exception as e:
+        logger.warning("open_dm_channel failed: %s", e)
+    return None
