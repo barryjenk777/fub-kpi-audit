@@ -20902,7 +20902,8 @@ def api_maverick_ingest_probe():
     v = (os.environ.get("MAVERICK_INGEST_KEY") or "").strip()
     out = {"scoped_key_set": bool(v), "scoped_key_len": len(v),
            "fingerprint": hashlib.sha256(v.encode()).hexdigest()[:8]
-           if v else None, "build_marker": "ingest-probe-v2"}
+           if v else None, "build_marker": "ingest-probe-v2",
+           "commit": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or "")[:7]}
     n = request.args.get("recent", type=int)
     if n:
         try:
