@@ -9926,6 +9926,48 @@ def api_admin_expire_isa_transfers():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/admin/handoff/purge-false", methods=["POST"])
+def api_admin_handoff_purge_false():
+    """One-time cleanup for the tag= filter bug (Oct 29 2026): the handoff
+    scan recorded every new FUB person as an ISA transfer. Hard-deletes
+    isa_transfers rows that never were transfers: no tag_removed_at stamp
+    (so not expired real history) and the person does not currently carry
+    the fresh-transfer tag in FUB. ?dry=1 lists without deleting."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    from fub_client import FUBClient
+    client = FUBClient(os.environ.get("FUB_API_KEY", ""))
+    tagged = {str(p.get("id")) for p in
+              (client.get_people(tag=config.ISA_TRANSFER_FRESH_TAG,
+                                 limit=500) or [])
+              if config.ISA_TRANSFER_FRESH_TAG in (p.get("tags") or [])}
+    dry = request.args.get("dry") == "1"
+    purged, kept = [], 0
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT person_id, lead_name, agent_name
+                               FROM isa_transfers
+                               WHERE tag_removed_at IS NULL""")
+                rows = cur.fetchall()
+                for pid, lead, agent in rows:
+                    if str(pid) in tagged:
+                        kept += 1
+                        continue
+                    purged.append({"person_id": pid, "lead": lead,
+                                   "agent": agent})
+                if not dry and purged:
+                    cur.execute(
+                        "DELETE FROM isa_transfers WHERE tag_removed_at IS "
+                        "NULL AND person_id = ANY(%s)",
+                        ([p["person_id"] for p in purged],))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True, "dry": dry, "currently_tagged": len(tagged),
+                    "kept": kept, "purged": len(purged),
+                    "purged_rows": purged[:100]})
+
+
 @app.route("/api/admin/backfill-isa-transfer-date", methods=["POST"])
 def api_admin_backfill_isa_transfer_date():
     """One-time backfill for currently active ISA transfers:

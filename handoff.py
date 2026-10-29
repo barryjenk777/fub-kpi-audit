@@ -88,6 +88,19 @@ def run_handoff_scan(dry_run=False):
         lead_name = (person.get("name") or "").strip()
         if not pid or not agent or agent in _EXCLUDED or agent in _gated:
             continue
+        # Trust nothing but the tag on the person itself: FUB has silently
+        # ignored misspelled filter params before (Oct 29 2026: the scan got
+        # the newest 200 people in the whole account and told Cynthia that
+        # Fhalen had qualified her own self-uploaded contacts).
+        if config.ISA_TRANSFER_FRESH_TAG not in (person.get("tags") or []):
+            continue
+        # An agent's own manual add is their sphere, never a transfer,
+        # even if a workflow mis-tags it.
+        if (person.get("createdVia") == "Manually"
+                and person.get("createdById")
+                and person.get("createdById") == person.get("assignedUserId")
+                and person.get("createdById") != config.ISA_USER_ID):
+            continue
         is_new = _db.record_isa_transfer(pid, lead_name=lead_name, agent_name=agent)
         if not is_new:
             continue
@@ -120,6 +133,21 @@ def run_handoff_scan(dry_run=False):
         except ValueError:
             idx = 0
         msg = variants[idx] % (first, who)
+        # Honesty guard: the hot copy says "just now". A lead tagged or
+        # reassigned late is not warm, and telling the agent it is sets
+        # them up for an awkward call. Older than a day = plain truth.
+        try:
+            _created = (person.get("created") or "")[:19]
+            if _created:
+                _age = datetime.now(timezone.utc) - datetime.strptime(
+                    _created, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                if _age > timedelta(hours=24):
+                    msg = ("%s, Fhalen's transfer %s is on your board and "
+                           "nobody has called yet. It landed a while back, "
+                           "so skip the small talk about timing and just "
+                           "get them on the phone today." % (first, who))
+        except Exception:
+            pass
         summary["messages"].append({"rung": 1, "agent": agent, "message": msg})
         if dry_run or seeding:
             continue

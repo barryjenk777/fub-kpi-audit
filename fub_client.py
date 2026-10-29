@@ -492,7 +492,10 @@ class FUBClient:
         if assigned_user_id:
             params["assignedUserId"] = assigned_user_id
         if tag:
-            params["tag"] = tag
+            # FUB's filter param is "tags" — "tag" is silently ignored and
+            # returns the whole account (Oct 29 2026: fake Fhalen-handoff
+            # texts fired for agents' self-uploaded contacts).
+            params["tags"] = tag
         if updated_since:
             params["updatedSince"] = updated_since.strftime("%Y-%m-%dT%H:%M:%S")
         if created_since:
@@ -510,12 +513,12 @@ class FUBClient:
         Optionally restrict to records updated since a datetime (proxy for 'tagged this week').
         Returns an integer count; never raises.
         """
-        params = {"limit": 100, "tag": tag}
+        params = {"limit": 100, "tags": tag}
         if updated_since:
             params["updatedSince"] = updated_since.strftime("%Y-%m-%dT%H:%M:%S")
         try:
             people = self._get_paginated("people", params, max_pages=50)
-            return len(people)
+            return len([p for p in people if tag in (p.get("tags") or [])])
         except Exception:
             return 0
 
@@ -844,7 +847,7 @@ class FUBClient:
         Capped at `limit` to avoid full-account scans.
         """
         try:
-            params = {"limit": min(limit, 100), "tag": tag}
+            params = {"limit": min(limit, 100), "tags": tag}
             candidates = self._get_paginated("people", params, max_pages=5)
             return [p for p in candidates if tag in (p.get("tags") or [])][:limit]
         except Exception as e:

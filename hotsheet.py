@@ -373,7 +373,7 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
         if len(picks) < 3:
             try:
                 leads = client._get_paginated("people", {
-                    "limit": 50, "assignedUserId": uid, "tag": config.LEADSTREAM_TAG,
+                    "limit": 50, "assignedUserId": uid, "tags": config.LEADSTREAM_TAG,
                     "fields": _PEOPLE_FIELDS}, max_pages=1) or []
             except Exception as e:
                 logger.warning("[HOT SHEET] leads fetch failed for %s: %s", agent, e)
