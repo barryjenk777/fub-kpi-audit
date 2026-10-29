@@ -898,6 +898,14 @@ TEXT_PAUSED_AGENTS = {
     "Damon Parker",
 }
 
+# ── Slack CC window ─────────────────────────────────────────────────────
+# Barry, Oct 29 2026: "For 2 weeks, cc me on all slack messages" — every
+# agent-bound DM (coaching reroutes, desk nudges, hotsheets, flight plan
+# pings) mirrors a copy to Barry's Slack DM, labeled with the recipient.
+# Expires on its own; extend the date or blank it to stop early.
+SLACK_CC_USER_ID = "U1LD80ZEY"        # Barry Jenkins
+SLACK_CC_UNTIL = "2026-11-12"         # inclusive last day
+
 
 # ── Desk distribution fairness ───────────────────────────────────────────
 # Barry, Oct 20 2026 ("I don't want Mitch getting all of them"): the

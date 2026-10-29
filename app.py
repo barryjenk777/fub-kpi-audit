@@ -6989,6 +6989,13 @@ def api_desk_slack_test():
     import slack_client as _sl
     if not _sl.is_available():
         return jsonify({"ok": False, "reason": "SLACK_BOT_TOKEN not set"})
+    _body = request.get_json(silent=True) or {}
+    if _body.get("dm_user"):
+        _dch = _sl.open_dm_channel(_body["dm_user"])
+        if not _dch:
+            return jsonify({"ok": False, "reason": "could not open DM"})
+        _ts = _sl.post_message(_dch, _body.get("text") or "Slack DM test.")
+        return jsonify({"ok": bool(_ts), "channel": _dch, "ts": _ts})
     ch = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
     if not ch:
         return jsonify({"ok": False, "reason": "SLACK_DESK_OPS_CHANNEL not set"})

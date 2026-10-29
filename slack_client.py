@@ -33,7 +33,7 @@ def _auth_header():
     return {"Authorization": "Bearer %s" % os.environ.get("SLACK_BOT_TOKEN", "")}
 
 
-def post_message(channel, text, blocks=None):
+def post_message(channel, text, blocks=None, _cc=True):
     """chat.postMessage. Returns the message ts on success, None otherwise.
     `channel` may be a channel id (C...) or a user id (U...) — posting to a
     user id opens/uses the bot DM, which is how desk offers travel."""
@@ -50,10 +50,42 @@ def post_message(channel, text, blocks=None):
         if not r.get("ok"):
             logger.warning("slack post failed (%s): %s", channel, r.get("error"))
             return None
+        if _cc:
+            try:
+                _cc_barry(channel, text)
+            except Exception as e:
+                logger.warning("slack cc mirror failed: %s", e)
         return r.get("ts")
     except Exception as e:
         logger.warning("slack post error: %s", e)
         return None
+
+
+def _cc_barry(channel, text):
+    """Time-boxed CC window (config.SLACK_CC_UNTIL): mirror every
+    agent-bound DM to Barry, labeled with who got it. Only direct sends
+    (U.../D... targets) mirror; channel posts he already sees. Buttons
+    are not mirrored, only the message text."""
+    import config as _cfg
+    cc_id = getattr(_cfg, "SLACK_CC_USER_ID", "")
+    until = getattr(_cfg, "SLACK_CC_UNTIL", "")
+    if not cc_id or not until or channel == cc_id:
+        return
+    if str(channel)[:1] not in ("U", "D"):
+        return
+    from datetime import date
+    if str(date.today()) > until:
+        return
+    who = channel
+    try:
+        import json as _json
+        import db as _db
+        raw, _ = _db.get_app_state("slack_user_map")
+        rev = {v: k for k, v in (_json.loads(raw or "{}") or {}).items()}
+        who = rev.get(channel, channel)
+    except Exception:
+        pass
+    post_message(cc_id, "cc — sent to %s:\n%s" % (who, text), _cc=False)
 
 
 def dm_user(user_id, text, blocks=None):
