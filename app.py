@@ -21722,14 +21722,37 @@ def scheduled_escalation_reconcile():
 
 @app.route("/api/admin/desk/reconcile-escalations", methods=["POST"])
 def api_reconcile_escalations():
-    """Run the zombie cleanup now."""
+    """Run the zombie cleanup now. Body {"fossils": true} additionally
+    resolves every open escalation whose lead shows no signs of life
+    (created 7d+ ago, no communication in 72h): batch-import artifacts,
+    not consumers waiting for a human. Stops the ladder mid-climb so
+    Fhalen and Barry are not paged about dead database rows."""
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
     before = len(_db.open_desk_escalations(older_than_min=0))
+    fossil_closed = 0
+    if (request.get_json(silent=True) or {}).get("fossils"):
+        import escalation as _esc
+        client = FUBClient()
+        for e in _db.open_desk_escalations(older_than_min=0):
+            try:
+                person = client.get_person(e["person_id"]) or {}
+                if not _desk_signs_of_life(person) and _esc.resolve_for_person(
+                        e["person_id"],
+                        how="batch artifact: no signs of life"):
+                    fossil_closed += 1
+            except Exception as _fe:
+                logger.warning("fossil reconcile failed for %s: %s",
+                               e.get("person_id"), _fe)
+        try:
+            cache_set("today_page", {})  # {} invalidates; None poisons
+        except Exception:
+            pass
     scheduled_escalation_reconcile()
     after = _db.open_desk_escalations(older_than_min=0)
     return jsonify({"ok": True, "open_before": before,
                     "open_after": len(after),
+                    "fossils_closed": fossil_closed,
                     "still_open": [{"lead": e["lead_name"],
                                     "age_days": round(e["age_min"] / 1440, 1)}
                                    for e in after]})
