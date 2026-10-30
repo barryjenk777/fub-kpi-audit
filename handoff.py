@@ -41,6 +41,30 @@ def _first(name):
     return (name or "").split()[0] if name else "there"
 
 
+def _signs_of_life(person, created_days=7, comm_hours=72):
+    """A transfer tag is believed only when the lead shows recent life:
+    created in the last `created_days` or any FUB communication in the
+    last `comm_hours`. Oct 30 2026: a 200k-lead database import re-synced
+    fossil ISA_TRANSFER_FRESH tags onto years-old leads; without this
+    guard every one would text an agent 'call them today'."""
+    now = datetime.now(timezone.utc)
+    try:
+        c = datetime.fromisoformat(
+            (person.get("created") or "").replace("Z", "+00:00"))
+        if (now - c) <= timedelta(days=created_days):
+            return True
+    except (ValueError, TypeError):
+        pass
+    try:
+        lc = ((person.get("lastCommunication") or {}).get("createdAt") or "")
+        d = datetime.fromisoformat(lc.replace("Z", "+00:00"))
+        if (now - d) <= timedelta(hours=comm_hours):
+            return True
+    except (ValueError, TypeError):
+        pass
+    return False
+
+
 def _profiles_by_name():
     return {p.get("agent_name"): p for p in (_db.get_agent_profiles(active_only=True) or [])}
 
@@ -103,6 +127,12 @@ def run_handoff_scan(dry_run=False):
             continue
         is_new = _db.record_isa_transfer(pid, lead_name=lead_name, agent_name=agent)
         if not is_new:
+            continue
+        # Fossil guard: the transfer is recorded above either way (so it
+        # never re-alerts), but a dead lead gets no text to anyone.
+        if not _signs_of_life(person):
+            summary.setdefault("suppressed_fossils", 0)
+            summary["suppressed_fossils"] += 1
             continue
         summary["new_transfers"] += 1
         profile = profiles.get(agent)

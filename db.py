@@ -9807,6 +9807,25 @@ def filter_new_desk_tags(person_id, tags, with_first_flag=False):
         return empty
 
 
+def count_recent_dispatch_offers(minutes=60):
+    """Offers created in the last N minutes, for the desk flood breaker.
+    Returns 0 on any failure (fail-open: a DB hiccup must not block a
+    real conversion)."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM dispatch_offers
+                    WHERE offered_at >= NOW() - make_interval(mins => %s)
+                """, (int(minutes),))
+                return int(cur.fetchone()[0])
+    except Exception as e:
+        logger.warning("count_recent_dispatch_offers failed: %s", e)
+        return 0
+
+
 def seed_desk_tags_bulk(rows):
     """Backfill: rows = [(person_id, tag), ...]. Returns inserted count."""
     if not is_available() or not rows:

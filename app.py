@@ -12195,6 +12195,32 @@ DESK_CONVERSION_TAGS = ("ai_needs_follow_up",
                         "isa_attempted_transfer_realtor_unavailable")
 
 
+def _desk_signs_of_life(person, created_days=7, comm_hours=72):
+    """A conversion tag is believed only when the lead shows recent life:
+    created in the last `created_days` (live transfers are born with
+    their tags before comms sync), or any FUB communication in the last
+    `comm_hours`. Oct 30 2026: a 200k-lead database import re-synced
+    fossil Ylopo conversion tags onto years-old leads and the desk
+    dispatched 131 of them in a day as hot conversions; not one had ever
+    sent a text."""
+    now = datetime.now(timezone.utc)
+    try:
+        c = datetime.fromisoformat(
+            (person.get("created") or "").replace("Z", "+00:00"))
+        if (now - c) <= timedelta(days=created_days):
+            return True
+    except (ValueError, TypeError):
+        pass
+    try:
+        lc = ((person.get("lastCommunication") or {}).get("createdAt") or "")
+        d = datetime.fromisoformat(lc.replace("Z", "+00:00"))
+        if (now - d) <= timedelta(hours=comm_hours):
+            return True
+    except (ValueError, TypeError):
+        pass
+    return False
+
+
 def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
     """The Lead Desk front door, one person at a time: fetch, filter
     against the seen-tags ledger, then offer (pond) or mirror + owner
@@ -12281,6 +12307,20 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             _fresh = _db.filter_new_desk_tags(pid, _present)
             if not _fresh:
                 continue
+            # Batch-artifact guard: the ledger has already recorded the
+            # tags above, so a suppressed fossil can never route again;
+            # the event log keeps the audit trail. No offer, no mirror
+            # card, no owner ping for a lead with no signs of life.
+            if not _desk_signs_of_life(person):
+                _db.log_automation_event(
+                    event_type="desk_batch_artifact", person_id=pid,
+                    person_name=person.get("name"), agent_name=None,
+                    payload={"tags": _fresh,
+                             "created": person.get("created"),
+                             "last_comm": ((person.get("lastCommunication")
+                                            or {}).get("createdAt"))},
+                    triggered_by=triggered_by)
+                continue
             # Weekly key, not once-ever: a lead whose offer went
             # terminal (or who re-converts weeks later) can route
             # again. Once-ever silently blacklisted every lead the
@@ -12318,6 +12358,32 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                               (person.get("addresses") or [])
                               if isinstance(a, dict) and a.get("city")),
                              None)
+                # Flood breaker: 30+ offers in an hour is never organic
+                # conversion volume (the Oct 30 import proved it). Halt
+                # new offers, page Barry once a day, keep the audit trail.
+                try:
+                    if _db.count_recent_dispatch_offers(60) >= 30:
+                        _db.log_automation_event(
+                            event_type="desk_flood_suppressed",
+                            person_id=pid, person_name=person.get("name"),
+                            agent_name=None, payload={"window_min": 60},
+                            triggered_by=triggered_by)
+                        if _db.claim_once("desk_flood_%s" % datetime
+                                          .now(timezone.utc)
+                                          .strftime("%Y%m%d")):
+                            import slack_client as _slb
+                            _bid = _dp._slack_user_id("Barry Jenkins")
+                            if _slb.is_available() and _bid:
+                                _slb.dm_user(_bid,
+                                    "\U0001f6d1 Lead Desk flood breaker "
+                                    "tripped: 30+ offers inside an hour. "
+                                    "New conversions are being held (and "
+                                    "logged) until volume drops. Likely "
+                                    "a bulk tag sync or import, not real "
+                                    "lead flow.")
+                        continue
+                except Exception as _fbe:
+                    logger.warning("flood breaker check failed: %s", _fbe)
                 _res = _dp.make_offer(src_kind, pid,
                                (person.get("name") or "").strip(),
                                _city, notes=_desk_evidence(pid),
