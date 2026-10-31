@@ -6649,6 +6649,120 @@ def api_desk_sweep():
     return jsonify({"ok": "error" not in res, "dry_run": False, **res})
 
 
+def run_ypriority_promoter(window_hours=24, cap=150, dry_run=False):
+    """YPRIORITY is IDX browsing behavior, a signal of significance, not a
+    conversion (Barry, Oct 31 2026). It never routes to an agent; a
+    Storage Pond lead that EARNS it moves to Shark Tank so lead scoring
+    and the working pool pick it up. Guards: the seen-tags ledger (the
+    30k existing carriers are baseline-seeded and never move on a Ylopo
+    re-apply sweep), a daily cap with a one-time DM to Barry, and
+    promoted-only-once semantics."""
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(hours=window_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    daykey = now.strftime("%Y%m%d")
+    client = FUBClient()
+    candidates, next_tok = [], None
+    while True:
+        params = {"tags": "YPRIORITY", "assignedPondId": 6,
+                  "updatedAfter": since, "limit": 100,
+                  "fields": "id,name,tags,assignedPondId,created"}
+        if next_tok:
+            params["next"] = next_tok
+        data = client._request("GET", "people", params=params) or {}
+        ppl = data.get("people") or []
+        candidates.extend(p for p in ppl
+                          if "YPRIORITY" in (p.get("tags") or []))
+        nxt = (data.get("_metadata") or {}).get("next")
+        if not ppl or not nxt or nxt == next_tok:
+            break
+        next_tok = nxt
+    pids = [str(p.get("id")) for p in candidates]
+    seen = _db.get_seen_desk_tag_pairs(pids) if pids else set()
+    fresh = [p for p in candidates
+             if (str(p.get("id")), "ypriority") not in seen]
+    try:
+        raw, _ = _db.get_app_state("ypromote_count_%s" % daykey)
+        done_today = int(raw or 0)
+    except Exception:
+        done_today = 0
+    out = {"candidates": len(candidates), "fresh": len(fresh),
+           "promoted": [], "cap": cap, "done_today": done_today,
+           "dry_run": dry_run}
+    capped = False
+    for p in fresh:
+        if done_today >= cap:
+            capped = True
+            break
+        pid = str(p.get("id"))
+        if dry_run:
+            out["promoted"].append({"person_id": pid, "lead": p.get("name")})
+            done_today += 1
+            continue
+        if not _db.filter_new_desk_tags(pid, ["ypriority"]):
+            continue  # another worker got there first
+        if _promote_to_shark_tank(pid, p, "ypriority signal",
+                                  "ypriority_promoter"):
+            out["promoted"].append({"person_id": pid, "lead": p.get("name")})
+            done_today += 1
+    if not dry_run:
+        try:
+            _db.set_app_state("ypromote_count_%s" % daykey, str(done_today))
+        except Exception:
+            pass
+        if capped and _db.claim_once("ypromote_cap_%s" % daykey):
+            try:
+                import slack_client as _slp
+                import dispatch as _dpp
+                _bid = _dpp._slack_user_id("Barry Jenkins")
+                if _slp.is_available() and _bid:
+                    _slp.dm_user(_bid,
+                        "⚠️ Shark Tank promoter hit its daily cap "
+                        "(%d) with %d more YPRIORITY leads waiting. If "
+                        "Ylopo ran a bulk tag sweep this is the guard "
+                        "doing its job; if the reactivation is just this "
+                        "hot, tell Claude to raise the cap."
+                        % (cap, len(fresh) - done_today))
+            except Exception:
+                pass
+    out["capped"] = capped
+    return out
+
+
+def scheduled_ypriority_promoter():
+    """Every 30 min; gated behind app_state ypriority_live until the
+    30k-carrier baseline is seeded."""
+    try:
+        live, _ = _db.get_app_state("ypriority_live")
+        if (live or "").strip() != "1":
+            return
+        res = run_ypriority_promoter(dry_run=False)
+        if res.get("promoted"):
+            print("[YPROMOTE] %d lead(s) moved to Shark Tank"
+                  % len(res["promoted"]))
+    except Exception as e:
+        logger.warning("ypriority promoter failed: %s", e)
+
+
+@app.route("/api/admin/desk/ypriority-scan", methods=["POST"])
+def api_ypriority_scan():
+    """Manual run / gate control for the YPRIORITY promoter. Body:
+    {"dry_run": true|false, "window_hours": 24, "live": true|false}.
+    dry_run defaults TRUE; "live" flips the scheduler gate."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    if "live" in body:
+        _db.set_app_state("ypriority_live", "1" if body["live"] else "0")
+        if len(body) == 1:
+            return jsonify({"ok": True,
+                            "ypriority_live": bool(body["live"])})
+    dry = body.get("dry_run")
+    dry = True if dry is None else bool(dry)
+    res = run_ypriority_promoter(
+        window_hours=int(body.get("window_hours") or 24), dry_run=dry)
+    return jsonify({"ok": True, **res})
+
+
 def scheduled_desk_watchdog():
     """Every 30 min while the desk routes live leads: two tripwires.
     1. Webhook silence: zero FUB webhooks for 60+ min in business hours
@@ -12188,11 +12302,16 @@ def _fub_instant_prep(appt):
 
 # All six conversion tags the Lead Desk routes on. One constant, used by
 # the webhook intake and the safety sweep.
+# y_ai_priority restored Oct 31 2026 (Barry: "y_ai_priority is an ai
+# conversion that should route to the agent"). It was dropped at go-live
+# because Ylopo re-applies it in sweeps with no guard in place; the
+# signs-of-life guard + ledger + flood breaker now make it safe.
 DESK_CONVERSION_TAGS = ("ai_needs_follow_up",
                         "ai_voice_needs_follow_up",
                         "sms_conversion", "claude_text_converted",
                         "isa_transfer_unsuccessful",
-                        "isa_attempted_transfer_realtor_unavailable")
+                        "isa_attempted_transfer_realtor_unavailable",
+                        "y_ai_priority")
 
 
 def _desk_signs_of_life(person, created_days=7, comm_hours=72):
@@ -12219,6 +12338,26 @@ def _desk_signs_of_life(person, created_days=7, comm_hours=72):
     except (ValueError, TypeError):
         pass
     return False
+
+
+def _promote_to_shark_tank(pid, person, reason, triggered_by="system"):
+    """Move a Storage Pond lead into Shark Tank so it enters the scored
+    working pool. Only ever pond 6 -> pond 4; owned leads and leads in
+    any other pond are left alone. Returns True when the move happened."""
+    try:
+        if person.get("assignedPondId") != 6:
+            return False
+        FUBClient()._request("PUT", "people/%s" % pid,
+                             json_data={"assignedPondId":
+                                        config.SHARK_TANK_POND_ID})
+        _db.log_automation_event(
+            event_type="shark_promote", person_id=pid,
+            person_name=person.get("name"), agent_name=None,
+            payload={"reason": reason}, triggered_by=triggered_by)
+        return True
+    except Exception as e:
+        logger.warning("shark promote failed for %s: %s", pid, e)
+        return False
 
 
 def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
@@ -12321,6 +12460,12 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                                             or {}).get("createdAt"))},
                     triggered_by=triggered_by)
                 continue
+            # A genuine conversion out of the 200k storage pool graduates
+            # to Shark Tank (Barry, Oct 31 2026: Ylopo is reactivating the
+            # pond and responders must stay in the scored working pool,
+            # not sink back into the dark 200k).
+            _promote_to_shark_tank(pid, person, "conversion: %s"
+                                   % ",".join(_fresh), triggered_by)
             # Weekly key, not once-ever: a lead whose offer went
             # terminal (or who re-converts weeks later) can route
             # again. Once-ever silently blacklisted every lead the
@@ -25292,6 +25437,13 @@ def start_scheduler():
     _scheduler.add_job(scheduled_desk_sweep,
                        CronTrigger(minute="2,12,22,32,42,52", timezone=ET),
                        id="desk_sweep", name="Desk safety sweep (every 10 min)",
+                       max_instances=1, coalesce=True)
+    # YPRIORITY -> Shark Tank promoter: IDX-behavior wake-ups out of the
+    # 200k storage pool into the scored pond. Gated by ypriority_live.
+    _scheduler.add_job(scheduled_ypriority_promoter,
+                       CronTrigger(minute="8,38", timezone=ET),
+                       id="ypriority_promoter",
+                       name="YPRIORITY Shark Tank promoter (every 30 min)",
                        max_instances=1, coalesce=True)
     # Ring group work order to Fhalen: Monday after the group push settles,
     # Tuesday re-check as the self-healing nag. DM only fires on a mismatch.
