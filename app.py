@@ -12344,6 +12344,34 @@ def _desk_signs_of_life(person, created_days=7, comm_hours=72):
     return False
 
 
+def _had_call_within(person_id, minutes=60):
+    """True when the lead has ANY call logged in the last N minutes — the
+    signature of an AI voice transfer a human already answered. FUB
+    auto-assigns whoever answers the inbox number, so the conversion
+    tags that follow must not re-ping or re-escalate a lead that is
+    already in that agent's hands."""
+    try:
+        r = FUBClient()._request("GET", "calls", params={
+            "personId": person_id, "limit": 5}) or {}
+        calls = next((v for v in r.values() if isinstance(v, list)), [])
+        now = datetime.now(timezone.utc)
+        for cl in calls:
+            created = (cl.get("created") or "")[:19]
+            if not created:
+                continue
+            try:
+                dt = datetime.strptime(
+                    created, "%Y-%m-%dT%H:%M:%S").replace(
+                    tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if (now - dt) <= timedelta(minutes=minutes):
+                return True
+    except Exception as e:
+        logger.warning("recent-call check failed for %s: %s", person_id, e)
+    return False
+
+
 def _promote_to_shark_tank(pid, person, reason, triggered_by="system"):
     """Move a Storage Pond lead into Shark Tank so it enters the scored
     working pool. Only ever pond 6 -> pond 4; owned leads and leads in
@@ -12491,7 +12519,14 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # A lead owned by a departing/paused agent is effectively
             # unowned: no ping reaches anyone, so it routes to the claim
             # board instead of vanishing (QA, Sep 2026).
-            _owned = (not person.get("assignedPondId")) and _own_name not in _dark_owners
+            # Ownership alone decides (Oct 31 2026): an AI voice transfer
+            # auto-assigns whoever answers the inbox number, and if FUB
+            # ever leaves the pond id on that lead the old pond condition
+            # would have the desk re-route a lead already in that agent's
+            # hands. A lead with an active agent's name on it is owned,
+            # pond or no pond; pond leads carry an empty assignedTo, which
+            # is a dark owner, so pond routing is unchanged.
+            _owned = _own_name not in _dark_owners
             if (live or "").strip() == "1" and not _owned:
                 import dispatch as _dp
                 src_kind = ("ai_voice" if any(t in _fresh for t in
@@ -12578,7 +12613,27 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                     _excl = set(config.EXCLUDED_USERS) | set(
                         getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS",
                                 set()))
-                    if _owned and _owner and _owner not in _excl:
+                    # Voice-transfer dedupe (Barry, Oct 31 2026): an
+                    # answered AI voice transfer assigns the lead to
+                    # whoever picked up, THEN the conversion tags land.
+                    # A call on the lead inside the last hour means the
+                    # human moment already happened — no ping ("call now"
+                    # right after they hung up) and no escalation ladder
+                    # (an answered inbound call never logs the outbound
+                    # touch that closes one, so Fhalen and Barry would
+                    # get paged about a lead that was just talked to).
+                    _answered = (_owned and _owner and _owner not in _excl
+                                 and _had_call_within(pid, minutes=60))
+                    if _answered:
+                        _db.log_automation_event(
+                            event_type="transfer_already_routed",
+                            person_id=pid,
+                            person_name=person.get("name"),
+                            agent_name=_owner,
+                            payload={"tags": _fresh},
+                            triggered_by=triggered_by)
+                    if _owned and _owner and _owner not in _excl \
+                            and not _answered:
                         _kind = ("voice" if "ai_voice_needs_follow_up"
                                  in _fresh else "text")
                         _lead1 = ((person.get("name") or "your lead")
