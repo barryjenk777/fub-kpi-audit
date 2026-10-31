@@ -162,6 +162,12 @@ def resolve_for_person(person_id, how="verified outbound touch"):
             try:
                 import slack_client as _sl
                 ops = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+                # A batch artifact never reached a human — closing it is
+                # bookkeeping, not a win, and must not post a victory line
+                # (Oct 31 2026: 48 import-fossil closures flooded ops with
+                # false "reached a human" messages).
+                if how.startswith("batch artifact"):
+                    ops = ""
                 if ops and row[2] >= 15:
                     _sl.post_message(ops, "✅ Guarantee closed: %s reached "
                                           "a human %d min after raising their "
