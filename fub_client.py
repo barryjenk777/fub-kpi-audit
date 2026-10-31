@@ -866,16 +866,18 @@ class FUBClient:
             return []
 
     def get_people_cursor(self, pond_id=None, assigned_user_id=None,
-                          tag=None, fields=None):
-        """People fetch that walks the WHOLE result set via created-cursor
-        pagination — immune to FUB's silent 2000-offset cap (found Oct
-        2026: the account holds 23k+ people and offset pagination sees
-        only the first 2000; Shark Tank alone has 3200+)."""
-        out, seen, after = [], set(), None
-        if fields and "created" not in fields:
-            fields = fields + ",created"
+                          tag=None, fields=None, max_people=None):
+        """People fetch that walks the WHOLE result set via FUB's native
+        `next` token (_metadata.next) — immune to the silent 2000-offset
+        cap AND to same-second created clusters. The old created-cursor
+        variant bailed whenever 100+ leads shared one created timestamp,
+        which every bulk import produces (Oct 31 2026: the 200k import
+        proved it — carriers of a tag went missing from full scans).
+        `max_people` is a safety valve for callers that only need a
+        bounded sample."""
+        out, seen, next_tok = [], set(), None
         while True:
-            params = {"limit": 100, "sort": "created"}
+            params = {"limit": 100}
             if fields:
                 params["fields"] = fields
             if pond_id is not None:
@@ -884,20 +886,21 @@ class FUBClient:
                 params["assignedUserId"] = assigned_user_id
             if tag:
                 params["tags"] = tag  # FUB's filter param is plural
-            if after:
-                params["createdAfter"] = after
+            if next_tok:
+                params["next"] = next_tok
             data = self._request("GET", "people", params=params)
             people = (data or {}).get("people") or []
             fresh = [p for p in people if p.get("id") not in seen]
             for p in fresh:
                 seen.add(p.get("id"))
             out.extend(fresh)
-            if len(people) < 100:
+            if max_people and len(out) >= max_people:
+                return out[:max_people]
+            meta = (data or {}).get("_metadata") or {}
+            nxt = meta.get("next")
+            if not people or not nxt or nxt == next_tok:
                 break
-            nxt = people[-1].get("created")
-            if not nxt or nxt == after:
-                break  # timestamp cluster bigger than a page — bail safely
-            after = nxt
+            next_tok = nxt
         return out
 
     def get_all_people(self):
