@@ -6649,7 +6649,7 @@ def api_desk_sweep():
     return jsonify({"ok": "error" not in res, "dry_run": False, **res})
 
 
-def run_ypriority_promoter(window_hours=24, cap=150, dry_run=False):
+def run_ypriority_promoter(window_hours=1, cap=150, dry_run=False):
     """YPRIORITY is IDX browsing behavior, a signal of significance, not a
     conversion (Barry, Oct 31 2026). It never routes to an agent; a
     Storage Pond lead that EARNS it moves to Shark Tank so lead scoring
@@ -6728,14 +6728,18 @@ def run_ypriority_promoter(window_hours=24, cap=150, dry_run=False):
     return out
 
 
-def scheduled_ypriority_promoter():
-    """Every 30 min; gated behind app_state ypriority_live until the
+def scheduled_ypriority_promoter(window_hours=1):
+    """Every 30 min with a 1h window (Ylopo churns ~1k YPRIORITY updates
+    an hour during reactivation; a wider window times out a synchronous
+    pass). A nightly 26h catch-up sweeps leads whose tag landed without
+    a later update. Gated behind app_state ypriority_live until the
     30k-carrier baseline is seeded."""
     try:
         live, _ = _db.get_app_state("ypriority_live")
         if (live or "").strip() != "1":
             return
-        res = run_ypriority_promoter(dry_run=False)
+        res = run_ypriority_promoter(window_hours=window_hours,
+                                     dry_run=False)
         if res.get("promoted"):
             print("[YPROMOTE] %d lead(s) moved to Shark Tank"
                   % len(res["promoted"]))
@@ -6759,7 +6763,7 @@ def api_ypriority_scan():
     dry = body.get("dry_run")
     dry = True if dry is None else bool(dry)
     res = run_ypriority_promoter(
-        window_hours=int(body.get("window_hours") or 24), dry_run=dry)
+        window_hours=int(body.get("window_hours") or 1), dry_run=dry)
     return jsonify({"ok": True, **res})
 
 
@@ -25444,6 +25448,11 @@ def start_scheduler():
                        CronTrigger(minute="8,38", timezone=ET),
                        id="ypriority_promoter",
                        name="YPRIORITY Shark Tank promoter (every 30 min)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(lambda: scheduled_ypriority_promoter(window_hours=26),
+                       CronTrigger(hour=3, minute=20, timezone=ET),
+                       id="ypriority_catchup",
+                       name="YPRIORITY promoter catch-up (daily 3:20am)",
                        max_instances=1, coalesce=True)
     # Ring group work order to Fhalen: Monday after the group push settles,
     # Tuesday re-check as the self-healing nag. DM only fires on a mismatch.
