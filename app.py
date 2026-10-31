@@ -21720,6 +21720,72 @@ def scheduled_escalation_reconcile():
         logger.warning("escalation reconcile failed: %s", e)
 
 
+@app.route("/api/admin/desk/revert-fossil-claims", methods=["POST"])
+def api_revert_fossil_claims():
+    """Undo the Oct 30 import-flood claims: any offer accepted since the
+    import began whose lead (a) still carries lead-mass-audit, (b) still
+    shows no signs of life, (c) is still assigned to the claiming agent,
+    and (d) never got a verified call, goes back to Barry + Storage Pond.
+    An agent who actually worked their claim keeps it. Body:
+    {"dry_run": true|false, "since": iso8601}. dry_run defaults TRUE."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    dry = body.get("dry_run")
+    dry = True if dry is None else bool(dry)
+    since = body.get("since") or "2026-10-30T04:00:00Z"
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT ON (person_id)
+                           person_id, agent_name, accepted_at
+                    FROM dispatch_offers
+                    WHERE accepted_at IS NOT NULL
+                      AND accepted_at >= %s
+                      AND first_call_at IS NULL
+                    ORDER BY person_id, accepted_at DESC
+                """, (since,))
+                claims = cur.fetchall()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:200]}), 500
+    client = FUBClient()
+    out = {"ok": True, "dry_run": dry, "claimed_uncalled": len(claims),
+           "reverted": [], "skipped": []}
+    for pid, agent, accepted_at in claims:
+        try:
+            person = client.get_person(pid) or {}
+            name = (person.get("name") or "").strip()
+            tags = person.get("tags") or []
+            why = None
+            if "lead-mass-audit" not in tags:
+                why = "not a fossil"
+            elif _desk_signs_of_life(person):
+                why = "signs of life since claim"
+            elif (person.get("assignedTo") or "").strip() != (agent or ""):
+                why = "assignment changed since claim"
+            if why:
+                out["skipped"].append({"person_id": pid, "lead": name,
+                                       "agent": agent, "why": why})
+                continue
+            if not dry:
+                client._request("PUT", "people/%s" % pid, json_data={
+                    "assignedUserId": config.BARRY_FUB_USER_ID,
+                    "assignedPondId": 6})
+                _db.log_automation_event(
+                    event_type="revert_fossil_claim", person_id=pid,
+                    person_name=name, agent_name=agent,
+                    payload={"accepted_at": accepted_at.isoformat()
+                             if accepted_at else None},
+                    triggered_by="admin")
+            out["reverted"].append({"person_id": pid, "lead": name,
+                                    "agent": agent})
+        except Exception as e:
+            out["skipped"].append({"person_id": pid, "agent": agent,
+                                   "why": "error: %s" % str(e)[:80]})
+    return jsonify(out)
+
+
 @app.route("/api/admin/desk/reconcile-escalations", methods=["POST"])
 def api_reconcile_escalations():
     """Run the zombie cleanup now. Body {"fossils": true} additionally
