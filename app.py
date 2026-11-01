@@ -3497,6 +3497,23 @@ def api_kpi_summary():
                         "traceback": traceback.format_exc()}), 500
 
 
+@app.route("/api/admin/hype/zero-context", methods=["GET", "POST"])
+def api_hype_zero_context():
+    """The context line the Sunday email shows on a zero-AI-transfer week.
+    GET returns it; POST {"text": "..."} sets it ("" restores the built-in
+    default). Lets Barry retire the 200k-reactivation framing without a
+    deploy."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    if request.method == "POST":
+        txt = ((request.get_json(silent=True) or {}).get("text") or "").strip()
+        _db.set_app_state("hype_zero_context", txt)
+        return jsonify({"ok": True, "hype_zero_context": txt or "(default)"})
+    cur, _ = _db.get_app_state("hype_zero_context")
+    return jsonify({"ok": True, "hype_zero_context": (cur or "").strip()
+                    or "(default)"})
+
+
 @app.route("/api/preview-hype-email")
 def api_preview_hype_email():
     """

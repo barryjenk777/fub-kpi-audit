@@ -648,7 +648,39 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
 
 <!-- LEAD DISTRIBUTION STAT -->
 """
-    if total_leads > 0:
+    # A week with zero AI transfers gets the truth, told kindly — not a
+    # big fake number borrowed from Fhalen's calendar (which includes
+    # recruiting and cash-offer appointments, not agent leads; Nov 1 2026
+    # the auto-count was about to claim "3 leads distributed" off exactly
+    # those). The context line lives in app_state hype_zero_context so
+    # Barry can retire the reactivation framing when that era ends.
+    if (ai_text_count + ai_voice_count) == 0:
+        zero_ctx = ("Here's what's actually happening: we just woke up "
+                    "200,000 contacts in our database and the AI is "
+                    "working them around the clock right now. "
+                    "Conversations are starting. Transfers follow "
+                    "conversations.")
+        try:
+            import db as _hdb
+            _ctx, _ = _hdb.get_app_state("hype_zero_context")
+            if (_ctx or "").strip():
+                zero_ctx = _ctx.strip()
+        except Exception:
+            pass
+        html += f"""
+<div style="background:#fff;border-radius:10px;border:2px solid #f59e0b;padding:20px 24px;margin-bottom:20px">
+  <p style="margin:0 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#6b7280">The board tells the truth, so here it is</p>
+  <p style="margin:0 0 10px;font-size:15px;color:#0f172a;line-height:1.6;font-weight:600">
+    Zero AI transfers hit the line this week. I want to be candid about that instead of dressing it up.
+  </p>
+  <p style="margin:0 0 10px;font-size:14px;color:#374151;line-height:1.6">{zero_ctx}</p>
+  <p style="margin:0;font-size:14px;color:#374151;line-height:1.6">
+    When they come, they route to whoever holds the board.
+    Make your calls. <strong>Be on the list when the dam breaks.</strong>
+  </p>
+</div>
+"""
+    elif total_leads > 0:
         detail_parts = []
         if ai_text_count > 0:
             detail_parts.append(f"{ai_text_count} AI text")
