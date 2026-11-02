@@ -21990,8 +21990,11 @@ def api_revert_fossil_claims():
                                        "agent": agent, "why": why})
                 continue
             if not dry:
+                # FUB rejects assignedUserId and assignedPondId in the
+                # same PUT ("Only assignedUserId or assignedPondId may be
+                # specified", Nov 2 2026). Pond assignment alone lands the
+                # desired state: pond 6's fallback owner is Barry.
                 client._request("PUT", "people/%s" % pid, json_data={
-                    "assignedUserId": config.BARRY_FUB_USER_ID,
                     "assignedPondId": 6})
                 _db.log_automation_event(
                     event_type="revert_fossil_claim", person_id=pid,
