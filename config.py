@@ -919,6 +919,20 @@ DESK_HOP1_ARM = "rotation"
 # everyone is capped so no lead ever waits on fairness).
 DESK_DAILY_CLAIM_CAP = 2
 
+# ── Realtor.com shootout lane ────────────────────────────────────────────
+# Barry, Nov 2 2026: purchased Realtor.com leads are SHARED — the same
+# lead is sold to competing agents outside the team, so routing is a
+# shootout, not a rotation. Round 1 offers the lead to the top N priority
+# agents SIMULTANEOUSLY; first CLAIM wins and the siblings are voided.
+# Round 2 blasts every active non-gated agent. A claim is a promise to
+# dial: no outbound call inside the yank window and the claim is released
+# back to the group. Gate: app_state "realtor_live".
+REALTOR_SOURCE_KEYWORD = "realtor"   # lowercase substring match on FUB source
+REALTOR_SHOOTOUT_SIZE = 3            # round-1 simultaneous offers
+REALTOR_OFFER_MINUTES = 2            # claim window per round
+REALTOR_CALL_NUDGE_MIN = 5           # claimed, no dial: private nudge
+REALTOR_CALL_YANK_MIN = 10           # claimed, no dial: claim released
+
 
 # ── Message governor ────────────────────────
 # Barry, Oct 28 2026 (Matt's four-text morning): each agent gets ONE

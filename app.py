@@ -5315,6 +5315,8 @@ def dispatch_accept_page(token):
             lat = _db.resolve_dispatch_offer(offer["id"], "accepted")
             if lat is not None:
                 _dispatch_accept(offer)
+                if offer["source"] == "realtor":
+                    _realtor_post_claim(offer, claim_secs=lat)
                 return ("<div style='font-family:sans-serif;padding:3rem;"
                         "text-align:center;max-width:440px;margin:0 auto'>"
                         "<h2 style='color:#2e7d4f'>&#10003; %s is yours</h2>"
@@ -5330,7 +5332,9 @@ def dispatch_accept_page(token):
             reason = (request.form.get("reason") or "no reason")[:60]
             lat = _db.resolve_dispatch_offer(offer["id"], "passed", reason=reason)
             if lat is not None:
-                if offer["hop"] < _dp.MAX_HOPS:
+                if offer["source"] == "realtor":
+                    _realtor_after_resolve(offer)
+                elif offer["hop"] < _dp.MAX_HOPS:
                     _dp.make_offer(offer["source"], offer["person_id"],
                                    offer["lead_name"], offer["lead_city"],
                                    offer["appt_time"], offer["notes"],
@@ -5789,6 +5793,8 @@ def api_slack_actions():
                     _say("Someone beat you to it by a heartbeat.")
                     return
                 _dispatch_accept(offer)
+                if offer["source"] == "realtor":
+                    _realtor_post_claim(offer, claim_secs=lat)
                 fub_link = ("https://yourfriendlyagent.followupboss.com"
                             "/2/people/view/%s" % offer["person_id"])
                 closers = ["The clock that matters starts now.",
@@ -5800,11 +5806,20 @@ def api_slack_actions():
                                      if c.isdigit()) or 0) % len(closers)
                 except Exception:
                     ci = 0
+                _extra = ""
+                if offer["source"] == "realtor":
+                    _extra = (" One more thing: Realtor.com sends this lead "
+                              "to competing agents too, and your claim "
+                              "holds for %d minutes without a dial before "
+                              "it reopens to the group. Phone first, "
+                              "everything else second."
+                              % int(getattr(config,
+                                            "REALTOR_CALL_YANK_MIN", 10)))
                 _say("✅ *%s is yours.* Claimed in %s. Assigned to you "
                      "in FUB right now. Call from the FUB app while they're "
-                     "warm: <%s|open %s in FUB>. %s"
+                     "warm: <%s|open %s in FUB>. %s%s"
                      % (lead_first, _dp.fmt_secs(lat), fub_link, lead_first,
-                        closers[ci]))
+                        closers[ci], _extra))
                 try:
                     import slack_client as _sl
                     wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
@@ -5821,6 +5836,12 @@ def api_slack_actions():
                                                  reason="slack pass")
                 if lat is None:
                     _say("Already resolved.")
+                    return
+                if offer["source"] == "realtor":
+                    _realtor_after_resolve(offer)
+                    _say("Passed. %s stays on the clock for the rest of "
+                         "the group. Honest passes cost respect from no "
+                         "one." % lead_first)
                     return
                 if offer["hop"] < _dp.MAX_HOPS:
                     _dp.make_offer(offer["source"], offer["person_id"],
@@ -6600,6 +6621,27 @@ def scheduled_desk_sweep(window_min=40, _force=False):
                 if len(ppl) < 100:
                     break
                 offset += 100
+        # Realtor.com catch-up: any lead BORN in the window whose source
+        # matches the shootout lane runs the identical intake path (deploy
+        # restarts and FUB webhook retries are the gap this closes).
+        # claim_once inside _realtor_intake makes re-sweeps free.
+        try:
+            _rlive, _ = _db.get_app_state("realtor_live")
+            if (_rlive or "").strip() == "1":
+                _kw = (getattr(config, "REALTOR_SOURCE_KEYWORD", "realtor")
+                       or "").lower()
+                _rdata = client._request("GET", "people", params={
+                    "createdAfter": since, "fields": "id,source",
+                    "limit": 100, "sort": "created"})
+                _rids = [p.get("id")
+                         for p in ((_rdata or {}).get("people") or [])
+                         if _kw in ((p.get("source") or "").lower())]
+                if _rids:
+                    logger.info("[DESK SWEEP] %d realtor-lane lead(s) in "
+                                "window", len(_rids))
+                    _desk_intake_people(_rids, triggered_by="desk_sweep")
+        except Exception as _rwe:
+            logger.warning("realtor sweep failed: %s", _rwe)
         if not candidates:
             return
         seen = _db.get_seen_desk_tag_pairs(list(candidates))
@@ -6664,6 +6706,61 @@ def api_desk_sweep():
             return jsonify({"ok": False, "error": str(e)}), 500
     res = scheduled_desk_sweep(window_min=window, _force=True) or {}
     return jsonify({"ok": "error" not in res, "dry_run": False, **res})
+
+
+@app.route("/api/admin/desk/realtor-lane", methods=["GET", "POST"])
+def api_realtor_lane():
+    """Realtor.com shootout lane control. GET: gate status, knobs, the
+    round-1 lineup a lead arriving right now would get, and recent lane
+    events. POST {"live": true|false} flips the gate."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        if "live" in body:
+            _db.set_app_state("realtor_live",
+                              "1" if bool(body["live"]) else "0")
+    live, _ = _db.get_app_state("realtor_live")
+    import dispatch as _dp
+    lineup = []
+    try:
+        lineup = [m["agent_name"] for m in
+                  _dp.make_shootout("dryrun", None,
+                                    audit=cache_get("audit") or {},
+                                    round_no=1, dry_run=True)]
+    except Exception as e:
+        lineup = ["error: %s" % e]
+    roster2 = []
+    try:
+        roster2 = [m["agent_name"] for m in
+                   _dp.make_shootout("dryrun", None,
+                                     audit=cache_get("audit") or {},
+                                     round_no=2, dry_run=True)]
+    except Exception:
+        pass
+    events = {}
+    for et in ("realtor_shootout", "realtor_gated", "realtor_yank",
+               "realtor_already_assigned", "realtor_stale_skip"):
+        try:
+            events[et] = _db.get_automation_events(et, days=7, limit=10)
+        except Exception:
+            events[et] = []
+    return jsonify({"ok": True,
+                    "live": (live or "").strip() == "1",
+                    "source_keyword": getattr(config,
+                                              "REALTOR_SOURCE_KEYWORD",
+                                              "realtor"),
+                    "round1_size": getattr(config,
+                                           "REALTOR_SHOOTOUT_SIZE", 3),
+                    "offer_minutes": getattr(config,
+                                             "REALTOR_OFFER_MINUTES", 2),
+                    "call_nudge_min": getattr(config,
+                                              "REALTOR_CALL_NUDGE_MIN", 5),
+                    "call_yank_min": getattr(config,
+                                             "REALTOR_CALL_YANK_MIN", 10),
+                    "round1_lineup_now": lineup,
+                    "round2_roster_now": roster2,
+                    "events_7d": events})
 
 
 def run_ypriority_promoter(window_hours=1, cap=150, dry_run=False):
@@ -7517,11 +7614,23 @@ def scheduled_dispatch_cascade():
             _esc.process_due()
         except Exception as _pe:
             logger.warning("escalation ladder failed: %s", _pe)
+        try:
+            _realtor_call_enforcer()
+        except Exception as _rce:
+            logger.warning("[SHOOTOUT] call enforcer failed: %s", _rce)
         for oid in _db.due_dispatch_offers():
             offer = _db.get_dispatch_offer(offer_id=oid)
             if not offer:
                 continue
             if _db.resolve_dispatch_offer(oid, "expired") is None:
+                continue
+            if offer["source"] == "realtor":
+                # Shootout rounds advance as a group, never per offer.
+                try:
+                    _realtor_after_resolve(offer)
+                except Exception as _rae:
+                    logger.warning("[SHOOTOUT] round advance failed: %s",
+                                   _rae)
                 continue
             if offer["hop"] < _dp.MAX_HOPS:
                 nxt = _dp.make_offer(offer["source"], offer["person_id"],
@@ -12409,6 +12518,280 @@ def _promote_to_shark_tank(pid, person, reason, triggered_by="system"):
         return False
 
 
+def _realtor_intake(pid, person, triggered_by="webhook_fub"):
+    """Realtor.com shootout lane front door (Barry, Nov 2 2026: purchased
+    SHARED leads, competing agents outside the team get the same lead).
+    Returns True when the person belongs to this lane (routed or
+    deliberately suppressed), False to fall through to the tag lanes.
+    Guards: live gate, once-per-lead, 48h freshness (import protection),
+    already-assigned stand-down, and the desk flood breaker."""
+    kw = (getattr(config, "REALTOR_SOURCE_KEYWORD", "realtor") or "").lower()
+    src = (person.get("source") or "").strip().lower()
+    if not kw or kw not in src:
+        return False
+    live, _ = _db.get_app_state("realtor_live")
+    if (live or "").strip() != "1":
+        _db.log_automation_event(
+            event_type="realtor_gated", person_id=pid,
+            person_name=person.get("name"), agent_name=None,
+            payload={"source": src}, triggered_by=triggered_by)
+        return True
+    if not _db.claim_once("realtorlead_%s" % pid):
+        return True
+    # Freshness: a purchased lead routes minutes after birth. Anything
+    # older reaching this path is a re-import or an edit echo, and the
+    # Oct 30 import taught us what routing fossils costs.
+    _fresh = False
+    try:
+        _c = datetime.fromisoformat(
+            (person.get("created") or "").replace("Z", "+00:00"))
+        _fresh = (datetime.now(timezone.utc) - _c) <= timedelta(hours=48)
+    except (ValueError, TypeError):
+        _fresh = False
+    if not _fresh:
+        _db.log_automation_event(
+            event_type="realtor_stale_skip", person_id=pid,
+            person_name=person.get("name"), agent_name=None,
+            payload={"source": src, "created": person.get("created")},
+            triggered_by=triggered_by)
+        return True
+    # Already in an agent's hands (FUB's own routing beat us): never
+    # double-route. Point FUB's Realtor.com routing at Barry or a pond so
+    # the desk owns assignment, same doctrine as the AI lane.
+    _own = (person.get("assignedTo") or "").strip()
+    _dark = {"", "Fhalen Tendencia", "Barry Jenkins"} | set(
+        getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+    if _own not in _dark:
+        _db.log_automation_event(
+            event_type="realtor_already_assigned", person_id=pid,
+            person_name=person.get("name"), agent_name=_own,
+            payload={"source": src}, triggered_by=triggered_by)
+        return True
+    try:
+        if _db.count_recent_dispatch_offers(60) >= 30:
+            _db.log_automation_event(
+                event_type="desk_flood_suppressed", person_id=pid,
+                person_name=person.get("name"), agent_name=None,
+                payload={"lane": "realtor", "source": src},
+                triggered_by=triggered_by)
+            return True
+    except Exception:
+        pass
+    city = ((person.get("addresses") or [{}])[0] or {}).get("city")
+    import dispatch as _dp
+    made = _dp.make_shootout(
+        pid, person.get("name"), lead_city=city,
+        notes="Paid Realtor.com lead, shared with competing agents",
+        audit=cache_get("audit") or {}, round_no=1)
+    _db.log_automation_event(
+        event_type="realtor_shootout", person_id=pid,
+        person_name=person.get("name"), agent_name=None,
+        payload={"source": src, "round": 1,
+                 "agents": [m["agent_name"] for m in (made or [])]},
+        triggered_by=triggered_by)
+    if not made:
+        made2 = _dp.make_shootout(
+            pid, person.get("name"), lead_city=city,
+            notes="Paid Realtor.com lead, shared with competing agents",
+            audit=cache_get("audit") or {}, round_no=2)
+        _db.log_automation_event(
+            event_type="realtor_shootout", person_id=pid,
+            person_name=person.get("name"), agent_name=None,
+            payload={"source": src, "round": 2,
+                     "agents": [m["agent_name"] for m in (made2 or [])]},
+            triggered_by=triggered_by)
+        if not made2:
+            _realtor_terminal(pid, person.get("name"))
+    return True
+
+
+def _realtor_post_claim(offer, claim_secs=None):
+    """Shootout aftermath: void the losing siblings and tell them who won.
+    Beaten by a heartbeat, not a habit. The claim-to-call clock is now
+    live (see _realtor_call_enforcer)."""
+    try:
+        losers = _db.void_sibling_offers(offer["person_id"], offer["id"])
+    except Exception as e:
+        logger.warning("[SHOOTOUT] sibling void failed: %s", e)
+        losers = []
+    if not losers:
+        return
+    import dispatch as _dp
+    winner = (offer["agent_name"] or "someone").split()[0]
+    lead1 = (offer["lead_name"] or "the lead").split()[0]
+    when = _dp.fmt_secs(claim_secs) if claim_secs is not None else "seconds"
+    try:
+        import slack_client as _sl
+        for name in losers:
+            sid = _dp._slack_user_id(name)
+            if _sl.is_available() and sid:
+                _sl.dm_user(sid, "⚡ %s claimed %s in %s. Beaten by a "
+                                 "heartbeat, not a habit. The next shootout "
+                                 "is yours if your thumb is faster."
+                            % (winner, lead1, when))
+    except Exception as e:
+        logger.warning("[SHOOTOUT] beaten DM failed: %s", e)
+
+
+def _realtor_after_resolve(offer):
+    """A shootout offer resolved without a claim. When the whole round is
+    dead, escalate: round 1 opens round 2 (full roster), round 2 lands on
+    the Guarantee (Fhalen asked immediately, Barry gets the receipt)."""
+    state = _db.dispatch_person_state(offer["person_id"], hours=24)
+    # A yanked claim stays accepted in the row but is marked terminal, so
+    # it must not read as "someone owns this".
+    if any(s["accepted"] and not s["terminal"] for s in state):
+        return
+    if any(not s["accepted"] and not s["passed"] and not s["expired"]
+           for s in state):
+        return  # a sibling clock is still running
+    if offer["hop"] < 2:
+        if not _db.claim_once("rshoot_r2_%s" % offer["person_id"]):
+            return
+        import dispatch as _dp
+        made = _dp.make_shootout(offer["person_id"], offer["lead_name"],
+                                 lead_city=offer["lead_city"],
+                                 notes=offer["notes"],
+                                 audit=cache_get("audit") or {}, round_no=2)
+        _db.log_automation_event(
+            event_type="realtor_shootout", person_id=offer["person_id"],
+            person_name=offer["lead_name"], agent_name=None,
+            payload={"round": 2,
+                     "agents": [m["agent_name"] for m in (made or [])]},
+            triggered_by="cascade")
+        if made:
+            return
+    _realtor_terminal(offer["person_id"], offer["lead_name"],
+                      last_offer_id=offer["id"])
+
+
+def _realtor_terminal(person_id, lead_name, last_offer_id=None):
+    """Both shootout rounds ran with no owner: the Guarantee takes over
+    (Fhalen asked immediately via the unclaimed rung) and Barry hears it
+    directly — a paid shared lead dying unclaimed is a business problem,
+    not a log line."""
+    if not _db.claim_once("rshoot_term_%s" % person_id):
+        return
+    if last_offer_id:
+        _db.mark_dispatch_terminal(last_offer_id)
+    try:
+        import escalation as _esc
+        _esc.open_escalation("unclaimed", person_id, lead_name,
+                             note="realtor shootout: both rounds ran, "
+                                  "no claim")
+    except Exception as e:
+        logger.warning("[SHOOTOUT] terminal escalation failed: %s", e)
+    lead1 = (lead_name or "A Realtor.com lead").split()[0]
+    try:
+        import slack_client as _sl
+        wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
+        if _sl.is_available():
+            _sl.post_message(wins, ":raised_hand: %s came in from "
+                "Realtor.com, paid for and shared with competing agents, "
+                "and nobody claimed. Fhalen has the call. Fastest recovery "
+                "still wins the relationship." % lead1)
+    except Exception:
+        pass
+    try:
+        import dispatch as _dp
+        import slack_client as _sl2
+        bid = _dp._slack_user_id("Barry Jenkins")
+        if _sl2.is_available() and bid:
+            _sl2.dm_user(bid, "\U0001f6a8 Paid Realtor.com lead %s went "
+                "unclaimed through both shootout rounds. Fhalen has been "
+                "asked to cover. https://yourfriendlyagent.followupboss"
+                ".com/2/people/view/%s" % (lead1, person_id))
+    except Exception:
+        pass
+
+
+def _realtor_call_enforcer():
+    """A shootout claim is a promise to dial. No outbound call by
+    REALTOR_CALL_NUDGE_MIN gets a private nudge; none by
+    REALTOR_CALL_YANK_MIN and the claim is released back to the group
+    (round 2, claimer excluded). Rides the every-minute cascade job;
+    claim_once keys make both steps fire exactly once per offer."""
+    try:
+        rows = _db.get_claims_pending_call(source="realtor", hours=24)
+    except Exception:
+        return
+    if not rows:
+        return
+    nudge_min = int(getattr(config, "REALTOR_CALL_NUDGE_MIN", 5))
+    yank_min = int(getattr(config, "REALTOR_CALL_YANK_MIN", 10))
+    import dispatch as _dp
+    for r in rows:
+        age = int(r.get("age_min") or 0)
+        first = (r["agent_name"] or "").split()[0]
+        lead1 = (r["lead_name"] or "the lead").split()[0]
+        link = ("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
+                % r["person_id"])
+        if age >= yank_min:
+            if not _db.claim_once("ryank_%s" % r["id"]):
+                continue
+            _db.mark_dispatch_terminal(r["id"])
+            try:
+                import slack_client as _sl
+                sid = _dp._slack_user_id(r["agent_name"])
+                if _sl.is_available() and sid:
+                    _sl.dm_user(sid, "%s, straight talk: you claimed %s %d "
+                        "minutes ago and no dial has hit FUB, so the "
+                        "shootout just reopened to the group. No lecture, "
+                        "just physics: a paid shared lead dies by the "
+                        "minute. Next one is yours the moment you claim "
+                        "AND dial." % (first, lead1, age))
+            except Exception:
+                pass
+            _db.log_automation_event(
+                event_type="realtor_yank", person_id=r["person_id"],
+                person_name=r["lead_name"], agent_name=r["agent_name"],
+                payload={"age_min": age, "hop": r["hop"]},
+                triggered_by="cascade")
+            made = []
+            if r["hop"] < 2:
+                made = _dp.make_shootout(
+                    r["person_id"], r["lead_name"],
+                    lead_city=r["lead_city"], notes=r["notes"],
+                    audit=cache_get("audit") or {}, round_no=2,
+                    exclude={r["agent_name"]})
+            if not made:
+                _realtor_terminal(r["person_id"], r["lead_name"])
+        elif age >= nudge_min:
+            if not _db.claim_once("rnudge_%s" % r["id"]):
+                continue
+            sent = False
+            try:
+                import slack_client as _sl
+                sid = _dp._slack_user_id(r["agent_name"])
+                if _sl.is_available() and sid:
+                    sent = _sl.dm_user(sid, "%s, %s said yes %d minutes ago "
+                        "and FUB hasn't seen a dial yet. Realtor.com sold "
+                        "this lead to other agents too, and the first voice "
+                        "usually wins. %d more minutes and the claim "
+                        "reopens to the group. Call now: %s"
+                        % (first, lead1, age, max(yank_min - age, 1), link))
+            except Exception:
+                pass
+            if not sent:
+                try:
+                    _prof = next((p for p in
+                                  (_db.get_agent_profiles(active_only=True)
+                                   or [])
+                                  if p["agent_name"] == r["agent_name"]),
+                                 None)
+                    if _prof:
+                        _db.queue_agent_imessage(
+                            r["agent_name"], _prof.get("fub_user_id"),
+                            _prof.get("phone") or _prof.get("fub_phone"),
+                            "%s, %s is claimed to you with no dial logged "
+                            "yet. %d more minutes and it reopens to the "
+                            "group. Call now." % (first, lead1,
+                                                  max(yank_min - age, 1)),
+                            week_day="dispatch")
+                except Exception:
+                    pass
+
+
 def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
     """The Lead Desk front door, one person at a time: fetch, filter
     against the seen-tags ledger, then offer (pond) or mirror + owner
@@ -12418,6 +12801,14 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
         try:
             person = FUBClient().get_person(pid) or {}
             tags_l = [t.lower() for t in (person.get("tags") or [])]
+            # ── Realtor.com shootout lane (Barry, Nov 2 2026): purchased
+            # shared leads route on SOURCE, not tags — they arrive with no
+            # conversion tag and every minute belongs to the first voice.
+            try:
+                if _realtor_intake(pid, person, triggered_by):
+                    continue
+            except Exception as _rie:
+                logger.warning("realtor intake failed for %s: %s", pid, _rie)
             # ── Cash lane (Barry, Oct 2026): hamptonroadshome.cash sellers
             # go to Fhalen, who calls them, with Ana closing by phone.
             # Assign ONCE per lead (claim_once), so a deliberate later
@@ -12466,21 +12857,12 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                         logger.warning("cash lane DM failed: %s", _ce)
             except Exception as _cle:
                 logger.warning("cash lane check failed for %s: %s", pid, _cle)
-            # One front door, full parity with the retired Warm
-            # Handoff reassignment step (Barry's screenshot, Sep
-            # 2026): all six conversion tags plus Blue's
-            # sms_conversion route through the desk once live.
-            # Y_AI_PRIORITY removed (Barry, Sep 2026 go-live day):
-            # it is a browsing-intent rollup that Ylopo re-applies
-            # in sweeps, not a conversion. The old FUB automation
-            # muted that with once-per-lead-ever semantics; the desk
-            # rings only when the lead actually said yes to talking.
-            _desk_tags = ("ai_needs_follow_up",
-                          "ai_voice_needs_follow_up",
-                          "sms_conversion", "claude_text_converted",
-                          "isa_transfer_unsuccessful",
-                          "isa_attempted_transfer_realtor_unavailable")
-            _present = [t for t in _desk_tags if t in tags_l]
+            # One front door: the desk routes on DESK_CONVERSION_TAGS,
+            # the single constant the safety sweep also uses. A local
+            # copy of the tuple drifted when y_ai_priority was restored
+            # (Oct 31 2026), so webhook routing silently missed that tag
+            # until the 10-minute sweep caught it. One list, one truth.
+            _present = [t for t in DESK_CONVERSION_TAGS if t in tags_l]
             if not _present:
                 continue
             # Route only on tags NEW to this lead — Ylopo never

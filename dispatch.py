@@ -283,6 +283,181 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
         week_day="dispatch"))
 
 
+def _notify_shootout(agent_name, offer_token, lead_name, lead_city,
+                     round_no, rivals):
+    """The shootout offer. Same two channels as _notify (Slack DM with
+    CLAIM/Pass, nudge text pointing back at the button), different story:
+    this lead is shared with competing agents and several teammates are
+    seeing the same button right now. First tap wins."""
+    first = agent_name.split()[0]
+    lead_first = (lead_name or "a new lead").split()[0]
+    where = (" in %s" % lead_city.title()) if lead_city else ""
+    mins = int(getattr(config, "REALTOR_OFFER_MINUTES", 2))
+    if round_no == 1:
+        head_line = ("%s, shootout: a paid Realtor.com lead just hit the "
+                     "board. %s%s. Realtor.com sends this lead to competing "
+                     "agents outside our team too, so the first voice "
+                     "usually wins the relationship. %d of you are seeing "
+                     "this at the same time. First CLAIM takes it."
+                     % (first, lead_first, where, max(rivals, 1)))
+    else:
+        head_line = ("%s, round two: %s%s is still unclaimed. The whole "
+                     "board is seeing this now. A paid lead with no owner "
+                     "is money burning. First CLAIM takes it."
+                     % (first, lead_first, where))
+    # ── Slack DM first ────────────────────────────────────────────────────
+    try:
+        import json as _json
+        import slack_client as _sl
+        sid = _slack_user_id(agent_name)
+        if _sl.is_available() and sid:
+            head = ("\U0001f534 *%s*\n*%d minutes* on the clock, and the "
+                    "clock is shared." % (head_line, mins))
+            blocks = [
+                {"type": "section", "text": {"type": "mrkdwn", "text": head}},
+                {"type": "actions", "elements": [
+                    {"type": "button", "style": "primary",
+                     "text": {"type": "plain_text", "text": "CLAIM"},
+                     "action_id": "desk_claim",
+                     "value": _json.dumps({"token": offer_token})},
+                    {"type": "button",
+                     "text": {"type": "plain_text", "text": "Pass"},
+                     "action_id": "desk_pass",
+                     "value": _json.dumps({"token": offer_token})},
+                ]},
+                {"type": "context", "elements": [
+                    {"type": "mrkdwn",
+                     "text": "Buttons not working? <%s|Claim here instead>."
+                             % _accept_url(offer_token)}]},
+            ]
+            if _sl.dm_user(sid, "Shootout lead: %s" % lead_first,
+                           blocks=blocks):
+                # Dual delivery, same doctrine as the conversion lane: a
+                # nudge text with no link pointing back at the button.
+                try:
+                    _prof = next((p for p in
+                                  (_db.get_agent_profiles(active_only=True) or [])
+                                  if p["agent_name"] == agent_name), None)
+                    if _prof:
+                        _dml = ""
+                        try:
+                            import json as _json2
+                            _raw, _unused = _db.get_app_state("slack_dm_channels")
+                            _chm = _json2.loads(_raw or "{}")
+                            _ch = _chm.get(agent_name)
+                            if not _ch:
+                                _ch = _sl.open_dm_channel(sid)
+                                if _ch:
+                                    _chm[agent_name] = _ch
+                                    _db.set_app_state("slack_dm_channels",
+                                                      _json2.dumps(_chm))
+                            if _ch:
+                                _dml = (" Tap here, the button is on your "
+                                        "screen: https://app.slack.com/"
+                                        "client/T1LDE7TCG/%s" % _ch)
+                        except Exception:
+                            pass
+                        _nudge = ("%s, shootout: a paid Realtor.com lead "
+                                  "(%s%s) just went to several of you at "
+                                  "once. First CLAIM in Slack takes it, %d "
+                                  "minutes on the clock.%s"
+                                  % (first, lead_first, where, mins, _dml))
+                        _db.queue_agent_imessage(
+                            agent_name, _prof.get("fub_user_id"),
+                            _prof.get("phone") or _prof.get("fub_phone"),
+                            _nudge, week_day="dispatch")
+                except Exception as _de:
+                    logger.warning("[SHOOTOUT] dual nudge failed for %s: %s",
+                                   agent_name, _de)
+                return True
+    except Exception as e:
+        logger.warning("[SHOOTOUT] slack offer failed for %s: %s",
+                       agent_name, e)
+    # ── Fallback: the standard queue with the accept URL ──────────────────
+    profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
+                    if p["agent_name"] == agent_name), None)
+    if not profile:
+        return False
+    msg = ("%s, shootout: a paid Realtor.com lead (%s%s) went to several "
+           "agents at once. First tap takes it, %d minutes on the clock: %s"
+           % (first, lead_first, where, mins, _accept_url(offer_token)))
+    return bool(_db.queue_agent_imessage(
+        agent_name, profile.get("fub_user_id"),
+        profile.get("phone") or profile.get("fub_phone"), msg,
+        week_day="dispatch"))
+
+
+def make_shootout(person_id, lead_name, lead_city=None, notes=None,
+                  audit=None, round_no=1, exclude=None, dry_run=False):
+    """Realtor.com lane (Barry, Nov 2 2026): shared paid leads get
+    SIMULTANEOUS offers, first CLAIM wins. Round 1 = the next
+    REALTOR_SHOOTOUT_SIZE eligible priority agents (rotation-ordered, so
+    bursts spread). Round 2 = every active non-gated agent who hasn't had
+    this lead yet: a shared lead rotting on doctrine still loses the
+    deal. The desk_claim handler voids the losing siblings on first
+    claim. Daily claim caps deliberately don't apply here — the fastest
+    hands win a shootout, fairness yields to a dying lead."""
+    exclude = set(exclude or ())
+    prior = {o["agent"] for o in _db.dispatch_person_state(person_id)}
+    size = int(getattr(config, "REALTOR_SHOOTOUT_SIZE", 3))
+    if round_no <= 1:
+        cands = []
+        for cand in eligible_agents(lead_city, audit=audit):
+            if cand in prior or cand in exclude:
+                continue
+            try:
+                if _db.count_open_dispatch_offers(cand) >= 2:
+                    continue
+                _t = (_db.dispatch_agent_today([cand]) or {}).get(cand) or {}
+                if _t.get("on_appt_now"):
+                    continue
+            except Exception:
+                pass
+            cands.append(cand)
+            if len(cands) >= size:
+                break
+    else:
+        gated = set()
+        try:
+            gated = _db.get_onboarding_gated()
+        except Exception:
+            pass
+        roster = [p["agent_name"] for p in
+                  (_db.get_agent_profiles(active_only=True) or [])]
+        cands = [n for n in roster
+                 if n not in prior and n not in exclude
+                 and n not in gated and n not in _EXCLUDED]
+    if dry_run:
+        return [{"agent_name": n, "dry_run": True} for n in cands]
+    if not cands:
+        return []
+    if round_no <= 1:
+        # Advance past the whole trio so the next lead's round 1 starts
+        # on fresh names (same per-offer doctrine as make_offer).
+        for _ in cands:
+            advance_rotation()
+    mins = int(getattr(config, "REALTOR_OFFER_MINUTES", 2))
+    made = []
+    for agent in cands:
+        token = secrets.token_urlsafe(9)
+        oid = _db.create_dispatch_offer("realtor", person_id, lead_name,
+                                        lead_city, None, notes, agent,
+                                        token, minutes=mins, hop=round_no)
+        if not oid:
+            continue
+        try:
+            _db.set_offer_route(oid, "shootout:r%d" % round_no)
+        except Exception:
+            pass
+        sent = _notify_shootout(agent, token, lead_name, lead_city,
+                                round_no, rivals=len(cands))
+        logger.info("[SHOOTOUT] offer %s: %s -> %s (round %d, sent=%s)",
+                    oid, lead_name, agent, round_no, sent)
+        made.append({"offer_id": oid, "agent_name": agent, "token": token,
+                     "sent": sent})
+    return made
+
+
 def make_offer(source, person_id, lead_name, lead_city=None, appt_time=None,
                notes=None, agent_name=None, hop=1, audit=None,
                lead_source=None):

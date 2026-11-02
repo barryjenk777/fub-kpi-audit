@@ -10066,6 +10066,56 @@ def mark_dispatch_terminal(offer_id):
         logger.warning("mark_dispatch_terminal failed: %s", e)
 
 
+def void_sibling_offers(person_id, except_id):
+    """Shootout resolution: the first claim closes every other open offer
+    on the lead. Returns the losing agents' names for the beaten DM.
+    pass_reason 'beaten' separates losing a race from ignoring an offer
+    in any stats query that cares."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE dispatch_offers
+                       SET expired_at = NOW(), pass_reason = 'beaten'
+                     WHERE person_id = %s AND id <> %s
+                       AND accepted_at IS NULL AND passed_at IS NULL
+                       AND expired_at IS NULL
+                    RETURNING agent_name
+                """, (str(person_id), except_id))
+                return [r[0] for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("void_sibling_offers failed: %s", e)
+        return []
+
+
+def get_claims_pending_call(source="realtor", hours=24):
+    """Accepted offers with no outbound call logged yet, for the
+    claim-to-call enforcer. terminal=TRUE marks a claim already released
+    (yanked), so it never enforces twice."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, person_id, lead_name, lead_city, notes,
+                           agent_name, hop,
+                           (EXTRACT(EPOCH FROM NOW() - accepted_at) / 60)::int
+                    FROM dispatch_offers
+                    WHERE source = %s AND accepted_at IS NOT NULL
+                      AND first_call_at IS NULL AND terminal = FALSE
+                      AND accepted_at >= NOW() - make_interval(hours => %s)
+                """, (source, int(hours)))
+                keys = ("id", "person_id", "lead_name", "lead_city", "notes",
+                        "agent_name", "hop", "age_min")
+                return [dict(zip(keys, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_claims_pending_call failed: %s", e)
+        return []
+
+
 def due_dispatch_offers():
     """Open offers past their window, for the cascade job."""
     if not is_available():
