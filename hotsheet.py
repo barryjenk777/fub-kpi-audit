@@ -447,9 +447,12 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
             import slack_client as _sl
             _sid = _db._slack_id_for_agent(agent)
             if _sl.is_available() and _sid:
+                # nm is already the validated first name; _usable_name is
+                # a yes/no check and rendered every link as "True" (Barry's
+                # CC, Nov 2 2026).
                 _links = " \u00b7 ".join(
                     "<https://yourfriendlyagent.followupboss.com/2/people/"
-                    "view/%s|%s>" % (pid, _usable_name(nm) or "lead")
+                    "view/%s|%s>" % (pid, nm or "lead")
                     for pid, nm, _r in picks)
                 _card = message
                 if _links:
