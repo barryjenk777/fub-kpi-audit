@@ -101,7 +101,7 @@ def _lead_reason(client, person, isa_days=None):
         reason = "back on the site this week"
     else:
         score = person.get("customLeadStreamScore")
-        reason = ("top score on your list (%s)" % int(score)) if score \
+        reason = ("top score on your list, %s" % int(score)) if score \
             else "highest priority on your list"
     if window:
         reason += ", " + window
@@ -127,13 +127,25 @@ def _compose(agent_first, picks, greeting=True):
                 "list right now. Start with %s."
                 % (hello, len(picks), listed, names[0]))
     else:
-        seen, parts = set(), []
+        # Names sharing a reason group together, whatever the reason, so
+        # the sheet reads human: "Colins and Donald (both second day on
+        # your sheet, still no call), Mary (top score on your list, 95)"
+        # instead of the same parenthetical twice (Barry's CC, Nov 2026).
+        groups = []  # [(reason, [names])] in first-seen order
         for n, r in picks:
-            if r in seen and r.startswith(("top score", "highest priority")):
-                parts.append(n)
+            g = next((g for g in groups if g[0] == r), None)
+            if g:
+                g[1].append(n)
             else:
-                parts.append("%s (%s)" % (n, r))
-                seen.add(r)
+                groups.append((r, [n]))
+        parts = []
+        for r, ns in groups:
+            if len(ns) == 1:
+                parts.append("%s (%s)" % (ns[0], r))
+            else:
+                listed = "%s and %s" % (", ".join(ns[:-1]), ns[-1])
+                parts.append("%s (%s %s)"
+                             % (listed, "both" if len(ns) == 2 else "all", r))
         body = ("%sYour %d for today: %s. Start with %s."
                 % (hello, len(picks), ", ".join(parts), names[0]))
     return body
@@ -462,7 +474,7 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
                     if _tk:
                         import os as _os2
                         _card += (chr(10) + "<%s/my-goals/%s|Your board: "
-                                  "goals, film, and today's names>"
+                                  "goals, call scores, and today's names>"
                                   % ((_os2.environ.get("BASE_URL")
                                       or "https://www.legacycommandcenter.com"
                                       ).rstrip("/"), _tk))
