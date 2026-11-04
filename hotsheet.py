@@ -248,6 +248,18 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
     profiles = _db.get_agent_profiles(active_only=True) or []
     uid_by_agent = {p.get("agent_name"): p.get("fub_user_id") for p in profiles}
 
+    # Paid Realtor.com claims still on the attempt ladder (no two way
+    # contact yet, inside the 14 day window). These pin to the TOP of the
+    # sheet: a shared lead is being competed for by agents outside the
+    # team, so it outranks everything, including yesterday's escalations.
+    ladder_by_agent = {}
+    try:
+        import realtor_ladder as _rl
+        for lad in _rl.active_ladders(client):
+            ladder_by_agent.setdefault(lad["agent_name"], []).append(lad)
+    except Exception as e:
+        logger.warning("[HOT SHEET] realtor ladder read failed: %s", e)
+
     # Ghosted-after-held leads from the appointment money layer
     ghosted_by_agent = {}
     try:
@@ -307,9 +319,30 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
 
         picks, used_pids = [], set()
 
+        # -1. Paid Realtor.com ladder leads pin first, always. The agent
+        # paid nothing, Barry paid $80, and competing agents got the same
+        # lead. Attempt count wins the close, so the sheet says exactly
+        # where they stand on the 14 day plan.
+        for lad in (ladder_by_agent.get(agent) or [])[:2]:
+            pid = str(lad["person_id"])
+            if pid in used_pids or not _usable_name(lad.get("lead_name")):
+                continue
+            if lad["day_no"] <= 0:
+                _r = ("paid Realtor.com lead claimed today, %d of %d calls "
+                      "in. The agents competing for this one have not "
+                      "stopped" % (lad["attempts"], lad["due"]))
+            else:
+                _r = ("paid Realtor.com lead, day %d of 14, %d of %d calls "
+                      "in" % (lad["day_no"], lad["attempts"], lad["due"]))
+            picks.append((pid, _first(lad["lead_name"]), _r))
+            used_pids.add(pid)
+
         # 0. Escalations: yesterday's uncalled picks come back on top
         for pid, lead_name in (uncalled.get(agent) or [])[:2]:
-            if str(pid) in phoenix_pids or not _usable_name(lead_name):
+            if len(picks) >= 3:
+                break
+            if str(pid) in phoenix_pids or str(pid) in used_pids \
+                    or not _usable_name(lead_name):
                 continue
             picks.append((str(pid), _first(lead_name),
                           "second day on your sheet, still no call"))

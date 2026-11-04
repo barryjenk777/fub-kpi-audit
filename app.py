@@ -6751,7 +6751,26 @@ def api_realtor_lane():
         if "live" in body:
             _db.set_app_state("realtor_live",
                               "1" if bool(body["live"]) else "0")
+        action = (body.get("action") or "").strip()
+        if action == "ladder_sweep":
+            return jsonify(scheduled_realtor_ladder_sweep(
+                dry_run=bool(body.get("dry_run", True))))
+        if action == "roi_email":
+            return jsonify(scheduled_realtor_roi_email(
+                dry_run=bool(body.get("dry_run", True))))
     live, _ = _db.get_app_state("realtor_live")
+    ladders = []
+    try:
+        import realtor_ladder as _rl
+        for lad in _rl.active_ladders(FUBClient()):
+            ladders.append({"lead": lad["lead_name"],
+                            "agent": lad["agent_name"],
+                            "day_no": lad["day_no"],
+                            "attempts": lad["attempts"],
+                            "due": lad["due"], "behind": lad["behind"],
+                            "person_id": lad["person_id"]})
+    except Exception as e:
+        ladders = [{"error": str(e)}]
     import dispatch as _dp
     lineup = []
     try:
@@ -6771,7 +6790,8 @@ def api_realtor_lane():
         pass
     events = {}
     for et in ("realtor_shootout", "realtor_gated", "realtor_yank",
-               "realtor_already_assigned", "realtor_stale_skip"):
+               "realtor_already_assigned", "realtor_stale_skip",
+               "realtor_ladder_nudge"):
         try:
             events[et] = _db.get_automation_events(et, days=7, limit=10)
         except Exception:
@@ -6791,6 +6811,7 @@ def api_realtor_lane():
                                              "REALTOR_CALL_YANK_MIN", 10),
                     "round1_lineup_now": lineup,
                     "round2_roster_now": roster2,
+                    "active_ladders": ladders,
                     "events_7d": events})
 
 
@@ -12863,6 +12884,185 @@ def _realtor_call_enforcer():
                             week_day="dispatch")
                 except Exception:
                     pass
+
+
+def scheduled_realtor_ladder_sweep(dry_run=False):
+    """7pm ET, daily: the attempt ladder for paid Realtor.com claims.
+    The shootout enforced call #1; this owns calls 2 through 10. One
+    Slack DM per lead per day, only when the agent is behind the plan,
+    competitor framing (on a shared lead it is literally true), never
+    shame. Rides outside the one-coaching-text governor the same way
+    shootout messages do, but the per-lead-per-day claim_once keeps it
+    from ever stacking."""
+    import realtor_ladder as _rl
+    import dispatch as _dp
+    summary = {"checked": 0, "nudged": 0, "dry_run": dry_run, "nudges": []}
+    client = FUBClient()
+    from zoneinfo import ZoneInfo as _ZI
+    today = datetime.now(_ZI("America/New_York")).date().isoformat()
+    base = (os.environ.get("BASE_URL")
+            or "https://www.legacycommandcenter.com").rstrip("/")
+    for lad in _rl.active_ladders(client):
+        summary["checked"] += 1
+        if lad["behind"] < 1:
+            continue
+        first = (lad["agent_name"] or "").split()[0]
+        lead1 = (lad["lead_name"] or "this lead").split()[0]
+        link = ("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
+                % lad["person_id"])
+        try:
+            tk = _db.get_token_for_agent(lad["agent_name"])
+            if tk:
+                link = "%s/t/%s/fub/%s?c=s" % (base, tk, lad["person_id"])
+        except Exception:
+            pass
+        msg = ("%s, quick one on %s. That is a paid Realtor.com lead, and "
+               "the competing agents who bought the same name have not "
+               "stopped dialing. FUB shows %d call%s since your claim; the "
+               "14 day plan says %d by tonight. One dial before 8 closes "
+               "the gap and keeps the lead yours: %s"
+               % (first, lead1, lad["attempts"],
+                  "" if lad["attempts"] == 1 else "s", lad["due"], link))
+        summary["nudges"].append({"agent": lad["agent_name"],
+                                  "lead": lad["lead_name"],
+                                  "behind": lad["behind"],
+                                  "message": msg})
+        if dry_run:
+            continue
+        if not _db.claim_once("rladder_%s_%s" % (lad["person_id"], today)):
+            continue
+        sent = False
+        try:
+            import slack_client as _sl
+            sid = _dp._slack_user_id(lad["agent_name"])
+            if _sl.is_available() and sid:
+                sent = _sl.dm_user(sid, msg)
+        except Exception as e:
+            logger.warning("[LADDER] slack nudge failed for %s: %s",
+                           lad["agent_name"], e)
+        if not sent:
+            try:
+                _prof = next((p for p in
+                              (_db.get_agent_profiles(active_only=True) or [])
+                              if p["agent_name"] == lad["agent_name"]), None)
+                if _prof:
+                    _db.queue_agent_imessage(
+                        lad["agent_name"], _prof.get("fub_user_id"),
+                        _prof.get("phone") or _prof.get("fub_phone"),
+                        msg, week_day="dispatch")
+                    sent = True
+            except Exception:
+                pass
+        if sent:
+            summary["nudged"] += 1
+            _db.log_automation_event(
+                event_type="realtor_ladder_nudge",
+                person_id=lad["person_id"], person_name=lad["lead_name"],
+                agent_name=lad["agent_name"],
+                payload={"day_no": lad["day_no"], "attempts": lad["attempts"],
+                         "due": lad["due"], "behind": lad["behind"]},
+                triggered_by="ladder_sweep")
+    logger.info("[LADDER] sweep done: checked=%d nudged=%d dry_run=%s",
+                summary["checked"], summary["nudged"], dry_run)
+    return summary
+
+
+def scheduled_realtor_roi_email(dry_run=False):
+    """Friday 8:30am ET: the Realtor.com receipt to Barry. Every claim
+    from the last 30 days with attempts vs the ladder, contact yes or no,
+    appointment yes or no, claim speed, and the month's spend math
+    against the 'one close a month makes this work' line. 'Claimed and
+    abandoned' (6 or more calls behind, no contact) is named per agent;
+    that pattern decides who keeps getting shootout offers."""
+    import realtor_ladder as _rl
+    if not dry_run and _already_fired_recently("realtor_roi", within_hours=20):
+        return {"skipped": "already sent"}
+    client = FUBClient()
+    claims = _rl.get_claims(days=30)
+    rows = []
+    pids = [c["person_id"] for c in claims]
+    appt_pids = set()
+    if pids:
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT DISTINCT person_id::text FROM appointments
+                        WHERE person_id::text = ANY(%s)
+                          AND status != 'canceled'
+                          AND created_at >= NOW() - INTERVAL '31 days'
+                    """, (pids,))
+                    appt_pids = {r[0] for r in cur.fetchall()}
+        except Exception as e:
+            logger.warning("[LADDER ROI] appt lookup failed: %s", e)
+    for c in claims:
+        st = _rl.ladder_state(client, c["person_id"], c["accepted_at"])
+        claim_secs = None
+        try:
+            claim_secs = int((c["accepted_at"]
+                              - c["offered_at"]).total_seconds())
+        except Exception:
+            pass
+        has_appt = str(c["person_id"]) in appt_pids
+        if has_appt:
+            status = "appointment"
+        elif st["contacted"]:
+            status = "contacted"
+        elif not st["window_open"]:
+            status = "to nurture, never reached"
+        elif st["behind"] >= 6:
+            status = "claimed and abandoned"
+        elif st["behind"] >= 1:
+            status = "behind by %d" % st["behind"]
+        else:
+            status = "on plan"
+        rows.append({"lead": c["lead_name"], "agent": c["agent_name"],
+                     "claimed": c["accepted_at"], "claim_secs": claim_secs,
+                     "attempts": st["attempts"], "due": st["due"],
+                     "day_no": st["day_no"], "contacted": st["contacted"],
+                     "appt": has_appt, "status": status,
+                     "person_id": c["person_id"]})
+    month_leads = 0
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(DISTINCT person_id)
+                    FROM automation_event_log
+                    WHERE event_type = 'realtor_shootout'
+                      AND created_at >= date_trunc('month', NOW())
+                """)
+                month_leads = int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.warning("[LADDER ROI] spend count failed: %s", e)
+    totals = {
+        "claims_30d": len(rows),
+        "contacted": sum(1 for r in rows if r["contacted"]),
+        "appts": sum(1 for r in rows if r["appt"]),
+        "abandoned": sum(1 for r in rows
+                         if r["status"] == "claimed and abandoned"),
+        "month_leads": month_leads,
+        "month_spend": month_leads * _rl.LEAD_COST_USD,
+    }
+    if dry_run:
+        return {"rows": [{k: (str(v) if k == "claimed" else v)
+                          for k, v in r.items()} for r in rows],
+                "totals": totals, "dry_run": True}
+    try:
+        import email_report as _er
+        import postmark_client as _pm
+        subj, html = _er.build_realtor_roi_email(rows, totals)
+        _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+                 subject=subj, html=html,
+                 text="Realtor.com weekly receipt: %d claims, %d contacted, "
+                      "%d appointments, $%d spent this month."
+                      % (totals["claims_30d"], totals["contacted"],
+                         totals["appts"], totals["month_spend"]))
+        _record_fired("realtor_roi")
+        logger.info("[LADDER ROI] sent: %s", totals)
+    except Exception as e:
+        logger.warning("[LADDER ROI] send failed: %s", e)
+    return {"totals": totals}
 
 
 def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
@@ -26005,6 +26205,16 @@ def start_scheduler():
     _scheduler.add_job(scheduled_handoff_scan,
                        CronTrigger(minute="*/10", hour="8-19", timezone=ET),
                        id="handoff_scan", name="Instant Handoff Protocol (10-min scan)",
+                       max_instances=1, coalesce=True)
+    # Realtor.com attempt ladder: the 7pm "you are behind the plan" sweep
+    # and the Friday receipt to Barry (paid shared leads, $80 each).
+    _scheduler.add_job(scheduled_realtor_ladder_sweep,
+                       CronTrigger(hour=19, minute=0, timezone=ET),
+                       id="realtor_ladder", name="Realtor ladder sweep (7pm)",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(scheduled_realtor_roi_email,
+                       CronTrigger(day_of_week="fri", hour=8, minute=30, timezone=ET),
+                       id="realtor_roi", name="Realtor ROI email (Fri 8:30am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_appt_insight,
                        CronTrigger(hour=6, minute=20, timezone=ET),

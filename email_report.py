@@ -2272,3 +2272,138 @@ def build_hotsheet_email(agent_first, coach_msg, scoreboard, picks, dojo,
         % (_HS_BG, preheader, _HS_BG, _HS_GRAY, _HS_GRAY, date_label,
            _HS_INK, agent_first, body, _HS_GRAY))
     return subject, html
+
+
+# ── Realtor.com weekly receipt (Barry-facing, Nov 4 2026) ───────────────────
+# 25 paid shared leads a month at $80. The receipt answers one question
+# every Friday: is the spend converting, and who is working the plan.
+
+def build_realtor_roi_email(rows, totals):
+    """rows: dicts from scheduled_realtor_roi_email (lead, agent, claimed,
+    claim_secs, attempts, due, day_no, contacted, appt, status, person_id).
+    totals: claims_30d, contacted, appts, abandoned, month_leads,
+    month_spend. Returns (subject, html)."""
+    subject = ("Realtor.com receipt: %d claimed, %d contacted, %d appt%s, "
+               "$%d this month"
+               % (totals["claims_30d"], totals["contacted"], totals["appts"],
+                  "" if totals["appts"] == 1 else "s",
+                  totals["month_spend"]))
+
+    def _speed(secs):
+        if secs is None:
+            return ""
+        if secs < 120:
+            return "%ds" % secs
+        return "%dm" % (secs // 60)
+
+    def _status_color(status):
+        if status in ("appointment", "contacted", "on plan"):
+            return _HS_GREEN
+        if status.startswith("behind"):
+            return "#b26a00"
+        if status == "claimed and abandoned":
+            return "#b3261e"
+        return _HS_GRAY
+
+    trs = []
+    for r in rows:
+        mark_c = ("&#10003;" if r["contacted"] else "&middot;")
+        mark_a = ("&#10003;" if r["appt"] else "&middot;")
+        link = ("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
+                % r["person_id"])
+        trs.append(
+            '<tr>'
+            '<td style="padding:8px 10px;font-size:14px;color:%s;">'
+            '<a href="%s" style="color:%s;text-decoration:none;'
+            'font-weight:700;">%s</a><br>'
+            '<span style="font-size:12px;color:%s;">%s &middot; claimed in '
+            '%s &middot; day %d</span></td>'
+            '<td align="center" style="padding:8px 10px;font-size:14px;'
+            'color:%s;white-space:nowrap;">%d of %d</td>'
+            '<td align="center" style="padding:8px 6px;font-size:16px;'
+            'color:%s;">%s</td>'
+            '<td align="center" style="padding:8px 6px;font-size:16px;'
+            'color:%s;">%s</td>'
+            '<td style="padding:8px 10px;font-size:13px;font-weight:700;'
+            'color:%s;">%s</td>'
+            '</tr>'
+            % (_HS_INK, link, _HS_INK, r["lead"] or "lead",
+               _HS_GRAY, r["agent"] or "", _speed(r["claim_secs"]),
+               r["day_no"],
+               _HS_INK, r["attempts"], r["due"],
+               _HS_GREEN if r["contacted"] else _HS_GRAY, mark_c,
+               _HS_GREEN if r["appt"] else _HS_GRAY, mark_a,
+               _status_color(r["status"]), r["status"]))
+    if not trs:
+        trs.append('<tr><td style="padding:14px 10px;font-size:14px;'
+                   'color:%s;">No Realtor.com claims in the last 30 days.'
+                   '</td></tr>' % _HS_GRAY)
+
+    contact_rate = (100 * totals["contacted"] // totals["claims_30d"]
+                    if totals["claims_30d"] else 0)
+    stat = ('<td align="center" style="padding:12px 8px;">'
+            '<div style="font-size:24px;font-weight:800;color:%s;">%s</div>'
+            '<div style="font-size:11px;letter-spacing:1px;color:%s;">%s'
+            '</div></td>')
+    stats_row = "".join([
+        stat % (_HS_INK, totals["claims_30d"], _HS_GRAY, "CLAIMED 30D"),
+        stat % (_HS_GREEN if contact_rate >= 60 else "#b26a00",
+                "%d%%" % contact_rate, _HS_GRAY, "CONTACT RATE"),
+        stat % (_HS_INK, totals["appts"], _HS_GRAY, "APPOINTMENTS"),
+        stat % (_HS_INK, "$%d" % totals["month_spend"], _HS_GRAY,
+                "SPEND THIS MONTH"),
+    ])
+    aband = ""
+    if totals["abandoned"]:
+        aband = ('<tr><td style="padding:10px 24px 0;font-size:14px;'
+                 'color:#b3261e;font-weight:700;">%d claim%s flagged as '
+                 'claimed and abandoned (6 or more calls behind, no '
+                 'contact). Claiming and sitting is the one behavior that '
+                 'kills this program.</td></tr>'
+                 % (totals["abandoned"],
+                    "" if totals["abandoned"] == 1 else "s"))
+
+    html = (
+        '<!DOCTYPE html><html><body style="margin:0;padding:0;'
+        'background:%s;">'
+        '<table role="presentation" width="100%%" cellpadding="0" '
+        'cellspacing="0" bgcolor="%s"><tr><td align="center" '
+        'style="padding:24px 12px;">'
+        '<table role="presentation" width="640" cellpadding="0" '
+        'cellspacing="0" style="max-width:640px;width:100%%;'
+        'font-family:-apple-system,Segoe UI,Arial,sans-serif;">'
+        '<tr><td style="padding:0 24px 10px;font-size:12px;'
+        'font-weight:700;letter-spacing:2px;color:%s;">'
+        'REALTOR.COM WEEKLY RECEIPT</td></tr>'
+        '<tr><td><table role="presentation" width="100%%" cellpadding="0" '
+        'cellspacing="0" bgcolor="#ffffff" style="border-radius:12px;">'
+        '<tr><td><table role="presentation" width="100%%" cellpadding="0" '
+        'cellspacing="0"><tr>%s</tr></table></td></tr>'
+        '%s'
+        '<tr><td style="padding:14px 14px 18px;">'
+        '<table role="presentation" width="100%%" cellpadding="0" '
+        'cellspacing="0">'
+        '<tr>'
+        '<td style="padding:4px 10px;font-size:11px;letter-spacing:1px;'
+        'color:%s;">LEAD</td>'
+        '<td align="center" style="padding:4px 10px;font-size:11px;'
+        'letter-spacing:1px;color:%s;">CALLS</td>'
+        '<td align="center" style="padding:4px 6px;font-size:11px;'
+        'letter-spacing:1px;color:%s;">CONTACT</td>'
+        '<td align="center" style="padding:4px 6px;font-size:11px;'
+        'letter-spacing:1px;color:%s;">APPT</td>'
+        '<td style="padding:4px 10px;font-size:11px;letter-spacing:1px;'
+        'color:%s;">STATUS</td>'
+        '</tr>%s</table></td></tr>'
+        '</table></td></tr>'
+        '<tr><td style="padding:14px 24px 0;font-size:13px;color:%s;">'
+        'The goal line: 1 close a month makes the spend work. Contact is '
+        'the gate to everything, and the ladder (10 calls over 14 days) is '
+        'the minimum that wins shared leads.</td></tr>'
+        '<tr><td align="center" style="padding:16px 24px 0;font-size:12px;'
+        'color:%s;">Legacy Home Team &middot; Legacy Command Center</td>'
+        '</tr></table></td></tr></table></body></html>'
+        % (_HS_BG, _HS_BG, _HS_GRAY, stats_row, aband,
+           _HS_GRAY, _HS_GRAY, _HS_GRAY, _HS_GRAY, _HS_GRAY,
+           "".join(trs), _HS_GRAY, _HS_GRAY))
+    return subject, html
