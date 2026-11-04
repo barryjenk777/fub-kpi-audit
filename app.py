@@ -20822,7 +20822,7 @@ def scheduled_lead_memory_refresh():
         _db.release_job_lock("lead_memory")
 
 
-def _market_field_sweep(dry_run=True, per_agent_limit=100):
+def _market_field_sweep(dry_run=True, per_agent_limit=2000):
     """Write the agent playbook URL onto EVERY assigned lead, not just the
     Call Opener's priority scope (Sep 9 gap: Barry spot-checked hot/warm/
     cold books and found the field empty — those leads never get briefs).
@@ -20848,9 +20848,13 @@ def _market_field_sweep(dry_run=True, per_agent_limit=100):
                 or agent == "Barry Jenkin$":
             continue
         try:
-            people = client.get_people(
-                assigned_user_id=uid, limit=per_agent_limit,
-                fields="id,name,stage,tags,addresses," + field) or []
+            # Cursor walk of the agent's WHOLE book (Nov 4 2026): the old
+            # limit=100 single page meant leads past the first page never
+            # picked up the field, silently, forever.
+            people = client.get_people_cursor(
+                assigned_user_id=uid,
+                fields="id,name,stage,tags,addresses," + field,
+                max_people=per_agent_limit) or []
         except Exception as e:
             logger.warning("[MARKET SWEEP] fetch failed for %s: %s", agent, e)
             continue
