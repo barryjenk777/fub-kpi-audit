@@ -418,24 +418,31 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
                            greeting=not coach_msg))
         elif scoreboard.get(agent, (0, 0))[1]:
             sections.append(_scoreboard_line(_first(agent), scoreboard[agent]).strip())
+        prep_body = ""
         if prep_msg:
             body = prep_msg.strip()
             first_prefix = "%s, " % _first(agent)
             if body.startswith(first_prefix):
                 body = body[len(first_prefix):]
+            prep_body = body
             sections.append(body)
 
+        dojo_info = None
         rx = dojo_rx.get(agent)
         if rx and rx.get("reps_required"):
             prog = _db.get_ai_coach_progress(agent, week_start)
             done = max((prog["latest_graded"] - prog["baseline_graded"]), 0) if prog else 0
             need = int(rx["reps_required"])
             if done >= need:
+                dojo_info = {"done": done, "need": need, "complete": True}
                 sections.append("Dojo: all %d practice reps in. That is how "
                                 "Monday's email becomes Friday's paycheck." % need)
             else:
                 d = "".join(c for c in (rx.get("scenario_phone") or "") if c.isdigit())[-10:]
                 pn = "(%s) %s-%s" % (d[:3], d[3:6], d[6:]) if len(d) == 10 else ""
+                dojo_info = {"done": done, "need": need, "complete": False,
+                             "phone_digits": d if len(d) == 10 else "",
+                             "label": rx.get("scenario_label") or "practice"}
                 sections.append("Dojo check: %d of %d practice reps done. Call the "
                                 "%s line now%s. Two minutes, pass is 7+. Your "
                                 "Phoenix bonus leads ride on finishing these."
@@ -486,15 +493,47 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
         except Exception as _se:
             logger.warning("[HOT SHEET] slack delivery failed for %s: %s",
                            agent, _se)
+        # Email edition (Barry, Nov 4 2026): the same sheet as a visual
+        # email. The three names are the hero, every lead is one tap into
+        # FUB, dojo is one tap to dial, the board is the big green door.
+        _email_sent = False
+        try:
+            _em = (profile.get("email") or "").strip()
+            if _em:
+                import email_report as _er
+                import postmark_client as _pm
+                _burl = ""
+                try:
+                    _tk2 = _db.get_token_for_agent(agent)
+                    if _tk2:
+                        import os as _os3
+                        _burl = "%s/my-goals/%s" % (
+                            (_os3.environ.get("BASE_URL")
+                             or "https://www.legacycommandcenter.com"
+                             ).rstrip("/"), _tk2)
+                except Exception:
+                    pass
+                _dlabel = today.strftime("%A, %B %d").replace(" 0", " ")
+                _subj, _html = _er.build_hotsheet_email(
+                    _first(agent), coach_msg, scoreboard.get(agent), picks,
+                    dojo_info, prep_body, _burl, _dlabel)
+                _pm.send(to=_em, from_email=config.EMAIL_FROM,
+                         subject=_subj, html=_html, text=message)
+                _email_sent = True
+                summary["emailed"] = summary.get("emailed", 0) + 1
+        except Exception as _ee:
+            logger.warning("[HOT SHEET] email failed for %s: %s", agent, _ee)
         if not rid:
             phone = profile.get("phone") or profile.get("fub_phone")
             if not phone and agent not in getattr(
                     __import__("config"), "EMAIL_DELIVERY_AGENTS", set()):
-                summary["skipped_no_phone"] += 1
-                continue
-            rid = _db.queue_agent_imessage(agent, uid, phone or "", message,
-                                           week_day="hotsheet")
-        if rid:
+                if not _email_sent:
+                    summary["skipped_no_phone"] += 1
+                    continue
+            else:
+                rid = _db.queue_agent_imessage(agent, uid, phone or "",
+                                               message, week_day="hotsheet")
+        if rid or _email_sent:
             summary["queued"] += 1
             for pid, lead_name, reason in picks:
                 _db.log_hotsheet_pick(today, agent, pid, lead_name, reason)

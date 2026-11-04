@@ -2081,3 +2081,191 @@ def send_impact_tracker_brief(date_label, entries, stats, analytics, dry_run=Fal
     print(f"[IMPACT TRACKER] Brief delivered via %s ({met} met)"
           % ("slack" if _posted else "email"))
     return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HOT SHEET EMAIL — the morning sheet as a visual email (Barry, Nov 4 2026).
+# Same data as the Slack card, rendered for adoption: the three names are
+# the hero, every lead is one tap into FUB, dojo is one tap to dial, and
+# the board link is the big green door. Email-safe HTML: tables + inline
+# styles only, no dashes in copy.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HS_GREEN = "#2e7d4f"
+_HS_INK = "#1e2a32"
+_HS_GRAY = "#5c6b76"
+_HS_BG = "#f2f4f7"
+
+
+def _hs_button(label, url, color=_HS_GREEN, full=False):
+    width = ' width="100%"' if full else ""
+    return (
+        '<table role="presentation" cellpadding="0" cellspacing="0"%s>'
+        '<tr><td align="center" bgcolor="%s" style="border-radius:8px;">'
+        '<a href="%s" style="display:inline-block;padding:11px 20px;'
+        'font-family:-apple-system,Segoe UI,Arial,sans-serif;font-size:15px;'
+        'font-weight:700;color:#ffffff;text-decoration:none;">%s</a>'
+        '</td></tr></table>' % (width, color, url, label))
+
+
+def _hs_paragraphs(prose, size=15):
+    out = []
+    for para in (prose or "").split("\n\n"):
+        para = para.strip()
+        if para:
+            out.append('<p style="margin:0 0 14px;font-size:%dpx;'
+                       'line-height:1.55;color:%s;">%s</p>'
+                       % (size, _HS_INK, para.replace("\n", "<br>")))
+    return "".join(out)
+
+
+def build_hotsheet_email(agent_first, coach_msg, scoreboard, picks, dojo,
+                         prep_msg, board_url, date_label):
+    """Returns (subject, html). picks: [(person_id, lead_first, reason)].
+    scoreboard: (called, total) or None. dojo: {done, need, phone_digits,
+    label, complete} or None. coach_msg/prep_msg: prose or empty."""
+    names = [n for _, n, _ in (picks or [])]
+    if names:
+        subject = "%s, your %d for today: %s" % (
+            agent_first, len(names), ", ".join(names))
+        preheader = "Start with %s. Every name is one tap away." % names[0]
+    else:
+        subject = "%s, your morning sheet" % agent_first
+        preheader = "Your numbers and your next move, one tap away."
+
+    blocks = []
+
+    # Coach's note
+    if coach_msg:
+        blocks.append(_hs_paragraphs(coach_msg))
+
+    # Yesterday's scoreboard chip
+    if scoreboard and scoreboard[1]:
+        called, total = scoreboard
+        if called == total:
+            chip_bg, chip_ink = "#e7f4ec", _HS_GREEN
+            chip = ("You called all %d from yesterday's sheet. "
+                    "That is the standard." % total)
+        elif called == 0:
+            chip_bg, chip_ink = "#fdecea", "#b3261e"
+            chip = ("Yesterday's %d went uncalled. "
+                    "They are back on your list." % total)
+        else:
+            chip_bg, chip_ink = "#fff7e6", "#8a6116"
+            chip = "Yesterday's %d: you called %d." % (total, called)
+        blocks.append(
+            '<table role="presentation" width="100%%" cellpadding="0" '
+            'cellspacing="0"><tr><td bgcolor="%s" style="border-radius:8px;'
+            'padding:10px 14px;font-size:14px;font-weight:600;color:%s;">'
+            '%s</td></tr></table>' % (chip_bg, chip_ink, chip))
+
+    # The hero: today's names
+    if picks:
+        rows = []
+        for i, (pid, nm, reason) in enumerate(picks, 1):
+            fub = ("https://yourfriendlyagent.followupboss.com/2/people/"
+                   "view/%s" % pid)
+            rows.append(
+                '<tr><td style="padding:12px 0;border-top:%s;">'
+                '<table role="presentation" width="100%%" cellpadding="0" '
+                'cellspacing="0"><tr>'
+                '<td width="34" valign="top">'
+                '<div style="width:26px;height:26px;border-radius:13px;'
+                'background:%s;color:#ffffff;font-size:14px;font-weight:700;'
+                'text-align:center;line-height:26px;'
+                'font-family:Arial,sans-serif;">%d</div></td>'
+                '<td valign="top" style="padding-right:10px;">'
+                '<div style="font-size:17px;font-weight:700;color:%s;">%s'
+                '</div><div style="font-size:13px;color:%s;'
+                'padding-top:2px;">%s</div></td>'
+                '<td width="120" valign="middle" align="right">%s</td>'
+                '</tr></table></td></tr>'
+                % ("1px solid #e6eaee" if i > 1 else "0",
+                   _HS_GREEN if i == 1 else "#8fa3af", i, _HS_INK, nm,
+                   _HS_GRAY, reason, _hs_button("Open in FUB", fub)))
+        blocks.append(
+            '<div style="font-size:12px;font-weight:700;letter-spacing:1.5px;'
+            'color:%s;padding:6px 0 2px;">YOUR %d FOR TODAY</div>'
+            '<table role="presentation" width="100%%" cellpadding="0" '
+            'cellspacing="0">%s</table>'
+            '<p style="margin:6px 0 0;font-size:14px;color:%s;">Start with '
+            '<b>%s</b>. Calls before the day gets loud.</p>'
+            % (_HS_GRAY, len(picks), "".join(rows), _HS_INK, names[0]))
+
+    # Dojo
+    if dojo:
+        if dojo.get("complete"):
+            blocks.append(
+                '<table role="presentation" width="100%%" cellpadding="0" '
+                'cellspacing="0"><tr><td bgcolor="#e7f4ec" '
+                'style="border-radius:8px;padding:12px 14px;font-size:14px;'
+                'color:%s;"><b>Dojo: all %d practice reps in.</b> That is '
+                'how Monday\'s email becomes Friday\'s paycheck.</td></tr>'
+                '</table>' % (_HS_GREEN, dojo.get("need", 0)))
+        else:
+            d = dojo.get("phone_digits") or ""
+            pn = ("(%s) %s-%s" % (d[:3], d[3:6], d[6:])) if len(d) == 10 else ""
+            call_btn = _hs_button("Call the %s line%s"
+                                  % (dojo.get("label") or "practice",
+                                     (" " + pn) if pn else ""),
+                                  "tel:+1%s" % d, color="#8a6116") if d else ""
+            blocks.append(
+                '<table role="presentation" width="100%%" cellpadding="0" '
+                'cellspacing="0"><tr><td bgcolor="#fff7e6" '
+                'style="border-radius:8px;padding:14px;">'
+                '<div style="font-size:14px;font-weight:700;color:#8a6116;'
+                'padding-bottom:6px;">Dojo check: %d of %d practice reps '
+                'done</div>'
+                '<div style="font-size:13px;color:%s;padding-bottom:10px;">'
+                'Two minutes, pass is 7+. Your Phoenix bonus leads ride on '
+                'finishing these.</div>%s</td></tr></table>'
+                % (dojo.get("done", 0), dojo.get("need", 0), _HS_INK,
+                   call_btn))
+
+    # Appointment prep
+    if prep_msg:
+        blocks.append(_hs_paragraphs(prep_msg, size=14))
+
+    # The big green door
+    if board_url:
+        blocks.append(
+            '<table role="presentation" width="100%%" cellpadding="0" '
+            'cellspacing="0"><tr><td align="center" style="padding:6px 0 0;">'
+            '%s<div style="font-size:12px;color:%s;padding-top:8px;">'
+            'Goals, call scores, and today\'s names. One tap.</div>'
+            '</td></tr></table>'
+            % (_hs_button("Open your board", board_url, full=False), _HS_GRAY))
+
+    body = ('<td style="padding:0 24px 8px;">%s</td>'
+            % '</td></tr><tr><td style="padding:0 24px 18px;">'.join(blocks))
+
+    html = (
+        '<!doctype html><html><body style="margin:0;padding:0;'
+        'background:%s;">'
+        '<div style="display:none;max-height:0;overflow:hidden;">%s</div>'
+        '<table role="presentation" width="100%%" cellpadding="0" '
+        'cellspacing="0" bgcolor="%s"><tr><td align="center" '
+        'style="padding:24px 12px;">'
+        '<table role="presentation" width="600" cellpadding="0" '
+        'cellspacing="0" style="max-width:600px;width:100%%;'
+        'font-family:-apple-system,Segoe UI,Arial,sans-serif;">'
+        '<tr><td style="padding:0 24px 10px;">'
+        '<table role="presentation" width="100%%" cellpadding="0" '
+        'cellspacing="0"><tr>'
+        '<td style="font-size:12px;font-weight:700;letter-spacing:2px;'
+        'color:%s;">THE MORNING HOT SHEET</td>'
+        '<td align="right" style="font-size:12px;color:%s;">%s</td>'
+        '</tr></table></td></tr>'
+        '<tr><td><table role="presentation" width="100%%" cellpadding="0" '
+        'cellspacing="0" bgcolor="#ffffff" style="border-radius:12px;">'
+        '<tr><td style="padding:22px 24px 6px;font-size:21px;'
+        'font-weight:800;color:%s;">Morning, %s.</td></tr>'
+        '<tr>%s</tr>'
+        '</table></td></tr>'
+        '<tr><td align="center" style="padding:16px 24px 0;font-size:12px;'
+        'color:%s;">Legacy Home Team &middot; Barry Jenkins, Realtor '
+        '&middot; LPT Realty</td></tr>'
+        '</table></td></tr></table></body></html>'
+        % (_HS_BG, preheader, _HS_BG, _HS_GRAY, _HS_GRAY, date_label,
+           _HS_INK, agent_first, body, _HS_GRAY))
+    return subject, html

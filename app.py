@@ -3514,6 +3514,35 @@ def api_hype_zero_context():
                     or "(default)"})
 
 
+@app.route("/api/preview-hotsheet-email")
+def api_preview_hotsheet_email():
+    """Render the hot sheet email with sample data — no email sent.
+    ?agent=First overrides the greeting name."""
+    from flask import make_response
+    from email_report import build_hotsheet_email as _bhe
+    first = (request.args.get("agent") or "Tanya").strip() or "Tanya"
+    coach = ("%s, halfway through the week, here's where you are: 38 calls, "
+             "5 conversations, 2 appointments. Top 3 in calls this week. I "
+             "see you working and I'm proud of it.\n\nMaverick check: your "
+             "graded calls average 4.1 out of 10, and you ask for the "
+             "appointment 33%% of the time. The ask is where the money is."
+             % first)
+    picks = [("111", "Colins", "second day on your sheet, still no call"),
+             ("222", "Donald", "second day on your sheet, still no call"),
+             ("333", "Mary", "top score on your list, 95")]
+    dojo = {"done": 0, "need": 3, "complete": False,
+            "phone_digits": "3213997494", "label": "Disinterested Seller"}
+    base = (os.environ.get("BASE_URL")
+            or "https://www.legacycommandcenter.com").rstrip("/")
+    _unused, html = _bhe(first, coach, (0, 3), picks, dojo, "",
+                         base + "/my-goals/SAMPLE",
+                         datetime.now(timezone(timedelta(hours=-5)))
+                         .strftime("%A, %B %d").replace(" 0", " "))
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return resp
+
+
 @app.route("/api/preview-hype-email")
 def api_preview_hype_email():
     """
