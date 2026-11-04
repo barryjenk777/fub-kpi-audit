@@ -530,7 +530,9 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
                 if not _email_sent:
                     summary["skipped_no_phone"] += 1
                     continue
-            else:
+            elif phone or not _email_sent:
+                # No-phone email-fallback agents who already got the visual
+                # email skip the plain queue copy (one sheet, not two).
                 rid = _db.queue_agent_imessage(agent, uid, phone or "",
                                                message, week_day="hotsheet")
         if rid or _email_sent:
