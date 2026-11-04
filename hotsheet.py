@@ -469,24 +469,34 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
                 # nm is already the validated first name; _usable_name is
                 # a yes/no check and rendered every link as "True" (Barry's
                 # CC, Nov 2 2026).
-                _links = " \u00b7 ".join(
-                    "<https://yourfriendlyagent.followupboss.com/2/people/"
-                    "view/%s|%s>" % (pid, nm or "lead")
-                    for pid, nm, _r in picks)
+                # Taps route through /t/<token> when the agent has a goal
+                # token (first-party click tracking, Barry Nov 4 2026);
+                # direct FUB links otherwise.
+                _tk = None
+                try:
+                    _tk = _db.get_token_for_agent(agent)
+                except Exception:
+                    pass
+                import os as _os2
+                _base2 = (_os2.environ.get("BASE_URL")
+                          or "https://www.legacycommandcenter.com").rstrip("/")
+                if _tk:
+                    _links = " \u00b7 ".join(
+                        "<%s/t/%s/fub/%s?c=s|%s>" % (_base2, _tk, pid,
+                                                     nm or "lead")
+                        for pid, nm, _r in picks)
+                else:
+                    _links = " \u00b7 ".join(
+                        "<https://yourfriendlyagent.followupboss.com/2/people/"
+                        "view/%s|%s>" % (pid, nm or "lead")
+                        for pid, nm, _r in picks)
                 _card = message
                 if _links:
                     _card += chr(10) * 2 + "Open in FUB: " + _links
-                try:
-                    _tk = _db.get_token_for_agent(agent)
-                    if _tk:
-                        import os as _os2
-                        _card += (chr(10) + "<%s/my-goals/%s|Your board: "
-                                  "goals, call scores, and today's names>"
-                                  % ((_os2.environ.get("BASE_URL")
-                                      or "https://www.legacycommandcenter.com"
-                                      ).rstrip("/"), _tk))
-                except Exception:
-                    pass
+                if _tk:
+                    _card += (chr(10) + "<%s/t/%s/board?c=s|Your board: "
+                              "goals, call scores, and today's names>"
+                              % (_base2, _tk))
                 if _sl.dm_user(_sid, _card):
                     rid = _db._record_slack_delivery(agent, uid, message,
                                                      "hotsheet")
@@ -502,21 +512,25 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
             if _em:
                 import email_report as _er
                 import postmark_client as _pm
-                _burl = ""
+                _burl, _tbase = "", None
                 try:
                     _tk2 = _db.get_token_for_agent(agent)
                     if _tk2:
                         import os as _os3
-                        _burl = "%s/my-goals/%s" % (
-                            (_os3.environ.get("BASE_URL")
-                             or "https://www.legacycommandcenter.com"
-                             ).rstrip("/"), _tk2)
+                        _base3 = (_os3.environ.get("BASE_URL")
+                                  or "https://www.legacycommandcenter.com"
+                                  ).rstrip("/")
+                        # Taps route through /t/<token> (first-party click
+                        # tracking, Barry Nov 4 2026), then on to FUB or
+                        # the board. No Postmark link rewriting.
+                        _tbase = "%s/t/%s" % (_base3, _tk2)
+                        _burl = "%s/board?c=e" % _tbase
                 except Exception:
                     pass
                 _dlabel = today.strftime("%A, %B %d").replace(" 0", " ")
                 _subj, _html = _er.build_hotsheet_email(
                     _first(agent), coach_msg, scoreboard.get(agent), picks,
-                    dojo_info, prep_body, _burl, _dlabel)
+                    dojo_info, prep_body, _burl, _dlabel, track_base=_tbase)
                 _pm.send(to=_em, from_email=config.EMAIL_FROM,
                          subject=_subj, html=_html, text=message)
                 _email_sent = True

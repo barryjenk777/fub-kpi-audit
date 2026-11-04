@@ -93,6 +93,8 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/v/", "/vp/", "/go/", "/mthumb/", "/audio/",
         # Nurture Run one-tap redirects (token IS the auth)
         "/nr/",
+        # Hot sheet tap tracking redirects (goal token IS the auth)
+        "/t/",
         # Agent Operating Rhythm (no PII, bookmarkable)
         "/rhythm",
         # Day One Pipeline: ops one-click done links + the hire's own page
@@ -8900,6 +8902,48 @@ def api_goals_setup_save(token):
 
 
 # ── Agent self-serve daily dashboard ─────────────────────────────────────────
+
+@app.route("/t/<token>/fub/<pid>")
+def hotsheet_tap_fub(token, pid):
+    """First-party tap tracking for hot sheet links (Barry, Nov 4 2026):
+    logs who tapped which lead from which channel, then forwards to FUB.
+    No Postmark link rewriting, so deliverability stays untouched. The
+    goal token is the auth, same trust as the /my-goals page; an expired
+    token still forwards so a tap never dies on us."""
+    from flask import redirect as _redir
+    pid = "".join(c for c in pid if c.isdigit())[:12]
+    try:
+        agent = _db.resolve_goal_token(token)
+        if agent and pid:
+            _db.log_automation_event(
+                event_type="hotsheet_click", person_id=pid, person_name=None,
+                agent_name=agent,
+                payload={"kind": "fub",
+                         "channel": request.args.get("c") or "?"},
+                triggered_by="hotsheet_tap")
+    except Exception as e:
+        logger.warning("hotsheet tap log failed: %s", e)
+    return _redir("https://yourfriendlyagent.followupboss.com/2/people/"
+                  "view/%s" % pid)
+
+
+@app.route("/t/<token>/board")
+def hotsheet_tap_board(token):
+    """Board tap from a hot sheet: log, then land on their /my-goals page."""
+    from flask import redirect as _redir
+    try:
+        agent = _db.resolve_goal_token(token)
+        if agent:
+            _db.log_automation_event(
+                event_type="hotsheet_click", person_id=None, person_name=None,
+                agent_name=agent,
+                payload={"kind": "board",
+                         "channel": request.args.get("c") or "?"},
+                triggered_by="hotsheet_tap")
+    except Exception as e:
+        logger.warning("hotsheet tap log failed: %s", e)
+    return _redir("/my-goals/%s" % token)
+
 
 @app.route("/my-goals/<token>")
 def agent_dashboard_page(token):

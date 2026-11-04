@@ -2120,10 +2120,12 @@ def _hs_paragraphs(prose, size=15):
 
 
 def build_hotsheet_email(agent_first, coach_msg, scoreboard, picks, dojo,
-                         prep_msg, board_url, date_label):
+                         prep_msg, board_url, date_label, track_base=None):
     """Returns (subject, html). picks: [(person_id, lead_first, reason)].
     scoreboard: (called, total) or None. dojo: {done, need, phone_digits,
-    label, complete} or None. coach_msg/prep_msg: prose or empty."""
+    label, complete} or None. coach_msg/prep_msg: prose or empty.
+    track_base: ".../t/<goal_token>" routes lead taps through first-party
+    tracking (then straight on to FUB); None links FUB directly."""
     names = [n for _, n, _ in (picks or [])]
     if names:
         subject = "%s, your %d for today: %s" % (
@@ -2163,7 +2165,8 @@ def build_hotsheet_email(agent_first, coach_msg, scoreboard, picks, dojo,
     if picks:
         rows = []
         for i, (pid, nm, reason) in enumerate(picks, 1):
-            fub = ("https://yourfriendlyagent.followupboss.com/2/people/"
+            fub = ("%s/fub/%s?c=e" % (track_base, pid)) if track_base else \
+                  ("https://yourfriendlyagent.followupboss.com/2/people/"
                    "view/%s" % pid)
             rows.append(
                 '<tr><td style="padding:12px 0;border-top:%s;">'
