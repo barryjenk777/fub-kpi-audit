@@ -102,6 +102,8 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         # Dispatch: agent accept pages (token auth) + Fhalen's board and its
         # APIs (own key checked inside via _dispatch_auth)
         "/a/", "/dispatch", "/api/dispatch/",
+        # CallAction audit page (Fhalen's key checked inside)
+        "/callaction",
         # Market Pulse pages: texted/emailed to leads, must be public
         "/market",
         # IDOS stage calculator (FallCon talk QR target; static math, no PII)
@@ -5695,6 +5697,110 @@ def dispatch_board():
         return redirect("/login")
     return render_template("desk_board.html",
                            key=request.args.get("key", ""))
+
+
+@app.route("/callaction")
+def callaction_page():
+    """Fhalen's CallAction audit: every drip reply, sentiment-sorted,
+    with the actual text and two buttons. Keep = she works it from FUB.
+    Trash = Storage Pond, gone from her day."""
+    if not _dispatch_auth():
+        return redirect("/login")
+    return render_template("callaction_audit.html",
+                           key=request.args.get("key", ""))
+
+
+@app.route("/api/dispatch/callaction")
+def api_ca_list():
+    """Pending responses for the audit page. Rows whose text had not
+    synced when the tag landed re-read here (self-healing: the tag
+    webhook usually beats the text into FUB)."""
+    if not _dispatch_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    rows = _db.get_ca_responses(pending_only=True, limit=200)
+    client = None
+    for r in rows:
+        if r.get("message") or r.get("sentiment") != "unread":
+            continue
+        client = client or FUBClient()
+        msg, found = _ca_read_inbound(r["person_id"], client)
+        if found:
+            s, sc, why = _ca_sentiment(msg, r.get("person_name"))
+            if _db.update_ca_response_read(r["id"], msg, s, sc, why):
+                r.update({"message": msg, "sentiment": s, "score": sc,
+                          "reason": why})
+    rows.sort(key=lambda r: ((r["sentiment"] != "positive"),
+                             (r["sentiment"] not in ("neutral", "unread")),
+                             r["created_at"]), )
+    return jsonify({"ok": True, "pending": rows,
+                    "counts": _db.ca_counts(days=7)})
+
+
+@app.route("/api/dispatch/callaction/decide", methods=["POST"])
+def api_ca_decide():
+    """Body {id, decision: keep|trash}. Trash moves the lead to Storage
+    Pond in FUB (pond 6); keep just clears it from the page, the lead
+    stays wherever it lives and Fhalen works it."""
+    if not _dispatch_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    row_id = body.get("id")
+    decision = {"keep": "kept", "trash": "trashed"}.get(
+        (body.get("decision") or "").strip())
+    if not row_id or not decision:
+        return jsonify({"ok": False,
+                        "error": "id and decision keep|trash required"}), 400
+    r = _db.decide_ca_response(int(row_id), decision,
+                               decided_by="Fhalen")
+    if not r:
+        return jsonify({"ok": False, "error": "already decided or not "
+                                              "found"}), 404
+    if decision == "trashed":
+        try:
+            FUBClient()._request("PUT", "people/%s" % r["person_id"],
+                                 json_data={"assignedPondId": 6})
+        except Exception as e:
+            logger.warning("[CALLACTION] pond move failed for %s: %s",
+                           r["person_id"], e)
+            return jsonify({"ok": True, "decision": decision,
+                            "pond_moved": False,
+                            "warning": "decision saved but the FUB pond "
+                                       "move failed; move it by hand"})
+    _db.log_automation_event(
+        event_type="ca_decision", person_id=r["person_id"],
+        person_name=r["person_name"], agent_name="Fhalen Tendencia",
+        payload={"decision": decision}, triggered_by="callaction_page")
+    return jsonify({"ok": True, "decision": decision, "pond_moved":
+                    decision == "trashed"})
+
+
+@app.route("/api/admin/callaction/backfill", methods=["POST"])
+def api_ca_backfill():
+    """Catch-up: run every CA_Responded carrier through the intake (the
+    seen-tags ledger makes re-runs free). For responses that landed
+    before this lane existed."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    client = FUBClient()
+    done, new = 0, 0
+    try:
+        ppl = client.get_people_cursor(
+            tag="CA_Responded",
+            fields="id,name,tags,phones,assignedTo,assignedPondId",
+            max_people=2000) or []
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:200]}), 502
+    for p in ppl:
+        done += 1
+        try:
+            if _callaction_intake(str(p.get("id")), p,
+                                  triggered_by="backfill"):
+                new += 1
+        except Exception as e:
+            logger.warning("[CALLACTION] backfill failed for %s: %s",
+                           p.get("id"), e)
+    return jsonify({"ok": True, "scanned": done, "newly_queued": new,
+                    "counts": _db.ca_counts(days=7)})
 
 
 @app.route("/api/dispatch/queue")
@@ -12937,6 +13043,118 @@ def _promote_to_shark_tank(pid, person, reason, triggered_by="system"):
         return False
 
 
+def _ca_read_inbound(pid, client=None):
+    """Latest inbound texts for a CallAction lead, newest last, joined.
+    Returns (message, found). FUB hides some text bodies for privacy;
+    hidden bodies read as the placeholder and count as not-found so the
+    card says 'open in FUB to read' instead of mis-scoring."""
+    client = client or FUBClient()
+    try:
+        data = client._request("GET", "textMessages",
+                               params={"personId": pid, "limit": 30}) or {}
+        txts = next((v for v in data.values() if isinstance(v, list)), [])
+    except Exception as e:
+        logger.warning("[CALLACTION] text read failed for %s: %s", pid, e)
+        return "", False
+    inbound = [t for t in txts if t.get("isIncoming")]
+    inbound.sort(key=lambda t: t.get("created") or "")
+    bodies = []
+    for t in inbound[-3:]:
+        b = (t.get("message") or "").strip()
+        if b and "hidden for privacy" not in b.lower():
+            bodies.append(b)
+    return ("\n".join(bodies), bool(bodies))
+
+
+def _ca_sentiment(reply_text, person_name=""):
+    """CallAction drip variant of the pond sentiment read. Context
+    matters: this is a COLD re-engagement blast, so 'who is this' is the
+    expected neutral case (salvageable), not a negative."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not reply_text.strip():
+        return "unread", 0.0, "No readable inbound text yet"
+    if not api_key:
+        low = reply_text.lower()
+        if any(w in low for w in ("stop", "unsubscribe", "remove me",
+                                  "wrong number", "not interested",
+                                  "leave me alone", "take me off")):
+            return "negative", 0.9, "Opt-out keywords (fallback)"
+        if any(w in low for w in ("yes", "interested", "buy", "sell",
+                                  "looking", "call me", "when", "how much")):
+            return "positive", 0.7, "Interest keywords (fallback)"
+        return "neutral", 0.5, "No clear signal (keyword fallback)"
+    try:
+        import anthropic, json as _json, re as _re
+        client = anthropic.Anthropic(api_key=api_key)
+        prompt = (
+            "A real estate team sent a cold SMS re-engagement drip "
+            "(CallAction) to 1,000 old leads. This is the reply from %s. "
+            "Most replies are identity questions or annoyance; that is "
+            "expected.\n\nREPLY:\n%s\n\nClassify:\n"
+            "- positive: any real estate intent at all (buying, selling, "
+            "asking about homes or values, wants a call or info)\n"
+            "- neutral: 'who is this', 'why are you texting me', "
+            "confusion, vague replies. Salvageable with a good human "
+            "response.\n"
+            "- negative: STOP or opt-out language, anger, wrong number, "
+            "firm not-interested.\n\n"
+            "Return JSON only: {\"sentiment\":\"positive\"|\"neutral\"|"
+            "\"negative\",\"score\":0.0-1.0,\"reason\":\"one sentence\"}"
+            % (person_name or "a lead", reply_text[:1000]))
+        resp = client.messages.create(model="claude-haiku-4-5",
+                                      max_tokens=120,
+                                      messages=[{"role": "user",
+                                                 "content": prompt}])
+        raw = resp.content[0].text.strip()
+        raw = _re.sub(r"^```(?:json)?\s*|\s*```$", "", raw,
+                      flags=_re.MULTILINE)
+        d = _json.loads(raw)
+        return (d.get("sentiment") or "neutral",
+                float(d.get("score") or 0.5),
+                (d.get("reason") or "")[:200])
+    except Exception as e:
+        logger.warning("[CALLACTION] sentiment failed: %s", e)
+        return "neutral", 0.5, "Sentiment read failed, judge by eye"
+
+
+def _callaction_intake(pid, person, triggered_by="webhook_fub"):
+    """CA_Responded landed: read the reply, score it, queue it for
+    Fhalen's audit page. Positive replies DM her immediately (a real
+    inbound text exists, so the truth test is satisfied); everything
+    else waits quietly on the page."""
+    if not _db.filter_new_desk_tags(pid, ["ca_responded"]):
+        return False
+    client = FUBClient()
+    msg, found = _ca_read_inbound(pid, client)
+    sentiment, score, reason = _ca_sentiment(msg, person.get("name"))
+    phone = ((person.get("phones") or [{}])[0] or {}).get("value")
+    rid = _db.add_ca_response(pid, person.get("name"), phone, msg,
+                              sentiment, score, reason)
+    _db.log_automation_event(
+        event_type="ca_response", person_id=pid,
+        person_name=person.get("name"), agent_name=None,
+        payload={"sentiment": sentiment, "score": score,
+                 "found_text": found, "row_id": rid},
+        triggered_by=triggered_by)
+    if rid and sentiment == "positive":
+        try:
+            import slack_client as _sl
+            import dispatch as _dp
+            fid = _dp._slack_user_id("Fhalen Tendencia")
+            base = (os.environ.get("BASE_URL")
+                    or "https://www.legacycommandcenter.com").rstrip("/")
+            if _sl.is_available() and fid:
+                _sl.dm_user(fid, "\U0001f4ac CallAction reply with real "
+                    "intent from %s: “%s”\nThe rest of the "
+                    "batch is on your audit page: %s/callaction"
+                    % ((person.get("name") or "a lead").split()[0],
+                       (msg or "")[:140],
+                       base))
+        except Exception as e:
+            logger.warning("[CALLACTION] fhalen DM failed: %s", e)
+    return True
+
+
 def _realtor_intake(pid, person, triggered_by="webhook_fub"):
     """Realtor.com shootout lane front door (Barry, Nov 2 2026: purchased
     SHARED leads, competing agents outside the team get the same lead).
@@ -13407,6 +13625,15 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                     continue
             except Exception as _rie:
                 logger.warning("realtor intake failed for %s: %s", pid, _rie)
+            # ── CallAction drip responses (Barry, Nov 5 2026): the reply
+            # gets sentiment-read onto Fhalen's audit page. Additive, no
+            # routing, so the lead still falls through to the tag lanes.
+            try:
+                if "ca_responded" in tags_l:
+                    _callaction_intake(pid, person, triggered_by)
+            except Exception as _cae:
+                logger.warning("callaction intake failed for %s: %s",
+                               pid, _cae)
             # ── Cash lane (Barry, Oct 2026): hamptonroadshome.cash sellers
             # go to Fhalen, who calls them, with Ana closing by phone.
             # Assign ONCE per lead (claim_once), so a deliberate later
@@ -23765,6 +23992,18 @@ def api_grok_pulse():
                           or [])]}
     except Exception as e:
         out["coaching"] = {"error": str(e)[:120]}
+
+    # ── callaction drip triage ──────────────────────────────────────────
+    try:
+        out["callaction"] = {
+            "as_of": _now,
+            "note": ("cold SMS re-engagement drip (1,000 leads); replies "
+                     "are sentiment-read and triaged by Fhalen (keep vs "
+                     "Storage Pond); 'who is this' counts as neutral by "
+                     "design"),
+            **(_db.ca_counts(days=7) or {})}
+    except Exception as e:
+        out["callaction"] = {"error": str(e)[:120]}
 
     # ── sync health ─────────────────────────────────────────────────────
     try:

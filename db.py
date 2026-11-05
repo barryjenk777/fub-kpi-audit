@@ -9649,6 +9649,168 @@ def get_lead_gated_agents():
         return set()
 
 
+# ── CallAction response triage (Barry, Nov 5 2026) ─────────────────────────
+# 1,000-lead cold drip; replies tag CA_Responded in FUB. Each response is
+# sentiment-read once and lands on Fhalen's audit page, where she keeps it
+# or sends it to Storage Pond. One row per intake, decision recorded.
+
+def ensure_callaction_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS callaction_responses (
+                        id          SERIAL PRIMARY KEY,
+                        person_id   TEXT NOT NULL,
+                        person_name TEXT,
+                        phone       TEXT,
+                        message     TEXT,
+                        sentiment   TEXT,       -- positive | neutral | negative
+                        score       REAL,
+                        reason      TEXT,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        decision    TEXT,       -- NULL=pending | kept | trashed
+                        decided_by  TEXT,
+                        decided_at  TIMESTAMPTZ
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_ca_pending
+                        ON callaction_responses (decision, created_at DESC);
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_ca_person_once
+                        ON callaction_responses (person_id)
+                        WHERE decision IS NULL;
+                """)
+    except Exception as e:
+        logger.warning("ensure_callaction_table failed: %s", e)
+
+
+def add_ca_response(person_id, person_name, phone, message, sentiment,
+                    score, reason):
+    """One pending row per lead (unique partial index); a lead who
+    responds again AFTER a decision creates a fresh row."""
+    if not is_available():
+        return None
+    ensure_callaction_table()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO callaction_responses
+                        (person_id, person_name, phone, message, sentiment,
+                         score, reason)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (person_id) WHERE decision IS NULL
+                    DO NOTHING
+                    RETURNING id
+                """, (str(person_id), person_name, phone, message,
+                      sentiment, score, reason))
+                r = cur.fetchone()
+                return r[0] if r else None
+    except Exception as e:
+        logger.warning("add_ca_response failed: %s", e)
+        return None
+
+
+def get_ca_responses(pending_only=True, limit=200):
+    if not is_available():
+        return []
+    ensure_callaction_table()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, person_id, person_name, phone, message,
+                           sentiment, score, reason, created_at,
+                           decision, decided_by, decided_at
+                    FROM callaction_responses
+                    %s
+                    ORDER BY (sentiment = 'positive') DESC,
+                             (sentiment = 'neutral') DESC,
+                             created_at DESC
+                    LIMIT %%s
+                """ % ("WHERE decision IS NULL" if pending_only else ""),
+                    (int(limit),))
+                keys = ("id", "person_id", "person_name", "phone", "message",
+                        "sentiment", "score", "reason", "created_at",
+                        "decision", "decided_by", "decided_at")
+                out = []
+                for r in cur.fetchall():
+                    d = dict(zip(keys, r))
+                    for k in ("created_at", "decided_at"):
+                        if d.get(k):
+                            d[k] = d[k].isoformat()
+                    out.append(d)
+                return out
+    except Exception as e:
+        logger.warning("get_ca_responses failed: %s", e)
+        return []
+
+
+def update_ca_response_read(row_id, message, sentiment, score, reason):
+    """Late text sync: the tag webhook often beats the text into FUB, so
+    pending rows with no message re-read on page load."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE callaction_responses
+                    SET message = %s, sentiment = %s, score = %s, reason = %s
+                    WHERE id = %s AND decision IS NULL
+                """, (message, sentiment, score, reason, row_id))
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("update_ca_response_read failed: %s", e)
+        return False
+
+
+def decide_ca_response(row_id, decision, decided_by=None):
+    if not is_available() or decision not in ("kept", "trashed"):
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE callaction_responses
+                    SET decision = %s, decided_by = %s, decided_at = NOW()
+                    WHERE id = %s AND decision IS NULL
+                    RETURNING person_id, person_name
+                """, (decision, decided_by, row_id))
+                r = cur.fetchone()
+                return {"person_id": r[0], "person_name": r[1]} if r else None
+    except Exception as e:
+        logger.warning("decide_ca_response failed: %s", e)
+        return None
+
+
+def ca_counts(days=7):
+    if not is_available():
+        return {}
+    ensure_callaction_table()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                      COUNT(*) FILTER (WHERE decision IS NULL),
+                      COUNT(*) FILTER (WHERE decision IS NULL
+                                       AND sentiment = 'positive'),
+                      COUNT(*) FILTER (WHERE decision = 'kept'
+                                       AND decided_at >= NOW() - make_interval(days => %s)),
+                      COUNT(*) FILTER (WHERE decision = 'trashed'
+                                       AND decided_at >= NOW() - make_interval(days => %s))
+                    FROM callaction_responses
+                """, (int(days), int(days)))
+                r = cur.fetchone()
+                return {"pending": r[0], "pending_positive": r[1],
+                        "kept_%dd" % days: r[2], "trashed_%dd" % days: r[3]}
+    except Exception as e:
+        logger.warning("ca_counts failed: %s", e)
+        return {}
+
+
 # ── 1-on-1 coaching commitments (Barry/Danny, Nov 4 2026) ──────────────────
 
 def ensure_coaching_table():

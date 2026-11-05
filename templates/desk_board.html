@@ -37,6 +37,7 @@ h2{font-size:.78rem;font-weight:800;letter-spacing:.14em;color:#8b98ab;
 </style></head><body><div class="wrap">
 <div class="kick">Legacy Command Center</div>
 <h1>Lead Claims</h1>
+<div id="ca-door" style="margin:0 0 12px"></div>
 <div class="calm" id="calm">Nothing needs you today. Every claim is being worked and every lead reached a human.</div>
 <div class="alert" id="alert"></div>
 <div class="tiles" id="tiles"></div>
@@ -47,6 +48,19 @@ h2{font-size:.78rem;font-weight:800;letter-spacing:.14em;color:#8b98ab;
 <script>
 const KEY = "{{ key }}";
 const VC = {"HOT HAND":"v-hot","STEADY":"v-steady","STRETCHED":"v-str","QUIET":"v-quiet","WARMING UP":"v-warm"};
+// CallAction audit doorway: only speaks when something is waiting.
+fetch("/api/dispatch/callaction?key="+encodeURIComponent(KEY))
+  .then(r=>r.json()).then(d=>{
+    const n=(d.counts||{}).pending||0, p=(d.counts||{}).pending_positive||0;
+    if(!n) return;
+    document.getElementById("ca-door").innerHTML=
+      '<a href="/callaction?key='+encodeURIComponent(KEY)+'" style="display:block;'+
+      'background:#16213e;border:1px solid #26365c;border-left:4px solid #f5a623;'+
+      'border-radius:10px;padding:11px 14px;color:#e8eefc;text-decoration:none;font-size:14px">'+
+      '💬 <b>'+n+' CallAction '+(n===1?'reply':'replies')+'</b> waiting on your call'+
+      (p? ', <b style="color:#79e5ba">'+p+' with real intent</b>':'')+
+      ' → tap to audit</a>';
+  }).catch(()=>{});
 async function load(){
   try{
     const r = await fetch("/api/dispatch/hothand?key="+encodeURIComponent(KEY));

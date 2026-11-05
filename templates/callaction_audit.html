@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CallAction Audit</title>
+<style>
+:root{--bg:#0f172a;--panel:#16213e;--line:#26365c;--ink:#e8eefc;
+--muted:#93a4c4;--gold:#f5a623;--green:#37c98b;--red:#e5544b;--blue:#4b8ef1}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;
+font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
+.wrap{max-width:720px;margin:0 auto;padding:20px 14px 70px}
+h1{font-size:20px;margin:0 0 2px}
+.sub{color:var(--muted);font-size:12.5px;margin:0 0 14px}
+.counts{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px}
+.c{background:var(--panel);border:1px solid var(--line);border-radius:9px;
+padding:8px 14px;font-size:12.5px;color:var(--muted)}
+.c b{color:var(--ink);font-size:16px;display:block}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:14px 16px;margin-bottom:12px}
+.card.pos{border-left:4px solid var(--green)}
+.card.neu{border-left:4px solid var(--gold)}
+.card.neg{border-left:4px solid var(--red)}
+.card.unread{border-left:4px solid var(--blue)}
+.top{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline}
+.nm{font-weight:700;font-size:15.5px}
+.nm a{color:var(--ink);text-decoration:none}
+.nm a:hover{color:var(--gold)}
+.chip{font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+padding:3px 9px;border-radius:99px}
+.chip.pos{background:rgba(55,201,139,.18);color:#79e5ba}
+.chip.neu{background:rgba(245,166,35,.18);color:#ffcb72}
+.chip.neg{background:rgba(229,84,75,.18);color:#ff9d96}
+.chip.unread{background:rgba(75,142,241,.18);color:#8fbcff}
+.msg{background:#0d1729;border-radius:9px;padding:10px 12px;margin:10px 0 6px;
+font-size:14.5px;white-space:pre-wrap}
+.msg.empty{color:var(--muted);font-style:italic}
+.why{font-size:12px;color:var(--muted);margin-bottom:10px}
+.btns{display:flex;gap:8px}
+.btn{flex:1;border:none;border-radius:9px;padding:12px 10px;font-size:14px;
+font-weight:700;cursor:pointer}
+.keep{background:var(--green);color:#06281a}
+.trash{background:#2a3a5e;color:var(--muted)}
+.btn:disabled{opacity:.6}
+.empty-state{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:26px;text-align:center;color:var(--muted)}
+.spin{color:var(--muted);padding:26px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CallAction replies</h1>
+  <p class="sub">Every drip response, read and sorted for you. Green first
+  (real intent), gold is "who is this" territory (your call), red asked to
+  stop. Keep = you work it from FUB. Trash = Storage Pond, off your plate.</p>
+  <div class="counts" id="counts"></div>
+  <div id="list"><div class="spin">Loading...</div></div>
+</div>
+<script>
+var KEY = {{ key|tojson }};
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function cls(s){return s==='positive'?'pos':s==='negative'?'neg':s==='unread'?'unread':'neu';}
+function label(s){return s==='positive'?'real intent':s==='negative'?'asked to stop':
+  s==='unread'?'text not synced yet':'your call';}
+function rel(iso){var d=new Date(iso);if(isNaN(d))return'';
+  var m=Math.floor((Date.now()-d.getTime())/60000);
+  if(m<60)return m+'m ago'; if(m<1440)return Math.floor(m/60)+'h ago';
+  return Math.floor(m/1440)+'d ago';}
+function load(){
+  fetch('/api/dispatch/callaction?key='+encodeURIComponent(KEY))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var c=d.counts||{};
+      document.getElementById('counts').innerHTML=
+        '<div class="c"><b>'+(c.pending||0)+'</b>waiting on you</div>'+
+        '<div class="c"><b>'+(c.pending_positive||0)+'</b>real intent</div>'+
+        '<div class="c"><b>'+(c.kept_7d||0)+'</b>kept this week</div>'+
+        '<div class="c"><b>'+(c.trashed_7d||0)+'</b>trashed this week</div>';
+      var rows=d.pending||[];
+      var el=document.getElementById('list');
+      if(!rows.length){
+        el.innerHTML='<div class="empty-state">Nothing waiting. Every reply '+
+          'has been decided. New ones appear here on their own.</div>';
+        return;
+      }
+      var h='';
+      rows.forEach(function(r){
+        var k=cls(r.sentiment);
+        h+='<div class="card '+k+'" id="row-'+r.id+'">'+
+          '<div class="top"><span class="nm"><a target="_blank" href="https://yourfriendlyagent.followupboss.com/2/people/view/'+r.person_id+'">'+esc(r.person_name||'Unknown')+'</a></span>'+
+          '<span><span class="chip '+k+'">'+label(r.sentiment)+'</span> '+
+          '<span style="font-size:11px;color:#93a4c4">'+rel(r.created_at)+'</span></span></div>'+
+          (r.message? '<div class="msg">'+esc(r.message)+'</div>'
+            : '<div class="msg empty">Text not readable here yet. Tap the name to read it in FUB, then decide.</div>')+
+          (r.reason? '<div class="why">'+esc(r.reason)+'</div>':'')+
+          '<div class="btns">'+
+          '<button class="btn keep" onclick="decide('+r.id+',\'keep\',this)">Worth my time</button>'+
+          '<button class="btn trash" onclick="decide('+r.id+',\'trash\',this)">Trash to pond</button>'+
+          '</div></div>';
+      });
+      el.innerHTML=h;
+    })
+    .catch(function(){document.getElementById('list').innerHTML=
+      '<div class="empty-state">Could not load. Pull to refresh.</div>';});
+}
+function decide(id,what,btn){
+  var card=document.getElementById('row-'+id);
+  card.querySelectorAll('button').forEach(function(b){b.disabled=true;});
+  btn.textContent=what==='keep'?'Keeping...':'Trashing...';
+  fetch('/api/dispatch/callaction/decide?key='+encodeURIComponent(KEY),{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:id,decision:what})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok){card.querySelectorAll('button').forEach(function(b){b.disabled=false;});
+        btn.textContent=what==='keep'?'Worth my time':'Trash to pond';
+        alert(d.error||'Did not save');return;}
+      card.style.opacity='0.45';
+      card.innerHTML='<div style="font-size:13px;color:'+(what==='keep'?'#79e5ba':'#93a4c4')+
+        '">'+(what==='keep'?'&#10003; Yours. It stays in FUB wherever it lives.':
+        '&#10003; Moved to Storage Pond.')+
+        (d.warning? ' <b style="color:#ffcb72">'+esc(d.warning)+'</b>':'')+'</div>';
+      setTimeout(function(){card.remove(); load();}, 900);
+    })
+    .catch(function(){card.querySelectorAll('button').forEach(function(b){b.disabled=false;});});
+}
+load();
+setInterval(load, 120000);
+</script>
+</body>
+</html>
