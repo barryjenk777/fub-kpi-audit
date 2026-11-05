@@ -6640,6 +6640,10 @@ def scheduled_call_coaching():
         calls = _db.get_maverick_calls_since(y0.isoformat())
         excl = set(config.EXCLUDED_USERS) | set(
             getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+        try:
+            excl |= _db.get_lead_gated_agents()
+        except Exception:
+            pass
         profiles = {p["agent_name"]: p for p in
                     (_db.get_agent_profiles(active_only=True) or [])}
         by_agent = {}
@@ -23165,34 +23169,277 @@ def api_maverick_ingest_probe():
     return jsonify(out)
 
 
+@app.route("/api/admin/roster/status", methods=["GET", "POST"])
+def api_roster_status():
+    """Roster statuses (Barry, Nov 4 2026): active | onboarding |
+    license_pending | non_lead | test | inactive. Only active +
+    onboarding work leads. GET lists; POST {"agent_name","status"} sets,
+    or {"set": {"Name": "status", ...}} for a batch."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        changes = body.get("set") or {}
+        if body.get("agent_name"):
+            changes[body["agent_name"]] = body.get("status")
+        applied, failed = [], []
+        for name, status in changes.items():
+            if _db.set_agent_status(name, (status or "").strip().lower()):
+                applied.append({name: status})
+            else:
+                failed.append({name: status})
+        if applied:
+            _db.log_automation_event(event_type="roster_status_set",
+                                     payload={"applied": applied},
+                                     triggered_by="admin")
+    else:
+        applied, failed = [], []
+    roster = [{"agent": p["agent_name"], "status": p.get("status"),
+               "is_active": p["is_active"]}
+              for p in (_db.get_agent_profiles(active_only=False) or [])]
+    return jsonify({"ok": True, "applied": applied, "failed": failed,
+                    "lead_gated_statuses": sorted(_db.LEAD_GATED_STATUSES),
+                    "roster": roster})
+
+
+@app.route("/api/admin/coaching", methods=["GET", "POST"])
+def api_coaching():
+    """1-on-1 coaching commitments (Barry or Danny Rinaldi). GET lists
+    active commitments + last-7d misses. POST actions:
+      {"add": {"agent_name","commitment","met_date","set_by",
+               "metric","target"}}   metric 'dials_per_day' is auto-checked
+      {"close": <id>}                retire a commitment
+    The nightly checker compares dials_per_day targets against the FUB
+    daily activity sync and logs coaching_miss events. Misses surface to
+    Barry (pulse + this endpoint), never to the agent (never-shame)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    out = {"ok": True}
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        if isinstance(body.get("add"), dict):
+            a = body["add"]
+            rid = _db.add_coaching_commitment(
+                (a.get("agent_name") or "").strip(),
+                (a.get("commitment") or "").strip(),
+                a.get("met_date") or datetime.now(timezone.utc)
+                .date().isoformat(),
+                set_by=(a.get("set_by") or "Barry").strip(),
+                metric=a.get("metric"), target=a.get("target"))
+            out["added_id"] = rid
+        if body.get("close"):
+            out["closed"] = _db.deactivate_coaching_commitment(
+                int(body["close"]))
+    rows = _db.get_coaching_commitments(active_only=True)
+    last = {}
+    for r in rows:
+        if r["agent_name"] not in last or r["met_date"] > last[r["agent_name"]]:
+            last[r["agent_name"]] = r["met_date"]
+    today = datetime.now(timezone.utc).date()
+    out["commitments"] = rows
+    out["days_since_last_1on1"] = {
+        a: (today - datetime.fromisoformat(d).date()).days
+        for a, d in last.items()}
+    try:
+        out["misses_7d"] = _db.get_automation_events("coaching_miss",
+                                                     days=7, limit=50)
+    except Exception:
+        out["misses_7d"] = []
+    return jsonify(out)
+
+
+def scheduled_coaching_check():
+    """8pm ET: check dials_per_day commitments against the FUB daily
+    activity sync (last intraday pass 7:30pm). A miss logs an event for
+    Barry's surfaces only; the agent never gets a robo-scold."""
+    from zoneinfo import ZoneInfo as _ZI
+    today = datetime.now(_ZI("America/New_York")).date()
+    if today.weekday() >= 5:
+        return {"skipped": "weekend"}
+    checked, misses = 0, 0
+    for c in _db.get_coaching_commitments(active_only=True):
+        if c.get("metric") != "dials_per_day" or not c.get("target"):
+            continue
+        calls = _db.get_agent_calls_on(c["agent_name"], today.isoformat())
+        if calls is None:
+            continue
+        checked += 1
+        if calls < int(c["target"]):
+            misses += 1
+            if _db.claim_once("coachmiss_%s_%s" % (c["id"],
+                                                   today.isoformat())):
+                _db.log_automation_event(
+                    event_type="coaching_miss",
+                    agent_name=c["agent_name"],
+                    payload={"commitment": c["commitment"],
+                             "target": int(c["target"]), "calls": calls,
+                             "date": today.isoformat(),
+                             "set_by": c.get("set_by")},
+                    triggered_by="coaching_check")
+    logger.info("[COACHING] check done: %d checked, %d misses",
+                checked, misses)
+    return {"checked": checked, "misses": misses}
+
+
+@app.route("/api/admin/revenue")
+def api_revenue():
+    """The money layer snapshot (FUB deals + pipelines + synced
+    appointments). ?force=1 rebuilds the 30-min cache."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import revenue as _rev
+    try:
+        return jsonify({"ok": True, **_rev.get_snapshot(
+            FUBClient(), force=request.args.get("force") in ("1", "true"))})
+    except Exception as e:
+        import traceback
+        return jsonify({"ok": False, "error": str(e)[:300],
+                        "traceback": traceback.format_exc()[-800:]}), 500
+
+
+@app.route("/revenue")
+def revenue_page():
+    """Barry's money page: pipeline 30/60/90, closings by source net of
+    referral fees, and the coverage line that says how much of the book
+    actually carries price/commission/person data."""
+    if not _perplexity_auth():
+        return "Unauthorized", 401
+    import revenue as _rev
+    try:
+        s = _rev.get_snapshot(FUBClient())
+    except Exception as e:
+        return "<pre>revenue snapshot failed: %s</pre>" % e, 500
+    cov = s["coverage"]
+
+    def _money(v):
+        return "$%s" % format(int(round(v or 0)), ",")
+
+    cards = ""
+    for label, w in (("Next 30 days", s["pipeline"]["next_30d"]),
+                     ("Next 60 days", s["pipeline"]["next_60d"]),
+                     ("Next 90 days", s["pipeline"]["next_90d"])):
+        cards += ('<div class="card"><div class="label">%s</div>'
+                  '<div class="val">%d deals</div>'
+                  '<div class="sub2">%s volume &middot; %s net GCI known'
+                  '</div></div>'
+                  % (label, w["deals"], _money(w["gross_volume"]),
+                     _money(w["net_gci_known"])))
+    srows = ""
+    for b, v in sorted(s["closed_by_source_90d"].items()):
+        fee = s["referral_fees"].get(b, 0)
+        srows += ('<tr><td>%s</td><td>%d</td><td>%s</td><td>%s</td>'
+                  '<td>%s</td><td>%s%%</td></tr>'
+                  % (b, v["closings"], _money(v["volume"]),
+                     _money(v["gci"]), _money(v["net_gci"]), fee))
+    ucrows = ""
+    for r in s["pipeline"]["under_contract"]:
+        ucrows += ('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td>'
+                   '<td>%s</td></tr>'
+                   % (r["name"], r["projected_close"] or "no date",
+                      _money(r["price"]) if r["price"] else "no price",
+                      _money(r["net_gci"]) if r["net_gci"] else "unknown",
+                      r["bucket"] or "unlinked"))
+    html = """<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Revenue</title><style>
+body{margin:0;background:#0f172a;color:#e8eefc;font-family:-apple-system,
+'Segoe UI',Arial,sans-serif;font-size:14px}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 20px 60px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:#93a4c4;font-size:12.5px;margin:0 0 18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+gap:12px;margin:0 0 20px}
+.card{background:#16213e;border:1px solid #26365c;border-radius:10px;
+padding:14px 16px}
+.label{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+color:#93a4c4;font-weight:700}
+.val{font-size:24px;font-weight:800;margin-top:4px}
+.sub2{font-size:12px;color:#93a4c4;margin-top:3px}
+table{width:100%%;border-collapse:collapse;background:#16213e;
+border:1px solid #26365c;border-radius:10px;overflow:hidden;
+margin-bottom:20px}
+th{background:#1c2a4a;text-align:left;font-size:10.5px;letter-spacing:.07em;
+text-transform:uppercase;color:#93a4c4;padding:9px 12px}
+td{padding:9px 12px;border-top:1px solid #26365c}
+.sec{margin:20px 0 8px;font-size:15px;font-weight:700}
+.note{background:#16213e;border:1px solid #26365c;border-radius:10px;
+padding:12px 16px;font-size:12.5px;color:#93a4c4;margin-top:16px}
+</style></head><body><div class="wrap">
+<a href="/" style="display:inline-block;margin-bottom:.8rem;font-size:.78rem;
+font-weight:700;color:#f5a623;text-decoration:none">&larr; Command Center</a>
+<h1>Revenue</h1>
+<p class="sub">FUB deals and appointments, nothing estimated &middot;
+as of %s &middot; coverage: %d deals, %d with price, %d with commission,
+%d linked to a lead</p>
+<div class="grid">%s</div>
+<div class="sec">Closings by source, last 90 days (net of referral fees)</div>
+<table><thead><tr><th>Source</th><th>Closings</th><th>Volume</th>
+<th>GCI</th><th>Net GCI</th><th>Referral fee</th></tr></thead>
+<tbody>%s</tbody></table>
+<div class="sec">Under contract now</div>
+<table><thead><tr><th>Deal</th><th>Projected close</th><th>Price</th>
+<th>Net GCI</th><th>Source</th></tr></thead><tbody>%s</tbody></table>
+<div class="note">%s</div>
+</div></body></html>""" % (
+        s["as_of"][:16].replace("T", " ") + "Z",
+        cov["deals_total"], cov["with_price"], cov["with_commission"],
+        cov["with_person_link"], cards,
+        srows or '<tr><td colspan="6" style="color:#93a4c4">No linked '
+                 'closings in the window yet. Coverage is the blocker: '
+                 'put price, commission, and the person on each deal in '
+                 'Dotloop/FUB and this fills in.</td></tr>',
+        ucrows or '<tr><td colspan="5" style="color:#93a4c4">No deals '
+                  'under contract.</td></tr>',
+        "<br>".join(s["notes"]))
+    return html
+
+
 @app.route("/api/grok/pulse")
 def api_grok_pulse():
-    """Command Center -> Grokbot (Barry, Nov 4 2026). The read half of the
-    Grok connection: Grokbot already WRITES call grades and engagement
-    through /api/admin/maverick/ingest; this is the curated state of the
-    team it can READ. Auth: scoped GROK_API_KEY (Railway env, can do
-    nothing else anywhere in the app) or the owner key. Read-only, no
-    tokens or links in the payload, every section fails soft."""
+    """Command Center -> Grokbot, v2 (Barry, Nov 4 2026). Read-only state
+    of the team with per-section as_of stamps and self-describing notes,
+    so an outside reader cannot misread the semantics (the v1 payload got
+    the hot sheet scoreboard diagnosed as a sync bug). Auth: scoped
+    GROK_API_KEY or owner key. No tokens or links; every section fails
+    soft."""
     _scoped = (os.environ.get("GROK_API_KEY") or "").strip()
     _given = (request.args.get("key", "").strip()
               or request.headers.get("X-Api-Key", "").strip())
     if not ((_scoped and _given == _scoped) or _perplexity_auth()):
         return jsonify({"error": "Unauthorized"}), 401
-    out = {"ok": True,
-           "generated_at": datetime.now(timezone.utc).isoformat()}
+    _now = datetime.now(timezone.utc).isoformat()
+    out = {"ok": True, "generated_at": _now, "timezone_note":
+           "timestamps are UTC; the team operates America/New_York"}
+
+    # ── roster with statuses ────────────────────────────────────────────
     try:
         _excl = set(getattr(config, "EXCLUDED_USERS", ()) or ())
-        out["roster"] = sorted(
-            p["agent_name"] for p in
-            (_db.get_agent_profiles(active_only=True) or [])
-            if p.get("agent_name") and p["agent_name"] not in _excl)
+        _profiles = _db.get_agent_profiles(active_only=False) or []
+        out["roster"] = {
+            "as_of": _now,
+            "note": ("status gates lead work: only active and onboarding "
+                     "get picks, ladders, scoreboards, and behind alerts; "
+                     "test is excluded from every stat"),
+            "agents": sorted(
+                ({"name": p["agent_name"], "status": p.get("status")}
+                 for p in _profiles
+                 if p.get("agent_name") and p["is_active"]
+                 and p.get("status") != "test"
+                 and p["agent_name"] not in _excl),
+                key=lambda a: a["name"])}
     except Exception as e:
         out["roster"] = {"error": str(e)[:120]}
+
+    # ── realtor lane ────────────────────────────────────────────────────
     try:
         import realtor_ladder as _rl
         live, _ = _db.get_app_state("realtor_live")
         claims = _rl.get_claims(days=7)
         out["realtor_lane"] = {
+            "as_of": _now,
+            "note": ("paid shared leads; the ladder is the minimum call "
+                     "plan until two-way contact (10 calls over 14 days); "
+                     "behind = calls due by tonight minus calls made"),
             "live": (live or "").strip() == "1",
             "claims_7d": len(claims),
             "active_ladders": [
@@ -23202,40 +23449,161 @@ def api_grok_pulse():
                 for l in _rl.active_ladders(FUBClient())]}
     except Exception as e:
         out["realtor_lane"] = {"error": str(e)[:120]}
+
+    # ── desk ────────────────────────────────────────────────────────────
     try:
         out["desk"] = {
+            "as_of": _now,
             "open_escalations": len(_db.open_desk_escalations(
                 older_than_min=0) or []),
             "offers_24h": _db.count_recent_dispatch_offers(60 * 24)}
     except Exception as e:
         out["desk"] = {"error": str(e)[:120]}
+
+    # ── onboarding: pipeline tasks + Fast Track course, merged ─────────
     try:
-        out["onboarding"] = [
-            {"agent": h["agent_name"], "started": h["started_at"],
-             "done": sum(1 for t in h["tasks"] if t["done_at"]),
-             "total": len(h["tasks"]),
-             "complete": bool(h["completed_at"])}
-            for h in _db.get_onboarding_pipeline()]
+        _ft = {}
+        try:
+            _board = _ft_board_data(force=False) or {}
+            for a in _board.get("matched") or []:
+                if a.get("cc_name"):
+                    _ft[a["cc_name"]] = a
+        except Exception:
+            pass
+        _rows = []
+        for h in _db.get_onboarding_pipeline():
+            f = _ft.get(h["agent_name"]) or {}
+            _idle = f.get("days_since_active")
+            _rows.append({
+                "agent": h["agent_name"], "started": h["started_at"],
+                "pipeline_tasks_done": sum(1 for t in h["tasks"]
+                                           if t["done_at"]),
+                "pipeline_tasks_total": len(h["tasks"]),
+                "course_percent": f.get("percent_complete"),
+                "course_days_idle": _idle,
+                "idle_7plus": bool(_idle is not None and _idle >= 7),
+                "complete": bool(h["completed_at"])})
+        out["onboarding"] = {
+            "as_of": _now,
+            "note": ("pipeline_tasks = Day One operational checklist "
+                     "(docs, headshot, meetings, systems); course_* = "
+                     "Fast Track training progress; two different "
+                     "things, both per agent"),
+            "hires": _rows}
     except Exception as e:
-        out["onboarding"] = [{"error": str(e)[:120]}]
+        out["onboarding"] = {"error": str(e)[:120]}
+
+    # ── hot sheet scoreboard ────────────────────────────────────────────
     try:
         with _db.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
+                    SELECT MAX(sheet_date) FROM hotsheet_log
+                    WHERE called IS NOT NULL
+                """)
+                _sd = cur.fetchone()[0]
+                cur.execute("""
                     SELECT agent_name, COUNT(*),
                            COUNT(*) FILTER (WHERE called)
                     FROM hotsheet_log
-                    WHERE sheet_date = (SELECT MAX(sheet_date)
-                                        FROM hotsheet_log
-                                        WHERE called IS NOT NULL)
-                      AND called IS NOT NULL
+                    WHERE sheet_date = %s AND called IS NOT NULL
                     GROUP BY agent_name ORDER BY agent_name
-                """)
-                out["hot_sheet_last_verified"] = [
-                    {"agent": r[0], "picks": int(r[1]),
-                     "called": int(r[2])} for r in cur.fetchall()]
+                """, (_sd,))
+                out["hot_sheet_scoreboard"] = {
+                    "as_of": _now,
+                    "sheet_date": str(_sd) if _sd else None,
+                    "note": ("picks are the 3 NAMED leads each agent was "
+                             "told to dial that morning; called means a "
+                             "verified FUB outbound call BY THAT AGENT to "
+                             "THAT lead after the sheet went out. Low "
+                             "numbers mean agents dialed other people, "
+                             "not their picks: an accountability finding, "
+                             "not a sync bug. Uncalled picks escalate "
+                             "back onto the next sheet."),
+                    "agents": [{"agent": r[0], "picks": int(r[1]),
+                                "called": int(r[2])}
+                               for r in cur.fetchall()]}
     except Exception as e:
-        out["hot_sheet_last_verified"] = [{"error": str(e)[:120]}]
+        out["hot_sheet_scoreboard"] = {"error": str(e)[:120]}
+
+    # ── revenue summary ─────────────────────────────────────────────────
+    try:
+        import revenue as _rev
+        _s = _rev.get_snapshot(FUBClient())
+        out["revenue"] = {
+            "as_of": _s["as_of"],
+            "note": ("FUB deals + synced appointments, nothing "
+                     "estimated; coverage says how many deals carry "
+                     "price/commission/person data"),
+            "coverage": _s["coverage"],
+            "referral_fees_pct": _s["referral_fees"],
+            "funnel_90d": {
+                "appointments_set": _s["funnel_90d"]["appointments"].get("set"),
+                "appointments_met": _s["funnel_90d"]["appointments"].get("met"),
+                "under_contract_now": _s["funnel_90d"]["under_contract_now"],
+                "closed_90d": _s["funnel_90d"]["closed_90d"]},
+            "closed_by_source_90d": _s["closed_by_source_90d"],
+            "pipeline_next_30_60_90": {
+                "30": _s["pipeline"]["next_30d"],
+                "60": _s["pipeline"]["next_60d"],
+                "90": _s["pipeline"]["next_90d"]}}
+    except Exception as e:
+        out["revenue"] = {"error": str(e)[:150]}
+
+    # ── coaching commitments ────────────────────────────────────────────
+    try:
+        _cc = _db.get_coaching_commitments(active_only=True)
+        _today = datetime.now(timezone.utc).date()
+        _last = {}
+        for c in _cc:
+            if c["agent_name"] not in _last \
+                    or c["met_date"] > _last[c["agent_name"]]:
+                _last[c["agent_name"]] = c["met_date"]
+        out["coaching"] = {
+            "as_of": _now,
+            "note": ("1-on-1 commitments logged by Barry or Danny; "
+                     "dials_per_day targets are auto-checked nightly "
+                     "against FUB activity; misses surface here only, "
+                     "never to the agent"),
+            "commitments": [{k: c[k] for k in
+                             ("agent_name", "commitment", "metric",
+                              "target", "met_date", "set_by")}
+                            for c in _cc],
+            "days_since_last_1on1": {
+                a: (_today - datetime.fromisoformat(d).date()).days
+                for a, d in _last.items()},
+            "misses_7d": [
+                {"agent": m.get("agent_name"), "at": m.get("at"),
+                 **(m.get("payload") or {})}
+                for m in (_db.get_automation_events("coaching_miss",
+                                                    days=7, limit=50)
+                          or [])]}
+    except Exception as e:
+        out["coaching"] = {"error": str(e)[:120]}
+
+    # ── sync health ─────────────────────────────────────────────────────
+    try:
+        _sh = {"as_of": _now}
+        try:
+            _raw, _ = _db.get_app_state("fub_webhook_stats")
+            _ws = json.loads(_raw or "{}")
+            _sh["fub_webhooks"] = {"last_event": _ws.get("last_event"),
+                                   "last_at": _ws.get("last_at")}
+        except Exception:
+            _sh["fub_webhooks"] = None
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT MAX(sheet_date) FROM hotsheet_log")
+                    _sh["last_hot_sheet"] = str(cur.fetchone()[0] or "")
+                    cur.execute("SELECT MAX(activity_date) "
+                                "FROM daily_activity")
+                    _sh["last_activity_sync"] = str(cur.fetchone()[0] or "")
+        except Exception:
+            pass
+        out["sync_health"] = _sh
+    except Exception as e:
+        out["sync_health"] = {"error": str(e)[:120]}
     return jsonify(out)
 
 
@@ -26481,6 +26849,15 @@ def start_scheduler():
     _scheduler.add_job(scheduled_realtor_roi_email,
                        CronTrigger(day_of_week="fri", hour=8, minute=30, timezone=ET),
                        id="realtor_roi", name="Realtor ROI email (Fri 8:30am)",
+                       max_instances=1, coalesce=True)
+    # 1-on-1 commitment checker: after the 7:30pm activity sync, so
+    # today's dials are already in daily_activity. Logs misses for
+    # Barry's surfaces only; never texts the agent.
+    _scheduler.add_job(scheduled_coaching_check,
+                       CronTrigger(day_of_week="mon-fri", hour=20, minute=0,
+                                   timezone=ET),
+                       id="coaching_check",
+                       name="Coaching commitment check (8pm)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_appt_insight,
                        CronTrigger(hour=6, minute=20, timezone=ET),

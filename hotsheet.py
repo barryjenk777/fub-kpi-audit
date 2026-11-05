@@ -316,6 +316,12 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
         uid = profile.get("fub_user_id")
         if not agent or not uid or agent in _EXCLUDED or agent in _gated:
             continue
+        # Roster status (Barry, Nov 4 2026): only active + onboarding
+        # work leads. License pending, non-lead, test, inactive get no
+        # sheet, no picks, no scoreboard.
+        if (profile.get("status") or "active") in getattr(
+                _db, "LEAD_GATED_STATUSES", set()):
+            continue
 
         picks, used_pids = [], set()
 

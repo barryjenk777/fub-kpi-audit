@@ -105,6 +105,14 @@ DO $$ BEGIN
   ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS fub_phone TEXT;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+-- status (Barry, Nov 4 2026): active | onboarding | license_pending |
+-- non_lead | test | inactive. NULL means derive from is_active. Only
+-- active + onboarding work leads (picks, ladders, scoreboards, alerts);
+-- test is excluded from every stat.
+DO $$ BEGIN
+  ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS status TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 -- onboarding_sent_at: timestamp when goal setup onboarding email was sent (NULL = not yet sent)
 DO $$ BEGIN
   ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS onboarding_sent_at TIMESTAMPTZ;
@@ -733,20 +741,23 @@ def get_agent_profiles(active_only=True):
                     cur.execute("""
                         SELECT agent_name, fub_user_id, email,
                                COALESCE(phone, fub_phone) AS phone,
-                               is_active, fub_phone, onboarding_sent_at, start_date
+                               is_active, fub_phone, onboarding_sent_at, start_date,
+                               status
                         FROM   agent_profiles WHERE is_active = TRUE ORDER BY agent_name
                     """)
                 else:
                     cur.execute("""
                         SELECT agent_name, fub_user_id, email,
                                COALESCE(phone, fub_phone) AS phone,
-                               is_active, fub_phone, onboarding_sent_at, start_date
+                               is_active, fub_phone, onboarding_sent_at, start_date,
+                               status
                         FROM   agent_profiles ORDER BY agent_name
                     """)
                 rows = cur.fetchall()
         return [{"agent_name": r[0], "fub_user_id": r[1], "email": r[2], "phone": r[3],
                  "is_active": r[4], "fub_phone": r[5], "onboarding_sent_at": r[6],
-                 "start_date": r[7].isoformat() if r[7] else None}
+                 "start_date": r[7].isoformat() if r[7] else None,
+                 "status": (r[8] or ("active" if r[4] else "inactive"))}
                 for r in rows]
     except Exception as e:
         logger.warning("get_agent_profiles failed: %s", e)
@@ -9599,6 +9610,149 @@ def get_onboarding_gated():
     except Exception as e:
         logger.warning("get_onboarding_gated failed: %s", e)
         return set()
+
+
+# Statuses that do NOT work leads: no picks, no ladders, no scoreboards,
+# no behind alerts (Barry, Nov 4 2026). 'test' is additionally excluded
+# from every stat surface.
+AGENT_STATUSES = ("active", "onboarding", "license_pending", "non_lead",
+                  "test", "inactive")
+LEAD_GATED_STATUSES = {"license_pending", "non_lead", "test", "inactive"}
+
+
+def set_agent_status(agent_name, status):
+    """Set the roster status for one agent. Returns True on a row hit."""
+    if not is_available() or status not in AGENT_STATUSES:
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE agent_profiles
+                    SET status = %s, updated_at = NOW()
+                    WHERE agent_name = %s
+                """, (status, agent_name))
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("set_agent_status failed: %s", e)
+        return False
+
+
+def get_lead_gated_agents():
+    """Names whose status keeps them out of lead work entirely."""
+    try:
+        return {p["agent_name"] for p in (get_agent_profiles(active_only=False)
+                                          or [])
+                if p.get("status") in LEAD_GATED_STATUSES}
+    except Exception as e:
+        logger.warning("get_lead_gated_agents failed: %s", e)
+        return set()
+
+
+# ── 1-on-1 coaching commitments (Barry/Danny, Nov 4 2026) ──────────────────
+
+def ensure_coaching_table():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS coaching_commitments (
+                        id          SERIAL PRIMARY KEY,
+                        agent_name  TEXT NOT NULL,
+                        commitment  TEXT NOT NULL,
+                        metric      TEXT,            -- dials_per_day | NULL (free text)
+                        target      INTEGER,         -- e.g. 10 for 10 dials/day
+                        met_date    DATE NOT NULL,   -- the 1-on-1 date
+                        set_by      TEXT,            -- Barry | Danny Rinaldi
+                        active      BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_cc_agent
+                        ON coaching_commitments (agent_name, met_date DESC);
+                """)
+    except Exception as e:
+        logger.warning("ensure_coaching_table failed: %s", e)
+
+
+def add_coaching_commitment(agent_name, commitment, met_date, set_by=None,
+                            metric=None, target=None):
+    if not is_available():
+        return None
+    ensure_coaching_table()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO coaching_commitments
+                        (agent_name, commitment, metric, target, met_date, set_by)
+                    VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+                """, (agent_name, commitment, metric, target, met_date, set_by))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("add_coaching_commitment failed: %s", e)
+        return None
+
+
+def get_coaching_commitments(active_only=True):
+    if not is_available():
+        return []
+    ensure_coaching_table()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, agent_name, commitment, metric, target,
+                           met_date, set_by, active, created_at
+                    FROM coaching_commitments %s
+                    ORDER BY agent_name, met_date DESC
+                """ % ("WHERE active = TRUE" if active_only else ""))
+                keys = ("id", "agent_name", "commitment", "metric", "target",
+                        "met_date", "set_by", "active", "created_at")
+                out = []
+                for r in cur.fetchall():
+                    d = dict(zip(keys, r))
+                    d["met_date"] = str(d["met_date"])
+                    d["created_at"] = d["created_at"].isoformat()
+                    out.append(d)
+                return out
+    except Exception as e:
+        logger.warning("get_coaching_commitments failed: %s", e)
+        return []
+
+
+def deactivate_coaching_commitment(commitment_id):
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE coaching_commitments SET active = FALSE "
+                            "WHERE id = %s", (commitment_id,))
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("deactivate_coaching_commitment failed: %s", e)
+        return False
+
+
+def get_agent_calls_on(agent_name, activity_date):
+    """Calls logged for one agent on one date, from the daily activity
+    sync (the coaching commitment checker's evidence)."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT calls FROM daily_activity
+                    WHERE agent_name = %s AND activity_date = %s
+                """, (agent_name, activity_date))
+                r = cur.fetchone()
+                return int(r[0]) if r else None
+    except Exception as e:
+        logger.warning("get_agent_calls_on failed: %s", e)
+        return None
 
 
 def remove_onboarding_hire(agent_name):

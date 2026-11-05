@@ -55,6 +55,12 @@ def eligible_agents(lead_city=None, audit=None):
         gated = _db.get_onboarding_gated()
     except Exception:
         pass
+    # Roster status (Barry, Nov 4 2026): license_pending / non_lead /
+    # test / inactive never receive offers, whatever the audit says.
+    try:
+        gated = gated | _db.get_lead_gated_agents()
+    except Exception:
+        pass
     passing = []
     for a in (audit or {}).get("agents", []):
         name = a.get("name")
@@ -420,6 +426,10 @@ def make_shootout(person_id, lead_name, lead_city=None, notes=None,
         gated = set()
         try:
             gated = _db.get_onboarding_gated()
+        except Exception:
+            pass
+        try:
+            gated = gated | _db.get_lead_gated_agents()
         except Exception:
             pass
         roster = [p["agent_name"] for p in
