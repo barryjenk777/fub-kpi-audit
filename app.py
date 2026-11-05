@@ -120,6 +120,10 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/api/recruiting/",
         # TM portal APIs check TM_PORTAL_KEY internally
         "/api/tm/",
+        # Grokbot read API: scoped GROK_API_KEY or owner key checked
+        # inside the route (Nov 2026 — same pattern as maverick/ingest,
+        # the external bot never holds the master key)
+        "/api/grok/",
         # MCP client discovery
         "/.well-known/",
     )
@@ -23158,6 +23162,80 @@ def api_maverick_ingest_probe():
                         for r in cur.fetchall()]
         except Exception as e:
             out["recent_error"] = str(e)[:200]
+    return jsonify(out)
+
+
+@app.route("/api/grok/pulse")
+def api_grok_pulse():
+    """Command Center -> Grokbot (Barry, Nov 4 2026). The read half of the
+    Grok connection: Grokbot already WRITES call grades and engagement
+    through /api/admin/maverick/ingest; this is the curated state of the
+    team it can READ. Auth: scoped GROK_API_KEY (Railway env, can do
+    nothing else anywhere in the app) or the owner key. Read-only, no
+    tokens or links in the payload, every section fails soft."""
+    _scoped = (os.environ.get("GROK_API_KEY") or "").strip()
+    _given = (request.args.get("key", "").strip()
+              or request.headers.get("X-Api-Key", "").strip())
+    if not ((_scoped and _given == _scoped) or _perplexity_auth()):
+        return jsonify({"error": "Unauthorized"}), 401
+    out = {"ok": True,
+           "generated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        _excl = set(getattr(config, "EXCLUDED_USERS", ()) or ())
+        out["roster"] = sorted(
+            p["agent_name"] for p in
+            (_db.get_agent_profiles(active_only=True) or [])
+            if p.get("agent_name") and p["agent_name"] not in _excl)
+    except Exception as e:
+        out["roster"] = {"error": str(e)[:120]}
+    try:
+        import realtor_ladder as _rl
+        live, _ = _db.get_app_state("realtor_live")
+        claims = _rl.get_claims(days=7)
+        out["realtor_lane"] = {
+            "live": (live or "").strip() == "1",
+            "claims_7d": len(claims),
+            "active_ladders": [
+                {"lead": l["lead_name"], "agent": l["agent_name"],
+                 "day_no": l["day_no"], "attempts": l["attempts"],
+                 "due": l["due"], "behind": l["behind"]}
+                for l in _rl.active_ladders(FUBClient())]}
+    except Exception as e:
+        out["realtor_lane"] = {"error": str(e)[:120]}
+    try:
+        out["desk"] = {
+            "open_escalations": len(_db.open_desk_escalations(
+                older_than_min=0) or []),
+            "offers_24h": _db.count_recent_dispatch_offers(60 * 24)}
+    except Exception as e:
+        out["desk"] = {"error": str(e)[:120]}
+    try:
+        out["onboarding"] = [
+            {"agent": h["agent_name"], "started": h["started_at"],
+             "done": sum(1 for t in h["tasks"] if t["done_at"]),
+             "total": len(h["tasks"]),
+             "complete": bool(h["completed_at"])}
+            for h in _db.get_onboarding_pipeline()]
+    except Exception as e:
+        out["onboarding"] = [{"error": str(e)[:120]}]
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, COUNT(*),
+                           COUNT(*) FILTER (WHERE called)
+                    FROM hotsheet_log
+                    WHERE sheet_date = (SELECT MAX(sheet_date)
+                                        FROM hotsheet_log
+                                        WHERE called IS NOT NULL)
+                      AND called IS NOT NULL
+                    GROUP BY agent_name ORDER BY agent_name
+                """)
+                out["hot_sheet_last_verified"] = [
+                    {"agent": r[0], "picks": int(r[1]),
+                     "called": int(r[2])} for r in cur.fetchall()]
+    except Exception as e:
+        out["hot_sheet_last_verified"] = [{"error": str(e)[:120]}]
     return jsonify(out)
 
 
