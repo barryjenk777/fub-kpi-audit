@@ -5774,6 +5774,128 @@ def api_ca_decide():
                     decision == "trashed"})
 
 
+def _ca_page_link():
+    base = (os.environ.get("BASE_URL")
+            or "https://www.legacycommandcenter.com").rstrip("/")
+    k = (os.environ.get("ISA_DISPATCH_KEY") or "").strip()
+    return "%s/callaction%s" % (base, ("?key=%s" % k) if k else "")
+
+
+def scheduled_ca_digest():
+    """9:05am ET: one morning note to Fhalen, Slack + email, ONLY when
+    CallAction replies are waiting. Zero pending = total silence."""
+    counts = _db.ca_counts(days=7) or {}
+    if not counts.get("pending"):
+        return {"skipped": "nothing pending"}
+    from zoneinfo import ZoneInfo as _ZI
+    today = datetime.now(_ZI("America/New_York")).date().isoformat()
+    if not _db.claim_once("ca_digest_%s" % today):
+        return {"skipped": "already sent today"}
+    n = counts["pending"]
+    p = counts.get("pending_positive") or 0
+    link = _ca_page_link()
+    msg = ("Morning Fhalen. %d CallAction repl%s waiting on your call this "
+           "morning%s. Two taps each: worth your time, or off to the "
+           "pond. %s"
+           % (n, "y is" if n == 1 else "ies are",
+              (", %d showing real intent" % p) if p else "",
+              link))
+    sent_slack = False
+    try:
+        import slack_client as _sl
+        import dispatch as _dp
+        fid = _dp._slack_user_id(config.ISA_NAME)
+        if _sl.is_available() and fid:
+            sent_slack = _sl.dm_user(fid, msg)
+    except Exception as e:
+        logger.warning("[CALLACTION] digest slack failed: %s", e)
+    try:
+        import postmark_client as _pm
+        em = getattr(config, "LIVE_CALLS_ADMIN_EMAIL", None)
+        if em:
+            _pm.send(to=em, from_email=config.EMAIL_FROM,
+                     subject="%d CallAction repl%s waiting for you"
+                             % (n, "y" if n == 1 else "ies"),
+                     html=("<p>Morning Fhalen.</p><p><b>%d</b> CallAction "
+                           "repl%s waiting on your call%s.</p>"
+                           "<p>Two taps each: worth your time, or off to "
+                           "the pond.</p>"
+                           "<p><a href='%s'>Open the reply desk</a></p>"
+                           % (n, "y is" if n == 1 else "ies are",
+                              (", <b>%d showing real intent</b>" % p)
+                              if p else "", link)),
+                     text=msg)
+    except Exception as e:
+        logger.warning("[CALLACTION] digest email failed: %s", e)
+    _db.log_automation_event(event_type="ca_digest",
+                             agent_name=config.ISA_NAME,
+                             payload={**counts, "slack": sent_slack},
+                             triggered_by="scheduler")
+    return {"sent": True, **counts}
+
+
+@app.route("/api/admin/callaction/announce", methods=["POST"])
+def api_ca_announce():
+    """One-time intro to Fhalen (Slack + email) explaining the reply
+    desk. Re-runnable on purpose (no claim_once): Barry may want it
+    re-sent after changes."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    link = _ca_page_link()
+    slack_msg = (
+        "Fhalen, new tool built for you: the CallAction reply desk.\n\n"
+        "We put 1,000 older leads on a text drip and the replies are "
+        "starting. Most will be “who is this”, and that is "
+        "expected. Every reply lands on one page, already read and "
+        "sorted: green means real intent, gold means your judgment "
+        "call, red asked to stop.\n\n"
+        "Two taps on each one: *Worth my time* keeps it (you work it "
+        "in FUB like always), *Trash to pond* moves it to Storage Pond "
+        "and off your plate.\n\n"
+        "Hot ones will DM you the moment they land. Mornings with "
+        "replies waiting, you get one 9am note, nothing on quiet days. "
+        "The page also shows as a banner on your Lead Claims board.\n\n"
+        "Your link: %s" % link)
+    email_html = (
+        "<p>Fhalen, new tool built for you: the CallAction reply desk."
+        "</p>"
+        "<p>We put 1,000 older leads on a text drip and the replies are "
+        "starting. Most will be “who is this”, and that is "
+        "expected. Every reply lands on one page, already read and "
+        "sorted: <b style='color:#2e7d4f'>green means real intent</b>, "
+        "gold means your judgment call, red asked to stop.</p>"
+        "<p>Two taps on each one: <b>Worth my time</b> keeps it (you "
+        "work it in FUB like always). <b>Trash to pond</b> moves it to "
+        "Storage Pond and off your plate.</p>"
+        "<p>Hot ones will DM you on Slack the moment they land. "
+        "Mornings with replies waiting, you get one 9am note, nothing "
+        "on quiet days. The page also shows as a banner on your Lead "
+        "Claims board.</p>"
+        "<p><a href='%s'>Open your reply desk</a> (bookmark it)</p>"
+        "<p>Barry</p>" % link)
+    out = {"ok": True, "slack": False, "email": False}
+    try:
+        import slack_client as _sl
+        import dispatch as _dp
+        fid = _dp._slack_user_id(config.ISA_NAME)
+        if _sl.is_available() and fid:
+            out["slack"] = bool(_sl.dm_user(fid, slack_msg))
+    except Exception as e:
+        out["slack_error"] = str(e)[:150]
+    try:
+        import postmark_client as _pm
+        em = getattr(config, "LIVE_CALLS_ADMIN_EMAIL", None)
+        if em:
+            _pm.send(to=em, from_email=config.EMAIL_FROM,
+                     subject="New for you: the CallAction reply desk",
+                     html=email_html, text=slack_msg.replace("*", ""))
+            out["email"] = True
+            out["email_to"] = em
+    except Exception as e:
+        out["email_error"] = str(e)[:150]
+    return jsonify(out)
+
+
 @app.route("/api/admin/callaction/backfill", methods=["POST"])
 def api_ca_backfill():
     """Catch-up: run every CA_Responded carrier through the intake (the
@@ -27282,6 +27404,12 @@ def start_scheduler():
                                    timezone=ET),
                        id="coaching_check",
                        name="Coaching commitment check (8pm)",
+                       max_instances=1, coalesce=True)
+    # CallAction morning digest to Fhalen: only speaks when replies wait.
+    _scheduler.add_job(scheduled_ca_digest,
+                       CronTrigger(hour=9, minute=5, timezone=ET),
+                       id="ca_digest",
+                       name="CallAction digest to Fhalen (9:05am)",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_appt_insight,
                        CronTrigger(hour=6, minute=20, timezone=ET),
