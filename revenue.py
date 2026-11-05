@@ -17,6 +17,7 @@ tracked by the ladder's Friday receipt).
 
 import json
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,17 @@ from datetime import datetime, timedelta, timezone
 import db as _db
 
 logger = logging.getLogger(__name__)
+
+# Dotloop is also the team's ONBOARDING paperwork tool, and its FUB sync
+# ships those loops over as "deals" (Barry, Nov 4 2026: "that's not a
+# transaction"). They are ignored everywhere money is counted and
+# surfaced in the TM Deal Desk only with a delete action.
+ADMIN_DEAL_RE = re.compile(
+    r"onboarding|commission split|handbook|independent contractor", re.I)
+
+
+def is_admin_deal(deal):
+    return bool(ADMIN_DEAL_RE.search(deal.get("name") or ""))
 
 # source bucket -> referral fee fraction taken off GCI
 REFERRAL_FEES = {
@@ -163,6 +175,7 @@ def build_snapshot(client):
         src = person_source[pid]
         return bucket_for(src) if src else None
 
+    deals = [d for d in deals if not is_admin_deal(d)]
     coverage = {"deals_total": len(deals), "with_price": 0,
                 "with_commission": 0, "with_person_link": 0}
     closed, under_contract = [], []

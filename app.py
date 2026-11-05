@@ -8173,6 +8173,13 @@ def api_tm_deals_attention():
         sname = (st.get("stage") or d.get("stageName") or "")
         if "archived" in sname.lower():
             continue
+        if _rev.is_admin_deal(d):
+            rows.append({"id": d.get("id"), "name": d.get("name"),
+                         "stage": sname, "pipeline": st.get("pipeline"),
+                         "price": None, "commission": None, "people": [],
+                         "users": [], "projected_close": None,
+                         "missing": [], "admin_loop": True})
+            continue
         missing = []
         if not d.get("people"):
             missing.append("lead link")
@@ -8197,8 +8204,39 @@ def api_tm_deals_attention():
                      "projected_close": (d.get("projectedCloseDate")
                                          or "")[:10] or None,
                      "missing": missing})
-    rows.sort(key=lambda r: -(r["id"] or 0))
+    rows.sort(key=lambda r: (not r.get("admin_loop"), -(r["id"] or 0)))
     return jsonify({"ok": True, "deals": rows})
+
+
+@app.route("/api/tm/deal/delete", methods=["POST"])
+def api_tm_deal_delete():
+    """Remove a non-transaction from FUB (Dotloop onboarding loops and
+    other admin paperwork synced over as deals). FUB soft-deletes, so a
+    mistake is recoverable from FUB's own trash by support, but the
+    button confirms first and everything is logged."""
+    if not (_tm_auth() or _perplexity_auth()):
+        return jsonify({"error": "Unauthorized"}), 401
+    deal_id = (request.get_json(silent=True) or {}).get("deal_id")
+    if not deal_id:
+        return jsonify({"ok": False, "error": "deal_id required"}), 400
+    client = FUBClient()
+    try:
+        deal = client._request("GET", "deals/%s" % deal_id) or {}
+        name = deal.get("name") or ""
+        client._request("DELETE", "deals/%s" % deal_id)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "FUB delete failed: %s"
+                                              % str(e)[:200]}), 502
+    try:
+        import revenue as _rev
+        with _rev._LOCK:
+            _rev._CACHE["data"] = None
+    except Exception:
+        pass
+    _db.log_automation_event(event_type="tm_deal_delete",
+                             payload={"deal_id": deal_id, "name": name},
+                             triggered_by="tm_portal")
+    return jsonify({"ok": True, "deleted": name})
 
 
 @app.route("/api/tm/lead-search")

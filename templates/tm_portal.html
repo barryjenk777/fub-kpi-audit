@@ -261,6 +261,15 @@ function loadDeals(){
       if(!rows.length){ el.innerHTML='<div class="empty">Every deal has a lead, a price, a GCI, and an agent. Nothing needs you.</div>'; return; }
       var h='';
       rows.forEach(function(dl){
+        if(dl.admin_loop){
+          h+='<div style="border:1px solid #e8d8d8;background:#faf6f4;border-radius:10px;padding:10px 14px;margin-bottom:10px" id="deal-'+dl.id+'">'+
+             '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;align-items:center">'+
+             '<span style="font-size:13px"><b>'+esc(dl.name)+'</b>'+
+             '<span style="font-size:11px;color:#a05252"> &middot; onboarding paperwork, not a transaction</span></span>'+
+             '<button class="btn" id="del-'+dl.id+'" onclick="deleteDeal('+dl.id+')">Delete from FUB</button>'+
+             '</div></div>';
+          return;
+        }
         h+='<div style="border:1px solid #e3e3dc;border-radius:10px;padding:12px 14px;margin-bottom:10px" id="deal-'+dl.id+'">';
         h+='<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">'+
            '<b style="font-size:13.5px">'+esc(dl.name)+'</b>'+
@@ -332,6 +341,20 @@ function linkDeal(id){
         (d.lead? ' &middot; linked to '+esc(d.lead):'')+(d.agent? ' &middot; agent '+esc(d.agent):'')+extra+'</div>';
     })
     .catch(function(){ btn.disabled=false; btn.textContent='Save to FUB'; });
+}
+function deleteDeal(id){
+  if(!confirm('Delete this from FUB? Use only for paperwork loops that are not real transactions.')) return;
+  var btn=document.getElementById('del-'+id);
+  btn.disabled=true; btn.textContent='Deleting...';
+  fetch('/api/tm/deal/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({k:KEY,deal_id:id})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok){ btn.disabled=false; btn.textContent='Delete from FUB'; alert(d.error||'Could not delete'); return; }
+      document.getElementById('deal-'+id).innerHTML=
+        '<div style="font-size:12.5px;color:#2e7d4f;padding:2px 0"><b>&#10003; Deleted</b> '+esc(d.deleted||'')+'</div>';
+    })
+    .catch(function(){ btn.disabled=false; btn.textContent='Delete from FUB'; });
 }
 loadDeals();
 document.getElementById('modal').onclick=function(e){ if(e.target.id==='modal') closeForm(); };
