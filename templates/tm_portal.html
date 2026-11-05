@@ -87,6 +87,15 @@ textarea{min-height:64px;resize:vertical}
     <h2>Contracts</h2>
     <div id="list"><div class="empty">Loading...</div></div>
   </div>
+
+  <div class="card">
+    <h2>FUB deals that need you</h2>
+    <div style="font-size:12.5px;color:#777;margin:-4px 0 10px">Dotloop
+    sends every deal over with no lead, no price, and Barry as the agent.
+    Search the client's phone or email, pick the lead, fill what you know,
+    save. This is what makes the money-by-source report real.</div>
+    <div id="deal-desk"><div class="empty">Loading...</div></div>
+  </div>
 </div>
 
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
@@ -237,6 +246,94 @@ function delTx(id){
 }
 
 function closeForm(){ document.getElementById('modal').classList.remove('on'); }
+
+/* ── FUB Deal Desk (Nov 4 2026): link deals to leads so revenue-by-source
+   fills in. peopleIds/userIds REPLACE on the server, so re-linking fixes
+   mistakes. ─────────────────────────────────────────────────────────── */
+var DEAL_AGENTS = AGENTS;
+function loadDeals(){
+  fetch('/api/tm/deals/needs-attention?k='+encodeURIComponent(KEY))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var el=document.getElementById('deal-desk');
+      var rows=d.deals||[];
+      if(!d.ok){ el.innerHTML='<div class="empty">Could not load deals.</div>'; return; }
+      if(!rows.length){ el.innerHTML='<div class="empty">Every deal has a lead, a price, a GCI, and an agent. Nothing needs you.</div>'; return; }
+      var h='';
+      rows.forEach(function(dl){
+        h+='<div style="border:1px solid #e3e3dc;border-radius:10px;padding:12px 14px;margin-bottom:10px" id="deal-'+dl.id+'">';
+        h+='<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px">'+
+           '<b style="font-size:13.5px">'+esc(dl.name)+'</b>'+
+           '<span style="font-size:11px;color:#a06a00">missing: '+esc(dl.missing.join(', '))+'</span></div>';
+        h+='<div style="font-size:11.5px;color:#777;margin:2px 0 8px">'+esc(dl.pipeline||'')+' &middot; '+esc(dl.stage||'')+
+           (dl.people.length? ' &middot; lead: '+esc(dl.people.join(', ')):'')+
+           (dl.users.length? ' &middot; agent: '+esc(dl.users.join(', ')):'')+'</div>';
+        h+='<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'+
+           '<input id="q-'+dl.id+'" placeholder="client phone or email" style="flex:1;min-width:170px" '+
+           'onkeydown="if(event.key===\'Enter\')searchLead('+dl.id+')">'+
+           '<button class="btn" onclick="searchLead('+dl.id+')">Find lead</button></div>';
+        h+='<div id="res-'+dl.id+'"></div>';
+        h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'+
+           '<input id="price-'+dl.id+'" type="number" step="1000" placeholder="sale price" value="'+(dl.price||'')+'" style="width:130px">'+
+           '<input id="gci-'+dl.id+'" type="number" step="100" placeholder="GCI $" value="'+(dl.commission&&dl.commission>10?dl.commission:'')+'" style="width:110px">'+
+           '<select id="agent-'+dl.id+'"><option value="">agent...</option>'+
+           DEAL_AGENTS.map(function(a){return '<option>'+esc(a)+'</option>';}).join('')+'</select>'+
+           '<button class="btn btn-gold" id="save-'+dl.id+'" onclick="linkDeal('+dl.id+')">Save to FUB</button></div>';
+        h+='</div>';
+      });
+      el.innerHTML=h;
+    })
+    .catch(function(){ document.getElementById('deal-desk').innerHTML='<div class="empty">Could not load deals.</div>'; });
+}
+var PICKED={};
+function searchLead(id){
+  var q=document.getElementById('q-'+id).value.trim();
+  var res=document.getElementById('res-'+id);
+  if(q.length<3){ res.innerHTML='<div class="empty">Type at least 3 characters.</div>'; return; }
+  res.innerHTML='<div class="empty">Searching...</div>';
+  fetch('/api/tm/lead-search?k='+encodeURIComponent(KEY)+'&q='+encodeURIComponent(q))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var m=d.matches||[];
+      if(!m.length){ res.innerHTML='<div class="empty">No FUB lead matches that. Try the other phone or email on the file.</div>'; return; }
+      var h='';
+      m.forEach(function(p){
+        h+='<label style="display:block;font-size:12.5px;padding:5px 2px;border-bottom:1px solid #f0f0ea;cursor:pointer">'+
+           '<input type="radio" name="pick-'+id+'" onchange="pickLead('+id+','+p.id+',\''+esc((p.assigned_to||'').replace(/'/g,''))+'\')"> '+
+           '<b>'+esc(p.name)+'</b> &middot; '+esc(p.source||'no source')+' &middot; '+esc(p.assigned_to||'unassigned')+
+           ' &middot; '+esc(p.phone||p.email||'')+' &middot; since '+esc(p.created||'')+'</label>';
+      });
+      res.innerHTML=h;
+    })
+    .catch(function(){ res.innerHTML='<div class="empty">Search failed, try again.</div>'; });
+}
+function pickLead(id,pid,assigned){
+  PICKED[id]=pid;
+  var sel=document.getElementById('agent-'+id);
+  if(sel && !sel.value && assigned){
+    for(var i=0;i<sel.options.length;i++){ if(sel.options[i].value===assigned){ sel.selectedIndex=i; break; } }
+  }
+}
+function linkDeal(id){
+  var btn=document.getElementById('save-'+id);
+  btn.disabled=true; btn.textContent='Saving...';
+  var body={k:KEY, deal_id:id,
+            person_id:PICKED[id]||null,
+            price:document.getElementById('price-'+id).value||null,
+            gci:document.getElementById('gci-'+id).value||null,
+            agent_name:document.getElementById('agent-'+id).value||null};
+  fetch('/api/tm/deal/link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok){ btn.disabled=false; btn.textContent='Save to FUB'; alert(d.error||'Could not save'); return; }
+      var card=document.getElementById('deal-'+id);
+      var extra = d.bucket? (' &middot; source: '+esc(d.bucket)+(d.referral_fee_pct?' ('+d.referral_fee_pct+'% referral fee)':'')) : '';
+      card.innerHTML='<div style="font-size:13px;color:#2e7d4f"><b>&#10003; Saved to FUB</b>'+
+        (d.lead? ' &middot; linked to '+esc(d.lead):'')+(d.agent? ' &middot; agent '+esc(d.agent):'')+extra+'</div>';
+    })
+    .catch(function(){ btn.disabled=false; btn.textContent='Save to FUB'; });
+}
+loadDeals();
 document.getElementById('modal').onclick=function(e){ if(e.target.id==='modal') closeForm(); };
 load();
 </script>

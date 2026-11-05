@@ -8157,6 +8157,153 @@ def api_tm_delete():
     return jsonify({"ok": bool(_db.delete_transaction(tx_id))})
 
 
+@app.route("/api/tm/deals/needs-attention")
+def api_tm_deals_attention():
+    """FUB deals missing the data the revenue layer needs: a person
+    link, a price, or a commission. Dotloop assigns every deal to Barry
+    with none of that, so Ana fixes them here (Barry, Nov 4 2026)."""
+    if not (_tm_auth() or _perplexity_auth()):
+        return jsonify({"error": "Unauthorized"}), 401
+    import revenue as _rev
+    client = FUBClient()
+    stages = _rev._stage_map(client)
+    rows = []
+    for d in _rev._fetch_all_deals(client):
+        st = stages.get(d.get("stageId")) or {}
+        sname = (st.get("stage") or d.get("stageName") or "")
+        if "archived" in sname.lower():
+            continue
+        missing = []
+        if not d.get("people"):
+            missing.append("lead link")
+        if not d.get("price"):
+            missing.append("price")
+        if not (d.get("commissionValue") or 0):
+            missing.append("GCI")
+        _users = d.get("users") or []
+        if not _users or all((u.get("name") or "") == "Barry Jenkins"
+                             for u in _users if isinstance(u, dict)):
+            missing.append("agent")
+        if not missing:
+            continue
+        rows.append({"id": d.get("id"), "name": d.get("name"),
+                     "stage": sname, "pipeline": st.get("pipeline"),
+                     "price": d.get("price"),
+                     "commission": d.get("commissionValue"),
+                     "people": [p.get("name") for p in (d.get("people") or [])
+                                if isinstance(p, dict)],
+                     "users": [u.get("name") for u in _users
+                               if isinstance(u, dict)],
+                     "projected_close": (d.get("projectedCloseDate")
+                                         or "")[:10] or None,
+                     "missing": missing})
+    rows.sort(key=lambda r: -(r["id"] or 0))
+    return jsonify({"ok": True, "deals": rows})
+
+
+@app.route("/api/tm/lead-search")
+def api_tm_lead_search():
+    """Find the FUB lead behind a deal by phone, email, or name."""
+    if not (_tm_auth() or _perplexity_auth()):
+        return jsonify({"error": "Unauthorized"}), 401
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 3:
+        return jsonify({"ok": False, "error": "need at least 3 characters"}), 400
+    client = FUBClient()
+    digits = "".join(c for c in q if c.isdigit())
+    params = {"limit": 8,
+              "fields": "id,name,source,assignedTo,emails,phones,created,stage"}
+    if "@" in q:
+        params["email"] = q
+    elif len(digits) >= 7:
+        params["phone"] = digits
+    else:
+        params["q"] = q
+    try:
+        data = client._request("GET", "people", params=params) or {}
+        ppl = data.get("people") or []
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:200]}), 502
+    return jsonify({"ok": True, "matches": [
+        {"id": p.get("id"), "name": p.get("name"),
+         "source": p.get("source"), "assigned_to": p.get("assignedTo"),
+         "stage": p.get("stage"),
+         "email": ((p.get("emails") or [{}])[0] or {}).get("value"),
+         "phone": ((p.get("phones") or [{}])[0] or {}).get("value"),
+         "created": (p.get("created") or "")[:10]}
+        for p in ppl]})
+
+
+@app.route("/api/tm/deal/link", methods=["POST"])
+def api_tm_deal_link():
+    """Write the truth onto a FUB deal: the lead (peopleIds), the agent
+    (userIds), price, and GCI in dollars. Probed Nov 4 2026: peopleIds
+    and userIds REPLACE on PUT, so corrections work the same as first
+    links. The revenue layer picks the change up on its next snapshot
+    (cache dropped here)."""
+    if not (_tm_auth() or _perplexity_auth()):
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    deal_id = body.get("deal_id")
+    person_id = body.get("person_id")
+    if not deal_id:
+        return jsonify({"ok": False, "error": "deal_id required"}), 400
+    client = FUBClient()
+    put = {}
+    receipt = {}
+    if person_id:
+        put["peopleIds"] = [int(person_id)]
+        try:
+            p = client._request("GET", "people/%s" % person_id,
+                                params={"fields":
+                                        "id,name,source,assignedTo"}) or {}
+            receipt["lead"] = p.get("name")
+            receipt["source"] = p.get("source")
+            if not body.get("agent_name") and p.get("assignedTo"):
+                body["agent_name"] = p["assignedTo"]
+        except Exception:
+            pass
+    agent = (body.get("agent_name") or "").strip()
+    if agent:
+        uid = next((pr.get("fub_user_id") for pr in
+                    (_db.get_agent_profiles(active_only=False) or [])
+                    if pr["agent_name"] == agent and pr.get("fub_user_id")),
+                   None)
+        if uid:
+            put["userIds"] = [int(uid)]
+            receipt["agent"] = agent
+    if body.get("price") not in (None, ""):
+        put["price"] = float(body["price"])
+    if body.get("gci") not in (None, ""):
+        put["commissionValue"] = float(body["gci"])
+    if not put:
+        return jsonify({"ok": False, "error": "nothing to write"}), 400
+    try:
+        client._request("PUT", "deals/%s" % deal_id, json_data=put)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "FUB write failed: %s"
+                                              % str(e)[:200]}), 502
+    try:
+        import revenue as _rev
+        with _rev._LOCK:
+            _rev._CACHE["data"] = None
+        if receipt.get("source"):
+            b = _rev.bucket_for(receipt["source"])
+            receipt["bucket"] = b
+            receipt["referral_fee_pct"] = int(
+                _rev.REFERRAL_FEES.get(b, 0) * 100)
+    except Exception:
+        pass
+    _db.log_automation_event(
+        event_type="tm_deal_link", person_id=person_id,
+        person_name=receipt.get("lead"), agent_name=receipt.get("agent"),
+        payload={"deal_id": deal_id, "written": {k: v for k, v in put.items()
+                                                 if k != "peopleIds"},
+                 "linked_person": person_id, **receipt},
+        triggered_by="tm_portal")
+    return jsonify({"ok": True, "written": sorted(put.keys()), **receipt})
+
+
 @app.route("/api/admin/roi")
 def api_admin_roi():
     """Barry's view of the ROI loop: money by lead source, from Ana's entries."""
