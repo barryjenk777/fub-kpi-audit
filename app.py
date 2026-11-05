@@ -5234,6 +5234,97 @@ def api_onboarding_task_done():
     return jsonify({"ok": True, **r})
 
 
+@app.route("/api/admin/onboarding/headshot-reminders", methods=["POST"])
+def api_onboarding_headshot_reminders():
+    """One click on the board: every hire still missing headshot + bio
+    gets their personal /join link by email. Smart defaults, zero forms
+    (Barry, Nov 4 2026): skips hires whose docs are unsigned (not on the
+    team yet), skips anyone already reminded today, dry_run previews.
+    Body: {"dry_run": true|false}."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    dry_run = bool(body.get("dry_run"))
+    base = (os.environ.get("BASE_URL")
+            or "https://www.legacycommandcenter.com").rstrip("/")
+    gated = _db.get_onboarding_gated()
+    emails = {}
+    for p in (_db.get_agent_profiles(active_only=False) or []):
+        if p.get("email"):
+            emails[p.get("agent_name")] = p["email"].strip()
+    from zoneinfo import ZoneInfo as _ZI
+    today = datetime.now(_ZI("America/New_York")).date().isoformat()
+    sent, skipped = [], []
+    import postmark_client as _pm
+    for h in _db.get_onboarding_pipeline():
+        name = h["agent_name"]
+        hs = next((t for t in h["tasks"] if t["key"] == "headshot_bio"), None)
+        if not hs or hs.get("done_at") or h.get("completed_at"):
+            continue
+        if name in gated:
+            skipped.append({"agent": name, "why": "docs unsigned"})
+            continue
+        em = emails.get(name)
+        if not em:
+            skipped.append({"agent": name, "why": "no email on file"})
+            continue
+        join_url = "%s/join/%s" % (base, h.get("join_token") or "")
+        if dry_run:
+            sent.append({"agent": name, "email": em, "dry_run": True})
+            continue
+        if not _db.claim_once("hsremind_%s_%s" % (name, today)):
+            skipped.append({"agent": name, "why": "already reminded today"})
+            continue
+        first = name.split()[0]
+        html = ("<p>%s, quick one. Your headshot goes on the team site and "
+                "your bio tells clients who they are about to meet, and "
+                "both are still open on your onboarding list.</p>"
+                "<p>Two minutes, one page, phone photo is fine: "
+                "<a href='%s'>%s</a></p>"
+                "<p>Three to six sentences on the bio. Who you are, what "
+                "part of Hampton Roads you know best, and one human thing "
+                "about you. Done beats perfect.</p>"
+                "<p>Barry</p>" % (first, join_url, join_url))
+        try:
+            _pm.send(to=em, from_email=config.EMAIL_FROM,
+                     subject="%s, your headshot and bio (two minutes)" % first,
+                     html=html,
+                     text=("%s, your headshot and bio are still open on "
+                           "your onboarding list. Two minutes, one page: %s"
+                           % (first, join_url)))
+            sent.append({"agent": name, "email": em})
+            try:
+                _db.log_nudge(name, "headshot_bio", join_url, status="sent")
+            except Exception:
+                pass
+        except Exception as e:
+            skipped.append({"agent": name, "why": "send failed: %s"
+                                                  % str(e)[:120]})
+    return jsonify({"ok": True, "dry_run": dry_run,
+                    "sent": sent, "skipped": skipped})
+
+
+@app.route("/api/admin/onboarding/remove-hire", methods=["POST"])
+def api_onboarding_remove_hire():
+    """Take someone off the Day One Pipeline (left the team, bad seed).
+    Body: {"agent_name": "..."}."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    name = ((request.get_json(silent=True) or {}).get("agent_name")
+            or "").strip()
+    if not name:
+        return jsonify({"error": "agent_name required"}), 400
+    r = _db.remove_onboarding_hire(name)
+    if not r or not r.get("pipeline"):
+        return jsonify({"ok": False, "error": "no hire named %r on the "
+                                              "pipeline" % name}), 404
+    _db.log_automation_event(event_type="onboarding_hire_removed",
+                             person_id=None, person_name=None,
+                             agent_name=name, payload=r,
+                             triggered_by="board")
+    return jsonify({"ok": True, **r})
+
+
 @app.route("/api/admin/onboarding/resend-goal-email", methods=["POST"])
 def api_onboarding_resend_goal_email():
     """Re-send one agent's Day 1 goal-setup invite (Cynthia, Oct 2026: the
@@ -12592,6 +12683,47 @@ def _had_call_within(person_id, minutes=60):
     return False
 
 
+def _had_inbound_within(person_id, hours=24):
+    """True when the LEAD reached out: an inbound text, or an inbound call
+    that connected, inside the window. This is the truth test behind every
+    'engaged the AI, ready for a human' notification (Barry, Nov 4 2026:
+    false fire drills were devaluing the channel). A NEEDS_FOLLOW_UP tag
+    with no inbound communication means the AI tried and missed, which is
+    a heads-up, not a drop-everything."""
+    now = datetime.now(timezone.utc)
+
+    def _within(created):
+        try:
+            dt = datetime.strptime((created or "")[:19],
+                                   "%Y-%m-%dT%H:%M:%S").replace(
+                tzinfo=timezone.utc)
+            return (now - dt) <= timedelta(hours=hours)
+        except ValueError:
+            return False
+
+    try:
+        client = FUBClient()
+        r = client._request("GET", "textMessages", params={
+            "personId": person_id, "limit": 25}) or {}
+        texts = next((v for v in r.values() if isinstance(v, list)), [])
+        for t in texts:
+            if t.get("isIncoming") and _within(t.get("created")):
+                return True
+        r = client._request("GET", "calls", params={
+            "personId": person_id, "limit": 10}) or {}
+        calls = next((v for v in r.values() if isinstance(v, list)), [])
+        for cl in calls:
+            if cl.get("isIncoming") and int(cl.get("duration") or 0) > 0 \
+                    and _within(cl.get("created")):
+                return True
+    except Exception as e:
+        logger.warning("inbound check failed for %s: %s", person_id, e)
+        # On an API hiccup, err toward the loud path: a missed real
+        # conversion costs more than one extra ping.
+        return True
+    return False
+
+
 def _promote_to_shark_tank(pid, person, reason, triggered_by="system"):
     """Move a Storage Pond lead into Shark Tank so it enters the scored
     working pool. Only ever pond 6 -> pond 4; owned leads and leads in
@@ -13199,7 +13331,16 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # pond or no pond; pond leads carry an empty assignedTo, which
             # is a dark owner, so pond routing is unchanged.
             _owned = _own_name not in _dark_owners
-            if (live or "").strip() == "1" and not _owned:
+            # The truth test (Barry, Nov 4 2026: false fire drills were
+            # devaluing every notification): a CONVERSION is a human-ask
+            # tag plus a real inbound communication. Everything else is
+            # a signal — promoted to Shark Tank, mirrored as evidence,
+            # softly pinged to an owner, but never offered to the claim
+            # board as a hot conversion and never escalated.
+            _ask = [t for t in _fresh if t != "y_ai_priority"]
+            _engaged = bool(_ask) and _had_inbound_within(pid, hours=24)
+            if (live or "").strip() == "1" and not _owned \
+                    and _ask and _engaged:
                 import dispatch as _dp
                 src_kind = ("ai_voice" if any(t in _fresh for t in
                             ("ai_voice_needs_follow_up",
@@ -13271,10 +13412,12 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                              "lead_created": person.get("created")},
                     triggered_by=triggered_by)
                 _desk_mirror_card(
-                    "AI conversion",
+                    "AI conversion" if (_ask and _engaged)
+                    else ("AI follow-up attempt" if _ask
+                          else "AI priority"),
                     (person.get("name") or "").strip(),
                     "voice" if "ai_voice_needs_follow_up" in _fresh
-                    else "text", person_id=pid)
+                    else ("text" if _ask else "priority"), person_id=pid)
                 # Owner ping (Clarissa gap, Sep 2026): an OWNED lead
                 # who engages the AI is protected from teammates but
                 # the owner must hear about it NOW. The old FUB
@@ -13307,18 +13450,38 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                     if _owned and _owner and _owner not in _excl \
                             and not _answered:
                         _kind = ("voice" if "ai_voice_needs_follow_up"
-                                 in _fresh else "text")
+                                 in _fresh else
+                                 "text" if _ask else "priority")
                         _lead1 = ((person.get("name") or "your lead")
                                   .strip().split()[0])
                         _flink = ("https://yourfriendlyagent."
                                   "followupboss.com/2/people/view/%s"
                                   % pid)
-                        _msg = ("\U0001f525 %s, your lead %s just "
-                                "engaged the AI (%s) and is ready for "
-                                "a human. Already yours, no button to "
-                                "tap. Call now: <%s|open %s in FUB>."
-                                % (_owner.split()[0], _lead1, _kind,
-                                   _flink, _lead1))
+                        if _ask and _engaged:
+                            _msg = ("\U0001f525 %s, your lead %s just "
+                                    "engaged the AI (%s) and is ready for "
+                                    "a human. Already yours, no button to "
+                                    "tap. Call now: <%s|open %s in FUB>."
+                                    % (_owner.split()[0], _lead1, _kind,
+                                       _flink, _lead1))
+                        elif _ask:
+                            _msg = ("%s, FYI: Ylopo's AI flagged your lead "
+                                    "%s for follow up (%s attempt, no "
+                                    "reply logged). Nobody is waiting on "
+                                    "the line, but they are warm on "
+                                    "paper: one dial today keeps you "
+                                    "first. <%s|Open %s in FUB>."
+                                    % (_owner.split()[0], _lead1, _kind,
+                                       _flink, _lead1))
+                        else:
+                            _msg = ("%s, heads up: Ylopo just bumped your "
+                                    "lead %s to priority (browsing and AI "
+                                    "scoring, not a conversation yet). No "
+                                    "fire drill, but a dial today is the "
+                                    "cheapest way to be first. "
+                                    "<%s|Open %s in FUB>."
+                                    % (_owner.split()[0], _lead1,
+                                       _flink, _lead1))
                         import slack_client as _slo
                         import dispatch as _dpo
                         _sid = _dpo._slack_user_id(_owner)
@@ -13343,15 +13506,23 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                             person_id=pid,
                             person_name=person.get("name"),
                             agent_name=_owner,
-                            payload={"kind": _kind},
+                            payload={"kind": _kind,
+                                     "engaged": bool(_engaged),
+                                     "soft": not (_ask and _engaged)},
                             triggered_by=triggered_by)
-                        import escalation as _esc
-                        _esc.open_escalation(
-                            "owned_reengage", pid,
-                            person.get("name"), owner_agent=_owner,
-                            note="rung 1: owner Slack DM %s"
-                                 % ("sent" if _sent_o else
-                                    "FAILED, fallback queued"))
+                        # Only a VERIFIED inbound engagement climbs the
+                        # ladder. Priority scores and missed AI attempts
+                        # never page Fhalen or Barry (Jon incident,
+                        # Nov 4 2026: the ladder ran on a lead with zero
+                        # communications ever logged).
+                        if _ask and _engaged:
+                            import escalation as _esc
+                            _esc.open_escalation(
+                                "owned_reengage", pid,
+                                person.get("name"), owner_agent=_owner,
+                                note="rung 1: owner Slack DM %s"
+                                     % ("sent" if _sent_o else
+                                        "FAILED, fallback queued"))
                 except Exception as _ope:
                     logger.warning("owner ping failed: %s", _ope)
         except Exception as e:
@@ -22667,6 +22838,23 @@ def api_revert_fossil_claims():
             out["skipped"].append({"person_id": pid, "agent": agent,
                                    "why": "error: %s" % str(e)[:80]})
     return jsonify(out)
+
+
+@app.route("/api/admin/desk/resolve-escalation", methods=["POST"])
+def api_resolve_escalation():
+    """Close every open escalation for one lead by hand. Body
+    {"person_id": ..., "how": "..."}. For the false-alarm case: stop the
+    ladder before it pages anyone else."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    pid = str(body.get("person_id") or "").strip()
+    if not pid:
+        return jsonify({"error": "person_id required"}), 400
+    import escalation as _esc
+    n = _esc.resolve_for_person(pid, how=body.get("how")
+                                or "resolved by hand (admin)")
+    return jsonify({"ok": True, "resolved": bool(n)})
 
 
 @app.route("/api/admin/desk/reconcile-escalations", methods=["POST"])

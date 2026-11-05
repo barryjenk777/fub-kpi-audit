@@ -9601,6 +9601,28 @@ def get_onboarding_gated():
         return set()
 
 
+def remove_onboarding_hire(agent_name):
+    """Take a hire off the Day One Pipeline (left the team, duplicate,
+    seeded by mistake). Deletes the pipeline row and its tasks; uploads
+    are kept (harmless, and a headshot already paid for stays findable).
+    Returns {'tasks': n, 'pipeline': n} or None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM onboarding_tasks WHERE agent_name = %s",
+                            (agent_name,))
+                t = cur.rowcount
+                cur.execute("DELETE FROM onboarding_pipeline WHERE agent_name = %s",
+                            (agent_name,))
+                p = cur.rowcount
+                return {"tasks": t, "pipeline": p}
+    except Exception as e:
+        logger.warning("remove_onboarding_hire failed: %s", e)
+        return None
+
+
 def get_open_onboarding_tasks(agent_name, lane=None):
     if not is_available():
         return []

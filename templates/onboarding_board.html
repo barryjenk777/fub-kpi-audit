@@ -88,7 +88,10 @@ textarea{width:100%;min-height:110px;background:#0d1729;color:var(--ink);border:
 
   <div id="banner-wrap"></div>
 
-  <div class="sec">Day One Pipeline</div>
+  <div class="row" style="justify-content:space-between;align-items:baseline">
+    <div class="sec">Day One Pipeline</div>
+    <span id="hs-remind-wrap"></span>
+  </div>
   <div class="sub" style="margin:-2px 0 8px">Every new hire, every task, one
   board. Docs unsigned = not on the team yet: no leads, no morning texts,
   until dotloop comes back. Ana's items check off from her email; anything
@@ -347,6 +350,18 @@ function loadPipeline(){
         return;
       }
       var gated=new Set(d.gated||[]);
+      // Headshot reminder button: one click, smart defaults. Counts the
+      // hires who would actually get an email (headshot open, docs
+      // signed, not complete).
+      var waiting=hires.filter(function(hire){
+        if(hire.completed_at||gated.has(hire.agent_name)) return false;
+        var t=hire.tasks.find(function(x){return x.key==='headshot_bio'});
+        return t&&!t.done_at;
+      });
+      document.getElementById('hs-remind-wrap').innerHTML = waiting.length
+        ? '<button class="btn btn-gold" id="hs-remind" onclick="remindHeadshots(this)">'+
+          'Remind on headshots ('+waiting.length+' waiting)</button>'
+        : '';
       var h='';
       hires.forEach(function(hire){
         var open=hire.tasks.filter(function(t){return !t.done_at});
@@ -357,7 +372,9 @@ function loadPipeline(){
         h+='<span style="font-size:11px;color:#93a4c4">started '+hire.started_at+
            ' &middot; '+done+'/'+hire.tasks.length+' done'+
            (gated.has(hire.agent_name)?' &middot; <b style="color:#e5544b">GATED: docs unsigned</b>':'')+
-           (hire.completed_at?' &middot; <b style="color:#37c98b">COMPLETE</b>':'')+'</span></div>';
+           (hire.completed_at?' &middot; <b style="color:#37c98b">COMPLETE</b>':'')+
+           ' &middot; <a href="#" style="color:#7c8aa5" onclick="removeHire(\''+
+           hire.agent_name.replace(/'/g,"\\'")+'\');return false">remove</a></span></div>';
         h+='<div style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:5px">';
         hire.tasks.forEach(function(t){
           var ok=!!t.done_at;
@@ -399,6 +416,32 @@ function markTask(agent,key){
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({agent_name:agent,task_key:key,done_by:'board'})})
   .then(function(){loadPipeline();});
+}
+function remindHeadshots(btn){
+  btn.disabled=true; btn.textContent='Sending...';
+  fetch(qs('/api/admin/onboarding/headshot-reminders'),{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({dry_run:false})})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    var n=(d.sent||[]).length;
+    var sk=(d.skipped||[]).filter(function(s){return s.why!=='docs unsigned'});
+    btn.textContent = n? ('Sent to '+n+(sk.length?' ('+sk.length+' skipped)':'')) :
+      (sk.length? 'Skipped: '+sk[0].why : 'Nobody to remind');
+  })
+  .catch(function(){btn.textContent='Failed'; btn.disabled=false;});
+}
+function removeHire(agent){
+  if(!confirm('Remove '+agent+' from the Day One Pipeline? Use this when '+
+              'someone leaves the team. Their headshot upload (if any) is kept.')) return;
+  fetch(qs('/api/admin/onboarding/remove-hire'),{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({agent_name:agent})})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(!d.ok){ alert(d.error||'Could not remove'); }
+    loadPipeline();
+  });
 }
 </script>
 </body>
