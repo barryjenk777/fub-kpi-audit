@@ -180,7 +180,15 @@ def build_snapshot(client):
             under_contract.append(d)
 
     def _row(d):
-        gci = float(d.get("commissionValue") or 0) or None
+        # FUB's commissionValue arrives two ways in this book (probe Nov
+        # 4 2026: "3" on a $725k deal): a small number is a PERCENT of
+        # price, a large one is dollars. <= 10 with a price = percent.
+        cv = float(d.get("commissionValue") or 0)
+        price_v = float(d.get("price") or 0)
+        if 0 < cv <= 10 and price_v:
+            gci = round(price_v * cv / 100.0, 2)
+        else:
+            gci = cv or None
         bucket = _deal_bucket(d)
         fee = REFERRAL_FEES.get(bucket or "", 0.0)
         return {
@@ -244,7 +252,10 @@ def build_snapshot(client):
         "closed_90d_rows": closed_90,
         "notes": [
             "Every figure comes from FUB deals/pipelines and synced "
-            "appointments. Nothing is estimated.",
+            "appointments. Nothing is estimated. One format rule: a "
+            "commissionValue of 10 or less on a priced deal is read as "
+            "a PERCENT of price (how this book enters it), larger "
+            "values as dollars.",
             "net_gci only exists where FUB carries BOTH a commission "
             "value and a person link (for the source bucket). Coverage "
             "says how much of the book qualifies; the upstream fix is "
