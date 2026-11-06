@@ -520,6 +520,45 @@ def _ordered_candidates(lead_city, audit, source, person_id, hop,
     per offered lead. Cascade hops always use rotation order (prior agents
     are excluded anyway)."""
     base = eligible_agents(lead_city, audit=audit)
+    # Nurture lane (Barry, Nov 6 2026: "she never gets leads routed to her
+    # and it's causing me problems as a team"): the KPI-audit gate had
+    # quietly shrunk the rotation to one passer plus grace hires, so
+    # veterans like Tanya never saw an offer. Hot conversion lanes keep
+    # the earned gate; nurture leads route across the FULL active roster
+    # (minus roster-gated and excluded) in the same rotation order. The
+    # on-ramp is open even when the audit says the week was slow.
+    if source == "ai_nurture":
+        gated = set()
+        try:
+            gated = _db.get_onboarding_gated()
+        except Exception:
+            pass
+        try:
+            gated = gated | _db.get_lead_gated_agents()
+        except Exception:
+            pass
+        roster = [p["agent_name"] for p in
+                  (_db.get_agent_profiles(active_only=True) or [])
+                  if p.get("agent_name") not in _EXCLUDED
+                  and p.get("agent_name") not in gated]
+        extras = [n for n in roster if n not in base]
+        try:
+            raw, _ = _db.get_app_state("dispatch_rr")
+            ptr = int(raw or 0)
+        except Exception:
+            ptr = 0
+        if extras:
+            ptr = ptr % len(extras)
+            extras = extras[ptr:] + extras[:ptr]
+        # Interleave so the full roster shares the lane instead of the
+        # audit-passers always eating first.
+        merged, a, b = [], base, extras
+        for i in range(max(len(a), len(b))):
+            if i < len(b):
+                merged.append(b[i])
+            if i < len(a):
+                merged.append(a[i])
+        base = [n for n in merged if n]
     if hop != 1 or not base:
         return base, "rotation"
     # Experiment concluded Oct 20 2026: rotation only, unless the config
