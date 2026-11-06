@@ -24571,8 +24571,12 @@ _FRIDAY_MEETING_TEXTS = [
 
 
 def _friday_meeting_text_for(agent_name):
-    week = datetime.now(timezone.utc).isocalendar()[1]
-    tmpl = _FRIDAY_MEETING_TEXTS[week % len(_FRIDAY_MEETING_TEXTS)]
+    from zoneinfo import ZoneInfo as _ZI
+    today_et = datetime.now(_ZI("America/New_York")).strftime("%Y-%m-%d")
+    tmpl = getattr(config, "FRIDAY_MEETING_TEXT_OVERRIDES", {}).get(today_et)
+    if not tmpl:
+        week = datetime.now(timezone.utc).isocalendar()[1]
+        tmpl = _FRIDAY_MEETING_TEXTS[week % len(_FRIDAY_MEETING_TEXTS)]
     return tmpl.format(first=agent_name.split()[0],
                        time=config.FRIDAY_MEETING_TIME,
                        zoom=config.FRIDAY_MEETING_ZOOM)

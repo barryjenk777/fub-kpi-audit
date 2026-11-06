@@ -871,6 +871,20 @@ DESK_GRACE_UNTIL = {
 FRIDAY_MEETING_ZOOM = "https://zoomwithbarry.com"
 FRIDAY_MEETING_TIME = "11:30am"
 
+# One-off text overrides, keyed by the Friday's date in ET (YYYY-MM-DD).
+# When today matches, the 10am text uses this copy instead of the rotating
+# openers in app.py. Placeholders: {first}, {time}, {zoom}. Stale dates are
+# harmless; prune whenever. The 8am email is NOT affected.
+# Barry, Nov 6 2026: lunch at the office, Zoom still live for anyone remote.
+FRIDAY_MEETING_TEXT_OVERRIDES = {
+    "2026-11-06": (
+        "Hey {first}! Change of plans today: we're doing lunch at the office "
+        "from 11:30 to 12 instead of the usual Zoom. If you can't make it in, "
+        "I'll still be talking from 11:30 to 12 and you can join on the Zoom "
+        "link: {zoom}. Hope to see you there."
+    ),
+}
+
 # ── Team Access Password ─────────────────────────────────────────────────
 # Dashboard password for the team (Barry, Oct 2026: /idos went public for
 # the FallCon talk, so the rest of Command Center gets a simple team
