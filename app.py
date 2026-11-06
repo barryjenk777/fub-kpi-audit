@@ -7260,6 +7260,159 @@ def api_ypriority_scan():
     return jsonify({"ok": True, **res})
 
 
+def run_ai_nurture_router(batch_cap=None, dry_run=False):
+    """Barry (Nov 6 2026): "The market sucks right now, so nurtures need to
+    be routed if they have a conversation with our AI." Ylopo's AI works
+    pond and admin-assigned leads all day; its only delivery was a Nurture
+    Priority text to Barry's phone, where these died.
+
+    Selection: a lead carrying a fresh AI follow-up tag (ledger pair
+    'ai_nurture', so one routing per lead, ever) that nobody really owns —
+    in a pond, unassigned, or assigned to an excluded user — updated within
+    AI_NURTURE_LOOKBACK_DAYS. Newest activity first, AI_NURTURE_BATCH_CAP
+    per run, so the two-week backlog drips instead of flooding.
+
+    Routing: the standard desk claim relay (source 'ai_nurture', calm
+    copy). A claim assigns the lead in FUB; a full pass-through just logs.
+    A nurture lead is never an emergency, so the cascade's terminal path
+    skips the escalation ladder for this source."""
+    import dispatch as _dp
+    cap = int(batch_cap or getattr(config, "AI_NURTURE_BATCH_CAP", 5))
+    lookback = int(getattr(config, "AI_NURTURE_LOOKBACK_DAYS", 14))
+    now_utc = datetime.now(timezone.utc)
+    since = (now_utc - timedelta(days=lookback)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    client = FUBClient()
+    excluded = set(getattr(config, "EXCLUDED_USERS", ()) or ())
+    suppression = set(getattr(config, "LEADSTREAM_SUPPRESSION_TAGS", ()) or ())
+    pool = {}
+    for _tag in getattr(config, "AI_NURTURE_TAGS",
+                        ("AI_VOICE_NEEDS_FOLLOW_UP", "AI_NEEDS_FOLLOW_UP")):
+        nxt = None
+        for _page in range(4):
+            params = {"tags": _tag, "updatedAfter": since, "limit": 100,
+                      "fields": ("id,name,tags,stage,assignedTo,"
+                                 "assignedPondId,assignedUserId,lastActivity")}
+            if nxt:
+                params["next"] = nxt
+            try:
+                data = client._request("GET", "people", params=params) or {}
+            except Exception as e:
+                logger.warning("[AI NURTURE] people fetch failed (%s): %s",
+                               _tag, e)
+                break
+            for p in data.get("people") or []:
+                pid = str(p.get("id") or "")
+                if pid and pid not in pool:
+                    pool[pid] = p
+            nxt2 = (data.get("_metadata") or {}).get("next")
+            if not data.get("people") or not nxt2 or nxt2 == nxt:
+                break
+            nxt = nxt2
+    out = {"ok": True, "dry_run": bool(dry_run), "scanned": len(pool),
+           "cap": cap, "routed": [], "skipped": {"owned": 0, "stage": 0,
+           "suppressed": 0, "already_seen": 0, "prior_offers": 0,
+           "no_name": 0}}
+    if not pool:
+        return out
+    seen = _db.get_seen_desk_tag_pairs(list(pool))
+    candidates = []
+    for pid, p in pool.items():
+        if (pid, "ai_nurture") in seen:
+            out["skipped"]["already_seen"] += 1
+            continue
+        tags = p.get("tags") or []
+        stage = (p.get("stage") or "").lower()
+        name = (p.get("name") or "").strip()
+        assigned_to = (p.get("assignedTo") or "").strip()
+        in_pond = bool(p.get("assignedPondId"))
+        unowned = in_pond or not assigned_to or assigned_to in excluded
+        if not unowned:
+            out["skipped"]["owned"] += 1
+            continue
+        if any(s in stage for s in ("closed", "trash", "sold")):
+            out["skipped"]["stage"] += 1
+            continue
+        if set(tags) & suppression:
+            out["skipped"]["suppressed"] += 1
+            continue
+        if not name or "@" in name or name.lower().startswith("unknown"):
+            out["skipped"]["no_name"] += 1
+            continue
+        candidates.append(p)
+    candidates.sort(key=lambda p: p.get("lastActivity") or "", reverse=True)
+    for p in candidates:
+        if len(out["routed"]) >= cap:
+            break
+        pid = str(p.get("id"))
+        try:
+            if _db.dispatch_person_state(pid):
+                out["skipped"]["prior_offers"] += 1
+                if not dry_run:
+                    _db.filter_new_desk_tags(pid, ["ai_nurture"])
+                continue
+        except Exception:
+            pass
+        if dry_run:
+            out["routed"].append({"person_id": pid, "lead": p.get("name"),
+                                  "dry_run": True})
+            continue
+        if not _db.filter_new_desk_tags(pid, ["ai_nurture"]):
+            continue  # another worker got there first
+        dnc = "Y_DNC_REGISTRY_TRUE" in (p.get("tags") or [])
+        notes = ("Ylopo's AI had a conversation with this lead and flagged "
+                 "a human follow-up. Longer timeline buyer. Warm intro, "
+                 "stay top of mind, no hard sell."
+                 + (" DNC registry: lead with a text, not a cold call."
+                    if dnc else ""))
+        try:
+            made = _dp.make_offer("ai_nurture", pid, p.get("name"),
+                                  None, None, notes,
+                                  audit=cache_get("audit") or {})
+        except Exception as e:
+            logger.warning("[AI NURTURE] offer failed for %s: %s", pid, e)
+            continue
+        if made:
+            out["routed"].append({"person_id": pid, "lead": p.get("name"),
+                                  "offered_to": made.get("agent_name")
+                                  if isinstance(made, dict) else True})
+            _db.log_automation_event(
+                event_type="ai_nurture_route", person_id=pid,
+                person_name=p.get("name"), agent_name=None,
+                payload={"dnc": dnc}, triggered_by="ai_nurture_router")
+    out["eligible"] = len(candidates)
+    return out
+
+
+def scheduled_ai_nurture_router():
+    """Twice a day (10:30am and 3:30pm ET). Rides the same live gate as
+    the desk: no routing while dispatch is dark."""
+    try:
+        live, _ = _db.get_app_state("dispatch_ai_live")
+        if (live or "").strip() != "1":
+            return
+        res = run_ai_nurture_router(dry_run=False)
+        if res.get("routed"):
+            logger.info("[AI NURTURE] routed %d lead(s): %s",
+                        len(res["routed"]),
+                        ", ".join(r.get("lead") or r["person_id"]
+                                  for r in res["routed"]))
+    except Exception as e:
+        logger.warning("ai nurture router failed: %s", e)
+
+
+@app.route("/api/admin/desk/ai-nurture", methods=["POST"])
+def api_ai_nurture_route():
+    """Manual run. Body: {"dry_run": true|false, "cap": 5}.
+    dry_run defaults TRUE."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    dry = body.get("dry_run")
+    dry = True if dry is None else bool(dry)
+    res = run_ai_nurture_router(batch_cap=body.get("cap"), dry_run=dry)
+    return jsonify(res)
+
+
 def scheduled_desk_watchdog():
     """Every 30 min while the desk routes live leads: two tripwires.
     1. Webhook silence: zero FUB webhooks for 60+ min in business hours
@@ -7844,6 +7997,89 @@ def api_desk_report():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()[:500]}), 500
 
 
+@app.route("/api/admin/lead-trace/<person_id>")
+def api_lead_trace(person_id):
+    """Forensics: every Command Center surface that ever touched this lead,
+    in one URL. Answers "why was an agent nudged at this lead" and "who
+    moved this lead" without archaeology (Odina Wright, Nov 6 2026).
+    Read-only."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    pid = "".join(c for c in str(person_id) if c.isdigit())
+    if not pid:
+        return jsonify({"error": "bad person id"}), 400
+    out = {"ok": True, "person_id": pid}
+    try:
+        p = FUBClient()._request("GET", "people/%s" % pid, params={
+            "fields": ("id,name,stage,source,assignedTo,assignedUserId,"
+                       "assignedPondId,created,updated,lastActivity,tags")}) or {}
+        pond = p.get("assignedPondId")
+        out["fub"] = {
+            "name": p.get("name"), "stage": p.get("stage"),
+            "source": p.get("source"), "assigned_to": p.get("assignedTo"),
+            "pond_id": pond,
+            "pond": ("Storage Pond" if pond == 6 else
+                     "Shark Tank" if pond == 4 else
+                     ("pond %s" % pond) if pond else None),
+            "created": p.get("created"), "updated": p.get("updated"),
+            "last_activity": p.get("lastActivity"),
+            "tag_count": len(p.get("tags") or []),
+            "notable_tags": sorted(t for t in (p.get("tags") or [])
+                                   if any(k in t.upper() for k in
+                                          ("AI_", "Y_AI", "YPRIORITY",
+                                           "NURTURE", "PHOENIX", "DNC",
+                                           "LEAD-MASS-AUDIT", "CALLACTION",
+                                           "STORAGE", "ISA_TRANSFER"))),
+        }
+    except Exception as e:
+        out["fub"] = {"error": str(e)}
+    def _q(key, sql, args):
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, args)
+                    cols = [c[0] for c in cur.description]
+                    rows = []
+                    for r in cur.fetchall():
+                        rows.append({c: (v.isoformat()
+                                         if hasattr(v, "isoformat") else v)
+                                     for c, v in zip(cols, r)})
+                    out[key] = rows
+        except Exception as e:
+            out[key] = [{"error": str(e)}]
+    _q("hot_sheet_picks",
+       """SELECT sheet_date, agent_name, reason, called FROM hotsheet_log
+          WHERE person_id = %s ORDER BY sheet_date DESC LIMIT 30""", (pid,))
+    _q("claim_offers",
+       """SELECT agent_name, source, hop, offered_at, accepted_at,
+                 passed_at, expired_at, first_call_at, terminal
+          FROM dispatch_offers WHERE person_id = %s
+          ORDER BY offered_at DESC LIMIT 30""", (pid,))
+    _q("phoenix",
+       """SELECT run_date, status, assigned_to, owner_before, dormant_days,
+                 activity_type FROM phoenix_log WHERE person_id = %s
+          ORDER BY created_at DESC LIMIT 10""", (pid,))
+    _q("isa_transfers",
+       """SELECT agent_name, transfer_type, transfer_date FROM isa_transfers
+          WHERE person_id = %s ORDER BY transfer_date DESC LIMIT 10""", (pid,))
+    _q("callaction",
+       """SELECT sentiment, decision, decided_by, created_at
+          FROM callaction_responses WHERE person_id = %s
+          ORDER BY created_at DESC LIMIT 10""", (pid,))
+    _q("desk_ledger",
+       """SELECT tag, seen_at FROM desk_tag_seen WHERE person_id = %s
+          ORDER BY seen_at DESC LIMIT 40""", (pid,))
+    _q("automation_events",
+       """SELECT event_type, agent_name, payload, created_at
+          FROM automation_event_log WHERE person_id = %s
+          ORDER BY created_at DESC LIMIT 40""", (int(pid),))
+    _q("maverick_calls",
+       """SELECT agent_name, call_grade, outcome, call_time
+          FROM maverick_calls WHERE lead_fub_id = %s
+          ORDER BY call_time DESC LIMIT 10""", (int(pid),))
+    return jsonify(out)
+
+
 @app.route("/api/admin/desk/mirror")
 def api_desk_mirror():
     """Phase 0 mirror report for the Lead Desk: what the claim engine would
@@ -8019,6 +8255,18 @@ def scheduled_dispatch_cascade():
                                      audit=cache_get("audit") or {})
                 if nxt:
                     continue
+            if offer["source"] == "ai_nurture":
+                # Nurture lane (Barry, Nov 6 2026): a full pass-through is
+                # information, not an emergency. No escalation, no room
+                # post, no Fhalen email — the lead stays where it was and
+                # the weekly receipt counts it.
+                _db.mark_dispatch_terminal(oid)
+                _db.log_automation_event(
+                    event_type="ai_nurture_unclaimed",
+                    person_id=offer["person_id"],
+                    person_name=offer["lead_name"], agent_name=None,
+                    payload={"hops": offer["hop"]}, triggered_by="dispatch")
+                continue
             _db.mark_dispatch_terminal(oid)
             try:
                 import escalation as _esc
@@ -26996,6 +27244,18 @@ def start_scheduler():
     # report-only until Barry flips the env var.
     _scheduler.add_job(scheduled_phoenix_sweep, CronTrigger(hour=7, minute=30, timezone=ET),
                        id="phoenix_sweep", name="Phoenix resurrection sweep (daily 7:30am)",
+                       max_instances=1, misfire_grace_time=600)
+
+    # AI Nurture Router (Barry, Nov 6 2026): leads the Ylopo AI actually
+    # talked with, that nobody owns, go out as calm claim offers. Two small
+    # batches a day so the two-week backlog drips, never floods.
+    _scheduler.add_job(scheduled_ai_nurture_router,
+                       CronTrigger(hour=10, minute=30, timezone=ET),
+                       id="ai_nurture_am", name="AI nurture router (10:30am)",
+                       max_instances=1, misfire_grace_time=600)
+    _scheduler.add_job(scheduled_ai_nurture_router,
+                       CronTrigger(hour=15, minute=30, timezone=ET),
+                       id="ai_nurture_pm", name="AI nurture router (3:30pm)",
                        max_instances=1, misfire_grace_time=600)
 
     # Phoenix tag expiry: daily 6:10am ET — removes PHOENIX tags 7+ days old

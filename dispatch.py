@@ -158,6 +158,10 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
     who = "Fhalen" if source == "fhalen" else \
           "The AI (voice)" if source == "ai_voice" else "The AI"
     again = " Second look, the first agent let it slide." if hop > 1 else ""
+    # Nurture lane (Barry, Nov 6 2026): honest calm copy. These leads talked
+    # with the AI and read as longer-timeline buyers — "converted" would be
+    # a lie and fire-drill framing devalues the real conversions.
+    nurture = source == "ai_nurture"
 
     # ── Slack DM first ────────────────────────────────────────────────────
     try:
@@ -175,6 +179,15 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
                 "New money, %s. %s converted %s%s. Your button.",
                 "%s, %s warmed up %s%s and you're first in line.",
             ]
+            if nurture:
+                headers = [
+                    "%s, %s had a real conversation with %s%s. Nobody owns "
+                    "them. First tap does.",
+                    "%s, bonus pipeline: %s talked with %s%s. Longer "
+                    "timeline, zero competition, your button.",
+                    "%s, %s got %s%s talking. Unowned nurture, first claim "
+                    "takes it.",
+                ]
             try:
                 v = int("".join(c for c in str(person_id_for_copy)
                                 if c.isdigit()) or 0) % len(headers)
@@ -257,10 +270,11 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
                                         "client/T1LDE7TCG/%s" % _ch)
                         except Exception:
                             pass
-                        _nudge = ("%s, live one: %s converted %s%s. First "
+                        _act = ("talked with" if nurture else "converted")
+                        _nudge = ("%s, live one: %s %s %s%s. First "
                                   "tap wins and it moves to the next agent "
                                   "in %d minutes.%s"
-                                  % (first, who, lead_first, where,
+                                  % (first, who, _act, lead_first, where,
                                      OFFER_MINUTES, _dml))
                         _db.queue_agent_imessage(
                             agent_name, _prof.get("fub_user_id"),
@@ -278,10 +292,12 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
                     if p["agent_name"] == agent_name), None)
     if not profile:
         return False
-    msg = ("%s, %s converted %s%s and picked you.%s Appointment%s. "
+    msg = ("%s, %s %s %s%s and picked you.%s Appointment%s. "
            "Tap to accept in the next %d minutes or it moves to the next "
            "agent: %s"
-           % (first, who, lead_first, where, again, when, OFFER_MINUTES,
+           % (first, who,
+              "talked with" if nurture else "converted",
+              lead_first, where, again, when, OFFER_MINUTES,
               _accept_url(offer_token)))
     return bool(_db.queue_agent_imessage(
         agent_name, profile.get("fub_user_id"),

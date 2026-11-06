@@ -440,6 +440,32 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
                 picks.append((pid, _first(p.get("name")), _lead_reason(client, p)))
                 used_pids.add(pid)
 
+        # Storage Pond guard (Barry, Nov 6 2026): a trashed lead must never
+        # be a pick. The sheet told Jullan to call Odina Wright the same
+        # week the import cleanup moved her to the Storage Pond — the sheet
+        # and the pond disagreeing costs the whole system trust. Phoenix
+        # leads are exempt: those were deliberately distributed this morning.
+        if picks:
+            _storage = int(getattr(config, "STORAGE_POND_ID", 6))
+            kept = []
+            for pk in picks:
+                pid = pk[0]
+                if pid in phoenix_pids:
+                    kept.append(pk)
+                    continue
+                try:
+                    pr = client._request("GET", "people/%s" % pid, params={
+                        "fields": "id,assignedPondId"}) or {}
+                    if int(pr.get("assignedPondId") or 0) == _storage:
+                        logger.info("[HOT SHEET] dropped Storage Pond lead "
+                                    "%s (%s) from %s's sheet", pid, pk[1],
+                                    agent)
+                        continue
+                except Exception:
+                    pass
+                kept.append(pk)
+            picks = kept
+
         coach_msg = coaching.get(agent) or ""
         prep_msg = prep.get(agent) or ""
         if not picks and not coach_msg and not prep_msg:

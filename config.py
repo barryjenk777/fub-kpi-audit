@@ -769,6 +769,23 @@ HEYGEN_ENABLED = _os.environ.get("HEYGEN_ENABLED", "0").strip() == "1"
 # dial target to earn Phoenix status for this week's bonus pool
 PHOENIX_QUALIFY_DAYS_REQUIRED = 4
 
+# =============================================================================
+# AI NURTURE ROUTER (Nov 6 2026)
+# Barry: "The market sucks right now, so nurtures need to be routed if they
+# have a conversation with our AI." Ylopo's AI talks to pond and admin-
+# assigned leads all day, then its only delivery is a Nurture Priority text
+# to Barry's phone, where these died (Nov 6 audit: 1,000+ Nurture-tagged
+# Storage Pond leads touched in one week, zero distributed; Phoenix's earn
+# gate routed nothing because nobody qualified). This lane routes them as
+# calm claim offers through the desk relay: claim assigns the lead in FUB,
+# a full pass-through just logs. A nurture lead is never a fire drill.
+# =============================================================================
+AI_NURTURE_TAGS = ("AI_VOICE_NEEDS_FOLLOW_UP", "AI_NEEDS_FOLLOW_UP")
+AI_NURTURE_LOOKBACK_DAYS = 14     # Barry: route the last 2 weeks of these
+AI_NURTURE_BATCH_CAP = 5          # per batch, newest conversation first —
+                                  # the backlog drips, never floods
+STORAGE_POND_ID = 6
+
 
 # =============================================================================
 # LEAD MEMORY — auto-maintained prep note on priority leads
