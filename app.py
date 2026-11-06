@@ -33,6 +33,7 @@ from flask import Flask, render_template, render_template_string, jsonify, reque
 from fub_client import FUBClient
 import config
 import db as _db
+import desk_route as _desk_route
 import merit as _merit
 from kpi_audit import (
     auto_detect_agents,
@@ -6030,22 +6031,72 @@ def api_dispatch_offer():
     return jsonify({"ok": True, **out})
 
 
-def _desk_mirror_card(lane, person_name, detail, person_id=None):
+def _record_routing_delivery(*, person_id, event_class, decision, reason,
+                             destination, slack_ts="", error="",
+                             triggered_by="desk", success=None):
+    """Privacy-safe route/delivery line plus an automation row.
+
+    Person id, class, decision, reason, destination, time, Slack ts, and
+    error token only. No message body, no address, no lead name. A send is
+    success only when the caller passes success=True after an ack.
+    """
+    attempted = datetime.now(timezone.utc).isoformat()
+    if success is None:
+        success = decision == "sent" and not error
+    try:
+        logger.info(_desk_route.routing_delivery_line(
+            person_id=person_id, event_class=event_class, decision=decision,
+            reason=reason, destination=destination, attempted_at=attempted,
+            slack_ts=slack_ts or "", error=error or ""))
+    except Exception as e:
+        logger.warning("routing_delivery log failed: %s", e)
+    try:
+        _db.log_automation_event(
+            event_type="routing_delivery", person_id=person_id,
+            person_name=None, agent_name=None, channel=destination or None,
+            payload={"class": event_class, "decision": decision,
+                     "reason": reason, "destination": destination,
+                     "attempted_at": attempted,
+                     "slack_ts": slack_ts or None,
+                     "error": error or None},
+            triggered_by=triggered_by, success=bool(success),
+            error_message=error or None)
+    except Exception as e:
+        logger.warning("routing_delivery persist failed: %s", e)
+
+
+def _desk_mirror_card(lane, person_name, detail, person_id=None, reason=""):
     """Phase 1: post a read-only mirror line to the private ops channel.
     Ops-facing only — never the agent channel, so unclaimed history can't
     poison lead perception. Carries the FUB link so Barry can spot-check
     the lead in one click (Barry, Sep 2026)."""
+    ts = None
+    err = ""
+    dest = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
     try:
         import slack_client as _sl
-        ch = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+        ch = dest
         if _sl.is_available() and ch:
             name = person_name or "Unknown"
             if person_id:
                 name = ("<https://yourfriendlyagent.followupboss.com"
                         "/2/people/view/%s|%s>" % (person_id, name))
-            _sl.post_message(ch, "🪞 %s — %s — %s" % (lane, name, detail))
+            ts = _sl.post_message(ch, "🪞 %s — %s — %s" % (lane, name, detail))
+            if not ts:
+                err = "slack_unacked"
+        elif not _sl.is_available():
+            err = "slack_unavailable"
+        else:
+            err = "ops_channel_unset"
     except Exception as e:
+        err = type(e).__name__
         logger.warning("desk mirror card failed: %s", e)
+    _record_routing_delivery(
+        person_id=person_id, event_class="desk_mirror",
+        decision="sent" if ts else "not_sent",
+        reason=reason or lane, destination=dest or "ops",
+        slack_ts=ts or "", error=err, triggered_by="desk",
+        success=bool(ts))
 
 
 @app.route("/api/slack/actions", methods=["POST"])
@@ -13112,30 +13163,19 @@ def _had_inbound_within(person_id, hours=24):
     with no inbound communication means the AI tried and missed, which is
     a heads-up, not a drop-everything."""
     now = datetime.now(timezone.utc)
-
-    def _within(created):
-        try:
-            dt = datetime.strptime((created or "")[:19],
-                                   "%Y-%m-%dT%H:%M:%S").replace(
-                tzinfo=timezone.utc)
-            return (now - dt) <= timedelta(hours=hours)
-        except ValueError:
-            return False
-
     try:
         client = FUBClient()
         r = client._request("GET", "textMessages", params={
             "personId": person_id, "limit": 25}) or {}
         texts = next((v for v in r.values() if isinstance(v, list)), [])
         for t in texts:
-            if t.get("isIncoming") and _within(t.get("created")):
+            if _desk_route.text_is_recent_inbound(t, now, hours=hours):
                 return True
         r = client._request("GET", "calls", params={
             "personId": person_id, "limit": 10}) or {}
         calls = next((v for v in r.values() if isinstance(v, list)), [])
         for cl in calls:
-            if cl.get("isIncoming") and int(cl.get("duration") or 0) > 0 \
-                    and _within(cl.get("created")):
+            if _desk_route.call_is_recent_inbound(cl, now, hours=hours):
                 return True
     except Exception as e:
         logger.warning("inbound check failed for %s: %s", person_id, e)
@@ -13789,7 +13829,7 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                         if _slc.is_available() and (_sidc or _sida):
                             _lead1c = ((person.get("name") or "a seller")
                                        .strip().split()[0])
-                            _slc.group_dm([_sidc, _sida],
+                            _dm_ts = _slc.group_dm([_sidc, _sida],
                                 "\U0001f4b0 Cash lead: %s just came in from "
                                 "the cash offer site and is assigned to "
                                 "Fhalen. Fhalen: first voice wins, call, "
@@ -13800,6 +13840,22 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                                 "<https://yourfriendlyagent.followupboss.com"
                                 "/2/people/view/%s|Open %s in FUB>."
                                 % (_lead1c, pid, _lead1c))
+                            _record_routing_delivery(
+                                person_id=pid, event_class="cash_assignment",
+                                decision="sent" if _dm_ts else "not_sent",
+                                reason="cash_offer_site",
+                                destination="group_dm",
+                                slack_ts=_dm_ts or "",
+                                error="" if _dm_ts else "slack_unacked",
+                                triggered_by=triggered_by,
+                                success=bool(_dm_ts))
+                        else:
+                            _record_routing_delivery(
+                                person_id=pid, event_class="cash_assignment",
+                                decision="not_sent", reason="cash_offer_site",
+                                destination="group_dm",
+                                error="slack_unavailable_or_unmapped",
+                                triggered_by=triggered_by, success=False)
                     except Exception as _ce:
                         logger.warning("cash lane DM failed: %s", _ce)
             except Exception as _cle:
@@ -13850,6 +13906,10 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # desk ever saw (QA sweep, Sep 2026).
             _wk = datetime.now(timezone.utc).strftime("%GW%V")
             if not _db.claim_once("aidispatch_%s_%s" % (pid, _wk)):
+                _record_routing_delivery(
+                    person_id=pid, event_class="desk", decision="skip",
+                    reason="already_routed_this_iso_week", destination="",
+                    triggered_by=triggered_by, success=True)
                 continue
             live, _ = _db.get_app_state("dispatch_ai_live")
             # The old automation only assigned POND leads. Same
@@ -13879,20 +13939,19 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # a signal — promoted to Shark Tank, mirrored as evidence,
             # softly pinged to an owner, but never offered to the claim
             # board as a hot conversion and never escalated.
-            _ask = [t for t in _fresh if t != "y_ai_priority"]
-            _engaged = bool(_ask) and _had_inbound_within(pid, hours=24)
-            if (live or "").strip() == "1" and not _owned \
-                    and _ask and _engaged:
+            # Short-circuit: priority-only tags are not a human ask, so
+            # they do not spend a FUB text/call read. Notes are not read
+            # here; see desk_route.py.
+            _inbound = (_had_inbound_within(pid, hours=24)
+                        if any(t != "y_ai_priority" for t in _fresh)
+                        else False)
+            _route = _desk_route.evaluate_desk_route(
+                _fresh, live=live, owned=_owned, inbound_recent=_inbound)
+            _ask = _route["ask"]
+            _engaged = _route["engaged"]
+            if _route["claim_offer"]:
                 import dispatch as _dp
-                src_kind = ("ai_voice" if any(t in _fresh for t in
-                            ("ai_voice_needs_follow_up",
-                             "isa_transfer_unsuccessful",
-                             "isa_attempted_transfer_realtor_unavailable"))
-                            else
-                            "blue_text" if ("sms_conversion" in _fresh
-                            or "claude_text_converted" in _fresh)
-                            and "ai_needs_follow_up" not in _fresh
-                            else "ai_text")
+                src_kind = _route["source_kind"]
                 _city = next((a.get("city") for a in
                               (person.get("addresses") or [])
                               if isinstance(a, dict) and a.get("city")),
@@ -13907,6 +13966,11 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                             person_id=pid, person_name=person.get("name"),
                             agent_name=None, payload={"window_min": 60},
                             triggered_by=triggered_by)
+                        _record_routing_delivery(
+                            person_id=pid, event_class="desk",
+                            decision="suppress", reason="flood_breaker",
+                            destination="dispatch_offer",
+                            triggered_by=triggered_by, success=True)
                         if _db.claim_once("desk_flood_%s" % datetime
                                           .now(timezone.utc)
                                           .strftime("%Y%m%d")):
@@ -13935,14 +13999,29 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                         agent_name=_res.get("agent_name"),
                         payload={"source": src_kind},
                         triggered_by=triggered_by)
+                    _record_routing_delivery(
+                        person_id=pid, event_class="desk",
+                        decision="claim_offer", reason=_route["reason"],
+                        destination="dispatch_offer",
+                        triggered_by=triggered_by, success=True)
                 else:
                     _desk_intake_alarm(pid, person.get("name"),
                                        "no offer could be created "
                                        "(no eligible agent?)")
+                    _record_routing_delivery(
+                        person_id=pid, event_class="desk",
+                        decision="not_sent", reason="no_eligible_agent",
+                        destination="dispatch_offer", error="no_offer",
+                        triggered_by=triggered_by, success=False)
             else:
                 # Mirror-mode evidence for the Lead Desk decisions:
                 # owner + last-touch answer the re-engagement rule,
                 # the event timestamp answers the evening question.
+                _record_routing_delivery(
+                    person_id=pid, event_class="desk",
+                    decision=_route["decision"], reason=_route["reason"],
+                    destination="ops_mirror",
+                    triggered_by=triggered_by, success=True)
                 _db.log_automation_event(
                     event_type="ai_convert_seen", person_id=pid,
                     person_name=person.get("name"), agent_name=None,
@@ -13954,12 +14033,10 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                              "lead_created": person.get("created")},
                     triggered_by=triggered_by)
                 _desk_mirror_card(
-                    "AI conversion" if (_ask and _engaged)
-                    else ("AI follow-up attempt" if _ask
-                          else "AI priority"),
+                    _route["lane"],
                     (person.get("name") or "").strip(),
-                    "voice" if "ai_voice_needs_follow_up" in _fresh
-                    else ("text" if _ask else "priority"), person_id=pid)
+                    _route["detail"], person_id=pid,
+                    reason=_route["reason"])
                 # Owner ping (Clarissa gap, Sep 2026): an OWNED lead
                 # who engages the AI is protected from teammates but
                 # the owner must hear about it NOW. The old FUB
@@ -14027,8 +14104,10 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                         import slack_client as _slo
                         import dispatch as _dpo
                         _sid = _dpo._slack_user_id(_owner)
-                        _sent_o = bool(_slo.is_available() and _sid
-                                       and _slo.dm_user(_sid, _msg))
+                        _ts_o = (_slo.dm_user(_sid, _msg)
+                                 if _slo.is_available() and _sid else None)
+                        _sent_o = bool(_ts_o)
+                        _im_id = None
                         if not _sent_o:
                             _prof = next(
                                 (p2 for p2 in
@@ -14039,10 +14118,16 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                                 _plain = _reo.sub(r"<[^|>]+\|([^>]+)>",
                                                   r"\1 %s" % _flink,
                                                   _msg)
-                                _db.queue_agent_imessage(
+                                _im_id = _db.queue_agent_imessage(
                                     _owner, _prof.get("fub_user_id"),
                                     _prof.get("phone") or "",
                                     _plain, week_day="dispatch")
+                        if _sent_o:
+                            _ping_err = ""
+                        elif _im_id:
+                            _ping_err = "slack_unacked_imessage_queued"
+                        else:
+                            _ping_err = "owner_ping_unacked"
                         _db.log_automation_event(
                             event_type="desk_owner_ping",
                             person_id=pid,
@@ -14050,8 +14135,24 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                             agent_name=_owner,
                             payload={"kind": _kind,
                                      "engaged": bool(_engaged),
-                                     "soft": not (_ask and _engaged)},
-                            triggered_by=triggered_by)
+                                     "soft": not (_ask and _engaged),
+                                     "slack_ts": _ts_o,
+                                     "imessage_queued": bool(_im_id)},
+                            triggered_by=triggered_by,
+                            success=bool(_sent_o),
+                            error_message=_ping_err or None)
+                        _record_routing_delivery(
+                            person_id=pid, event_class="desk_owner_ping",
+                            decision=("sent" if _sent_o else
+                                      "queued_imessage" if _im_id else
+                                      "not_sent"),
+                            reason=_route["reason"],
+                            destination=("slack_dm" if _sent_o else
+                                         "imessage_queue" if _im_id else
+                                         "none"),
+                            slack_ts=_ts_o or "", error=_ping_err,
+                            triggered_by=triggered_by,
+                            success=bool(_sent_o))
                         # Only a VERIFIED inbound engagement climbs the
                         # ladder. Priority scores and missed AI attempts
                         # never page Fhalen or Barry (Jon incident,

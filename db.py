@@ -3882,6 +3882,26 @@ def delete_pond_emails_today(tz_name="America/New_York"):
         return 0
 
 
+def delete_pond_email_log(log_id):
+    """Remove one pond_email_log row.
+
+    Called when a new-lead send raises after the pre-send cooldown insert,
+    so the next run inside the lookback window can retry. A row left behind
+    would make has_received_new_lead_immediate true for an email that was
+    never accepted by the provider. Returns True when a row was deleted.
+    """
+    if not is_available() or not log_id:
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM pond_email_log WHERE id = %s", (log_id,))
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("delete_pond_email_log failed for %s: %s", log_id, e)
+        return False
+
+
 def update_pond_email_sg_id(log_id, sg_message_id):
     """Update the SendGrid message ID on an already-logged pond email row."""
     if not is_available() or not log_id:
