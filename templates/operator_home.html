@@ -147,7 +147,13 @@ a.qbtn{text-decoration:none}
   border:none;border-radius:9px;padding:8px 14px;cursor:pointer;
   font-size:13px}
 
-.foot{margin-top:34px;font-size:11.5px;color:var(--faint);
+.toolbox{display:flex;gap:8px;flex-wrap:wrap}
+.toolbox a{background:var(--panel);border:1px solid var(--line);
+  border-radius:9px;padding:8px 13px;font-size:12.5px;font-weight:600;
+  color:var(--muted)}
+.toolbox a:hover{color:var(--ink);border-color:var(--teal);
+  text-decoration:none}
+.foot{margin-top:28px;font-size:11.5px;color:var(--faint);
   display:flex;gap:18px;flex-wrap:wrap}
 .foot a{color:var(--faint)}
 .foot a:hover{color:var(--ink)}
@@ -193,10 +199,29 @@ a.qbtn{text-decoration:none}
     </div>
   </div>
 
+  <div style="margin-top:34px">
+    <h2>Toolbox</h2>
+    <div class="toolbox">
+      <a href="/dispatch">Lead Claims</a>
+      <a href="/leadstream">LeadStream</a>
+      <a href="/today">Today</a>
+      <a href="/salesfloor">Sales Floor</a>
+      <a href="/calls">Call Library</a>
+      <a href="/callaction">Drip Replies</a>
+      <a href="/callingly-console">Ring Line</a>
+      <a href="/revenue">Revenue</a>
+      <a href="/team/onboarding">Onboarding</a>
+      <a href="/admin/policy">Roster Policy</a>
+      <a href="/training">Training</a>
+      <a href="/market">Market Pages</a>
+      <a href="/system">Mission Control</a>
+      <a href="/classic">Classic · Appointments, AI Outreach, 1-on-1,
+        ISA, Messaging</a>
+    </div>
+  </div>
   <div class="foot">
     <span>Every number folds open to its own math. If a receipt ever
     disagrees with FUB, that is a five alarm bug: say so.</span>
-    <a href="/system">Mission Control</a>
   </div>
 </div>
 <div class="toast" id="toast"></div>
