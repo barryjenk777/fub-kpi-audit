@@ -13671,16 +13671,42 @@ def _callingly_ring_first(pid, person, triggered_by):
         wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
         if _sl.is_available():
             city = ((person.get("addresses") or [{}])[0] or {}).get("city")
-            first_l = name.split()[0] if name else "The lead"
+            first_l = name.split()[0] if name else "there"
+            # The cure for calling blind (Matt, first bridged call):
+            # Realtor.com Property Inquiry events carry the exact house.
+            prop_line = ""
+            opener = ("Hey %s, I saw you were just looking at homes "
+                      "online. Which one caught your eye?" % first_l)
+            try:
+                evs = FUBClient()._request("GET", "events", params={
+                    "personId": pid, "limit": 25}) or {}
+                for ev in evs.get("events") or []:
+                    pr = ev.get("property") or {}
+                    if pr.get("street"):
+                        try:
+                            pv = int(float(pr.get("price") or 0))
+                            price = "$%s" % format(pv, ",") if pv else ""
+                        except (TypeError, ValueError):
+                            price = ""
+                        prop_line = ("\nThey asked about *%s, %s*%s."
+                                     % (pr["street"],
+                                        pr.get("city") or "",
+                                        (", listed at %s" % price)
+                                        if price else ""))
+                        opener = ("Hey %s, I saw you were asking about "
+                                  "%s. Is that one still on your list?"
+                                  % (first_l, pr["street"]))
+                        break
+            except Exception:
+                pass
             _sl.post_message(wins,
                 "\U0001f4de Ringing the team RIGHT NOW: *%s*, a "
-                "Realtor.com buyer%s. Whoever presses 1, here is the "
+                "Realtor.com buyer%s.%s\nWhoever presses 1, here is the "
                 "record: https://yourfriendlyagent.followupboss.com/2/"
-                "people/view/%s\nOpener: \"Hey %s, I saw you were just "
-                "looking at homes online. Which one caught your eye?\""
+                "people/view/%s\nOpener: \"%s\""
                 % (name or "New lead",
                    (" in %s" % city.title()) if city else "",
-                   pid, first_l))
+                   prop_line, pid, opener))
     except Exception:
         pass
     logger.info("[CALLINGLY] ringing team %s for %s (%s)", team_id, name, pid)
