@@ -7,12 +7,12 @@
 <title>LeadStream — Legacy Home Team</title>
 <style>
 :root {
-  --bg:         #080c14;
-  --surface:    #0f1520;
-  --surface2:   #161e2e;
-  --surface3:   #1d2740;
+  --bg:         #f4f2ec;
+  --surface:    #fdfcf8;
+  --surface2:   #fdfcf8;
+  --surface3:   #e1ddd0;
   --border:     #243050;
-  --border-sub: #182030;
+  --border-sub: #f1eee6;
   --text:       #191b1e;
   --muted:      #68789a;
   --subtle:     #3d506e;
@@ -834,7 +834,7 @@ function renderLeaks(leaks){
   const el=document.getElementById('leaks-wrap');
   el.innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:.7rem">`+
     leaks.map(l=>`
-    <div style="background:var(--surface,#0f1520);border:1px solid var(--border,#243050);border-left:3px solid ${sevColor(l.severity)};border-radius:12px;padding:.85rem 1rem">
+    <div style="background:var(--surface,#fdfcf8);border:1px solid var(--border,#243050);border-left:3px solid ${sevColor(l.severity)};border-radius:12px;padding:.85rem 1rem">
       <div style="display:flex;align-items:baseline;gap:.5rem">
         <span style="font-size:1.6rem;font-weight:750;color:${sevColor(l.severity)}">${l.count}</span>
         <span style="font-size:.85rem;font-weight:650">${l.label}</span>
@@ -860,7 +860,7 @@ function renderScoreboard(rows){
         <td style="padding:.5rem .6rem">${r.texted}</td>
         <td style="padding:.5rem .6rem">
           <div style="display:flex;align-items:center;gap:.5rem">
-            <div class="bar-track" style="flex:1;height:7px;border-radius:99px;background:var(--surface2,#161e2e);overflow:hidden">
+            <div class="bar-track" style="flex:1;height:7px;border-radius:99px;background:var(--surface2,#fdfcf8);overflow:hidden">
               <div style="width:${r.worked_pct}%;height:100%;border-radius:99px;background:${sevColor(r.grade)}"></div>
             </div>
             <span style="font-weight:700;color:${sevColor(r.grade)};min-width:38px;text-align:right">${r.worked_pct}%</span>
