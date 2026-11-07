@@ -98,6 +98,43 @@ details.r summary:hover{color:var(--cobalt)}
   color:var(--faint);font-size:14px}
 .drawer .rbody{margin-top:0;border:none;background:transparent;
   padding:0}
+.brow{display:grid;grid-template-columns:minmax(120px,38%) 1fr auto;
+  gap:12px;align-items:center;padding:5px 0;font-size:13px}
+.blabel{font-weight:600;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.bbar{height:8px;background:#ece9e0;border-radius:99px;overflow:hidden}
+.bbar i{display:block;height:100%;border-radius:99px;
+  background:var(--cobalt);transition:width .6s ease}
+.bbar i.good{background:var(--emerald)}
+.bbar i.warn{background:#d97706}
+.bbar i.bad{background:var(--verm)}
+.bval{font-weight:800;font-variant-numeric:tabular-nums;font-size:12.5px;
+  min-width:52px;text-align:right}
+.fineprint{font-family:var(--mono);font-size:10.5px;color:#8a8d82;
+  border-top:1px dashed var(--line);margin-top:10px;padding-top:8px;
+  line-height:1.7}
+.fineprint a{color:var(--cobalt)}
+
+/* menu overlay */
+.menubtn{background:var(--ink);color:#f2efe7;border:none;cursor:pointer;
+  font-family:var(--sans);font-weight:800;font-size:12.5px;
+  border-radius:9px;padding:7px 14px;margin-left:14px}
+.menubtn:hover{background:#000}
+.veil{position:fixed;inset:0;background:rgba(25,27,30,.35);
+  backdrop-filter:blur(2px);z-index:90;display:flex;
+  align-items:flex-start;justify-content:center;padding:70px 16px 16px}
+.menu{background:var(--card);border:1px solid var(--line);
+  border-radius:18px;max-width:900px;width:100%;padding:22px 26px;
+  box-shadow:0 30px 70px rgba(25,27,30,.3);
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:20px;max-height:80vh;overflow:auto}
+.menu h5{margin:0 0 8px;font-size:10px;font-weight:800;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+.menu a{display:block;padding:7px 9px;border-radius:9px;color:var(--ink);
+  font-weight:700;font-size:13.5px}
+.menu a small{display:block;font-weight:500;font-size:11px;
+  color:var(--muted)}
+.menu a:hover{background:#f1eee6;text-decoration:none}
 
 /* bottleneck: the one dark panel on the page */
 .bneck{margin-top:22px;background:var(--inkpanel);color:#f2efe7;
@@ -164,13 +201,6 @@ a.qbtn:hover{background:var(--card);border-color:var(--ink);
 .empty b{color:var(--emerald);display:block;font-size:17px;
   margin-bottom:4px;font-family:var(--display);font-weight:600}
 
-/* toolbox */
-.toolbox{display:flex;gap:8px;flex-wrap:wrap}
-.toolbox a{background:var(--card);border:1px solid var(--line);
-  border-radius:99px;padding:8px 15px;font-size:12.5px;font-weight:600;
-  color:var(--muted)}
-.toolbox a:hover{color:var(--ink);border-color:var(--ink);
-  text-decoration:none}
 
 .foot{margin-top:28px;font-size:11.5px;color:var(--faint);
   display:flex;gap:18px;flex-wrap:wrap}
@@ -196,7 +226,8 @@ a:focus-visible,button:focus-visible,summary:focus-visible{
     <div class="brand">Legacy <span>Command Center</span></div>
     <div class="topr"><span id="asof"></span>
       <a href="/revenue">Revenue</a><a href="/callingly-console">Ring line</a>
-      <a href="/admin/policy">Roster</a><a href="/classic">Classic view</a>
+      <a href="/dispatch">Claims</a>
+      <button class="menubtn" onclick="toggleMenu(true)">Menu</button>
     </div>
   </div>
 
@@ -210,29 +241,35 @@ a:focus-visible,button:focus-visible,summary:focus-visible{
     <div id="queue"></div>
   </div>
 
-  <div style="margin-top:34px">
-    <h2>Toolbox</h2>
-    <div class="toolbox">
-      <a href="/dispatch">Lead Claims</a>
-      <a href="/leadstream">LeadStream</a>
-      <a href="/today">Today</a>
-      <a href="/salesfloor">Sales Floor</a>
-      <a href="/calls">Call Library</a>
-      <a href="/callaction">Drip Replies</a>
-      <a href="/callingly-console">Ring Line</a>
-      <a href="/revenue">Revenue</a>
-      <a href="/team/onboarding">Onboarding</a>
-      <a href="/admin/policy">Roster Policy</a>
-      <a href="/training">Training</a>
-      <a href="/market">Market Pages</a>
-      <a href="/system">Mission Control</a>
-      <a href="/classic">Classic · Appointments, AI Outreach, 1-on-1,
-        ISA, Messaging</a>
-    </div>
-  </div>
   <div class="foot">
     <span>Every number folds open to its own math. If a receipt ever
     disagrees with FUB, that is a five alarm bug: say so.</span>
+  </div>
+</div>
+<div class="veil" id="veil" hidden onclick="if(event.target===this)toggleMenu(false)">
+  <div class="menu">
+    <div><h5>Leads and the Desk</h5>
+      <a href="/dispatch">Lead Claims<small>offers, claims, hot hand board</small></a>
+      <a href="/callingly-console">Ring Line<small>press-1 lane, test rings, scoreboard</small></a>
+      <a href="/callaction">Drip Replies<small>Fhalen's reply desk</small></a>
+      <a href="/leadstream">LeadStream<small>scored call lists</small></a>
+    </div>
+    <div><h5>Money</h5>
+      <a href="/revenue">Revenue<small>closings, pipeline, show rates, unattributed money</small></a>
+      <a href="/market">Market Pages<small>city stats and nurture ammo</small></a>
+    </div>
+    <div><h5>Team</h5>
+      <a href="/salesfloor">Sales Floor<small>live activity</small></a>
+      <a href="/today">Today<small>the day at a glance</small></a>
+      <a href="/calls">Call Library<small>graded film</small></a>
+      <a href="/training">Training<small>Dojo and drills</small></a>
+      <a href="/team/onboarding">Onboarding<small>new hire board</small></a>
+      <a href="/admin/policy">Roster Policy<small>rotation, grace, protected</small></a>
+    </div>
+    <div><h5>System</h5>
+      <a href="/system">Mission Control<small>jobs, feeds, health</small></a>
+      <a href="/classic">Classic view<small>Appointments · AI Outreach · 1-on-1 · ISA · Messaging</small></a>
+    </div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -256,18 +293,56 @@ function receipt(r){
     rbody(r)+'</details>';
 }
 var RECEIPTS={},DRAWERKEY=null;
+function fmtVal(v,f){
+  if(f==='money')return money(v);
+  if(f==='pct')return Math.round(v)+'%';
+  return String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+}
+function barClass(row){
+  if(row.fmt!=='pct')return row.fmt==='money'?' class="good"':'';
+  return row.value>=55?' class="good"':row.value>=40?' class="warn"':
+    ' class="bad"';
+}
+function breakdownHTML(rows){
+  var max=0;
+  rows.forEach(function(r){if(r.value>max)max=r.value;});
+  return rows.map(function(r){
+    var w=max?Math.max(3,Math.round(100*r.value/max)):0;
+    if(r.fmt==='pct')w=Math.max(3,Math.round(r.value));
+    return '<div class="brow"><span class="blabel" title="'+esc(r.label)+
+      '">'+esc(r.label)+'</span><span class="bbar"><i'+barClass(r)+
+      ' style="width:'+w+'%"></i></span><span class="bval">'+
+      fmtVal(r.value,r.fmt)+'</span></div>';
+  }).join('');
+}
 function toggleReceipt(key,label){
   var dr=document.getElementById('stripDrawer');
   document.querySelectorAll('.rtoggle').forEach(function(b){
     b.classList.toggle('open',b.getAttribute('data-k')===key&&DRAWERKEY!==key);});
   if(DRAWERKEY===key){dr.hidden=true;DRAWERKEY=null;return;}
-  var r=RECEIPTS[key];
-  if(!r)return;
-  dr.innerHTML='<div class="dtitle"><span>'+esc(label)+' · how this '+
-    'number is made</span><button onclick="toggleReceipt(\''+esc(key)+
-    '\')" aria-label="close">✕</button></div>'+rbody(r);
+  var st=RECEIPTS[key];
+  if(!st)return;
+  var r=st.receipt||{};
+  var body;
+  if(st.breakdown&&st.breakdown.length){
+    body=breakdownHTML(st.breakdown)+
+      '<div class="fineprint">'+esc(r.formula||'')+
+      (r.source?'\n'+esc(r.source):'')+
+      (r.door?'  ·  <a href="'+esc(r.door)+'">open the data →</a>':'')+
+      '</div>';
+  }else{
+    body=rbody(r);
+  }
+  dr.innerHTML='<div class="dtitle"><span>'+esc(label)+' · the data '+
+    'behind this number</span><button onclick="toggleReceipt(\''+esc(key)+
+    '\')" aria-label="close">✕</button></div>'+body;
   dr.hidden=false;DRAWERKEY=key;
 }
+function toggleMenu(open){
+  document.getElementById('veil').hidden=!open;
+}
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape')toggleMenu(false);});
 function gauge(pct,size,color,track,textcolor){
   var r=(size/2)-5,c=2*Math.PI*r,off=c*(1-(pct||0)/100);
   return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'">'+
@@ -328,7 +403,7 @@ function render(d,fresh){
       var ring=(st.key==='net'&&d.net_coverage_pct!=null)?
         '<span class="ring" title="share of deals carrying commission data">'+
         gauge(d.net_coverage_pct,34,'#6d28d9','#e6e2d7')+'</span>':'';
-      RECEIPTS[st.key]=st.receipt;
+      RECEIPTS[st.key]={receipt:st.receipt,breakdown:st.breakdown};
       s+='<div class="'+cls+'">'+ring+
         '<div class="nlabel">'+esc(st.label)+'</div>'+
         '<div class="nval" data-k="'+st.key+'">'+val+'</div>'+

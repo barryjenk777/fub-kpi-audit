@@ -21740,10 +21740,15 @@ def build_operator_home():
     out = {"ok": True, "as_of": now.isoformat(), "stages": [],
            "bottleneck": None, "queue": [], "hiring": []}
 
-    def stage(key, label, value, unit, receipt, door, flag=False):
+    def stage(key, label, value, unit, receipt, door, flag=False,
+              breakdown=None):
+        # breakdown = the ACTUAL data behind the number (Barry, Nov 7:
+        # "I want to see the actual data... Mitch xyz, Salma xyz").
+        # Rows: {label, value, fmt: num|pct|money}.
         out["stages"].append({"key": key, "label": label, "value": value,
                               "unit": unit, "receipt": receipt,
-                              "door": door, "flag": flag})
+                              "door": door, "flag": flag,
+                              "breakdown": breakdown or []})
 
     # ── Revenue snapshot feeds several stages (30-min cached) ──────────
     snap = {}
@@ -21779,15 +21784,26 @@ def build_operator_home():
         logger.warning("[OPERATOR] onboarding read failed: %s", e)
     stage("onboarding", "Onboarding", len(hires) or None, "hires",
           {"formula": "hires on the onboarding board, not yet complete",
-           "inputs": {"hires": [h.get("agent") for h in hires],
-                      "idle_3plus_days": [h.get("agent") for h in idle]},
            "source": "onboarding board (course progress + pipeline "
                      "tasks, synced from the Fast Track course)",
            "door": "/team/onboarding"},
-          "/team/onboarding")
+          "/team/onboarding",
+          breakdown=[{"label": "%s%s" % (h.get("agent"),
+                      " · idle %d days" % int(h.get("course_days_idle"))
+                      if int(h.get("course_days_idle") or 0) >= 3 else ""),
+                      "value": int(h.get("course_percent") or 0),
+                      "fmt": "pct"}
+                     for h in sorted(hires,
+                                     key=lambda x: -(x.get("course_percent")
+                                                     or 0))])
 
-    # ── Leads routed (30d) ──────────────────────────────────────────────
-    leads_30 = 0
+    # ── Leads routed (30d), by lane ─────────────────────────────────────
+    leads_30, lane_rows = 0, []
+    _lane_names = {"realtor": "Realtor.com", "ai_text": "AI text "
+                   "conversions", "ai_voice": "AI voice conversions",
+                   "fhalen": "Fhalen transfers",
+                   "ai_nurture": "Nurture router",
+                   "callingly": "Ring line"}
     try:
         with _db.get_conn() as conn:
             with conn.cursor() as cur:
@@ -21796,75 +21812,109 @@ def build_operator_home():
                     WHERE offered_at >= NOW() - INTERVAL '30 days'
                 """)
                 leads_30 = int(cur.fetchone()[0] or 0)
+                cur.execute("""
+                    SELECT source, COUNT(DISTINCT person_id)
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - INTERVAL '30 days'
+                    GROUP BY source ORDER BY 2 DESC
+                """)
+                lane_rows = [{"label": _lane_names.get(r[0], r[0]),
+                              "value": int(r[1]), "fmt": "num"}
+                             for r in cur.fetchall()]
     except Exception:
         pass
     stage("leads", "Leads routed", leads_30, "30 days",
-          {"formula": "COUNT(DISTINCT person) across every claim offer "
-                      "in 30 days: Realtor.com rings and shootouts, AI "
-                      "conversions, nurture router",
-           "inputs": {"window_days": 30},
+          {"formula": "distinct people offered to agents in 30 days, "
+                      "split by which lane routed them. A lead touched "
+                      "by two lanes counts once in the total",
            "source": "dispatch_offers table (every offer ever made has "
                      "a row; nothing is sampled)",
            "door": "/dispatch"},
-          "/dispatch")
+          "/dispatch", breakdown=lane_rows)
 
-    # ── Conversations (7d) ──────────────────────────────────────────────
-    convos_7 = None
+    # ── Conversations (7d), by person ───────────────────────────────────
+    convos_7, convo_rows = None, []
     try:
         excl = tuple(getattr(config, "EXCLUDED_CALL_USER_IDS", {1})) or (1,)
+        uid_name = {}
+        for p in (_db.get_agent_profiles(active_only=False) or []):
+            if p.get("fub_user_id"):
+                uid_name[int(p["fub_user_id"])] = p.get("agent_name")
         with _db.get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT COUNT(*) FROM calls_cache
+                    SELECT user_id, COUNT(*) FROM calls_cache
                     WHERE created >= NOW() - INTERVAL '7 days'
                       AND duration >= 120
                       AND user_id NOT IN %s
+                    GROUP BY user_id ORDER BY 2 DESC
                 """, (excl,))
-                convos_7 = int(cur.fetchone()[0] or 0)
+                rows = cur.fetchall()
+        convos_7 = sum(int(r[1]) for r in rows)
+        convo_rows = [{"label": uid_name.get(int(r[0] or 0),
+                                             "Staff (FUB user %s)" % r[0]),
+                       "value": int(r[1]), "fmt": "num"}
+                      for r in rows[:12]]
     except Exception as e:
         logger.warning("[OPERATOR] convos read failed: %s", e)
     stage("convos", "Conversations", convos_7, "7 days",
           {"formula": "calls of 2 minutes or longer, any direction, by "
-                      "agents (Barry's drip dials excluded), last 7 days",
-           "inputs": {"threshold_seconds": 120,
-                      "excluded_user_ids": list(excl)},
+                      "person, last 7 days. Barry's drip dials excluded",
            "source": "calls warehouse, verified complete against FUB "
                      "every night at 2:40am (zero drift on last check)",
            "door": "/salesfloor"},
-          "/salesfloor")
+          "/salesfloor", breakdown=convo_rows)
 
-    # ── Appointments set / held (90d) ───────────────────────────────────
+    # ── Appointments set / held (90d), by agent ─────────────────────────
+    by_agent = funnel.get("by_agent") or {}
+    set_rows = [{"label": a, "value": int(v.get("set") or 0),
+                 "fmt": "num"}
+                for a, v in sorted(by_agent.items(),
+                                   key=lambda kv: -(kv[1].get("set") or 0))
+                if (v.get("set") or 0) > 0][:12]
     stage("appts_set", "Appts set", appts_set, "90 days",
           {"formula": "appointments created in FUB in the last 90 days, "
-                      "canceled excluded",
-           "inputs": {"set": appts_set},
+                      "canceled excluded, split by the agent on the "
+                      "appointment",
            "source": "appointments table, synced from FUB in realtime "
                      "via webhook plus a daily sweep",
            "door": "/revenue"},
-          "/revenue")
+          "/revenue", breakdown=set_rows)
     held_pct = round(100.0 * appts_met / appts_set) if appts_set else None
+    held_rows = [{"label": "%s · %d of %d"
+                  % (a, int(v.get("met") or 0), int(v.get("set") or 0)),
+                  "value": round(100.0 * (v.get("met") or 0)
+                                 / v["set"]) if v.get("set") else 0,
+                  "fmt": "pct"}
+                 for a, v in sorted(by_agent.items(),
+                                    key=lambda kv: -(kv[1].get("set")
+                                                     or 0))
+                 if (v.get("set") or 0) >= 3][:12]
     stage("appts_held", "Appts held",
           held_pct, "%",
-          {"formula": "met ÷ set × 100. met = outcome or status "
-                      "'showed' on the appointment record",
-           "inputs": {"set": appts_set, "met": appts_met,
-                      "evaporated": appts_set - appts_met},
-           "source": "same appointments table; by-agent split lives on "
-                     "the Revenue page",
+          {"formula": "met ÷ set × 100 per agent (3+ set to rank). "
+                      "met = outcome or status 'showed'. Team: %d of %d"
+                      % (appts_met, appts_set),
+           "source": "same appointments table as the set number",
            "door": "/revenue"},
-          "/revenue", flag=True)
+          "/revenue", flag=True, breakdown=held_rows)
 
     # ── Closed + Net GCI (90d) ──────────────────────────────────────────
     stage("closed", "Closed", closed_n, "90 days",
           {"formula": "deals whose stage entered Closed in the last 90 "
-                      "days, Dotloop onboarding paperwork excluded",
-           "inputs": {"closed": closed_n,
-                      "under_contract_now":
-                          len((snap.get("pipeline") or {})
-                              .get("under_contract") or [])},
+                      "days, Dotloop onboarding paperwork excluded. "
+                      "Under contract now: %d"
+                      % len((snap.get("pipeline") or {})
+                            .get("under_contract") or []),
            "source": "FUB deals via the revenue layer; nothing estimated",
            "door": "/revenue"},
-          "/revenue")
+          "/revenue",
+          breakdown=[{"label": (r.get("name") or "deal")[:44]
+                      + ("" if r.get("gci") else
+                         " · no commission on file"),
+                      "value": r.get("gci") or 0, "fmt": "money"}
+                     for r in sorted(closed_rows,
+                                     key=lambda x: -(x.get("gci") or 0))])
     net_known = 0.0
     try:
         net_known = round(sum((v.get("net_gci") or 0) for v in
@@ -21873,25 +21923,29 @@ def build_operator_home():
     except Exception:
         pass
     deals_total = int(cov.get("deals_total") or 0)
+    _bys = snap.get("closed_by_source_90d") or {}
     stage("net", "Net GCI known", net_known, "90 days",
-          {"formula": "GCI × (1 - referral fee) summed over closings "
-                      "where FUB carries BOTH a commission and a lead "
-                      "link. Fees: Ylopo 40%, probate 25%, zBuyer and "
-                      "Realtor.com 0%",
-           "inputs": {"closings_with_full_data":
-                          sum(v.get("closings", 0) for k, v in
-                              (snap.get("closed_by_source_90d")
-                               or {}).items() if k != "unlinked"),
-                      "closings_unattributed":
-                          (snap.get("closed_by_source_90d") or {})
-                          .get("unlinked", {}).get("closings", 0),
-                      "coverage": cov},
-           "source": "the number is deliberately incomplete until Ana "
-                     "clears the unattributed-money queue; the coverage "
-                     "ring on this node shows how much of the book "
-                     "qualifies",
+          {"formula": "GCI × (1 - referral fee) per source, summed over "
+                      "closings where FUB carries BOTH a commission and "
+                      "a lead link. Fees: Ylopo 40%, probate 25%, "
+                      "zBuyer and Realtor.com 0%",
+           "source": "deliberately incomplete until Ana clears the "
+                     "unattributed-money queue; the ring on this node "
+                     "is the share of deals carrying commission data",
            "door": "/revenue"},
-          "/revenue")
+          "/revenue",
+          breakdown=[{"label": ("unattributed · %d closing%s, $%s gross"
+                                % (v.get("closings", 0),
+                                   "" if v.get("closings") == 1 else "s",
+                                   format(int(v.get("gci") or 0), ",")))
+                      if b == "unlinked" else
+                      ("%s · %d closing%s"
+                       % (b, v.get("closings", 0),
+                          "" if v.get("closings") == 1 else "s")),
+                      "value": v.get("net_gci") or 0, "fmt": "money"}
+                     for b, v in sorted(_bys.items(),
+                                        key=lambda kv:
+                                        -(kv[1].get("net_gci") or 0))])
     out["net_coverage_pct"] = round(
         100.0 * (cov.get("with_commission") or 0) / deals_total) \
         if deals_total else 0
