@@ -95,6 +95,8 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         "/nr/",
         # Hot sheet tap tracking redirects (goal token IS the auth)
         "/t/",
+        # Junk-flag links in offer cards: the offer token IS the auth
+        "/j/",
         # Agent Operating Rhythm (no PII, bookmarkable)
         "/rhythm",
         # Day One Pipeline: ops one-click done links + the hire's own page
@@ -5435,6 +5437,48 @@ def _dispatch_accept(offer):
         person_name=offer["lead_name"], agent_name=agent,
         payload={"source": offer["source"], "hop": offer["hop"]},
         triggered_by="dispatch")
+
+
+@app.route("/j/<token>")
+def junk_offer_page(token):
+    """Agent's one-tap junk flag (Nov 7 2026: the quality circuit
+    breaker). Two junk flags on a lane in 7 days pause optional lanes
+    automatically and page Barry either way. The token is the offer's
+    own token, so only the holder of the offer link can flag it."""
+    row = _db.mark_offer_junk(token)
+    shell = ("<div style='font-family:Archivo,-apple-system,sans-serif;"
+             "max-width:430px;margin:14vh auto;padding:0 20px;"
+             "color:#191b1e'>%s</div>")
+    if not row:
+        return shell % ("<h2>Nothing to flag.</h2><p>This link only "
+                        "works on an offer you claimed, once.</p>")
+    _db.log_automation_event(
+        event_type="lead_junk_flag", person_id=row["person_id"],
+        person_name=row["lead_name"], agent_name=row["agent_name"],
+        payload={"source": row["source"]}, triggered_by="agent")
+    n = _db.lane_junk_count(row["source"], days=7)
+    paused = False
+    if n >= 2 and row["source"] == "ai_nurture":
+        _db.set_app_state("ai_nurture_live", "0")
+        paused = True
+    try:
+        import slack_client as _sl
+        import dispatch as _dp
+        bid = _dp._slack_user_id("Barry Jenkins")
+        if _sl.is_available() and bid:
+            _sl.dm_user(bid,
+                "\U0001f6AE %s flagged %s as junk (lane: %s). That lane "
+                "has %d junk flag%s in 7 days.%s"
+                % (row["agent_name"], row["lead_name"] or "a lead",
+                   row["source"], n, "" if n == 1 else "s",
+                   " The lane just paused itself." if paused else ""))
+    except Exception:
+        pass
+    return shell % ("<h2>Logged.</h2><p>%s counts against the %s lane "
+                    "that sent it. Two flags in a week and that lane "
+                    "answers for it. Thank you for keeping the desk "
+                    "honest.</p>"
+                    % ((row["lead_name"] or "That lead"), row["source"]))
 
 
 @app.route("/a/<token>", methods=["GET", "POST"])

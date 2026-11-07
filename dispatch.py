@@ -153,6 +153,98 @@ def _accept_url(token):
     return "%s/a/%s" % (base, token)
 
 
+def _junk_url(token):
+    base = (os.environ.get("BASE_URL")
+            or "https://web-production-3363cc.up.railway.app").rstrip("/")
+    return "%s/j/%s" % (base, token)
+
+
+def evidence_line(person_id):
+    """THE EVIDENCE STANDARD (Barry, Nov 7 2026: three junk-lead
+    incidents share one root cause, trusting tags). What we can PROVE
+    about a lead, with dates: newest inbound text, newest connected
+    inbound call, newest AI voice outcome parsed from the deep note
+    history, newest property inquiry. Tags are hints and never appear
+    here. Every offer carries this line; a lead whose evidence reads
+    thin goes out looking thin, by design."""
+    import re as _re
+    from fub_client import FUBClient
+    bits = []
+    try:
+        client = FUBClient()
+        try:
+            data = client._request("GET", "textMessages", params={
+                "personId": person_id, "limit": 30}) or {}
+            txts = next((v for v in data.values()
+                         if isinstance(v, list)), [])
+            inb = [t for t in txts if t.get("isIncoming")]
+            if inb:
+                inb.sort(key=lambda t: t.get("created") or "")
+                bits.append(("texted us %s"
+                             % (inb[-1].get("created") or "")[:10],
+                             inb[-1].get("created") or ""))
+        except Exception:
+            pass
+        try:
+            data = client._request("GET", "calls", params={
+                "personId": person_id, "limit": 20}) or {}
+            calls = next((v for v in data.values()
+                          if isinstance(v, list)), [])
+            inc = [c for c in calls if c.get("isIncoming")
+                   and (c.get("duration") or 0) >= 30]
+            if inc:
+                inc.sort(key=lambda c: c.get("created") or "")
+                bits.append(("called in %s"
+                             % (inc[-1].get("created") or "")[:10],
+                             inc[-1].get("created") or ""))
+        except Exception:
+            pass
+        try:
+            # AI voice outcomes hide deep under system notes; walk up to
+            # 200 of them for the newest dated disposition.
+            newest = None
+            for offset in (0, 100):
+                data = client._request("GET", "notes", params={
+                    "personId": person_id, "limit": 100,
+                    "offset": offset}) or {}
+                notes = data.get("notes") or []
+                for n in notes:
+                    body = n.get("body") or ""
+                    if "Call Disposition" in body:
+                        disp = _re.search(
+                            r"Call Disposition:\s*([A-Za-z_ ]+)", body)
+                        when = (n.get("created") or "")[:10]
+                        if disp and (newest is None or when > newest[1]):
+                            newest = ("AI call %s on %s"
+                                      % (disp.group(1).strip(), when),
+                                      when)
+                if len(notes) < 100:
+                    break
+            if newest:
+                bits.append(newest)
+        except Exception:
+            pass
+        try:
+            data = client._request("GET", "events", params={
+                "personId": person_id, "limit": 15}) or {}
+            for ev in data.get("events") or []:
+                pr = ev.get("property") or {}
+                if pr.get("street"):
+                    bits.append(("asked about %s on %s"
+                                 % (pr["street"],
+                                    (ev.get("created") or "")[:10]),
+                                 ev.get("created") or ""))
+                    break
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning("[EVIDENCE] line failed for %s: %s", person_id, e)
+    if not bits:
+        return "Evidence on record: none. No inbound, no AI conversation, no inquiry."
+    bits.sort(key=lambda b: b[1], reverse=True)
+    return "Evidence: " + "; ".join(b[0] for b in bits[:3])
+
+
 def _slack_user_id(agent_name):
     try:
         import json as _json
@@ -263,8 +355,11 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
                 ]},
                 {"type": "context", "elements": [
                     {"type": "mrkdwn",
-                     "text": "Buttons not working? <%s|Claim here instead>."
-                             % _accept_url(offer_token)}]},
+                     "text": "Buttons not working? <%s|Claim here "
+                             "instead>. Claimed it and it was junk? "
+                             "<%s|Flag it>."
+                             % (_accept_url(offer_token),
+                                _junk_url(offer_token))}]},
             ]
             if _sl.dm_user(sid, "New lead offer: %s" % lead_first, blocks=blocks):
                 # Dual delivery (Barry, Oct 2026: a weekend of offers died
@@ -377,8 +472,11 @@ def _notify_shootout(agent_name, offer_token, lead_name, lead_city,
                 ]},
                 {"type": "context", "elements": [
                     {"type": "mrkdwn",
-                     "text": "Buttons not working? <%s|Claim here instead>."
-                             % _accept_url(offer_token)}]},
+                     "text": "Buttons not working? <%s|Claim here "
+                             "instead>. Claimed it and it was junk? "
+                             "<%s|Flag it>."
+                             % (_accept_url(offer_token),
+                                _junk_url(offer_token))}]},
             ]
             if _sl.dm_user(sid, "Shootout lead: %s" % lead_first,
                            blocks=blocks):
@@ -491,6 +589,12 @@ def make_shootout(person_id, lead_name, lead_city=None, notes=None,
         for _ in cands:
             advance_rotation()
     mins = int(getattr(config, "REALTOR_OFFER_MINUTES", 2))
+    if "Evidence" not in (notes or ""):
+        try:
+            ev = evidence_line(person_id)
+            notes = ("%s\n%s" % (notes, ev)) if notes else ev
+        except Exception:
+            pass
     made = []
     for agent in cands:
         token = secrets.token_urlsafe(9)
@@ -667,6 +771,14 @@ def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
                 break
     if not agent_name:
         return None
+    # The evidence standard rides every offer: dated, verifiable, never
+    # tags. Weak evidence goes out looking weak, on purpose.
+    if hop == 1 and "Evidence" not in (notes or ""):
+        try:
+            ev = evidence_line(person_id)
+            notes = ("%s\n%s" % (notes, ev)) if notes else ev
+        except Exception:
+            pass
     token = secrets.token_urlsafe(9)
     oid = _db.create_dispatch_offer(source, person_id, lead_name, lead_city,
                                     appt_time, notes, agent_name, token,

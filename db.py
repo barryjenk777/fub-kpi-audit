@@ -10308,9 +10308,54 @@ def ensure_dispatch_table():
                         ADD COLUMN IF NOT EXISTS appt_met_at TIMESTAMPTZ;
                     ALTER TABLE dispatch_offers
                         ADD COLUMN IF NOT EXISTS route_path TEXT;
+                    ALTER TABLE dispatch_offers
+                        ADD COLUMN IF NOT EXISTS junk_at TIMESTAMPTZ;
                 """)
     except Exception as e:
         logger.warning("ensure_dispatch_table failed: %s", e)
+
+
+def mark_offer_junk(token):
+    """Agent's one-tap junk flag on a claimed offer (Nov 7 2026: the
+    quality circuit breaker). Returns the row once, None on repeats or
+    unclaimed offers."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE dispatch_offers
+                       SET junk_at = NOW()
+                     WHERE token = %s AND accepted_at IS NOT NULL
+                       AND junk_at IS NULL
+                    RETURNING id, source, agent_name, person_id, lead_name
+                """, (token,))
+                r = cur.fetchone()
+        if not r:
+            return None
+        return {"offer_id": r[0], "source": r[1], "agent_name": r[2],
+                "person_id": r[3], "lead_name": r[4]}
+    except Exception as e:
+        logger.warning("mark_offer_junk failed: %s", e)
+        return None
+
+
+def lane_junk_count(source, days=7):
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM dispatch_offers
+                    WHERE source = %s
+                      AND junk_at >= NOW() - make_interval(days => %s)
+                """, (source, int(days)))
+                return int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.warning("lane_junk_count failed: %s", e)
+        return 0
 
 
 def filter_new_desk_tags(person_id, tags, with_first_flag=False):
