@@ -205,6 +205,29 @@ a.qbtn:hover{background:var(--card);border-color:var(--ink);
 
 .foot{margin-top:28px;font-size:11.5px;color:var(--faint);
   display:flex;gap:18px;flex-wrap:wrap}
+/* peek panel: pages open OVER the home, never instead of it */
+.sheetveil{position:fixed;inset:0;background:rgba(25,27,30,.38);
+  z-index:80;opacity:1;transition:opacity .2s}
+.sheetveil[hidden]{display:none!important}
+.sheet{position:fixed;top:0;right:0;bottom:0;z-index:85;
+  width:min(1100px,96vw);background:var(--paper);
+  box-shadow:-24px 0 60px rgba(25,27,30,.35);
+  display:flex;flex-direction:column;
+  transform:translateX(0);transition:transform .25s ease}
+.sheet[hidden]{display:none!important}
+.sheethead{display:flex;align-items:center;gap:12px;
+  padding:12px 18px;border-bottom:2px solid var(--ink);
+  background:var(--card)}
+.sheethead b{font-family:var(--display);font-size:16px;flex:1}
+.sheethead a,.sheethead button{font-size:12px;font-weight:700;
+  color:var(--muted);background:none;border:1px solid var(--line);
+  border-radius:8px;padding:6px 12px;cursor:pointer;
+  font-family:var(--sans);text-decoration:none}
+.sheethead a:hover,.sheethead button:hover{color:var(--ink);
+  border-color:var(--ink);text-decoration:none}
+.sheet iframe{flex:1;border:none;width:100%;background:var(--paper)}
+@media (prefers-reduced-motion: reduce){.sheet{transition:none}}
+
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
   background:var(--inkpanel);color:#d9f2e4;border:1px solid #2b5c44;
   padding:10px 18px;border-radius:12px;font-size:13px;font-weight:600;
@@ -272,6 +295,15 @@ a:focus-visible,button:focus-visible,summary:focus-visible{
       <a href="/classic">Classic view<small>Appointments · AI Outreach · 1-on-1 · ISA · Messaging</small></a>
     </div>
   </div>
+</div>
+<div class="sheetveil" id="sheetveil" hidden onclick="closeView()"></div>
+<div class="sheet" id="sheet" hidden>
+  <div class="sheethead">
+    <b id="sheettitle"></b>
+    <a id="sheetfull" href="#" target="_blank" rel="noopener">Open full page ↗</a>
+    <button onclick="closeView()">Close · esc</button>
+  </div>
+  <iframe id="sheetframe" title="page"></iframe>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -342,8 +374,66 @@ function toggleReceipt(key,label){
 function toggleMenu(open){
   document.getElementById('veil').hidden=!open;
 }
+
+/* ---- peek panel: sub-pages open OVER the home, never instead of it ---- */
+var VIEWNAMES={'/dispatch':'Lead Claims','/callingly-console':'Ring Line',
+  '/callaction':'Drip Replies','/leadstream':'LeadStream','/revenue':'Revenue',
+  '/market':'Market Pages','/salesfloor':'Sales Floor','/today':'Today',
+  '/calls':'Call Library','/training':'Training',
+  '/team/onboarding':'Onboarding','/admin/policy':'Roster Policy',
+  '/system':'Mission Control','/classic':'Classic view'};
+var VIEWOPEN=null;
+function viewLabel(path){
+  var base=path.split('?')[0].replace(/\/$/,'')||'/';
+  return VIEWNAMES[base]||base.replace(/^\//,'').replace(/[-_/]/g,' ');
+}
+function openView(path,push){
+  if(path===VIEWOPEN)return;
+  toggleMenu(false);
+  var fr=document.getElementById('sheetframe');
+  if(fr.getAttribute('src')!==path)fr.setAttribute('src',path);
+  document.getElementById('sheettitle').textContent=viewLabel(path);
+  document.getElementById('sheetfull').setAttribute('href',path);
+  document.getElementById('sheetveil').hidden=false;
+  document.getElementById('sheet').hidden=false;
+  document.body.style.overflow='hidden';
+  VIEWOPEN=path;
+  if(push!==false){
+    try{history.pushState({view:path},'','#view='+encodeURIComponent(path));}
+    catch(e){}
+  }
+}
+function closeView(pop){
+  if(!VIEWOPEN)return;
+  document.getElementById('sheetveil').hidden=true;
+  document.getElementById('sheet').hidden=true;
+  document.body.style.overflow='';
+  VIEWOPEN=null;
+  if(pop!==false&&location.hash.indexOf('#view=')===0){
+    try{history.pushState(null,'',location.pathname);}catch(e){}
+  }
+}
+window.addEventListener('popstate',function(){
+  var m=location.hash.match(/^#view=(.+)$/);
+  if(m)openView(decodeURIComponent(m[1]),false);
+  else closeView(false);
+});
+/* every same-site link on this page opens in the panel */
+document.addEventListener('click',function(e){
+  if(e.metaKey||e.ctrlKey||e.shiftKey||e.altKey||e.button!==0)return;
+  var a=e.target.closest?e.target.closest('a'):null;
+  if(!a)return;
+  var href=a.getAttribute('href')||'';
+  if(a.target==='_blank'||a.id==='sheetfull')return;
+  if(href.charAt(0)!=='/'||href.indexOf('//')===0)return;
+  if(href==='/'||href.indexOf('/api/')===0)return;
+  e.preventDefault();
+  openView(href);
+});
 document.addEventListener('keydown',function(e){
-  if(e.key==='Escape')toggleMenu(false);});
+  if(e.key!=='Escape')return;
+  if(VIEWOPEN)closeView();else toggleMenu(false);
+});
 function gauge(pct,size,color,track,textcolor){
   var r=(size/2)-5,c=2*Math.PI*r,off=c*(1-(pct||0)/100);
   return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'">'+
@@ -497,6 +587,10 @@ function act(id,cardKey,btn){
   else skeleton();
 })();
 load();
+(function(){
+  var m=location.hash.match(/^#view=(.+)$/);
+  if(m)openView(decodeURIComponent(m[1]),false);
+})();
 setInterval(load,120000);
 </script>
 </body>

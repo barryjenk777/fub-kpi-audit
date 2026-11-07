@@ -22023,12 +22023,32 @@ def build_operator_home():
           "/salesfloor", breakdown=convo_rows)
 
     # ── Appointments set / held (90d), by agent ─────────────────────────
+    # Departed agents never rank beside the roster (Barry, Nov 7). Their
+    # old appointments still count in the team totals, so they collapse
+    # into one "former teammates" row and the receipt still adds up.
     by_agent = funnel.get("by_agent") or {}
+    departed = set()
+    try:
+        departed = {p["agent_name"] for p in
+                    (_db.get_agent_profiles(active_only=False) or [])
+                    if not p.get("is_active")
+                    or (p.get("status") or "") == "inactive"}
+    except Exception:
+        pass
+    former = {"set": 0, "met": 0}
+    for a in list(by_agent.keys()):
+        if a in departed:
+            v = by_agent.pop(a)
+            former["set"] += int(v.get("set") or 0)
+            former["met"] += int(v.get("met") or 0)
     set_rows = [{"label": a, "value": int(v.get("set") or 0),
                  "fmt": "num"}
                 for a, v in sorted(by_agent.items(),
                                    key=lambda kv: -(kv[1].get("set") or 0))
                 if (v.get("set") or 0) > 0][:12]
+    if former["set"]:
+        set_rows.append({"label": "Former teammates (off the roster)",
+                         "value": former["set"], "fmt": "num"})
     stage("appts_set", "Appts set", appts_set, "90 days",
           {"formula": "appointments created in FUB in the last 90 days, "
                       "canceled excluded, split by the agent on the "
@@ -22047,6 +22067,12 @@ def build_operator_home():
                                     key=lambda kv: -(kv[1].get("set")
                                                      or 0))
                  if (v.get("set") or 0) >= 3][:12]
+    if former["set"] >= 3:
+        held_rows.append({"label": "Former teammates · %d of %d"
+                          % (former["met"], former["set"]),
+                          "value": round(100.0 * former["met"]
+                                         / former["set"]),
+                          "fmt": "pct"})
     stage("appts_held", "Appts held",
           held_pct, "%",
           {"formula": "met ÷ set × 100 per agent (3+ set to rank). "
