@@ -13663,6 +13663,26 @@ def _callingly_ring_first(pid, person, triggered_by):
         event_type="callingly_ring", person_id=pid, person_name=name,
         agent_name=None, payload={"team_id": team_id},
         triggered_by=triggered_by)
+    # Matt's ask from the first bridged test call (Nov 7 2026): the
+    # whisper says the name, and this card carries the rest, so the
+    # agent who presses 1 opens with a person, not a cold hello.
+    try:
+        import slack_client as _sl
+        wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
+        if _sl.is_available():
+            city = ((person.get("addresses") or [{}])[0] or {}).get("city")
+            first_l = name.split()[0] if name else "The lead"
+            _sl.post_message(wins,
+                "\U0001f4de Ringing the team RIGHT NOW: *%s*, a "
+                "Realtor.com buyer%s. Whoever presses 1, here is the "
+                "record: https://yourfriendlyagent.followupboss.com/2/"
+                "people/view/%s\nOpener: \"Hey %s, I saw you were just "
+                "looking at homes online. Which one caught your eye?\""
+                % (name or "New lead",
+                   (" in %s" % city.title()) if city else "",
+                   pid, first_l))
+    except Exception:
+        pass
     logger.info("[CALLINGLY] ringing team %s for %s (%s)", team_id, name, pid)
     return True
 
