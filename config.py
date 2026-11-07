@@ -783,6 +783,10 @@ PHOENIX_QUALIFY_DAYS_REQUIRED = 4
 # calm claim offers through the desk relay: claim assigns the lead in FUB,
 # a full pass-through just logs. A nurture lead is never a fire drill.
 # =============================================================================
+# Callingly ring-first lane (Nov 7 2026): minutes the phones get before
+# the claim-button shootout fires as the fallback.
+CALLINGLY_FALLBACK_MINUTES = 4
+
 AI_NURTURE_TAGS = ("AI_VOICE_NEEDS_FOLLOW_UP", "AI_NEEDS_FOLLOW_UP")
 AI_NURTURE_LOOKBACK_DAYS = 14     # Barry: route the last 2 weeks of these
 AI_NURTURE_BATCH_CAP = 5          # per batch, newest conversation first —
@@ -923,14 +927,13 @@ FASTTRACK_EXEMPT = {
 }
 
 # ── Text pause list ──────────────────────────────────────────────────────
-# Agents whose SYSTEM texts are paused (Barry, Oct 16 2026: "pause Damon's
-# text messages until I say otherwise"). Blocks everything that rides
+# Agents whose SYSTEM texts are paused. Blocks everything that rides
 # queue_agent_imessage: coaching texts, Save-Bot prompts, Friday meeting
 # texts, Phoenix alerts, desk nudge texts. Emails and Slack are untouched.
 # Unpause = remove the name and deploy.
-TEXT_PAUSED_AGENTS = {
-    "Damon Parker",
-}
+# Damon Parker removed Nov 7 2026 (Barry: he has an iPhone, "add him to
+# whatever texts we do"; the Oct 16 pause is over).
+TEXT_PAUSED_AGENTS = set()
 
 # ── Slack CC window ─────────────────────────────────────────────────────
 # Barry, Oct 29 2026: "For 2 weeks, cc me on all slack messages" — every

@@ -3685,6 +3685,113 @@ def get_cached_calls(since, until=None):
         return []
 
 
+def ensure_callingly_table():
+    """Pending Callingly rings: one row per lead we handed to the ring,
+    swept to the claim-button fallback if no human answers in time."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS callingly_rings (
+                        id            SERIAL PRIMARY KEY,
+                        person_id     TEXT NOT NULL,
+                        lead_name     TEXT,
+                        team_id       INTEGER,
+                        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        status        TEXT NOT NULL DEFAULT 'ringing',
+                                      -- ringing | answered | fallback | failed
+                        agent_name    TEXT,
+                        outcome       TEXT,
+                        resolved_at   TIMESTAMPTZ
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_callingly_pending
+                        ON callingly_rings (status, created_at);
+                """)
+    except Exception as e:
+        logger.warning("ensure_callingly_table failed: %s", e)
+
+
+def add_callingly_ring(person_id, lead_name, team_id):
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO callingly_rings (person_id, lead_name, team_id)
+                    VALUES (%s, %s, %s) RETURNING id
+                """, (str(person_id), lead_name, team_id))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("add_callingly_ring failed: %s", e)
+        return None
+
+
+def resolve_callingly_ring(person_id, status, agent_name=None, outcome=None):
+    """Close the newest pending ring for a person. Returns the row id or
+    None if nothing was pending (idempotent for repeated webhooks)."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE callingly_rings
+                       SET status = %s, agent_name = %s, outcome = %s,
+                           resolved_at = NOW()
+                     WHERE id = (SELECT id FROM callingly_rings
+                                 WHERE person_id = %s AND status = 'ringing'
+                                 ORDER BY created_at DESC LIMIT 1)
+                    RETURNING id
+                """, (status, agent_name, outcome, str(person_id)))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("resolve_callingly_ring failed: %s", e)
+        return None
+
+
+def stamp_callingly_offer(offer_id):
+    """A Callingly win IS claim + call in one motion: stamp both so every
+    existing accountability surface (desk report, hot hand, receipts)
+    sees it without special cases."""
+    if not is_available() or not offer_id:
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE dispatch_offers
+                       SET accepted_at = NOW(), first_call_at = NOW()
+                     WHERE id = %s
+                """, (offer_id,))
+        return True
+    except Exception as e:
+        logger.warning("stamp_callingly_offer failed: %s", e)
+        return False
+
+
+def stale_callingly_rings(minutes=4):
+    """Rings still unanswered after the window: fallback candidates."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, person_id, lead_name FROM callingly_rings
+                    WHERE status = 'ringing'
+                      AND created_at < NOW() - make_interval(mins => %s)
+                """, (int(minutes),))
+                return [{"id": r[0], "person_id": r[1], "lead_name": r[2]}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("stale_callingly_rings failed: %s", e)
+        return []
+
+
 def count_cached_calls(since, until):
     """Row count in calls_cache for a window. The reconciliation job's
     read side (Nov 6 2026 audit, punch list #3)."""

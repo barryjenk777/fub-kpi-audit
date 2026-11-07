@@ -126,6 +126,9 @@ def _is_public_path(path: str, method: str = "GET") -> bool:
         # inside the route (Nov 2026 — same pattern as maverick/ingest,
         # the external bot never holds the master key)
         "/api/grok/",
+        # Callingly webhook: the URL path carries its own random secret
+        # (Callingly does not sign payloads), checked inside the route
+        "/api/callingly/",
         # MCP client discovery
         "/.well-known/",
     )
@@ -8233,6 +8236,10 @@ def scheduled_dispatch_cascade():
             _realtor_call_enforcer()
         except Exception as _rce:
             logger.warning("[SHOOTOUT] call enforcer failed: %s", _rce)
+        try:
+            _callingly_fallback_sweep()
+        except Exception as _cfe:
+            logger.warning("[CALLINGLY] fallback sweep failed: %s", _cfe)
         for oid in _db.due_dispatch_offers():
             offer = _db.get_dispatch_offer(offer_id=oid)
             if not offer:
@@ -13559,6 +13566,377 @@ def _callaction_intake(pid, person, triggered_by="webhook_fub"):
     return True
 
 
+# ── Callingly: ring-first lead delivery (Nov 7 2026) ─────────────────────
+# Barry's Callingly account rings agents' phones the moment a paid lead
+# lands; first press-1 is bridged live to the lead. Command Center owns
+# the trigger, the receipts, and the fallback. Gates, in order: the API
+# key must exist in Railway, a team id must be configured, and the
+# app_state switch callingly_live must be "1". All three live behind
+# explicit admin actions; nothing rings by default.
+
+def _callingly_webhook_secret():
+    """Random secret baked into the webhook URL we register (Callingly
+    does not sign payloads). Generated once, kept in app_state."""
+    try:
+        stored, _ = _db.get_app_state("callingly_webhook_secret")
+        if (stored or "").strip():
+            return stored.strip()
+        import secrets as _sec
+        fresh = _sec.token_urlsafe(18)
+        _db.set_app_state("callingly_webhook_secret", fresh)
+        return fresh
+    except Exception as e:
+        logger.error("callingly secret generation failed: %s", e)
+        return ""
+
+
+def _callingly_team():
+    """Configured team id, or None when the lane is not ready."""
+    import callingly_client as _cc
+    if not _cc.is_configured():
+        return None
+    try:
+        live, _ = _db.get_app_state("callingly_live")
+        if (live or "").strip() != "1":
+            return None
+        tid, _ = _db.get_app_state("callingly_team_id")
+        tid = (tid or "").strip()
+        return int(tid) if tid.isdigit() else None
+    except Exception:
+        return None
+
+
+def _callingly_match_agent(raw_name):
+    """Map a Callingly agent name to our roster, exact name first, then
+    first+last initial. Returns the agent_profiles row or None."""
+    n = (raw_name or "").strip().lower()
+    if not n:
+        return None
+    profiles = _db.get_agent_profiles(active_only=True) or []
+    for p in profiles:
+        if (p.get("agent_name") or "").strip().lower() == n:
+            return p
+    parts = n.split()
+    if len(parts) >= 2:
+        for p in profiles:
+            ours = (p.get("agent_name") or "").strip().lower().split()
+            if len(ours) >= 2 and ours[0] == parts[0] \
+                    and ours[-1][:1] == parts[-1][:1]:
+                return p
+    return None
+
+
+def _callingly_ring_first(pid, person, triggered_by):
+    """Hand one lead to the Callingly ring. True = ring started and the
+    shootout must NOT fire now (the sweep owns the fallback)."""
+    team_id = _callingly_team()
+    if not team_id:
+        return False
+    phones = person.get("phones") or []
+    phone = (phones[0] or {}).get("value") if phones else None
+    if not phone:
+        try:
+            p = FUBClient()._request(
+                "GET", "people/%s" % pid,
+                params={"fields": "id,phones"}) or {}
+            phones = p.get("phones") or []
+            phone = (phones[0] or {}).get("value") if phones else None
+        except Exception:
+            phone = None
+    if not phone:
+        return False  # nothing to bridge to; claim buttons handle it
+    name = (person.get("name") or "").strip()
+    first = name.split()[0] if name else "Lead"
+    last = " ".join(name.split()[1:]) if len(name.split()) > 1 else ""
+    import callingly_client as _cc
+    try:
+        _cc.create_call(team_id, first, last, phone, pid, "Realtor.com",
+                        email=(person.get("emails") or [{}])[0].get("value")
+                        if person.get("emails") else None)
+    except Exception as e:
+        logger.warning("[CALLINGLY] ring failed for %s, falling through "
+                       "to shootout: %s", pid, e)
+        return False
+    _db.ensure_callingly_table()
+    _db.add_callingly_ring(pid, name, team_id)
+    _db.log_automation_event(
+        event_type="callingly_ring", person_id=pid, person_name=name,
+        agent_name=None, payload={"team_id": team_id},
+        triggered_by=triggered_by)
+    logger.info("[CALLINGLY] ringing team %s for %s (%s)", team_id, name, pid)
+    return True
+
+
+def _callingly_fallback_sweep():
+    """Every minute via the dispatch cascade: rings nobody answered
+    inside the window fall back to the exact claim-button shootout the
+    lane ran before Callingly existed."""
+    mins = int(getattr(config, "CALLINGLY_FALLBACK_MINUTES", 4))
+    rows = _db.stale_callingly_rings(minutes=mins)
+    if not rows:
+        return
+    import dispatch as _dp
+    for r in rows:
+        if not _db.resolve_callingly_ring(r["person_id"], "fallback"):
+            continue  # another worker got it
+    # re-read nothing: fire the shootout per row we just claimed
+        made = _dp.make_shootout(
+            r["person_id"], r["lead_name"],
+            notes="Paid Realtor.com lead. Phones rang first, nobody "
+                  "picked up in %d minutes, so first claim wins." % mins,
+            audit=cache_get("audit") or {}, round_no=1)
+        _db.log_automation_event(
+            event_type="callingly_fallback", person_id=r["person_id"],
+            person_name=r["lead_name"], agent_name=None,
+            payload={"minutes": mins,
+                     "agents": [m["agent_name"] for m in (made or [])]},
+            triggered_by="callingly_sweep")
+        try:
+            import slack_client as _sl
+            ops = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+            if ops and _sl.is_available():
+                _sl.post_message(ops,
+                    "Callingly rang for %s and nobody pressed 1 in %d "
+                    "minutes. Claim buttons went out as the fallback."
+                    % ((r["lead_name"] or "a lead").split()[0], mins))
+        except Exception:
+            pass
+
+
+@app.route("/api/callingly/webhook/<secret>", methods=["POST"])
+def callingly_webhook(secret):
+    """call_completed receiver. Callingly payloads are unsigned and the
+    body shape is undocumented, so: the URL secret is the auth, the body
+    is treated as a hint, and when it carries a call id we re-read the
+    call from Callingly's API as the source of truth. Always answers 200
+    fast (Callingly auto-disables after 100 failures)."""
+    stored = _callingly_webhook_secret()
+    if not stored or secret != stored:
+        return "", 404
+    payload = request.get_json(silent=True) or {}
+    try:
+        _db.log_automation_event(
+            event_type="callingly_webhook", person_id=None,
+            person_name=None, agent_name=None,
+            payload={"raw": json.dumps(payload)[:1500]},
+            triggered_by="callingly")
+    except Exception:
+        pass
+
+    def _dig(obj, *keys):
+        for k in keys:
+            cur = obj
+            for part in k.split("."):
+                cur = cur.get(part) if isinstance(cur, dict) else None
+                if cur is None:
+                    break
+            if cur not in (None, ""):
+                return cur
+        return None
+
+    call = payload
+    call_id = _dig(payload, "id", "call_id", "call.id")
+    import callingly_client as _cc
+    if call_id and _cc.is_configured():
+        try:
+            fresh = _cc.get_call(call_id)
+            if isinstance(fresh, dict) and fresh:
+                call = {**payload, **fresh}
+        except Exception as e:
+            logger.warning("[CALLINGLY] call re-read failed (%s), using "
+                           "webhook body: %s", call_id, e)
+    pid = _dig(call, "crm_id", "lead.crm_id", "lead.source_id")
+    pid = str(pid) if pid else None
+    lead_name = (_dig(call, "lead.fname") or "") + " " + \
+                (_dig(call, "lead.lname") or "")
+    lead_name = lead_name.strip() or _dig(call, "lead_name") or "the lead"
+    agent_raw = _dig(call, "agent.name", "agent_name", "user.name", "agent")
+    if isinstance(agent_raw, dict):
+        agent_raw = agent_raw.get("name")
+    status = str(_dig(call, "status") or "").lower()
+    lead_status = str(_dig(call, "lead_status") or
+                      _dig(call, "human_result") or "").lower()
+    is_vm = bool(_dig(call, "is_voicemail"))
+    if not pid:
+        return jsonify({"ok": True, "note": "no crm_id, logged only"})
+
+    answered = (lead_status == "contacted") or \
+               (status == "completed" and not is_vm) or is_vm
+    # is_vm counts as answered: an agent pressed 1 and dialed; the lead's
+    # voicemail is the agent's follow-up to work, not a routing failure.
+    if answered:
+        prof = _callingly_match_agent(agent_raw)
+        agent_name = (prof or {}).get("agent_name") or (agent_raw or "")
+        row = _db.resolve_callingly_ring(
+            pid, "answered", agent_name=agent_name,
+            outcome="voicemail" if is_vm else (lead_status or status))
+        if row is None:
+            return jsonify({"ok": True, "note": "already resolved"})
+        import secrets as _sec
+        oid = _db.create_dispatch_offer(
+            "callingly", pid, lead_name, None, None,
+            "Answered the Callingly ring", agent_name,
+            _sec.token_urlsafe(9), minutes=1, hop=1)
+        if oid:
+            _db.stamp_callingly_offer(oid)
+        if prof and prof.get("fub_user_id"):
+            try:
+                FUBClient().update_person_fields(
+                    pid, {"assignedUserId": prof["fub_user_id"]})
+            except Exception as e:
+                _desk_intake_alarm(pid, lead_name,
+                                   "answered the Callingly ring but the "
+                                   "FUB assignment failed, assign %s by "
+                                   "hand" % agent_name)
+                logger.warning("[CALLINGLY] FUB assign failed: %s", e)
+        try:
+            import slack_client as _sl
+            wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
+            if _sl.is_available():
+                first = (agent_name or "Someone").split()[0]
+                lead1 = lead_name.split()[0]
+                msg = ("⚡ %s answered the ring and %s. %s is theirs "
+                       "in FUB." % (first,
+                       "left %s a voicemail on the live bridge" % lead1
+                       if is_vm else
+                       "talked to %s live, seconds after the lead came "
+                       "in" % lead1, lead1))
+                _sl.post_message(wins, msg)
+        except Exception:
+            pass
+        _db.log_automation_event(
+            event_type="callingly_answered", person_id=pid,
+            person_name=lead_name, agent_name=agent_name,
+            payload={"voicemail": is_vm, "status": status,
+                     "lead_status": lead_status}, triggered_by="callingly")
+        return jsonify({"ok": True, "result": "answered",
+                        "agent": agent_name})
+
+    # missed / offline: nobody pressed 1, or the team was unavailable.
+    if _db.resolve_callingly_ring(pid, "fallback",
+                                  outcome=status or "missed"):
+        import dispatch as _dp
+        made = _dp.make_shootout(
+            pid, lead_name,
+            notes="Paid Realtor.com lead. Phones rang first with no "
+                  "answer, so first claim wins.",
+            audit=cache_get("audit") or {}, round_no=1)
+        _db.log_automation_event(
+            event_type="callingly_fallback", person_id=pid,
+            person_name=lead_name, agent_name=None,
+            payload={"via": "webhook", "status": status,
+                     "agents": [m["agent_name"] for m in (made or [])]},
+            triggered_by="callingly")
+    return jsonify({"ok": True, "result": "fallback"})
+
+
+@app.route("/api/admin/callingly/status")
+def api_callingly_status():
+    """Everything about the lane in one read: key, teams, ring roster,
+    webhooks, gates, and the exact webhook URL to register."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import callingly_client as _cc
+    out = {"ok": True, "configured": _cc.is_configured()}
+    try:
+        live, _ = _db.get_app_state("callingly_live")
+        tid, _ = _db.get_app_state("callingly_team_id")
+        out["live"] = (live or "").strip() == "1"
+        out["team_id"] = (tid or "").strip() or None
+    except Exception:
+        pass
+    base = (os.environ.get("BASE_URL") or request.url_root).rstrip("/")
+    out["webhook_url"] = "%s/api/callingly/webhook/%s" \
+        % (base, _callingly_webhook_secret())
+    if _cc.is_configured():
+        for key, fn in (("teams", _cc.get_teams),
+                        ("webhooks", _cc.list_webhooks)):
+            try:
+                out[key] = fn()
+            except Exception as e:
+                out[key] = {"error": str(e)[:150]}
+        try:
+            if out.get("team_id"):
+                out["ring_roster"] = _cc.get_team_agents(out["team_id"])
+        except Exception as e:
+            out["ring_roster"] = {"error": str(e)[:150]}
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT status, COUNT(*) FROM callingly_rings
+                    WHERE created_at >= NOW() - INTERVAL '14 days'
+                    GROUP BY status""")
+                out["rings_14d"] = {r[0]: int(r[1]) for r in cur.fetchall()}
+    except Exception:
+        pass
+    return jsonify(out)
+
+
+@app.route("/api/admin/callingly/configure", methods=["POST"])
+def api_callingly_configure():
+    """Explicit admin actions, one per call:
+    {"team_id": 123}            pick the ring team
+    {"live": true|false}        open or close the gate
+    {"register_webhook": true}  create the call_completed webhook at
+                                Callingly pointing at our receiver"""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import callingly_client as _cc
+    body = request.get_json(silent=True) or {}
+    if "team_id" in body:
+        _db.set_app_state("callingly_team_id", str(int(body["team_id"])))
+        return jsonify({"ok": True, "team_id": int(body["team_id"])})
+    if "live" in body:
+        _db.set_app_state("callingly_live", "1" if body["live"] else "0")
+        _db.log_automation_event(
+            event_type="callingly_gate", person_id=None, person_name=None,
+            agent_name=None, payload={"live": bool(body["live"])},
+            triggered_by="admin")
+        return jsonify({"ok": True, "live": bool(body["live"])})
+    if body.get("register_webhook"):
+        if not _cc.is_configured():
+            return jsonify({"ok": False,
+                            "error": "CALLINGLY_API_KEY not set"}), 400
+        tid, _ = _db.get_app_state("callingly_team_id")
+        base = (os.environ.get("BASE_URL") or request.url_root).rstrip("/")
+        url = "%s/api/callingly/webhook/%s" % (base,
+                                               _callingly_webhook_secret())
+        res = _cc.create_webhook("Command Center call_completed", url,
+                                 team_id=(tid or "").strip() or None)
+        return jsonify({"ok": True, "created": res, "target_url": url})
+    return jsonify({"ok": False, "error": "nothing to do"}), 400
+
+
+@app.route("/api/admin/callingly/test-ring", methods=["POST"])
+def api_callingly_test_ring():
+    """One test ring, only ever to a phone number typed into this call:
+    {"phone": "+1757...", "name": "Barry Test", "confirm": "ring"}.
+    Uses the configured team, so put ONLY yourself on that team first."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import callingly_client as _cc
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") != "ring":
+        return jsonify({"ok": False,
+                        "error": "add \"confirm\": \"ring\" to fire"}), 400
+    phone = (body.get("phone") or "").strip()
+    if not phone:
+        return jsonify({"ok": False, "error": "phone required"}), 400
+    tid, _ = _db.get_app_state("callingly_team_id")
+    if not (tid or "").strip():
+        return jsonify({"ok": False, "error": "set team_id first"}), 400
+    name = (body.get("name") or "Command Center Test").split()
+    res = _cc.create_call(int(tid), name[0],
+                          " ".join(name[1:]) or "Test", phone, 0,
+                          "Command Center test")
+    _db.log_automation_event(
+        event_type="callingly_test_ring", person_id=None,
+        person_name=" ".join(name), agent_name=None,
+        payload={"team_id": int(tid)}, triggered_by="admin")
+    return jsonify({"ok": True, "created": res})
+
+
 def _realtor_intake(pid, person, triggered_by="webhook_fub"):
     """Realtor.com shootout lane front door (Barry, Nov 2 2026: purchased
     SHARED leads, competing agents outside the team get the same lead).
@@ -13620,6 +13998,13 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
         pass
     city = ((person.get("addresses") or [{}])[0] or {}).get("city")
     import dispatch as _dp
+    # Callingly ring-first (Nov 7 2026, pilot): when the lane is live,
+    # the paid lead rings agents' actual phones before any claim button
+    # exists. First press-1 is bridged straight to the lead. No answer
+    # inside the window and the cascade sweep fires the exact shootout
+    # below, so a lead is never worse off than the old path.
+    if _callingly_ring_first(pid, person, triggered_by):
+        return True
     made = _dp.make_shootout(
         pid, person.get("name"), lead_city=city,
         notes="Paid Realtor.com lead, shared with competing agents",
