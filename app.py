@@ -20926,13 +20926,36 @@ def run_feed_watch():
             stale.append((feed, "check failed: %s" % str(e)[:80],
                           what_it_means))
 
-    _check("Maverick call grades",
-           "SELECT MAX(call_time) FROM maverick_calls", (), 48,
-           "No graded calls means game film, ask rates, and OOC flags "
-           "are running on nothing. Check the always-on Mac and "
-           "my.maverickre.com itself.")
+    # Maverick is judged on VOLUME, not recency: one stray graded call
+    # must not read as a living feed (Nov 7: a single grade in 14 days
+    # slipped past a pure max-age check).
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FILTER (WHERE call_time >= NOW()
+                                            - INTERVAL '72 hours'),
+                           COUNT(*) FILTER (WHERE call_time >= NOW()
+                                            - INTERVAL '7 days')
+                    FROM maverick_calls
+                """)
+                c72, c7d = cur.fetchone()
+        if int(c72 or 0) == 0 or int(c7d or 0) < 10:
+            stale.append(("Maverick call grades",
+                          "%d graded in 72h, %d in 7 days"
+                          % (int(c72 or 0), int(c7d or 0)),
+                          "Game film, ask rates, and OOC flags are "
+                          "running on nothing. Check the always-on Mac "
+                          "and whether my.maverickre.com itself is "
+                          "still grading."))
+    except Exception as e:
+        stale.append(("Maverick call grades",
+                      "check failed: %s" % str(e)[:80],
+                      "Grading coverage unknown."))
+    # 18h, not 3h: the newest row is the newest CALL, and the team does
+    # not dial overnight. A dead sync still trips by mid-afternoon.
     _check("Calls warehouse sync",
-           "SELECT MAX(created) FROM calls_cache", (), 3,
+           "SELECT MAX(created) FROM calls_cache", (), 18,
            "The 30-minute call sync has stopped. Audit and scoring "
            "numbers start aging immediately.")
     _check("Appointment sync",
