@@ -7520,7 +7520,11 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
         out["proof_checks"] = out.get("proof_checks", 0) + 1
         if out["proof_checks"] > 40:
             break  # bound the FUB calls; the rest wait for the next batch
-        if not _had_inbound_within(pid, hours=fresh_h):
+        # Proof, two doors: a fresh inbound text/connected call, OR a
+        # fresh AI VOICE disposition that marks a real conversation —
+        # voice conversions often never log an inbound call record.
+        voice = _fresh_ai_voice_outcome(pid, hours=fresh_h)
+        if not voice and not _had_inbound_within(pid, hours=fresh_h):
             # No fresh conversation YET. Skip without burning the
             # once-ever ledger: if they talk to our AI next week, that
             # conversation routes them then. (Burning here was the old
@@ -7529,15 +7533,17 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
             continue
         if dry_run:
             out["routed"].append({"person_id": pid, "lead": p.get("name"),
-                                  "dry_run": True})
+                                  "voice": voice, "dry_run": True})
             continue
         if not _db.filter_new_desk_tags(pid, ["ai_nurture"]):
             continue  # another worker got there first
         dnc = "Y_DNC_REGISTRY_TRUE" in (p.get("tags") or [])
-        notes = ("This lead talked with our AI in the last 48 hours and "
-                 "said not ready yet. Fresh conversation, longer timeline. "
-                 "Warm intro while it's warm, stay top of mind, no hard "
-                 "sell."
+        notes = ("This lead talked with our AI in the last 48 hours. "
+                 + ("The AI logged: %s on %s. "
+                    % (voice["disposition"], voice["when"]) if voice
+                    else "")
+                 + "Fresh conversation, longer timeline. Warm intro "
+                   "while it's warm, stay top of mind, no hard sell."
                  + (" DNC registry: lead with a text, not a cold call."
                     if dnc else ""))
         try:
@@ -7584,6 +7590,36 @@ def scheduled_ai_nurture_router():
                                   for r in res["routed"]))
     except Exception as e:
         logger.warning("ai nurture router failed: %s", e)
+
+
+def scheduled_ai_nurture_fast():
+    """Every 10 minutes, 8am-9pm ET: the event-speed path (Barry, Nov 7:
+    'I want it best in class'). A lead who talks to the AI at 4:05 is on
+    an agent's phone by 4:15, not tomorrow morning. Tiny per-sweep cap;
+    the once-ever ledger plus a rolling 24h cap keep it a trickle, and
+    the same freshness wall and proof gate decide who qualifies."""
+    if not _db.try_acquire_job_lock("ai_nurture_fast"):
+        return
+    try:
+        nlive, _ = _db.get_app_state("ai_nurture_live")
+        if (nlive or "").strip() != "1":
+            return
+        live, _ = _db.get_app_state("dispatch_ai_live")
+        if (live or "").strip() != "1":
+            return
+        daily = int(getattr(config, "AI_NURTURE_DAILY_CAP", 10))
+        if _db.count_recent_offer_leads("ai_nurture", hours=24) >= daily:
+            return
+        res = run_ai_nurture_router(
+            batch_cap=int(getattr(config, "AI_NURTURE_SWEEP_CAP", 2)),
+            dry_run=False)
+        if res.get("routed"):
+            logger.info("[AI NURTURE fast] routed %d lead(s): %s",
+                        len(res["routed"]),
+                        ", ".join(r.get("lead") or r["person_id"]
+                                  for r in res["routed"]))
+    except Exception as e:
+        logger.warning("ai nurture fast sweep failed: %s", e)
 
 
 @app.route("/api/admin/desk/ai-nurture", methods=["POST"])
@@ -13625,6 +13661,64 @@ def _had_inbound_within(person_id, hours=24):
         # conversion costs more than one extra ping.
         return True
     return False
+
+
+# Dispositions that mean the AI tried or the lead said no — never a
+# conversation worth an agent's time. Everything else, printed on the
+# offer card, routes.
+_AI_VOICE_NON_CONVO = {
+    "NO ANSWER", "NO_ANSWER", "VOICEMAIL", "LEFT VOICEMAIL",
+    "LEFT_VOICEMAIL", "BUSY", "FAILED", "UNRESPONSIVE",
+    "WRONG NUMBER", "WRONG_NUMBER", "BAD NUMBER", "BAD_NUMBER",
+    "DNC", "DO NOT CALL", "DO_NOT_CALL", "DO NOT CONTACT",
+    "DO_NOT_CONTACT", "NOT INTERESTED", "NOT_INTERESTED",
+    "SPAM", "NOT A LEAD", "NOT_A_LEAD", "DEAD"}
+
+
+def _fresh_ai_voice_outcome(person_id, hours=48):
+    """Newest dated 'Call Disposition' from Ylopo's AI voice notes, when
+    it sits inside the window AND marks a real conversation. Voice
+    conversions often never log an inbound call record in FUB, so without
+    this the freshness wall silently drops them. Returns
+    {'disposition','when'} or None. Attempt/negative dispositions
+    (voicemail, wrong number, DNC, not interested) never count."""
+    import re as _re
+    now = datetime.now(timezone.utc)
+    try:
+        client = FUBClient()
+        newest = None
+        for offset in (0, 100):
+            data = client._request("GET", "notes", params={
+                "personId": person_id, "limit": 100,
+                "offset": offset}) or {}
+            notes = data.get("notes") or []
+            for n in notes:
+                body = n.get("body") or ""
+                if "Call Disposition" not in body:
+                    continue
+                m = _re.search(r"Call Disposition:\s*([A-Za-z_ ]+)", body)
+                when = n.get("created") or ""
+                if m and (newest is None or when > newest[1]):
+                    newest = (m.group(1).strip(), when)
+            if len(notes) < 100:
+                break
+        if not newest:
+            return None
+        disp, when = newest
+        if disp.upper().replace("-", " ").strip() in _AI_VOICE_NON_CONVO:
+            return None
+        try:
+            dt = datetime.strptime(when[:19], "%Y-%m-%dT%H:%M:%S") \
+                .replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        if (now - dt) > timedelta(hours=hours):
+            return None
+        return {"disposition": disp, "when": when[:10]}
+    except Exception as e:
+        logger.warning("ai voice outcome check failed for %s: %s",
+                       person_id, e)
+        return None
 
 
 def _promote_to_shark_tank(pid, person, reason, triggered_by="system"):
@@ -29161,17 +29255,16 @@ def start_scheduler():
                        id="phoenix_sweep", name="Phoenix resurrection sweep (daily 7:30am)",
                        max_instances=1, misfire_grace_time=600)
 
-    # AI Nurture Router (Barry, Nov 6 2026): leads the Ylopo AI actually
-    # talked with, that nobody owns, go out as calm claim offers. Two small
-    # batches a day so the two-week backlog drips, never floods.
-    _scheduler.add_job(scheduled_ai_nurture_router,
-                       CronTrigger(hour=10, minute=30, timezone=ET),
-                       id="ai_nurture_am", name="AI nurture router (10:30am)",
-                       max_instances=1, misfire_grace_time=600)
-    _scheduler.add_job(scheduled_ai_nurture_router,
-                       CronTrigger(hour=15, minute=30, timezone=ET),
-                       id="ai_nurture_pm", name="AI nurture router (3:30pm)",
-                       max_instances=1, misfire_grace_time=600)
+    # AI Nurture fast sweep (Barry, Nov 7 2026, "I want it best in
+    # class"): every 10 minutes during waking hours, leads with a FRESH
+    # verified AI conversation (48h wall) go out as calm claim offers
+    # minutes after the conversation, not next morning. 2 per sweep,
+    # 10 distinct leads per rolling day, once-ever per lead.
+    _scheduler.add_job(scheduled_ai_nurture_fast,
+                       CronTrigger(minute="*/10", hour="8-20", timezone=ET),
+                       id="ai_nurture_fast",
+                       name="AI nurture fast sweep (10min, 8a-9p)",
+                       max_instances=1, misfire_grace_time=300)
 
     # Phoenix tag expiry: daily 6:10am ET — removes PHOENIX tags 7+ days old
     # so the LeadStream boost doesn't outlive the resurrection moment.

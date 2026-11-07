@@ -794,6 +794,8 @@ AI_NURTURE_FRESH_HOURS = 48       # Barry, Nov 7: the AI conversation must
                                   # convo is not a warm handoff.
 AI_NURTURE_BATCH_CAP = 5          # per batch, newest conversation first —
                                   # the backlog drips, never floods
+AI_NURTURE_SWEEP_CAP = 2          # per 10-min fast sweep (event-speed path)
+AI_NURTURE_DAILY_CAP = 10         # distinct leads per rolling 24h, all paths
 STORAGE_POND_ID = 6
 
 

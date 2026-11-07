@@ -10315,6 +10315,25 @@ def ensure_dispatch_table():
         logger.warning("ensure_dispatch_table failed: %s", e)
 
 
+def count_recent_offer_leads(source, hours=24):
+    """Distinct leads offered from a source in the sliding window. The
+    ai_nurture fast sweep's daily cap counts leads, not hops."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(DISTINCT person_id) FROM dispatch_offers
+                    WHERE source = %s
+                      AND offered_at > NOW() - make_interval(hours => %s)
+                """, (source, int(hours)))
+                return int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.warning("count_recent_offer_leads failed: %s", e)
+        return 0
+
+
 def mark_offer_junk(token):
     """Agent's one-tap junk flag on a claimed offer (Nov 7 2026: the
     quality circuit breaker). Returns the row once, None on repeats or
