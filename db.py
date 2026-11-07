@@ -3685,6 +3685,87 @@ def get_cached_calls(since, until=None):
         return []
 
 
+def ensure_hiring_table():
+    """The funnel's first stage finally gets a surface (Operator
+    redesign, Nov 7 2026): a five-column rail Barry drags candidates
+    across. Ten minutes a week of upkeep, one honest number on the
+    strip."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS hiring_candidates (
+                        id          SERIAL PRIMARY KEY,
+                        name        TEXT NOT NULL,
+                        stage       TEXT NOT NULL DEFAULT 'contacted',
+                                    -- contacted|interviewed|offered|signed|started|out
+                        note        TEXT,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+    except Exception as e:
+        logger.warning("ensure_hiring_table failed: %s", e)
+
+
+HIRING_STAGES = ("contacted", "interviewed", "offered", "signed",
+                 "started", "out")
+
+
+def get_hiring_candidates():
+    if not is_available():
+        return []
+    try:
+        ensure_hiring_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, name, stage, note, updated_at
+                    FROM hiring_candidates
+                    WHERE stage != 'out'
+                    ORDER BY updated_at DESC
+                """)
+                return [{"id": r[0], "name": r[1], "stage": r[2],
+                         "note": r[3],
+                         "updated_at": r[4].isoformat() if r[4] else None}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_hiring_candidates failed: %s", e)
+        return []
+
+
+def upsert_hiring_candidate(cand_id=None, name=None, stage=None, note=None):
+    """Add (no id) or update (id). stage 'out' archives. Returns id."""
+    if not is_available():
+        return None
+    try:
+        ensure_hiring_table()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if cand_id:
+                    cur.execute("""
+                        UPDATE hiring_candidates
+                           SET name = COALESCE(%s, name),
+                               stage = COALESCE(%s, stage),
+                               note = COALESCE(%s, note),
+                               updated_at = NOW()
+                         WHERE id = %s RETURNING id
+                    """, (name, stage, note, cand_id))
+                else:
+                    cur.execute("""
+                        INSERT INTO hiring_candidates (name, stage, note)
+                        VALUES (%s, COALESCE(%s, 'contacted'), %s)
+                        RETURNING id
+                    """, (name, stage, note))
+                row = cur.fetchone()
+                return row[0] if row else None
+    except Exception as e:
+        logger.warning("upsert_hiring_candidate failed: %s", e)
+        return None
+
+
 def ensure_callingly_table():
     """Pending Callingly rings: one row per lead we handed to the ring,
     swept to the claim-button fallback if no human answers in time."""

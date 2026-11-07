@@ -1712,6 +1712,14 @@ def scheduled_market_pulse_refresh():
 
 @app.route("/")
 def dashboard():
+    """The Operator home (Barry, Nov 7 2026: 'ship it: the whole
+    thing'). The classic dashboard lives on at /classic, one click
+    away, nothing removed."""
+    return render_template("operator_home.html")
+
+
+@app.route("/classic")
+def classic_dashboard():
     return render_template("dashboard.html")
 
 
@@ -21561,14 +21569,10 @@ def api_calls_warehouse_repair():
     return jsonify(run_calls_warehouse_repair(days=days))
 
 
-def run_feed_watch():
-    """Nov 7 2026 audit, punch list #1. Every data feed Command Center
-    depends on gets a freshness check each morning. None of this needs a
-    vendor API: it watches OUR OWN tables and asks "when did this feed
-    last produce a row." A healthy morning is silent. A stale feed pages
-    Barry once per feed per week (first detection plus a Monday-ish
-    reminder, never a daily nag), because the Maverick outage sat
-    invisible for two weeks before the Nov 6 audit found it."""
+def _feed_watch_scan():
+    """Pure freshness scan, no claims and no paging: safe for any page
+    load. run_feed_watch wraps this with the once-per-feed-per-week
+    alarm."""
     now = datetime.now(timezone.utc)
     stale = []
 
@@ -21651,7 +21655,16 @@ def run_feed_watch():
                           "The desk is blind to new conversions."))
     except Exception:
         pass
+    return stale
 
+
+def run_feed_watch():
+    """Nov 7 2026 audit, punch list #1. Every data feed Command Center
+    depends on gets a freshness check each morning, against OUR OWN
+    tables. A healthy morning is silent. A stale feed pages Barry once
+    per feed per week, never a daily nag."""
+    now = datetime.now(timezone.utc)
+    stale = _feed_watch_scan()
     if not stale:
         return {"ok": True, "stale": []}
     week = now.strftime("%G-W%V")
@@ -21694,6 +21707,475 @@ def scheduled_feed_watch():
         run_feed_watch()
     except Exception as e:
         logger.warning("feed watch failed: %s", e)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THE OPERATOR HOME (Barry, Nov 7 2026: "ship it: the whole thing")
+# One screen, one question: what is the most expensive thing going wrong
+# in the funnel right now, and what's the move. Every number carries a
+# RECEIPT (formula, inputs, source, door) because a number you can't
+# interrogate is a number you stop trusting.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _op_dismissals():
+    try:
+        raw, _ = _db.get_app_state("operator_dismiss")
+        d = json.loads(raw or "{}")
+        today = datetime.now(timezone.utc).date().isoformat()
+        return {k: v for k, v in d.items() if v >= today}
+    except Exception:
+        return {}
+
+
+def _op_dismiss(card_key, days):
+    d = _op_dismissals()
+    d[card_key] = (datetime.now(timezone.utc).date()
+                   + timedelta(days=int(days))).isoformat()
+    _db.set_app_state("operator_dismiss", json.dumps(d))
+
+
+def build_operator_home():
+    """Everything the home needs in one pass. Receipts on every number."""
+    now = datetime.now(timezone.utc)
+    out = {"ok": True, "as_of": now.isoformat(), "stages": [],
+           "bottleneck": None, "queue": [], "hiring": []}
+
+    def stage(key, label, value, unit, receipt, door, flag=False):
+        out["stages"].append({"key": key, "label": label, "value": value,
+                              "unit": unit, "receipt": receipt,
+                              "door": door, "flag": flag})
+
+    # ── Revenue snapshot feeds several stages (30-min cached) ──────────
+    snap = {}
+    try:
+        import revenue as _rev
+        snap = _rev.get_snapshot(FUBClient()) or {}
+    except Exception as e:
+        logger.warning("[OPERATOR] revenue snapshot failed: %s", e)
+    funnel = ((snap.get("funnel_90d") or {}).get("appointments") or {})
+    appts_set = int(funnel.get("set") or 0)
+    appts_met = int(funnel.get("met") or 0)
+    closed_rows = snap.get("closed_90d_rows") or []
+    closed_n = len(closed_rows)
+    cov = snap.get("coverage") or {}
+
+    # ── Hiring ──────────────────────────────────────────────────────────
+    cands = _db.get_hiring_candidates()
+    out["hiring"] = cands
+    active_c = [c for c in cands if c["stage"] != "started"]
+    stage("hiring", "Hiring", len(active_c) if cands else None, "in play",
+          {"formula": "candidates on your hiring rail not yet started "
+                      "or out",
+           "inputs": {"on_rail": len(cands),
+                      "started": sum(1 for c in cands
+                                     if c["stage"] == "started")},
+           "source": "the hiring rail below, maintained by you; this "
+                     "stage had NO surface anywhere before Nov 7 2026",
+           "door": None},
+          None)
+
+    # ── Onboarding ──────────────────────────────────────────────────────
+    hires, idle = [], []
+    try:
+        ob = _ft_board_data() or {}
+        hires = ob.get("hires") or []
+        idle = [h for h in hires
+                if not h.get("complete")
+                and int(h.get("course_days_idle") or 0) >= 3]
+    except Exception as e:
+        logger.warning("[OPERATOR] onboarding read failed: %s", e)
+    stage("onboarding", "Onboarding", len(hires) or None, "hires",
+          {"formula": "hires on the onboarding board, not yet complete",
+           "inputs": {"hires": [h.get("agent") for h in hires],
+                      "idle_3plus_days": [h.get("agent") for h in idle]},
+           "source": "onboarding board (course progress + pipeline "
+                     "tasks, synced from the Fast Track course)",
+           "door": "/team/onboarding"},
+          "/team/onboarding")
+
+    # ── Leads routed (30d) ──────────────────────────────────────────────
+    leads_30 = 0
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(DISTINCT person_id) FROM dispatch_offers
+                    WHERE offered_at >= NOW() - INTERVAL '30 days'
+                """)
+                leads_30 = int(cur.fetchone()[0] or 0)
+    except Exception:
+        pass
+    stage("leads", "Leads routed", leads_30, "30 days",
+          {"formula": "COUNT(DISTINCT person) across every claim offer "
+                      "in 30 days: Realtor.com rings and shootouts, AI "
+                      "conversions, nurture router",
+           "inputs": {"window_days": 30},
+           "source": "dispatch_offers table (every offer ever made has "
+                     "a row; nothing is sampled)",
+           "door": "/dispatch"},
+          "/dispatch")
+
+    # ── Conversations (7d) ──────────────────────────────────────────────
+    convos_7 = None
+    try:
+        excl = tuple(getattr(config, "EXCLUDED_CALL_USER_IDS", {1})) or (1,)
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM calls_cache
+                    WHERE created >= NOW() - INTERVAL '7 days'
+                      AND duration >= 120
+                      AND user_id NOT IN %s
+                """, (excl,))
+                convos_7 = int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.warning("[OPERATOR] convos read failed: %s", e)
+    stage("convos", "Conversations", convos_7, "7 days",
+          {"formula": "calls of 2 minutes or longer, any direction, by "
+                      "agents (Barry's drip dials excluded), last 7 days",
+           "inputs": {"threshold_seconds": 120,
+                      "excluded_user_ids": list(excl)},
+           "source": "calls warehouse, verified complete against FUB "
+                     "every night at 2:40am (zero drift on last check)",
+           "door": "/salesfloor"},
+          "/salesfloor")
+
+    # ── Appointments set / held (90d) ───────────────────────────────────
+    stage("appts_set", "Appts set", appts_set, "90 days",
+          {"formula": "appointments created in FUB in the last 90 days, "
+                      "canceled excluded",
+           "inputs": {"set": appts_set},
+           "source": "appointments table, synced from FUB in realtime "
+                     "via webhook plus a daily sweep",
+           "door": "/revenue"},
+          "/revenue")
+    held_pct = round(100.0 * appts_met / appts_set) if appts_set else None
+    stage("appts_held", "Appts held",
+          held_pct, "%",
+          {"formula": "met ÷ set × 100. met = outcome or status "
+                      "'showed' on the appointment record",
+           "inputs": {"set": appts_set, "met": appts_met,
+                      "evaporated": appts_set - appts_met},
+           "source": "same appointments table; by-agent split lives on "
+                     "the Revenue page",
+           "door": "/revenue"},
+          "/revenue", flag=True)
+
+    # ── Closed + Net GCI (90d) ──────────────────────────────────────────
+    stage("closed", "Closed", closed_n, "90 days",
+          {"formula": "deals whose stage entered Closed in the last 90 "
+                      "days, Dotloop onboarding paperwork excluded",
+           "inputs": {"closed": closed_n,
+                      "under_contract_now":
+                          len((snap.get("pipeline") or {})
+                              .get("under_contract") or [])},
+           "source": "FUB deals via the revenue layer; nothing estimated",
+           "door": "/revenue"},
+          "/revenue")
+    net_known = 0.0
+    try:
+        net_known = round(sum((v.get("net_gci") or 0) for v in
+                              (snap.get("closed_by_source_90d")
+                               or {}).values()), 2)
+    except Exception:
+        pass
+    deals_total = int(cov.get("deals_total") or 0)
+    stage("net", "Net GCI known", net_known, "90 days",
+          {"formula": "GCI × (1 - referral fee) summed over closings "
+                      "where FUB carries BOTH a commission and a lead "
+                      "link. Fees: Ylopo 40%, probate 25%, zBuyer and "
+                      "Realtor.com 0%",
+           "inputs": {"closings_with_full_data":
+                          sum(v.get("closings", 0) for k, v in
+                              (snap.get("closed_by_source_90d")
+                               or {}).items() if k != "unlinked"),
+                      "closings_unattributed":
+                          (snap.get("closed_by_source_90d") or {})
+                          .get("unlinked", {}).get("closings", 0),
+                      "coverage": cov},
+           "source": "the number is deliberately incomplete until Ana "
+                     "clears the unattributed-money queue; the coverage "
+                     "ring on this node shows how much of the book "
+                     "qualifies",
+           "door": "/revenue"},
+          "/revenue")
+    out["net_coverage_pct"] = round(
+        100.0 * (cov.get("with_commission") or 0) / deals_total) \
+        if deals_total else 0
+
+    # ── Bottleneck engine ───────────────────────────────────────────────
+    met_to_close = (closed_n / appts_met) if appts_met else 0
+    evaporated = appts_set - appts_met
+    lost_q = round(evaporated * met_to_close, 1)
+    out["bottleneck"] = {
+        "stage": "appts_held",
+        "title": "Appointments that never happen",
+        "body": ("%d set in 90 days, %d held. The %d that evaporated, "
+                 "run at your own met-to-close rate, are roughly %s "
+                 "closings a quarter left on the table. Bigger than "
+                 "lead flow, bigger than claim speed."
+                 % (appts_set, appts_met, evaporated,
+                    ("%g" % lost_q))),
+        "receipt": {
+            "formula": "evaporated × (closed ÷ met) = %d × (%d ÷ %d) "
+                       "= %s closings per 90 days"
+                       % (evaporated, closed_n, appts_met or 1,
+                          "%g" % lost_q),
+            "inputs": {"set_90d": appts_set, "met_90d": appts_met,
+                       "closed_90d": closed_n,
+                       "met_to_close_rate":
+                           round(met_to_close, 4)},
+            "source": "every input above is on this page with its own "
+                      "receipt. The flag rule: the stage with the "
+                      "largest computable closing loss wins; a stage "
+                      "whose cost can't be computed honestly can't "
+                      "win the flag.",
+            "door": "/revenue"},
+        "levers": [
+            {"label": "Show rate by agent", "href": "/revenue"},
+            {"label": "This week's confirmations",
+             "note": "5pm day-before nudges went live Nov 7"}]}
+
+    # ── Decision queue ──────────────────────────────────────────────────
+    dismissed = _op_dismissals()
+    q = []
+
+    ex = (snap.get("exceptions") or {})
+    if (ex.get("count") or 0) > 0 and "money" not in dismissed:
+        items = ex.get("items") or []
+        oldest = max((i.get("age_days") or 0) for i in items)
+        q.append({"key": "money", "tag": "money",
+                  "title": "%d closings and contracts carry money "
+                           "nobody attributed" % ex["count"],
+                  "why": "Oldest is aging %d days. Until these are "
+                         "cleared, source ROI is a guess." % oldest,
+                  "receipt": {
+                      "formula": "closed or under-contract deals "
+                                 "missing a lead link, price, or "
+                                 "commission",
+                      "inputs": {"items": [
+                          {"deal": i["name"], "missing": i["missing"],
+                           "age_days": i["age_days"]}
+                          for i in items[:10]]},
+                      "source": "FUB deals, live",
+                      "door": "/revenue"},
+                  "actions": [
+                      {"id": "nudge_ana", "label": "Nudge Ana with "
+                                                   "the list"},
+                      {"id": "open", "label": "Open the list",
+                       "href": "/revenue"}]})
+
+    if idle and "idle_hires" not in dismissed:
+        q.append({"key": "idle_hires", "tag": "people",
+                  "title": "%d hire%s idle on the course 3+ days"
+                           % (len(idle), "" if len(idle) == 1 else "s"),
+                  "why": ", ".join("%s (%d days)" % (
+                      h.get("agent"), int(h.get("course_days_idle") or 0))
+                      for h in idle),
+                  "receipt": {
+                      "formula": "onboarding hires, not complete, with "
+                                 "no course activity for 3 or more days",
+                      "inputs": {"hires": [
+                          {"agent": h.get("agent"),
+                           "course_percent": h.get("course_percent"),
+                           "days_idle": h.get("course_days_idle")}
+                          for h in idle]},
+                      "source": "Fast Track course sync",
+                      "door": "/team/onboarding"},
+                  "actions": [
+                      {"id": "ack:idle_hires:3",
+                       "label": "I'll handle it, quiet 3 days"},
+                      {"id": "open", "label": "Onboarding board",
+                       "href": "/team/onboarding"}]})
+
+    try:
+        for feed, state, impact in _feed_watch_scan():
+            ck = "feed:%s" % feed
+            if ck in dismissed:
+                continue
+            q.append({"key": ck, "tag": "system",
+                      "title": "%s has gone quiet" % feed,
+                      "why": "%s %s" % (state, impact),
+                      "receipt": {
+                          "formula": "freshness thresholds per feed "
+                                     "(Maverick: under 10 grades a "
+                                     "week or none in 72h)",
+                          "inputs": {"state": state},
+                          "source": "feed watch, same scan that pages "
+                                    "you at 7:10am",
+                          "door": None},
+                      "actions": [
+                          {"id": "ack:%s:7" % ck,
+                           "label": "On it, quiet a week"}]})
+    except Exception:
+        pass
+
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, COUNT(accepted_at) AS claims,
+                           COUNT(first_call_at) AS called
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - INTERVAL '7 days'
+                      AND accepted_at IS NOT NULL
+                    GROUP BY agent_name
+                    HAVING COUNT(accepted_at) >= 4
+                       AND COUNT(first_call_at)
+                           < COUNT(accepted_at) * 0.5
+                """)
+                squat = [{"agent": r[0], "claims": int(r[1]),
+                          "called": int(r[2])} for r in cur.fetchall()]
+        if squat and "squat" not in dismissed:
+            q.append({"key": "squat", "tag": "people",
+                      "title": "Claims that never became calls this week",
+                      "why": " · ".join(
+                          "%s: %d claims, %d verified calls"
+                          % (s["agent"], s["claims"], s["called"])
+                          for s in squat),
+                      "receipt": {
+                          "formula": "agents with 4+ claims in 7 days "
+                                     "and verified first calls on fewer "
+                                     "than half. A call is verified by "
+                                     "the FUB call webhook within 24h "
+                                     "of the claim, so late calls "
+                                     "undercount slightly",
+                          "inputs": {"agents": squat},
+                          "source": "dispatch_offers receipts",
+                          "door": "/dispatch"},
+                      "actions": [
+                          {"id": "ack:squat:7",
+                           "label": "Noted, quiet a week"},
+                          {"id": "open", "label": "Claim board",
+                           "href": "/dispatch"}]})
+    except Exception:
+        pass
+
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT status, COUNT(*) FROM callingly_rings
+                    WHERE created_at >= NOW() - INTERVAL '7 days'
+                    GROUP BY status""")
+                rc = {r[0]: int(r[1]) for r in cur.fetchall()}
+        total_r = sum(rc.values())
+        if total_r and "rings" not in dismissed:
+            ans = rc.get("answered", 0)
+            q.append({"key": "rings", "tag": "people",
+                      "title": "Ring line this week: %d of %d answered"
+                               % (ans, total_r),
+                      "why": "Unanswered rings fall back to claim "
+                             "buttons after 4 minutes. Answer rate is "
+                             "the whole beta.",
+                      "receipt": {
+                          "formula": "rings answered ÷ rings fired, "
+                                     "real leads only (tests excluded)",
+                          "inputs": rc,
+                          "source": "callingly_rings receipts + the "
+                                    "Callingly webhook",
+                          "door": "/callingly-console"},
+                      "actions": [
+                          {"id": "open", "label": "Ring console",
+                           "href": "/callingly-console"}]})
+    except Exception:
+        pass
+
+    order = {"money": 0, "people": 1, "system": 2}
+    q.sort(key=lambda c: order.get(c["tag"], 9))
+    out["queue"] = q
+    return out
+
+
+@app.route("/api/operator/home")
+def api_operator_home():
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        return jsonify(build_operator_home())
+    except Exception as e:
+        import traceback
+        logger.error("[OPERATOR] home build failed: %s\n%s", e,
+                     traceback.format_exc())
+        return jsonify({"ok": False, "error": str(e)[:200]}), 500
+
+
+@app.route("/api/operator/act", methods=["POST"])
+def api_operator_act():
+    """Queue levers. {"action": "ack:<card>:<days>" | "nudge_ana" |
+    "hiring_add"/"hiring_move" with fields}."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    action = (body.get("action") or "").strip()
+    if action.startswith("ack:"):
+        parts = action.split(":")
+        card = ":".join(parts[1:-1])
+        days = int(parts[-1] or 7)
+        _op_dismiss(card, days)
+        return jsonify({"ok": True, "quiet_until_days": days})
+    if action == "nudge_ana":
+        if not _db.claim_once("op_nudge_ana_%s"
+                              % datetime.now(timezone.utc).date()):
+            return jsonify({"ok": True, "note": "already nudged today"})
+        try:
+            import revenue as _rev
+            snap = _rev.get_snapshot(FUBClient()) or {}
+            items = (snap.get("exceptions") or {}).get("items") or []
+            lines = "\n".join("• %s (missing %s, %s days old)"
+                              % (i["name"], ", ".join(i["missing"]),
+                                 i.get("age_days", "?"))
+                              for i in items[:10])
+            sent = {"slack": False, "email": False}
+            try:
+                import slack_client as _sl
+                import dispatch as _dp
+                sid = _dp._slack_user_id("Ana Pena")
+                if _sl.is_available() and sid:
+                    sent["slack"] = bool(_sl.dm_user(sid,
+                        "Ana, %d deals are carrying money with missing "
+                        "pieces. When you have a minute in the Deal "
+                        "Desk:\n%s" % (len(items), lines)))
+            except Exception:
+                pass
+            try:
+                import postmark_client as _pm
+                em = getattr(config, "TM_EMAIL", None)
+                if em:
+                    _pm.send(to=em, from_email=config.EMAIL_FROM,
+                             subject="%d deals need their money details"
+                                     % len(items),
+                             html="<p>Ana, these are aging in the Deal "
+                                  "Desk:</p><pre>%s</pre>" % lines)
+                    sent["email"] = True
+            except Exception:
+                pass
+            _db.log_automation_event(
+                event_type="op_nudge_ana", person_id=None,
+                person_name=None, agent_name="Ana Pena",
+                payload={"count": len(items), **sent},
+                triggered_by="operator")
+            return jsonify({"ok": True, **sent})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)[:150]}), 500
+    if action == "hiring_add":
+        cid = _db.upsert_hiring_candidate(
+            name=(body.get("name") or "").strip() or None,
+            stage=body.get("stage"), note=body.get("note"))
+        return jsonify({"ok": bool(cid), "id": cid})
+    if action == "hiring_move":
+        st = body.get("stage")
+        if st not in _db.HIRING_STAGES:
+            return jsonify({"ok": False, "error": "bad stage"}), 400
+        cid = _db.upsert_hiring_candidate(cand_id=body.get("id"),
+                                          stage=st)
+        return jsonify({"ok": bool(cid)})
+    return jsonify({"ok": False, "error": "unknown action"}), 400
+
+
+@app.route("/operator")
+def operator_home_page():
+    return render_template("operator_home.html")
 
 
 @app.route("/api/admin/feed-watch", methods=["GET", "POST"])

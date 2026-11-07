@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Command Center</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* THE OPERATOR — one screen, one question.
+   Canvas: deep space. One flag at a time. Every number folds open. */
+:root{
+  --bg:#0b0e14; --panel:#121825; --panel2:#0e1420; --line:#1e2635;
+  --ink:#edf1f7; --muted:#8a94a6; --faint:#5b6474;
+  --teal:#2dd4bf; --teal-soft:rgba(45,212,191,.12);
+  --amber:#f5a623; --amber-deep:#c2410c;
+  --rose:#fb7185; --violet:#a78bfa; --lime:#a3e635;
+  --sans:'Archivo',-apple-system,'Segoe UI',Arial,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.55;
+  background-image:radial-gradient(1100px 500px at 70% -10%,rgba(245,166,35,.07),transparent 60%),
+                   radial-gradient(900px 500px at 10% 110%,rgba(45,212,191,.05),transparent 60%)}
+.wrap{max-width:1180px;margin:0 auto;padding:26px 20px 90px}
+a{color:var(--teal);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* header */
+.top{display:flex;justify-content:space-between;align-items:baseline;
+  gap:1rem;flex-wrap:wrap;margin-bottom:26px}
+.brand{font-weight:900;font-size:19px;letter-spacing:-.02em}
+.brand span{color:var(--amber)}
+.topr{font-size:12.5px;color:var(--muted)}
+.topr a{margin-left:14px;color:var(--muted)}
+.topr a:hover{color:var(--ink)}
+
+/* funnel strip */
+.stripwrap{overflow-x:auto;padding-bottom:6px;margin:0 -4px}
+.strip{display:flex;gap:0;min-width:860px;padding:0 4px}
+.node{flex:1;min-width:104px;background:var(--panel);
+  border:1px solid var(--line);padding:14px 12px 12px;position:relative;
+  transition:border-color .2s}
+.node:first-child{border-radius:14px 0 0 14px}
+.node:last-child{border-radius:0 14px 14px 0}
+.node+.node{border-left:none}
+.node:hover{border-color:#31405a}
+.nlabel{font-size:10px;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint)}
+.nval{font-size:27px;font-weight:900;letter-spacing:-.02em;margin-top:3px;
+  font-variant-numeric:tabular-nums;line-height:1.1}
+.nunit{font-size:10.5px;color:var(--muted);margin-top:1px}
+.node.flag{background:linear-gradient(160deg,#241a0c,#1c1409);
+  border:1px solid var(--amber);box-shadow:0 0 28px rgba(245,166,35,.18);
+  z-index:1;border-radius:10px;margin:-4px 0}
+.node.flag .nlabel{color:var(--amber)}
+.node.dim .nval{color:var(--faint)}
+.node .ring{position:absolute;top:10px;right:10px}
+.fold{margin-top:8px}
+details.r summary{list-style:none;cursor:pointer;font-size:10px;
+  font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--faint);display:inline-flex;align-items:center;gap:4px}
+details.r summary::-webkit-details-marker{display:none}
+details.r summary::before{content:"▸";transition:transform .15s;font-size:9px}
+details.r[open] summary::before{transform:rotate(90deg)}
+details.r summary:hover{color:var(--teal)}
+.rbody{font-family:var(--mono);font-size:11px;line-height:1.7;
+  background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  padding:10px 12px;margin-top:8px;color:var(--muted);text-align:left;
+  white-space:pre-wrap;word-break:break-word}
+.rbody b{color:var(--ink);font-weight:600}
+.rbody a{color:var(--teal)}
+.node .rbody{position:absolute;left:4px;right:4px;top:calc(100% + 6px);
+  z-index:30;box-shadow:0 14px 34px rgba(0,0,0,.5)}
+.node{overflow:visible}
+
+/* bottleneck */
+.bneck{margin-top:22px;background:linear-gradient(150deg,#1c1710,#151008 65%);
+  border:1px solid rgba(245,166,35,.45);border-radius:18px;
+  padding:22px 26px;display:flex;gap:26px;align-items:center;flex-wrap:wrap;
+  box-shadow:0 10px 40px rgba(0,0,0,.35)}
+.bgauge{flex:none}
+.btxt{flex:1;min-width:260px}
+.btag{font-size:10px;font-weight:800;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--amber)}
+.btitle{font-size:21px;font-weight:800;letter-spacing:-.01em;margin:4px 0 6px}
+.bbody{font-size:14px;color:#cdbfa4;max-width:62ch}
+.blevers{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap}
+.lever{background:var(--amber);color:#241500;font-weight:800;font-size:13px;
+  border-radius:10px;padding:9px 16px;border:none;cursor:pointer}
+.lever.ghost{background:transparent;color:var(--muted);
+  border:1px solid var(--line)}
+a.lever{text-decoration:none}
+
+/* layout: queue + hiring */
+.cols{display:grid;grid-template-columns:1.4fr 1fr;gap:22px;margin-top:26px}
+@media (max-width:900px){.cols{grid-template-columns:1fr}}
+h2{font-size:12px;font-weight:800;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+h2 .count{color:var(--amber)}
+
+/* queue cards */
+.qcard{background:var(--panel);border:1px solid var(--line);
+  border-radius:14px;padding:15px 18px;margin-bottom:12px;
+  border-left:4px solid var(--violet);transition:opacity .4s,transform .4s}
+.qcard.tag-money{border-left-color:var(--amber)}
+.qcard.tag-people{border-left-color:var(--teal)}
+.qcard.tag-system{border-left-color:var(--rose)}
+.qcard.gone{opacity:0;transform:translateX(24px)}
+.qtag{font-size:9.5px;font-weight:800;letter-spacing:.14em;
+  text-transform:uppercase}
+.tag-money .qtag{color:var(--amber)}
+.tag-people .qtag{color:var(--teal)}
+.tag-system .qtag{color:var(--rose)}
+.qtitle{font-size:15.5px;font-weight:800;margin:3px 0 3px;letter-spacing:-.01em}
+.qwhy{font-size:13px;color:var(--muted)}
+.qacts{display:flex;gap:8px;margin-top:11px;flex-wrap:wrap}
+.qbtn{background:#1d2views;background:#1d2a40;color:var(--ink);font-weight:700;
+  font-size:12.5px;border:1px solid var(--line);border-radius:9px;
+  padding:7px 13px;cursor:pointer;font-family:var(--sans)}
+.qbtn:hover{border-color:var(--teal)}
+a.qbtn{text-decoration:none}
+.empty{background:var(--panel);border:1px dashed #2a3850;border-radius:14px;
+  padding:34px 24px;text-align:center;color:var(--muted);font-size:14.5px}
+.empty b{color:var(--teal);display:block;font-size:17px;margin-bottom:4px}
+
+/* hiring rail */
+.rail{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+@media (max-width:700px){.rail{grid-template-columns:repeat(2,1fr)}}
+.rcol{background:var(--panel2);border:1px solid var(--line);
+  border-radius:10px;padding:8px;min-height:86px}
+.rcol h4{margin:0 0 6px;font-size:9.5px;font-weight:800;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+.cand{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  padding:6px 8px;font-size:12px;font-weight:600;margin-bottom:6px;
+  display:flex;align-items:center;gap:5px;justify-content:space-between}
+.cand .mv{display:flex;gap:2px}
+.cand button{background:none;border:none;color:var(--faint);cursor:pointer;
+  font-size:12px;padding:1px 3px}
+.cand button:hover{color:var(--teal)}
+.addrow{display:flex;gap:8px;margin-top:10px}
+.addrow input{flex:1;background:var(--panel2);border:1px solid var(--line);
+  color:var(--ink);border-radius:9px;padding:8px 11px;font-size:13px;
+  font-family:var(--sans)}
+.addrow button{background:var(--teal);color:#06231f;font-weight:800;
+  border:none;border-radius:9px;padding:8px 14px;cursor:pointer;
+  font-size:13px}
+
+.foot{margin-top:34px;font-size:11.5px;color:var(--faint);
+  display:flex;gap:18px;flex-wrap:wrap}
+.foot a{color:var(--faint)}
+.foot a:hover{color:var(--ink)}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
+  background:#12251d;border:1px solid #2dd4bf66;color:#9ff0e2;
+  padding:10px 18px;border-radius:12px;font-size:13px;font-weight:600;
+  opacity:0;transition:opacity .3s;pointer-events:none;z-index:99}
+.toast.on{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">LEGACY <span>COMMAND CENTER</span></div>
+    <div class="topr"><span id="asof"></span>
+      <a href="/revenue">Revenue</a><a href="/callingly-console">Ring line</a>
+      <a href="/admin/policy">Roster</a><a href="/classic">Classic view</a>
+    </div>
+  </div>
+
+  <div class="stripwrap"><div class="strip" id="strip"></div></div>
+
+  <div id="bneck"></div>
+
+  <div class="cols">
+    <div>
+      <h2>Needs a decision <span class="count" id="qcount"></span></h2>
+      <div id="queue"></div>
+    </div>
+    <div>
+      <h2>Hiring rail</h2>
+      <div class="rail" id="rail"></div>
+      <div class="addrow">
+        <input id="candName" placeholder="Candidate name"
+               onkeydown="if(event.key==='Enter')addCand()">
+        <button onclick="addCand()">Add</button>
+      </div>
+      <div style="font-size:11px;color:var(--faint);margin-top:8px">
+        Contacted → interviewed → offered → signed → started. Arrows move
+        them. This is the funnel's first number; it only exists if you
+        keep it honest.</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>Every number folds open to its own math. If a receipt ever
+    disagrees with FUB, that is a five alarm bug: say so.</span>
+    <a href="/system">Mission Control</a>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+var STAGELABELS={contacted:'Contacted',interviewed:'Interviewed',
+  offered:'Offered',signed:'Signed',started:'Started'};
+var STAGES=['contacted','interviewed','offered','signed','started'];
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function money(v){return '$'+Math.round(v).toLocaleString();}
+function receipt(r){
+  if(!r)return '';
+  var inp='';
+  try{inp=JSON.stringify(r.inputs,null,1).replace(/[{}"]/g,'').trim();}catch(e){}
+  return '<details class="r"><summary>How this is made</summary>'+
+    '<div class="rbody"><b>formula</b>  '+esc(r.formula)+'\n'+
+    (inp?'<b>inputs</b>\n'+esc(inp)+'\n':'')+
+    '<b>source</b>  '+esc(r.source)+
+    (r.door?'\n<a href="'+esc(r.door)+'">open the data →</a>':'')+
+    '</div></details>';
+}
+function gauge(pct,size,color){
+  var r=(size/2)-5,c=2*Math.PI*r,off=c*(1-(pct||0)/100);
+  return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'">'+
+    '<circle cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" fill="none" stroke="#242e42" stroke-width="7"/>'+
+    '<circle cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" fill="none" stroke="'+color+'" stroke-width="7" '+
+    'stroke-linecap="round" stroke-dasharray="'+c+'" stroke-dashoffset="'+off+'" '+
+    'transform="rotate(-90 '+size/2+' '+size/2+')" style="transition:stroke-dashoffset 1s ease"/>'+
+    '<text x="50%" y="54%" text-anchor="middle" fill="'+color+'" '+
+    'font-size="'+(size/4.2)+'" font-weight="800" font-family="Archivo">'+(pct==null?'?':pct+'%')+'</text></svg>';
+}
+function countUp(el,target,fmt){
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches||target==null){
+    el.textContent=fmt(target);return;}
+  var t0=null,dur=700;
+  function step(ts){if(!t0)t0=ts;var p=Math.min((ts-t0)/dur,1);
+    el.textContent=fmt(target*(0.4+0.6*p));
+    if(p<1)requestAnimationFrame(step);else el.textContent=fmt(target);}
+  requestAnimationFrame(step);
+}
+function load(){
+  fetch('/api/operator/home').then(function(r){
+    if(r.status===401){location='/login';throw 0;}
+    return r.json();
+  }).then(function(d){
+    if(!d.ok){document.getElementById('bneck').innerHTML=
+      '<div class="empty">Could not build the picture: '+esc(d.error||'')+'</div>';return;}
+    document.getElementById('asof').textContent=
+      new Date(d.as_of).toLocaleString([],{weekday:'short',hour:'numeric',minute:'2-digit'});
+    // strip
+    var s='';
+    (d.stages||[]).forEach(function(st){
+      var cls='node'+(st.flag?' flag':'')+(st.value==null?' dim':'');
+      var val;
+      if(st.value==null)val='?';
+      else if(st.key==='net')val=money(st.value);
+      else if(st.unit==='%')val=st.value+'%';
+      else val=String(st.value);
+      var ring=(st.key==='net'&&d.net_coverage_pct!=null)?
+        '<span class="ring" title="share of deals carrying commission data">'+
+        gauge(d.net_coverage_pct,34,'#a78bfa')+'</span>':'';
+      s+='<div class="'+cls+'">'+ring+
+        '<div class="nlabel">'+esc(st.label)+'</div>'+
+        '<div class="nval" data-k="'+st.key+'">'+val+'</div>'+
+        '<div class="nunit">'+esc(st.unit||'')+'</div>'+
+        '<div class="fold">'+receipt(st.receipt)+'</div></div>';
+    });
+    document.getElementById('strip').innerHTML=s;
+    // animate the countable ones
+    (d.stages||[]).forEach(function(st){
+      if(st.value==null||st.unit==='%')return;
+      var el=document.querySelector('.nval[data-k="'+st.key+'"]');
+      if(!el)return;
+      if(st.key==='net')countUp(el,st.value,function(v){return money(v);});
+      else countUp(el,st.value,function(v){return String(Math.round(v));});
+    });
+    // bottleneck
+    var b=d.bottleneck;
+    if(b){
+      var held=(d.stages||[]).find(function(x){return x.key==='appts_held';});
+      document.getElementById('bneck').innerHTML=
+        '<div class="bneck"><div class="bgauge">'+
+        gauge(held?held.value:null,120,'#f5a623')+'</div>'+
+        '<div class="btxt"><div class="btag">Your bottleneck right now</div>'+
+        '<div class="btitle">'+esc(b.title)+'</div>'+
+        '<div class="bbody">'+esc(b.body)+'</div>'+
+        '<div class="blevers">'+
+        (b.levers||[]).map(function(l){
+          return l.href?'<a class="lever" href="'+esc(l.href)+'">'+esc(l.label)+'</a>':
+            '<span class="lever ghost">'+esc(l.label)+(l.note?' · '+esc(l.note):'')+'</span>';
+        }).join('')+'</div>'+
+        '<div class="fold" style="margin-top:10px">'+receipt(b.receipt)+'</div>'+
+        '</div></div>';
+    }
+    // queue
+    var q=d.queue||[];
+    document.getElementById('qcount').textContent=q.length?('· '+q.length):'';
+    if(!q.length){
+      document.getElementById('queue').innerHTML=
+        '<div class="empty"><b>Nothing needs you.</b>Every feed verified, '+
+        'every lead reached a human, every dollar chased. Enjoy it.</div>';
+    }else{
+      document.getElementById('queue').innerHTML=q.map(function(c){
+        return '<div class="qcard tag-'+esc(c.tag)+'" id="qc-'+esc(c.key)+'">'+
+          '<span class="qtag">'+esc(c.tag)+'</span>'+
+          '<div class="qtitle">'+esc(c.title)+'</div>'+
+          '<div class="qwhy">'+esc(c.why)+'</div>'+
+          '<div class="fold">'+receipt(c.receipt)+'</div>'+
+          '<div class="qacts">'+(c.actions||[]).map(function(a){
+            if(a.href)return '<a class="qbtn" href="'+esc(a.href)+'">'+esc(a.label)+'</a>';
+            return '<button class="qbtn" onclick="act(\''+esc(a.id)+'\',\''+esc(c.key)+'\',this)">'+esc(a.label)+'</button>';
+          }).join('')+'</div></div>';
+      }).join('');
+    }
+    // hiring rail
+    var byStage={};
+    (d.hiring||[]).forEach(function(c){(byStage[c.stage]=byStage[c.stage]||[]).push(c);});
+    document.getElementById('rail').innerHTML=STAGES.map(function(stg,i){
+      var items=(byStage[stg]||[]).map(function(c){
+        return '<div class="cand"><span>'+esc(c.name)+'</span><span class="mv">'+
+          (i>0?'<button title="back" onclick="mv('+c.id+',\''+STAGES[i-1]+'\')">◂</button>':'')+
+          (i<STAGES.length-1?'<button title="forward" onclick="mv('+c.id+',\''+STAGES[i+1]+'\')">▸</button>':'')+
+          '<button title="out" onclick="mv('+c.id+',\'out\')">✕</button>'+
+          '</span></div>';
+      }).join('');
+      return '<div class="rcol"><h4>'+STAGELABELS[stg]+'</h4>'+items+'</div>';
+    }).join('');
+  }).catch(function(e){if(e!==0)console.error(e);});
+}
+function toast(msg){
+  var t=document.getElementById('toast');
+  t.textContent=msg;t.classList.add('on');
+  setTimeout(function(){t.classList.remove('on');},2600);
+}
+function act(id,cardKey,btn){
+  if(btn){btn.disabled=true;btn.textContent='...';}
+  fetch('/api/operator/act',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:id})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok&&!d.note){toast(d.error||'Did not work');
+        if(btn){btn.disabled=false;}return;}
+      if(id.indexOf('ack:')===0){
+        var el=document.getElementById('qc-'+cardKey);
+        if(el){el.classList.add('gone');setTimeout(load,420);}
+        toast('Quiet. It comes back if it is still true.');
+      }else if(id==='nudge_ana'){
+        toast(d.note?d.note:'Ana has the list on Slack'+(d.email?' and email':''));
+        if(btn){btn.textContent='Nudged ✓';}
+      }
+    }).catch(function(){if(btn)btn.disabled=false;});
+}
+function addCand(){
+  var inp=document.getElementById('candName');
+  var name=inp.value.trim();
+  if(!name)return;
+  fetch('/api/operator/act',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'hiring_add',name:name})})
+    .then(function(r){return r.json();})
+    .then(function(d){if(d.ok){inp.value='';load();}});
+}
+function mv(id,stage){
+  fetch('/api/operator/act',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'hiring_move',id:id,stage:stage})})
+    .then(function(r){return r.json();})
+    .then(function(){load();});
+}
+load();
+setInterval(load,120000);
+</script>
+</body>
+</html>
