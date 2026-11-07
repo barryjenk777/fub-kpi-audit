@@ -13699,14 +13699,18 @@ def _callingly_ring_first(pid, person, triggered_by):
                         break
             except Exception:
                 pass
+            # Private offers, public wins (desk doctrine): pre-claim, the
+            # room gets first name + property only. No FUB link, no last
+            # name, so losing the race never hands anyone a way to dial
+            # the lead around the winner. The full record DMs to whoever
+            # presses 1, from the answered webhook.
             _sl.post_message(wins,
                 "\U0001f4de Ringing the team RIGHT NOW: *%s*, a "
-                "Realtor.com buyer%s.%s\nWhoever presses 1, here is the "
-                "record: https://yourfriendlyagent.followupboss.com/2/"
-                "people/view/%s\nOpener: \"%s\""
-                % (name or "New lead",
-                   (" in %s" % city.title()) if city else "",
-                   prop_line, pid, opener))
+                "Realtor.com buyer%s.%s\nAnswer and press 1 to claim. "
+                "The winner gets the full record by DM.\n"
+                "Opener: \"%s\""
+                % (first_l, (" in %s" % city.title()) if city else "",
+                   prop_line, opener))
     except Exception:
         pass
     logger.info("[CALLINGLY] ringing team %s for %s (%s)", team_id, name, pid)
@@ -13848,6 +13852,20 @@ def callingly_webhook(secret):
                        "talked to %s live, seconds after the lead came "
                        "in" % lead1, lead1))
                 _sl.post_message(wins, msg)
+                # Private offers, public wins: the WINNER (and only the
+                # winner) gets the full name and record link by DM.
+                try:
+                    import dispatch as _dpw
+                    sid = _dpw._slack_user_id(agent_name)
+                    if sid:
+                        _sl.dm_user(sid,
+                            "%s is yours, already assigned to you in "
+                            "FUB: https://yourfriendlyagent.followup"
+                            "boss.com/2/people/view/%s\nLog the call "
+                            "and your next step on the record."
+                            % (lead_name, pid))
+                except Exception:
+                    pass
         except Exception:
             pass
         _db.log_automation_event(
