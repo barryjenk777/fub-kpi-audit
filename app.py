@@ -5939,19 +5939,20 @@ def api_ca_announce():
         return jsonify({"error": "Unauthorized"}), 401
     link = _ca_page_link()
     slack_msg = (
-        "Fhalen, new tool built for you: the CallAction reply desk.\n\n"
-        "We put 1,000 older leads on a text drip and the replies are "
-        "starting. Most will be “who is this”, and that is "
-        "expected. Every reply lands on one page, already read and "
-        "sorted: green means real intent, gold means your judgment "
-        "call, red asked to stop.\n\n"
-        "Two taps on each one: *Worth my time* keeps it (you work it "
-        "in FUB like always), *Trash to pond* moves it to Storage Pond "
-        "and off your plate.\n\n"
-        "Hot ones will DM you the moment they land. Mornings with "
-        "replies waiting, you get one 9am note, nothing on quiet days. "
-        "The page also shows as a banner on your Lead Claims board.\n\n"
-        "Your link: %s" % link)
+        "Fhalen, your reply desk got a big upgrade today.\n\n"
+        "Same link, much better page. Every pending reply now shows "
+        "who the lead actually is (source, city, how old the lead is), "
+        "how fast they texted back and how many times, and an honest "
+        "read: *green engaged* means they are talking to us or back to "
+        "browsing homes since replying, *gold replied once* means one "
+        "text and your judgment call.\n\n"
+        "FUB hides the actual words from outside tools, so every card "
+        "now has a *Read reply in CallAction* button that opens the "
+        "real thread, plus *Open in FUB* and a tap to call button.\n\n"
+        "Same two decisions as always: *Worth my time* keeps it, "
+        "*Trash to pond* moves it to Storage Pond and off your "
+        "plate.\n\n"
+        "Your link, worth a bookmark: %s" % link)
     email_html = (
         "<p>Fhalen, new tool built for you: the CallAction reply desk."
         "</p>"
@@ -5978,6 +5979,8 @@ def api_ca_announce():
             out["slack"] = bool(_sl.dm_user(fid, slack_msg))
     except Exception as e:
         out["slack_error"] = str(e)[:150]
+    if (request.get_json(silent=True) or {}).get("slack_only"):
+        return jsonify(out)
     try:
         import postmark_client as _pm
         em = getattr(config, "LIVE_CALLS_ADMIN_EMAIL", None)
