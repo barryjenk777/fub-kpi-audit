@@ -20938,6 +20938,7 @@ def run_feed_watch():
                            COUNT(*) FILTER (WHERE call_time >= NOW()
                                             - INTERVAL '7 days')
                     FROM maverick_calls
+                    WHERE call_grade IS NOT NULL
                 """)
                 c72, c7d = cur.fetchone()
         if int(c72 or 0) == 0 or int(c7d or 0) < 10:
