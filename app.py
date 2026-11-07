@@ -7418,7 +7418,7 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
     out = {"ok": True, "dry_run": bool(dry_run), "scanned": len(pool),
            "cap": cap, "routed": [], "skipped": {"owned": 0, "stage": 0,
            "suppressed": 0, "already_seen": 0, "prior_offers": 0,
-           "no_name": 0}}
+           "no_name": 0, "no_inbound_proof": 0}}
     if not pool:
         return out
     seen = _db.get_seen_desk_tag_pairs(list(pool))
@@ -7459,6 +7459,17 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
                 continue
         except Exception:
             pass
+        # PROOF GATE (Barry, Nov 7 2026: "you are sending crap leads to
+        # my agents"). Ylopo's follow-up tags fire on ATTEMPTS, not just
+        # conversations, so the tag alone proves nothing. A lead routes
+        # ONLY with a verifiable inbound communication in the window:
+        # they texted back or they called. Same standard as the
+        # notification truth test, applied to routing.
+        if not _had_inbound_within(pid, hours=24 * lookback):
+            out["skipped"]["no_inbound_proof"] += 1
+            if not dry_run:
+                _db.filter_new_desk_tags(pid, ["ai_nurture"])
+            continue
         if dry_run:
             out["routed"].append({"person_id": pid, "lead": p.get("name"),
                                   "dry_run": True})
@@ -7498,6 +7509,12 @@ def scheduled_ai_nurture_router():
     if not _db.try_acquire_job_lock("ai_nurture_router"):
         return
     try:
+        # Own kill switch (Barry, Nov 7: lane OFF until the proof-gated
+        # selection earns its way back). Flip with
+        # POST /api/admin/desk/ai-nurture {"live": true}.
+        nlive, _ = _db.get_app_state("ai_nurture_live")
+        if (nlive or "").strip() != "1":
+            return
         live, _ = _db.get_app_state("dispatch_ai_live")
         if (live or "").strip() != "1":
             return
@@ -7513,11 +7530,21 @@ def scheduled_ai_nurture_router():
 
 @app.route("/api/admin/desk/ai-nurture", methods=["POST"])
 def api_ai_nurture_route():
-    """Manual run. Body: {"dry_run": true|false, "cap": 5}.
-    dry_run defaults TRUE."""
+    """Manual run: {"dry_run": true|false, "cap": 5} (dry_run defaults
+    TRUE). Gate control: {"live": true|false} flips the lane's own kill
+    switch (OFF since Nov 7; tags alone routed junk)."""
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(silent=True) or {}
+    if "live" in body:
+        _db.set_app_state("ai_nurture_live", "1" if body["live"] else "0")
+        _db.log_automation_event(
+            event_type="ai_nurture_gate", person_id=None, person_name=None,
+            agent_name=None, payload={"live": bool(body["live"])},
+            triggered_by="admin")
+        if len(body) == 1:
+            return jsonify({"ok": True,
+                            "ai_nurture_live": bool(body["live"])})
     dry = body.get("dry_run")
     dry = True if dry is None else bool(dry)
     res = run_ai_nurture_router(batch_cap=body.get("cap"), dry_run=dry)
