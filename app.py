@@ -5732,6 +5732,50 @@ def api_ca_list():
             if _db.update_ca_response_read(r["id"], msg, s, sc, why):
                 r.update({"message": msg, "sentiment": s, "score": sc,
                           "reason": why})
+    # Dossier enrichment (Barry, Nov 7 2026: cards without text were "a
+    # waste of space"). FUB hides message CONTENT from API systems until
+    # content access is granted for LegacyCommandCenter, but the metadata
+    # still tells Fhalen a real story: when they replied, how fast after
+    # our drip text, and who the lead actually is.
+    client = client or FUBClient()
+    for r in rows[:30]:
+        try:
+            pid = r["person_id"]
+            p = client._request("GET", "people/%s" % pid, params={
+                "fields": "id,stage,source,created,addresses,phones"}) or {}
+            city = ((p.get("addresses") or [{}])[0] or {}).get("city")
+            phone = ((p.get("phones") or [{}])[0] or {}).get("value")
+            data = client._request("GET", "textMessages", params={
+                "personId": pid, "limit": 30}) or {}
+            txts = next((v for v in data.values()
+                         if isinstance(v, list)), [])
+            inb = sorted([t for t in txts if t.get("isIncoming")],
+                         key=lambda t: t.get("created") or "")
+            outb = [t for t in txts if not t.get("isIncoming")]
+            reply_mins = None
+            if inb:
+                last_in_created = inb[-1].get("created") or ""
+                prior = [t.get("created") for t in outb
+                         if (t.get("created") or "") < last_in_created]
+                if prior:
+                    try:
+                        a = datetime.fromisoformat(
+                            max(prior).replace("Z", "+00:00"))
+                        b = datetime.fromisoformat(
+                            last_in_created.replace("Z", "+00:00"))
+                        reply_mins = max(0, int(
+                            (b - a).total_seconds() // 60))
+                    except (ValueError, TypeError):
+                        pass
+            r["context"] = {
+                "stage": p.get("stage"), "source": p.get("source"),
+                "city": city, "phone": phone,
+                "lead_since": (p.get("created") or "")[:4] or None,
+                "replies": len(inb), "drips_sent": len(outb),
+                "last_reply_at": inb[-1].get("created") if inb else None,
+                "reply_mins": reply_mins}
+        except Exception:
+            r["context"] = None
     rows.sort(key=lambda r: ((r["sentiment"] != "positive"),
                              (r["sentiment"] not in ("neutral", "unread")),
                              r["created_at"]), )

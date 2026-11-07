@@ -37,12 +37,16 @@ padding:3px 9px;border-radius:99px}
 font-size:14.5px;white-space:pre-wrap}
 .msg.empty{color:var(--muted);font-style:italic}
 .why{font-size:12px;color:var(--muted);margin-bottom:10px}
-.btns{display:flex;gap:8px}
+.btns{display:flex;gap:8px;margin-top:8px}
 .btn{flex:1;border:none;border-radius:9px;padding:12px 10px;font-size:14px;
 font-weight:700;cursor:pointer}
 .keep{background:var(--green);color:#06281a}
 .trash{background:#2a3a5e;color:var(--muted)}
 .btn:disabled{opacity:.6}
+a.btn{display:block;text-align:center;text-decoration:none;
+background:#1d2c4e;color:#8fbcff;border:1px solid var(--line)}
+.dossier{font-size:12px;color:var(--muted);margin-top:4px}
+.replyline{font-size:12.5px;color:#ffcb72;margin-top:8px;font-weight:600}
 .empty-state{background:var(--panel);border:1px solid var(--line);border-radius:12px;
 padding:26px;text-align:center;color:var(--muted)}
 .spin{color:var(--muted);padding:26px;text-align:center}
@@ -63,7 +67,7 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function cls(s){return s==='positive'?'pos':s==='negative'?'neg':s==='unread'?'unread':'neu';}
 function label(s){return s==='positive'?'real intent':s==='negative'?'asked to stop':
-  s==='unread'?'text not synced yet':'your call';}
+  s==='unread'?'read in FUB':'your call';}
 function rel(iso){var d=new Date(iso);if(isNaN(d))return'';
   var m=Math.floor((Date.now()-d.getTime())/60000);
   if(m<60)return m+'m ago'; if(m<1440)return Math.floor(m/60)+'h ago';
@@ -88,13 +92,34 @@ function load(){
       var h='';
       rows.forEach(function(r){
         var k=cls(r.sentiment);
+        var c=r.context||{};
+        var fub='https://yourfriendlyagent.followupboss.com/2/people/view/'+r.person_id;
+        var first=esc((r.person_name||'them').split(' ')[0]);
+        var dossier=[];
+        if(c.source)dossier.push(esc(c.source)+(c.lead_since?' lead since '+esc(c.lead_since):''));
+        if(c.city)dossier.push(esc(c.city));
+        if(c.stage)dossier.push(esc(c.stage)+' stage');
+        var reply='';
+        if(c.last_reply_at){
+          var speed=(c.reply_mins==null)?'':
+            (', '+(c.reply_mins<60?c.reply_mins+' min':Math.round(c.reply_mins/60)+'h')+' after our text');
+          reply='They replied '+rel(c.last_reply_at)+speed+
+            ' · '+(c.replies||0)+(c.replies==1?' reply':' replies')+
+            ' to '+(c.drips_sent||0)+' drip texts';
+        }
         h+='<div class="card '+k+'" id="row-'+r.id+'">'+
-          '<div class="top"><span class="nm"><a target="_blank" href="https://yourfriendlyagent.followupboss.com/2/people/view/'+r.person_id+'">'+esc(r.person_name||'Unknown')+'</a></span>'+
+          '<div class="top"><span class="nm"><a target="_blank" href="'+fub+'" style="text-decoration:underline">'+esc(r.person_name||'Unknown')+'</a></span>'+
           '<span><span class="chip '+k+'">'+label(r.sentiment)+'</span> '+
           '<span style="font-size:11px;color:#93a4c4">'+rel(r.created_at)+'</span></span></div>'+
+          (dossier.length? '<div class="dossier">'+dossier.join(' · ')+'</div>':'')+
           (r.message? '<div class="msg">'+esc(r.message)+'</div>'
-            : '<div class="msg empty">Text not readable here yet. Tap the name to read it in FUB, then decide.</div>')+
-          (r.reason? '<div class="why">'+esc(r.reason)+'</div>':'')+
+            : '<div class="msg empty">FUB hides text content from outside tools until access is approved. One tap below reads it in FUB.</div>')+
+          (reply? '<div class="replyline">'+reply+'</div>':'')+
+          (r.reason&&r.message? '<div class="why">'+esc(r.reason)+'</div>':'')+
+          '<div class="btns">'+
+          '<a class="btn" target="_blank" href="'+fub+'">Open in FUB &#8599;</a>'+
+          (c.phone? '<a class="btn" href="tel:'+esc(c.phone)+'">Call '+first+'</a>':'')+
+          '</div>'+
           '<div class="btns">'+
           '<button class="btn keep" onclick="decide('+r.id+',\'keep\',this)">Worth my time</button>'+
           '<button class="btn trash" onclick="decide('+r.id+',\'trash\',this)">Trash to pond</button>'+
