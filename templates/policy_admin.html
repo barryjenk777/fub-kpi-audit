@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Roster Policy</title>
+<style>
+:root{--bg:#0f172a;--panel:#16213e;--line:#26365c;--ink:#e8eefc;
+--muted:#93a4c4;--gold:#f5a623;--green:#37c98b;--red:#e5544b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:14.5px;
+font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
+.wrap{max-width:880px;margin:0 auto;padding:22px 16px 70px}
+h1{font-size:21px;margin:0 0 2px}
+.sub{color:var(--muted);font-size:12.5px;margin:0 0 16px;max-width:64ch}
+table{width:100%;border-collapse:collapse;background:var(--panel);
+border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th{background:#1c2a4a;text-align:left;font-size:10.5px;letter-spacing:.07em;
+text-transform:uppercase;color:var(--muted);padding:9px 10px}
+td{padding:8px 10px;border-top:1px solid var(--line);vertical-align:middle}
+.tag{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+padding:2px 7px;border-radius:99px;white-space:nowrap}
+.t-in{background:rgba(55,201,139,.16);color:#79e5ba}
+.t-out{background:rgba(229,84,75,.14);color:#ff9d96}
+.t-pass{color:#79e5ba}.t-fail{color:var(--muted)}
+input[type=date]{background:#0d1729;border:1px solid var(--line);color:var(--ink);
+border-radius:7px;padding:5px 7px;font-size:13px;color-scheme:dark}
+input[type=checkbox]{width:17px;height:17px;accent-color:var(--gold)}
+.stale{color:var(--red);font-size:10.5px}
+.btn{background:var(--gold);color:#241500;border:none;border-radius:9px;
+padding:11px 22px;font-size:14.5px;font-weight:800;cursor:pointer;margin-top:14px}
+.btn:disabled{opacity:.6}
+.saved{color:#79e5ba;font-weight:700;margin-left:12px;font-size:13px}
+.note{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+padding:11px 14px;font-size:12px;color:var(--muted);margin-top:16px;max-width:66ch}
+.src{font-size:11px;color:var(--muted);margin:0 0 10px}
+a{color:var(--gold)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Roster Policy</h1>
+  <p class="sub">Why each agent is in or out of the claim rotation, and the
+  two levers you control directly: new-hire grace (desk access through a
+  date, KPI pass or not) and protected (always in rotation). Changes apply
+  on the next offer, no deploy.</p>
+  <p class="src" id="src"></p>
+  <table>
+    <thead><tr><th>Agent</th><th>Status</th><th>KPI audit</th>
+    <th>In rotation now</th><th>Grace until</th><th>Protected</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="6" style="color:var(--muted)">Loading...</td></tr></tbody>
+  </table>
+  <button class="btn" id="save" onclick="save()">Save policy</button>
+  <span class="saved" id="ok" hidden>Saved. In force now.</span>
+  <div class="note">The KPI audit column is the weekly 30 calls / 5 convos
+  gate; it refreshes on its own and is not editable here. Hot conversion
+  lanes route to audit passers, protected agents, and active grace hires.
+  The nurture lane routes to the whole active roster regardless. Statuses
+  (onboarding, license pending, non lead) are set on the roster endpoint
+  and gate everything.</div>
+</div>
+<script>
+var KEY=new URLSearchParams(location.search).get("key")||"";
+var DATA=null;
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function load(){
+  fetch('/api/admin/policy?key='+encodeURIComponent(KEY))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok){document.getElementById('rows').innerHTML=
+        '<tr><td colspan="6">'+esc(d.error||'failed')+'</td></tr>';return;}
+      DATA=d;
+      document.getElementById('src').textContent=
+        'Policy source: '+d.source+(d.source.indexOf('config')===0?
+        ' (your first save moves it into the database)':'');
+      var today=new Date().toISOString().slice(0,10);
+      var h='';
+      d.roster.forEach(function(r){
+        var g=r.grace_until||'';
+        var staleG=g&&g<today?'<div class="stale">expired</div>':'';
+        h+='<tr data-agent="'+esc(r.agent)+'">'+
+          '<td><b>'+esc(r.agent)+'</b></td>'+
+          '<td style="color:var(--muted)">'+esc(r.status)+'</td>'+
+          '<td class="'+(r.audit_pass?'t-pass':'t-fail')+'">'+
+            (r.audit_pass?'pass':'not passing')+'</td>'+
+          '<td><span class="tag '+(r.in_claim_rotation?'t-in':'t-out')+'">'+
+            (r.in_claim_rotation?'in':'out')+'</span></td>'+
+          '<td><input type="date" class="g" value="'+esc(g)+'">'+staleG+'</td>'+
+          '<td><input type="checkbox" class="p"'+(r.protected?' checked':'')+'></td>'+
+          '</tr>';
+      });
+      document.getElementById('rows').innerHTML=h;
+    })
+    .catch(function(){document.getElementById('rows').innerHTML=
+      '<tr><td colspan="6">Could not load.</td></tr>';});
+}
+function save(){
+  var grace={},protected_=[];
+  document.querySelectorAll('#rows tr[data-agent]').forEach(function(tr){
+    var a=tr.getAttribute('data-agent');
+    var g=tr.querySelector('.g').value;
+    if(g)grace[a]=g;
+    if(tr.querySelector('.p').checked)protected_.push(a);
+  });
+  var btn=document.getElementById('save');btn.disabled=true;
+  btn.textContent='Saving...';
+  fetch('/api/admin/policy?key='+encodeURIComponent(KEY),{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({grace:grace,protected:protected_})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      btn.disabled=false;btn.textContent='Save policy';
+      if(!d.ok){alert(d.error||'Save failed');return;}
+      document.getElementById('ok').hidden=false;
+      setTimeout(function(){document.getElementById('ok').hidden=true;},2500);
+      load();
+    })
+    .catch(function(){btn.disabled=false;btn.textContent='Save policy';});
+}
+load();
+</script>
+</body>
+</html>

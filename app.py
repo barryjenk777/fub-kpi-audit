@@ -20893,6 +20893,126 @@ def api_calls_warehouse_repair():
     return jsonify(run_calls_warehouse_repair(days=days))
 
 
+def run_feed_watch():
+    """Nov 7 2026 audit, punch list #1. Every data feed Command Center
+    depends on gets a freshness check each morning. None of this needs a
+    vendor API: it watches OUR OWN tables and asks "when did this feed
+    last produce a row." A healthy morning is silent. A stale feed pages
+    Barry once per feed per week (first detection plus a Monday-ish
+    reminder, never a daily nag), because the Maverick outage sat
+    invisible for two weeks before the Nov 6 audit found it."""
+    now = datetime.now(timezone.utc)
+    stale = []
+
+    def _check(feed, sql, args, max_age_hours, what_it_means):
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, args)
+                    row = cur.fetchone()
+            last = row[0] if row else None
+            if last is None:
+                stale.append((feed, "has never produced a row",
+                              what_it_means))
+                return
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            age_h = (now - last).total_seconds() / 3600.0
+            if age_h > max_age_hours:
+                stale.append((feed, "quiet for %d hours (last: %s)"
+                              % (int(age_h), last.strftime("%b %d %I:%M%p")),
+                              what_it_means))
+        except Exception as e:
+            stale.append((feed, "check failed: %s" % str(e)[:80],
+                          what_it_means))
+
+    _check("Maverick call grades",
+           "SELECT MAX(call_time) FROM maverick_calls", (), 48,
+           "No graded calls means game film, ask rates, and OOC flags "
+           "are running on nothing. Check the always-on Mac and "
+           "my.maverickre.com itself.")
+    _check("Calls warehouse sync",
+           "SELECT MAX(created) FROM calls_cache", (), 3,
+           "The 30-minute call sync has stopped. Audit and scoring "
+           "numbers start aging immediately.")
+    _check("Appointment sync",
+           "SELECT MAX(fub_synced_at) FROM appointments", (), 30,
+           "Appointments are not syncing from FUB. Show rates, prep, "
+           "and confirmation nudges go blind.")
+    _check("Daily activity sync",
+           "SELECT MAX(activity_date)::timestamp FROM daily_activity",
+           (), 54,
+           "Agent dashboards and coaching checks are reading old days.")
+    # Webhooks live in app_state, not a table.
+    try:
+        raw, _ = _db.get_app_state("fub_webhook_stats")
+        last_at = (json.loads(raw or "{}") or {}).get("last_at")
+        if last_at:
+            age_h = (now - datetime.fromisoformat(last_at)) \
+                .total_seconds() / 3600.0
+            if age_h > 24:
+                stale.append(("FUB webhooks",
+                              "quiet for %d hours" % int(age_h),
+                              "The desk is blind to new conversions."))
+        else:
+            stale.append(("FUB webhooks", "no events ever recorded",
+                          "The desk is blind to new conversions."))
+    except Exception:
+        pass
+
+    if not stale:
+        return {"ok": True, "stale": []}
+    week = now.strftime("%G-W%V")
+    fresh_alarms = [s for s in stale
+                    if _db.claim_once("feedwatch_%s_%s"
+                                      % (s[0].replace(" ", "_"), week))]
+    if fresh_alarms:
+        lines = ["%s: %s. %s" % s for s in fresh_alarms]
+        body = ("Feed watch: %d data feed(s) have gone quiet. "
+                % len(fresh_alarms)) + " || ".join(lines)
+        logger.error("[FEED WATCH] %s", body)
+        try:
+            import postmark_client as _pm
+            _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+                     subject="Feed watch: %d feed(s) quiet"
+                             % len(fresh_alarms),
+                     html="".join("<p><b>%s</b>: %s<br>%s</p>" % s
+                                  for s in fresh_alarms))
+        except Exception as e:
+            logger.warning("[FEED WATCH] email failed: %s", e)
+        try:
+            import slack_client as _sl
+            import dispatch as _dp
+            bid = _dp._slack_user_id("Barry Jenkins")
+            if _sl.is_available() and bid:
+                _sl.dm_user(bid, "\U0001f6a8 " + body)
+        except Exception:
+            pass
+    return {"ok": True,
+            "stale": [{"feed": f, "state": st, "impact": imp}
+                      for f, st, imp in stale],
+            "alerted_now": len(fresh_alarms)}
+
+
+def scheduled_feed_watch():
+    """Daily 7:10am ET, before the morning surfaces go out."""
+    if not _db.try_acquire_job_lock("feed_watch"):
+        return
+    try:
+        run_feed_watch()
+    except Exception as e:
+        logger.warning("feed watch failed: %s", e)
+
+
+@app.route("/api/admin/feed-watch", methods=["GET", "POST"])
+def api_feed_watch():
+    """Current feed freshness. Safe to hit any time: claim_once limits
+    paging to once per feed per week no matter how often this runs."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(run_feed_watch())
+
+
 def scheduled_appt_confirm_nudge(dry_run=False):
     """Nov 6 2026 audit, punch list #6 (the show-rate machine, step one).
     The 90-day funnel shows 354 appointments set and 149 met (42%).
@@ -24194,6 +24314,83 @@ def api_maverick_ingest_probe():
         except Exception as e:
             out["recent_error"] = str(e)[:200]
     return jsonify(out)
+
+
+@app.route("/api/admin/policy", methods=["GET", "POST"])
+def api_roster_policy():
+    """Roster policy as data (Nov 7 2026, audit punch list #7): grace
+    dates and protected agents, editable without a deploy. GET returns
+    the policy in force and where it came from; POST
+    {"grace": {name: "YYYY-MM-DD" | null}, "protected": [names]}
+    replaces both (null/empty date removes a grace entry)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import dispatch as _dp
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        grace_in = body.get("grace")
+        protected_in = body.get("protected")
+        if grace_in is not None:
+            clean = {}
+            for name, until in (grace_in or {}).items():
+                if not until:
+                    continue
+                try:
+                    datetime.strptime(str(until)[:10], "%Y-%m-%d")
+                except ValueError:
+                    return jsonify({"ok": False,
+                                    "error": "bad date for %s: %r"
+                                             % (name, until)}), 400
+                clean[str(name).strip()] = str(until)[:10]
+            _db.set_app_state("policy_grace_until", json.dumps(clean))
+        if protected_in is not None:
+            _db.set_app_state("policy_protected_agents", json.dumps(
+                [str(n).strip() for n in protected_in if str(n).strip()]))
+        _db.log_automation_event(
+            event_type="policy_update", person_id=None, person_name=None,
+            agent_name=None,
+            payload={"grace": grace_in, "protected": protected_in},
+            triggered_by="admin_policy")
+    grace, protected = _dp.roster_policy()
+    try:
+        raw, _ = _db.get_app_state("policy_grace_until")
+        source = "database" if (raw or "").strip() else "config (code)"
+    except Exception:
+        source = "config (code)"
+    audit = cache_get("audit") or {}
+    passing = {a.get("name") for a in audit.get("agents", [])
+               if (a.get("evaluation") or {}).get("overall_pass")}
+    try:
+        rotation = set(_dp.eligible_agents(None, audit=audit))
+    except Exception:
+        rotation = set()
+    today = datetime.now(timezone.utc).date().isoformat()
+    profiles = _db.get_agent_profiles(active_only=True) or []
+    roster = []
+    for p in sorted(profiles, key=lambda x: x.get("agent_name") or ""):
+        n = p.get("agent_name")
+        if not n or n in set(getattr(config, "EXCLUDED_USERS", ()) or ()):
+            continue
+        g = grace.get(n)
+        roster.append({"agent": n,
+                       "status": p.get("status") or "active",
+                       "audit_pass": n in passing,
+                       "protected": n in protected,
+                       "grace_until": g,
+                       "grace_active": bool(g and today <= g),
+                       "in_claim_rotation": n in rotation})
+    return jsonify({"ok": True, "source": source, "grace": grace,
+                    "protected": protected, "roster": roster})
+
+
+@app.route("/admin/policy")
+def admin_policy_page():
+    """One screen that answers 'why is this agent not getting leads' and
+    gives Barry the levers, no deploy needed."""
+    if not _perplexity_auth():
+        return "Unauthorized", 401
+    key = request.args.get("key", "")
+    return render_template("policy_admin.html", key=key)
 
 
 @app.route("/api/admin/roster/status", methods=["GET", "POST"])
@@ -27841,6 +28038,14 @@ def start_scheduler():
                        id="appt_confirm_nudge",
                        name="Appointment confirmation nudges (5pm)",
                        max_instances=1, misfire_grace_time=1800)
+
+    # Punch list #1: feed freshness watch, daily 7:10am ET. Pages Barry
+    # once per feed per week when a data feed goes quiet (the Maverick
+    # outage sat invisible for two weeks before the Nov 6 audit).
+    _scheduler.add_job(scheduled_feed_watch,
+                       CronTrigger(hour=7, minute=10, timezone=ET),
+                       id="feed_watch", name="Feed freshness watch (7:10am)",
+                       max_instances=1, misfire_grace_time=3600)
 
     # Weekly self audit: Friday 7am ET — data consistency checks, emails only findings
     _scheduler.add_job(scheduled_system_self_audit,

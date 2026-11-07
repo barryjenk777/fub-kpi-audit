@@ -28,6 +28,33 @@ from datetime import datetime, timedelta, timezone
 import config
 import db as _db
 
+
+def roster_policy():
+    """DB-backed roster policy (Nov 7 2026, audit punch list #7): grace
+    dates and protected agents are rows Barry edits on /admin/policy,
+    not code that waits for a deploy. Falls back to config until the
+    page saves once. Returns (grace_until: {name: 'YYYY-MM-DD'},
+    protected: [names])."""
+    import json as _json
+    grace, protected = None, None
+    try:
+        raw, _ = _db.get_app_state("policy_grace_until")
+        if (raw or "").strip():
+            grace = _json.loads(raw)
+    except Exception:
+        grace = None
+    try:
+        raw, _ = _db.get_app_state("policy_protected_agents")
+        if (raw or "").strip():
+            protected = _json.loads(raw)
+    except Exception:
+        protected = None
+    if grace is None:
+        grace = dict(getattr(config, "DESK_GRACE_UNTIL", {}) or {})
+    if protected is None:
+        protected = list(getattr(config, "PROTECTED_AGENTS", []) or [])
+    return grace, protected
+
 logger = logging.getLogger(__name__)
 
 OFFER_MINUTES = 5
@@ -79,14 +106,15 @@ def eligible_agents(lead_city=None, audit=None):
                        if n not in _EXCLUDED and n not in gated]
         except Exception:
             pass
-    for name in getattr(config, "PROTECTED_AGENTS", []):
+    _grace, _protected = roster_policy()
+    for name in _protected:
         if name not in passing and name not in _EXCLUDED:
             passing.append(name)
     # New-hire grace (Barry, Sep 2026): unconditional desk access through
     # the listed date, KPI pass or not. Gated hires stay gated — docs first.
     today = datetime.now(timezone.utc).date().isoformat()
-    for name, until in (getattr(config, "DESK_GRACE_UNTIL", {}) or {}).items():
-        if today <= until and name not in passing \
+    for name, until in _grace.items():
+        if today <= (until or "") and name not in passing \
                 and name not in _EXCLUDED and name not in gated:
             passing.append(name)
     geo = [n for n, cities in DISPATCH_GEO_OVERRIDES.items()
