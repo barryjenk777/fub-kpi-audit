@@ -196,14 +196,20 @@ class FUBClient:
         time.sleep(self.RATE_LIMIT_DELAY)
         self._request_count += 1
 
-        for attempt in range(3):  # max 3 attempts
+        for attempt in range(5):  # Nov 7 2026: 3 attempts lost tag
+            # writes under sustained 429 pressure (LeadStream lists
+            # visibly thinned). 5 attempts, honoring Retry-After.
             response = self.session.request(
                 method, url, params=params, json=json_data,
                 timeout=self.REQUEST_TIMEOUT,
             )
             if response.status_code == 429:
-                wait = 3 * (attempt + 1)  # 3s, 6s, 9s — max 18s total
-                time.sleep(wait)
+                try:
+                    wait = float(response.headers.get("Retry-After") or 0)
+                except (TypeError, ValueError):
+                    wait = 0
+                wait = max(wait, 3 * (attempt + 1))  # >=3,6,9,12,15s
+                time.sleep(min(wait, 30))
                 continue
             response.raise_for_status()
             return response.json()

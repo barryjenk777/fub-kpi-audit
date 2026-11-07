@@ -21622,6 +21622,88 @@ def run_calls_warehouse_repair(days=7):
     return report
 
 
+def run_leadstream_tag_reconcile():
+    """Nightly self-heal (Nov 7 2026: ~30 of 167 manifest leads were
+    missing their LeadStream tag after 429s ate the writes). Diffs the
+    manifest against FUB's actual tag carriers and re-applies what is
+    missing. Read side is 2 queries; writes only the gap."""
+    import lead_scoring as _ls
+    client = FUBClient()
+    report = {"ok": True, "reapplied": {}, "errors": 0}
+    try:
+        scorer = _ls.LeadScorer(client)
+        manifest = scorer._load_manifest() or {}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:150]}
+    want = {config.LEADSTREAM_TAG: set(), config.LEADSTREAM_POND_TAG: set()}
+    for items in (manifest.get("agent") or {}).values():
+        for it in items:
+            pid = it.get("id") if isinstance(it, dict) else it
+            if pid:
+                want[config.LEADSTREAM_TAG].add(str(pid))
+    for it in (manifest.get("pond") or []):
+        pid = it.get("id") if isinstance(it, dict) else it
+        if pid:
+            want[config.LEADSTREAM_POND_TAG].add(str(pid))
+    for tag, want_ids in want.items():
+        if not want_ids:
+            continue
+        have = set()
+        try:
+            nxt = None
+            for _ in range(8):
+                params = {"tags": tag, "limit": 100, "fields": "id"}
+                if nxt:
+                    params["next"] = nxt
+                data = client._request("GET", "people", params=params) or {}
+                for p in data.get("people") or []:
+                    have.add(str(p.get("id")))
+                nxt2 = (data.get("_metadata") or {}).get("next")
+                if not data.get("people") or not nxt2 or nxt2 == nxt:
+                    break
+                nxt = nxt2
+        except Exception as e:
+            logger.warning("[LS RECONCILE] carrier read failed for %s: %s",
+                           tag, e)
+            continue
+        missing = want_ids - have
+        done = 0
+        for pid in list(missing)[:60]:
+            try:
+                client.add_tag(pid, tag)
+                done += 1
+            except Exception:
+                report["errors"] += 1
+        report["reapplied"][tag] = {"manifest": len(want_ids),
+                                    "carrying": len(have),
+                                    "missing": len(missing),
+                                    "reapplied_now": done}
+    if any((v.get("missing") or 0) > 0
+           for v in report["reapplied"].values()):
+        _db.log_automation_event(
+            event_type="leadstream_tag_reconcile", person_id=None,
+            person_name=None, agent_name=None, payload=report,
+            triggered_by="reconcile")
+    return report
+
+
+def scheduled_leadstream_tag_reconcile():
+    if not _db.try_acquire_job_lock("ls_tag_reconcile"):
+        return
+    try:
+        rep = run_leadstream_tag_reconcile()
+        logger.info("[LS RECONCILE] %s", json.dumps(rep)[:300])
+    except Exception as e:
+        logger.warning("ls tag reconcile failed: %s", e)
+
+
+@app.route("/api/admin/leadstream/reconcile", methods=["POST"])
+def api_ls_reconcile():
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(run_leadstream_tag_reconcile())
+
+
 def scheduled_calls_warehouse_repair():
     """Nightly 2:40am ET."""
     if not _db.try_acquire_job_lock("calls_warehouse_repair"):
@@ -29356,6 +29438,14 @@ def start_scheduler():
                        id="appt_confirm_nudge",
                        name="Appointment confirmation nudges (5pm)",
                        max_instances=1, misfire_grace_time=1800)
+
+    # LeadStream tag reconcile: nightly 3:10am ET, re-applies tags the
+    # 429s ate so the smartlists never thin out silently again.
+    _scheduler.add_job(scheduled_leadstream_tag_reconcile,
+                       CronTrigger(hour=3, minute=10, timezone=ET),
+                       id="ls_tag_reconcile",
+                       name="LeadStream tag reconcile (3:10am)",
+                       max_instances=1, misfire_grace_time=3600)
 
     # Punch list #1: feed freshness watch, daily 7:10am ET. Pages Barry
     # once per feed per week when a data feed goes quiet (the Maverick
