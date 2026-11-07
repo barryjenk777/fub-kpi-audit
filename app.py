@@ -7417,11 +7417,17 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
     pond and admin-assigned leads all day; its only delivery was a Nurture
     Priority text to Barry's phone, where these died.
 
-    Selection: a lead carrying a fresh AI follow-up tag (ledger pair
-    'ai_nurture', so one routing per lead, ever) that nobody really owns —
-    in a pond, unassigned, or assigned to an excluded user — updated within
-    AI_NURTURE_LOOKBACK_DAYS. Newest activity first, AI_NURTURE_BATCH_CAP
-    per run, so the two-week backlog drips instead of flooding.
+    Rebuilt Nov 7 2026 after the stale-batch incident. Barry: nurture
+    conversions should still reach agents, "but you were transferring
+    leads that had a convo with ai a month ago. That won't work."
+
+    Selection: a lead carrying an AI follow-up tag that nobody really owns
+    (pond, unassigned, or excluded user), updated within
+    AI_NURTURE_LOOKBACK_DAYS (prefilter only). It routes ONLY on proof of
+    an inbound communication within AI_NURTURE_FRESH_HOURS — they just
+    talked to our AI and said not ready yet. Once-ever ledger burns on
+    ROUTE, not on a proof miss, so a future conversation still routes.
+    Newest activity first, AI_NURTURE_BATCH_CAP per run.
 
     Routing: the standard desk claim relay (source 'ai_nurture', calm
     copy). A claim assigns the lead in FUB; a full pass-through just logs.
@@ -7503,16 +7509,23 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
                 continue
         except Exception:
             pass
-        # PROOF GATE (Barry, Nov 7 2026: "you are sending crap leads to
-        # my agents"). Ylopo's follow-up tags fire on ATTEMPTS, not just
-        # conversations, so the tag alone proves nothing. A lead routes
-        # ONLY with a verifiable inbound communication in the window:
-        # they texted back or they called. Same standard as the
-        # notification truth test, applied to routing.
-        if not _had_inbound_within(pid, hours=24 * lookback):
+        # PROOF GATE + FRESHNESS WALL (Barry, Nov 7 2026). Ylopo's
+        # follow-up tags fire on ATTEMPTS, not just conversations, so the
+        # tag alone proves nothing. And a real conversation from a month
+        # ago is not a warm handoff ("that won't work"). A lead routes
+        # ONLY with a verifiable inbound communication inside the last
+        # AI_NURTURE_FRESH_HOURS: they just talked to our AI and said
+        # not-ready-yet, and an agent gets them while it's warm.
+        fresh_h = int(getattr(config, "AI_NURTURE_FRESH_HOURS", 48))
+        out["proof_checks"] = out.get("proof_checks", 0) + 1
+        if out["proof_checks"] > 40:
+            break  # bound the FUB calls; the rest wait for the next batch
+        if not _had_inbound_within(pid, hours=fresh_h):
+            # No fresh conversation YET. Skip without burning the
+            # once-ever ledger: if they talk to our AI next week, that
+            # conversation routes them then. (Burning here was the old
+            # behavior and it would have orphaned every future convo.)
             out["skipped"]["no_inbound_proof"] += 1
-            if not dry_run:
-                _db.filter_new_desk_tags(pid, ["ai_nurture"])
             continue
         if dry_run:
             out["routed"].append({"person_id": pid, "lead": p.get("name"),
@@ -7521,9 +7534,10 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
         if not _db.filter_new_desk_tags(pid, ["ai_nurture"]):
             continue  # another worker got there first
         dnc = "Y_DNC_REGISTRY_TRUE" in (p.get("tags") or [])
-        notes = ("Ylopo's AI had a conversation with this lead and flagged "
-                 "a human follow-up. Longer timeline buyer. Warm intro, "
-                 "stay top of mind, no hard sell."
+        notes = ("This lead talked with our AI in the last 48 hours and "
+                 "said not ready yet. Fresh conversation, longer timeline. "
+                 "Warm intro while it's warm, stay top of mind, no hard "
+                 "sell."
                  + (" DNC registry: lead with a text, not a cold call."
                     if dnc else ""))
         try:

@@ -788,7 +788,10 @@ PHOENIX_QUALIFY_DAYS_REQUIRED = 4
 CALLINGLY_FALLBACK_MINUTES = 4
 
 AI_NURTURE_TAGS = ("AI_VOICE_NEEDS_FOLLOW_UP", "AI_NEEDS_FOLLOW_UP")
-AI_NURTURE_LOOKBACK_DAYS = 14     # Barry: route the last 2 weeks of these
+AI_NURTURE_LOOKBACK_DAYS = 3      # scan prefilter only, never evidence
+AI_NURTURE_FRESH_HOURS = 48       # Barry, Nov 7: the AI conversation must
+                                  # be THIS fresh to route. A month-old
+                                  # convo is not a warm handoff.
 AI_NURTURE_BATCH_CAP = 5          # per batch, newest conversation first —
                                   # the backlog drips, never floods
 STORAGE_POND_ID = 6
