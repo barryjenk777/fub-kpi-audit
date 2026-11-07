@@ -107,16 +107,27 @@ function load(){
             ' · '+(c.replies||0)+(c.replies==1?' reply':' replies')+
             ' to '+(c.drips_sent||0)+' drip texts';
         }
+        // Without the words (FUB hides text bodies from outside tools),
+        // the chip shows an ENGAGEMENT read built from verifiable signals.
+        var chip='<span class="chip '+k+'">'+label(r.sentiment)+'</span>';
+        if(!r.message&&c.read){
+          chip=(c.read==='engaged')?
+            '<span class="chip pos">engaged</span>':
+            '<span class="chip neu">replied once</span>';
+          if(c.read==='engaged')k='pos';
+        }
         h+='<div class="card '+k+'" id="row-'+r.id+'">'+
           '<div class="top"><span class="nm"><a target="_blank" href="'+fub+'" style="text-decoration:underline">'+esc(r.person_name||'Unknown')+'</a></span>'+
-          '<span><span class="chip '+k+'">'+label(r.sentiment)+'</span> '+
+          '<span>'+chip+' '+
           '<span style="font-size:11px;color:#93a4c4">'+rel(r.created_at)+'</span></span></div>'+
           (dossier.length? '<div class="dossier">'+dossier.join(' · ')+'</div>':'')+
           (r.message? '<div class="msg">'+esc(r.message)+'</div>'
-            : '<div class="msg empty">FUB hides text content from outside tools until access is approved. One tap below reads it in FUB.</div>')+
+            : (c.read_why? '<div class="msg">Signals, not words: '+esc(c.read_why)+'. Their actual reply is one tap away in CallAction.</div>'
+               : '<div class="msg empty">No readable activity yet. Open the thread to see what happened.</div>'))+
           (reply? '<div class="replyline">'+reply+'</div>':'')+
           (r.reason&&r.message? '<div class="why">'+esc(r.reason)+'</div>':'')+
           '<div class="btns">'+
+          (c.ca_link? '<a class="btn" target="_blank" href="'+esc(c.ca_link)+'" style="background:#2b4a2f;color:#9fe2b0;border-color:#3c6442">Read reply in CallAction</a>':'')+
           '<a class="btn" target="_blank" href="'+fub+'">Open in FUB &#8599;</a>'+
           (c.phone? '<a class="btn" href="tel:'+esc(c.phone)+'">Call '+first+'</a>':'')+
           '</div>'+

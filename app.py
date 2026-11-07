@@ -5767,13 +5767,62 @@ def api_ca_list():
                             (b - a).total_seconds() // 60))
                     except (ValueError, TypeError):
                         pass
+            # Their words live behind FUB's privacy wall, but CallAction's
+            # FUB notes carry a cact.co deep link straight to the thread.
+            ca_link = None
+            try:
+                import re as _re
+                nd = client._request("GET", "notes", params={
+                    "personId": pid, "limit": 10}) or {}
+                for nrow in nd.get("notes") or []:
+                    m = _re.search(r"https://cact\.co/[A-Za-z0-9]+",
+                                   nrow.get("body") or "")
+                    if m:
+                        ca_link = m.group(0)
+                        break
+            except Exception:
+                pass
+            # Verifiable intent without words: did they go back to
+            # browsing homes AFTER texting us back?
+            browsing_after = None
+            try:
+                if inb:
+                    evd = client._request("GET", "events", params={
+                        "personId": pid, "limit": 10}) or {}
+                    last_in_created = inb[-1].get("created") or ""
+                    for ev in evd.get("events") or []:
+                        if (ev.get("created") or "") > last_in_created \
+                                and "propert" in (ev.get("type")
+                                                  or "").lower():
+                            browsing_after = (ev.get("created") or "")[:10]
+                            break
+            except Exception:
+                pass
+            # Engagement read: honest signals, never claimed as the
+            # words (notification truth test). 2+ replies or browsing
+            # after replying = engaged; one reply = replied.
+            read, why = None, []
+            if len(inb) >= 2:
+                read = "engaged"
+                why.append("%d replies back and forth" % len(inb))
+            elif len(inb) == 1:
+                read = "replied"
+                why.append("one reply")
+            if reply_mins is not None and reply_mins <= 5:
+                why.append("texted back within %d minute%s"
+                           % (max(reply_mins, 1),
+                              "" if reply_mins <= 1 else "s"))
+            if browsing_after:
+                read = "engaged"
+                why.append("back to browsing homes since replying")
             r["context"] = {
                 "stage": p.get("stage"), "source": p.get("source"),
                 "city": city, "phone": phone,
                 "lead_since": (p.get("created") or "")[:4] or None,
                 "replies": len(inb), "drips_sent": len(outb),
                 "last_reply_at": inb[-1].get("created") if inb else None,
-                "reply_mins": reply_mins}
+                "reply_mins": reply_mins, "ca_link": ca_link,
+                "read": read, "read_why": ", ".join(why) or None}
         except Exception:
             r["context"] = None
     rows.sort(key=lambda r: ((r["sentiment"] != "positive"),
