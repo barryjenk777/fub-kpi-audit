@@ -51,9 +51,15 @@ def _req(method, path, json_data=None, params=None):
         json=json_data, params=params, timeout=TIMEOUT)
     r.raise_for_status()
     try:
-        return r.json()
+        out = r.json()
     except ValueError:
         return {"raw": r.text[:500]}
+    # Callingly wraps list responses in a {"data": [...]} envelope
+    # (observed live Nov 7 2026). Unwrap so callers get the list.
+    if isinstance(out, dict) and isinstance(out.get("data"), (list, dict)) \
+            and set(out.keys()) <= {"data", "meta", "links"}:
+        return out["data"]
+    return out
 
 
 # ── Read side (safe any time) ────────────────────────────────────────────
