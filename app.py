@@ -21759,20 +21759,13 @@ def build_operator_home():
     closed_n = len(closed_rows)
     cov = snap.get("coverage") or {}
 
-    # ── Hiring ──────────────────────────────────────────────────────────
-    cands = _db.get_hiring_candidates()
-    out["hiring"] = cands
-    active_c = [c for c in cands if c["stage"] != "started"]
-    stage("hiring", "Hiring", len(active_c) if cands else None, "in play",
-          {"formula": "candidates on your hiring rail not yet started "
-                      "or out",
-           "inputs": {"on_rail": len(cands),
-                      "started": sum(1 for c in cands
-                                     if c["stage"] == "started")},
-           "source": "the hiring rail below, maintained by you; this "
-                     "stage had NO surface anywhere before Nov 7 2026",
-           "door": None},
-          None)
+    # ── Hiring: deliberately absent (Barry, Nov 7 2026) ─────────────────
+    # There is no hiring process to surface yet; agents enter the funnel
+    # when added to FUB, which starts onboarding. The hiring_candidates
+    # table and the hiring_add/hiring_move actions stay dormant so a
+    # top-of-funnel rail is a one-commit revive when Barry starts
+    # organizing candidates.
+    out["hiring"] = []
 
     # ── Onboarding ──────────────────────────────────────────────────────
     hires, idle = [], []

@@ -179,24 +179,9 @@ a.qbtn{text-decoration:none}
 
   <div id="bneck"></div>
 
-  <div class="cols">
-    <div>
-      <h2>Needs a decision <span class="count" id="qcount"></span></h2>
-      <div id="queue"></div>
-    </div>
-    <div>
-      <h2>Hiring rail</h2>
-      <div class="rail" id="rail"></div>
-      <div class="addrow">
-        <input id="candName" placeholder="Candidate name"
-               onkeydown="if(event.key==='Enter')addCand()">
-        <button onclick="addCand()">Add</button>
-      </div>
-      <div style="font-size:11px;color:var(--faint);margin-top:8px">
-        Contacted → interviewed → offered → signed → started. Arrows move
-        them. This is the funnel's first number; it only exists if you
-        keep it honest.</div>
-    </div>
+  <div style="margin-top:26px;max-width:760px">
+    <h2>Needs a decision <span class="count" id="qcount"></span></h2>
+    <div id="queue"></div>
   </div>
 
   <div style="margin-top:34px">
@@ -227,9 +212,6 @@ a.qbtn{text-decoration:none}
 <div class="toast" id="toast"></div>
 
 <script>
-var STAGELABELS={contacted:'Contacted',interviewed:'Interviewed',
-  offered:'Offered',signed:'Signed',started:'Started'};
-var STAGES=['contacted','interviewed','offered','signed','started'];
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function money(v){return '$'+Math.round(v).toLocaleString();}
@@ -337,19 +319,6 @@ function load(){
           }).join('')+'</div></div>';
       }).join('');
     }
-    // hiring rail
-    var byStage={};
-    (d.hiring||[]).forEach(function(c){(byStage[c.stage]=byStage[c.stage]||[]).push(c);});
-    document.getElementById('rail').innerHTML=STAGES.map(function(stg,i){
-      var items=(byStage[stg]||[]).map(function(c){
-        return '<div class="cand"><span>'+esc(c.name)+'</span><span class="mv">'+
-          (i>0?'<button title="back" onclick="mv('+c.id+',\''+STAGES[i-1]+'\')">◂</button>':'')+
-          (i<STAGES.length-1?'<button title="forward" onclick="mv('+c.id+',\''+STAGES[i+1]+'\')">▸</button>':'')+
-          '<button title="out" onclick="mv('+c.id+',\'out\')">✕</button>'+
-          '</span></div>';
-      }).join('');
-      return '<div class="rcol"><h4>'+STAGELABELS[stg]+'</h4>'+items+'</div>';
-    }).join('');
   }).catch(function(e){if(e!==0)console.error(e);});
 }
 function toast(msg){
@@ -375,23 +344,6 @@ function act(id,cardKey,btn){
         if(btn){btn.textContent='Nudged ✓';}
       }
     }).catch(function(){if(btn)btn.disabled=false;});
-}
-function addCand(){
-  var inp=document.getElementById('candName');
-  var name=inp.value.trim();
-  if(!name)return;
-  fetch('/api/operator/act',{method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action:'hiring_add',name:name})})
-    .then(function(r){return r.json();})
-    .then(function(d){if(d.ok){inp.value='';load();}});
-}
-function mv(id,stage){
-  fetch('/api/operator/act',{method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action:'hiring_move',id:id,stage:stage})})
-    .then(function(r){return r.json();})
-    .then(function(){load();});
 }
 load();
 setInterval(load,120000);
