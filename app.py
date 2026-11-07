@@ -13908,6 +13908,129 @@ def api_callingly_configure():
     return jsonify({"ok": False, "error": "nothing to do"}), 400
 
 
+@app.route("/api/admin/callingly/sync-team", methods=["POST"])
+def api_callingly_sync_team():
+    """Set the Callingly ring roster from Command Center names.
+    Body: {"agents": ["Matt Moubray", ...], "apply": false}
+    apply false (default) returns the diff and touches nothing;
+    apply true replaces the team's membership at Callingly."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import callingly_client as _cc
+    if not _cc.is_configured():
+        return jsonify({"ok": False,
+                        "error": "CALLINGLY_API_KEY not set"}), 400
+    tid, _ = _db.get_app_state("callingly_team_id")
+    if not (tid or "").strip():
+        return jsonify({"ok": False, "error": "set team_id first"}), 400
+    body = request.get_json(silent=True) or {}
+    wanted = [str(n).strip() for n in (body.get("agents") or [])
+              if str(n).strip()]
+    try:
+        remote = _cc.list_agents()
+        remote = remote if isinstance(remote, list) else \
+            (remote or {}).get("agents") or []
+    except Exception as e:
+        return jsonify({"ok": False,
+                        "error": "Callingly agents fetch failed: %s"
+                                 % str(e)[:150]}), 502
+    by_name = {(a.get("name") or "").strip().lower(): a for a in remote}
+    matched, unmatched = [], []
+    for n in wanted:
+        hit = by_name.get(n.lower())
+        if hit:
+            matched.append({"name": n, "callingly_id": hit.get("id")})
+        else:
+            unmatched.append(n)
+    try:
+        cur = _cc.get_team_agents(tid)
+        current = [a.get("name") for a in
+                   ((cur or {}).get("agents") or [])]
+    except Exception:
+        current = []
+    out = {"ok": True, "team_id": tid, "current": current,
+           "matched": matched, "unmatched": unmatched,
+           "unmatched_note": ("These names have no Callingly user yet. "
+                              "Add them in the Callingly dashboard "
+                              "(Agents) with their cell number, then "
+                              "sync again." if unmatched else None),
+           "applied": False}
+    if body.get("apply") and matched:
+        _cc.set_team_agents(tid, [m["callingly_id"] for m in matched])
+        out["applied"] = True
+        _db.log_automation_event(
+            event_type="callingly_team_sync", person_id=None,
+            person_name=None, agent_name=None,
+            payload={"team_id": tid,
+                     "agents": [m["name"] for m in matched]},
+            triggered_by="admin")
+    return jsonify(out)
+
+
+@app.route("/api/admin/callingly/scoreboard")
+def api_callingly_scoreboard():
+    """Ring outcomes, honestly labeled. 'Ring to resolved' includes the
+    call itself for answered rings (the webhook fires at call end), so
+    it is an upper bound on speed, never the claim it beat a stopwatch."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = max(1, min(request.args.get("days", 30, type=int) or 30, 90))
+    out = {"ok": True, "days": days}
+    try:
+        _db.ensure_callingly_table()
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT status, COUNT(*) FROM callingly_rings
+                    WHERE created_at >= NOW() - make_interval(days => %s)
+                    GROUP BY status""", (days,))
+                out["by_status"] = {r[0]: int(r[1])
+                                    for r in cur.fetchall()}
+                cur.execute("""
+                    SELECT agent_name, COUNT(*),
+                           ROUND(AVG(EXTRACT(EPOCH FROM resolved_at
+                                             - created_at)))
+                    FROM callingly_rings
+                    WHERE status = 'answered' AND agent_name IS NOT NULL
+                      AND created_at >= NOW() - make_interval(days => %s)
+                    GROUP BY agent_name ORDER BY 2 DESC""", (days,))
+                out["answered_by_agent"] = [
+                    {"agent": r[0], "answers": int(r[1]),
+                     "avg_ring_to_resolved_secs": int(r[2])
+                     if r[2] is not None else None}
+                    for r in cur.fetchall()]
+                cur.execute("""
+                    SELECT lead_name, status, agent_name, outcome,
+                           created_at, resolved_at
+                    FROM callingly_rings
+                    WHERE created_at >= NOW() - make_interval(days => %s)
+                    ORDER BY created_at DESC LIMIT 20""", (days,))
+                out["recent"] = [
+                    {"lead": r[0], "status": r[1], "agent": r[2],
+                     "outcome": r[3],
+                     "at": r[4].isoformat() if r[4] else None,
+                     "resolved_at": r[5].isoformat() if r[5] else None}
+                    for r in cur.fetchall()]
+        total = sum(out["by_status"].values()) or 0
+        answered = out["by_status"].get("answered", 0)
+        out["answer_rate_pct"] = round(100.0 * answered / total) \
+            if total else None
+    except Exception as e:
+        out["error"] = str(e)[:200]
+    return jsonify(out)
+
+
+@app.route("/callingly-console")
+def callingly_console_page():
+    """Barry's launch console: every gate, lever, and receipt for the
+    ring-first lane on one screen. Safe to open any time; the page
+    never fires anything without an explicit click plus confirm."""
+    if not _perplexity_auth():
+        return "Unauthorized", 401
+    return render_template("callingly_console.html",
+                           key=request.args.get("key", ""))
+
+
 @app.route("/api/admin/callingly/test-ring", methods=["POST"])
 def api_callingly_test_ring():
     """One test ring, only ever to a phone number typed into this call:
@@ -25258,6 +25381,28 @@ def api_grok_pulse():
             **(_db.ca_counts(days=7) or {})}
     except Exception as e:
         out["callaction"] = {"error": str(e)[:120]}
+
+    # ── callingly ring-first lane ───────────────────────────────────────
+    try:
+        _cl_live, _ = _db.get_app_state("callingly_live")
+        _cl = {"as_of": _now,
+               "live": (_cl_live or "").strip() == "1",
+               "note": ("ring-first delivery for paid Realtor.com leads: "
+                        "phones ring, first press-1 bridges to the lead, "
+                        "4-minute fallback to claim buttons. Dark until "
+                        "Barry's training rollout; rings_14d empty means "
+                        "not launched, not broken")}
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT status, COUNT(*) FROM callingly_rings
+                    WHERE created_at >= NOW() - INTERVAL '14 days'
+                    GROUP BY status""")
+                _cl["rings_14d"] = {r[0]: int(r[1])
+                                    for r in cur.fetchall()}
+        out["callingly"] = _cl
+    except Exception as e:
+        out["callingly"] = {"error": str(e)[:120]}
 
     # ── sync health ─────────────────────────────────────────────────────
     try:

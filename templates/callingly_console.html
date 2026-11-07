@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Callingly Console</title>
+<style>
+:root{--bg:#0f172a;--panel:#16213e;--line:#26365c;--ink:#e8eefc;
+--muted:#93a4c4;--gold:#f5a623;--green:#37c98b;--red:#e5544b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:14.5px;
+font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:22px 16px 70px}
+h1{font-size:21px;margin:0 0 2px}
+.sub{color:var(--muted);font-size:12.5px;margin:0 0 16px;max-width:66ch}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;margin-bottom:14px}
+h2{font-size:14px;margin:0 0 10px;letter-spacing:.04em}
+.gate{display:flex;align-items:center;gap:10px;padding:7px 0;font-size:13.5px}
+.dot{width:11px;height:11px;border-radius:99px;flex:none}
+.d-on{background:var(--green)}.d-off{background:var(--red)}
+.d-warn{background:var(--gold)}
+.gate .why{color:var(--muted);font-size:12px}
+button{background:#2a3a5e;color:var(--ink);border:none;border-radius:9px;
+padding:9px 16px;font-size:13.5px;font-weight:700;cursor:pointer}
+button.primary{background:var(--gold);color:#241500}
+button.danger{background:var(--red);color:#fff}
+button:disabled{opacity:.45;cursor:default}
+input[type=text],input[type=tel]{background:#0d1729;border:1px solid var(--line);
+color:var(--ink);border-radius:8px;padding:8px 10px;font-size:13.5px;width:100%;
+max-width:260px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.agents{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px}
+.agents label{display:flex;gap:8px;align-items:center;background:#0d1729;
+border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;
+cursor:pointer}
+input[type=checkbox]{width:16px;height:16px;accent-color:var(--gold)}
+pre{background:#0d1729;border:1px solid var(--line);border-radius:8px;
+padding:10px 12px;font-size:12px;overflow-x:auto;color:var(--muted);
+white-space:pre-wrap;margin:8px 0 0}
+table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+th{text-align:left;font-size:10px;letter-spacing:.07em;text-transform:uppercase;
+color:var(--muted);padding:5px 8px 5px 0;border-bottom:1px solid var(--line)}
+td{padding:6px 8px 6px 0;border-bottom:1px solid #1a2440}
+.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--gold)}
+.msg{font-size:12.5px;margin-top:8px}
+.live-warning{background:rgba(229,84,75,.12);border:1px solid rgba(229,84,75,.4);
+border-radius:9px;padding:10px 12px;font-size:12.5px;color:#ff9d96;margin:8px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Callingly Console</h1>
+  <p class="sub">The ring-first lane for paid Realtor.com leads: phones ring,
+  first press of 1 is bridged live to the lead, no answer in 4 minutes falls
+  back to the claim buttons. Nothing on this page fires without your click.</p>
+
+  <div class="card">
+    <h2>Gates</h2>
+    <div id="gates"><div class="gate"><span class="dot d-warn"></span>Loading...</div></div>
+    <div class="row" id="gate-actions"></div>
+    <div class="msg" id="gate-msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Ring team</h2>
+    <p class="sub" style="margin-bottom:8px">Tick who should ring. Preview
+    shows the match against Callingly before anything changes. Agents
+    missing from Callingly get added in its dashboard first (Agents, with
+    their cell number).</p>
+    <div class="agents" id="agents">Loading roster...</div>
+    <div class="row">
+      <button onclick="syncTeam(false)">Preview sync</button>
+      <button class="primary" id="applyBtn" onclick="syncTeam(true)" disabled>Apply to Callingly</button>
+    </div>
+    <pre id="sync-out" hidden></pre>
+  </div>
+
+  <div class="card">
+    <h2>Test ring</h2>
+    <p class="sub" style="margin-bottom:8px">Rings the configured team for
+    the number below as the pretend lead. Put only yourself on the team
+    first. Use your own cell or one you control.</p>
+    <div class="row">
+      <input type="tel" id="testPhone" placeholder="(757) 555-0100">
+      <button class="primary" onclick="testRing()">Fire one test ring</button>
+    </div>
+    <div class="msg" id="test-msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Go live</h2>
+    <div class="live-warning">Live means every new Realtor.com lead rings
+    the team's actual phones immediately. Flip it only after the team demo
+    and with the ring team set on purpose.</div>
+    <div class="row">
+      <button class="danger" id="liveBtn" onclick="toggleLive()">...</button>
+      <span class="msg" id="live-msg"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Scoreboard (30 days)</h2>
+    <div id="score">No rings yet. This fills in from the first test ring.</div>
+  </div>
+</div>
+<script>
+var KEY=new URLSearchParams(location.search).get("key")||"";
+var ST=null;
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function api(path,body){
+  var opt=body?{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)}:{};
+  return fetch(path+(path.indexOf('?')<0?'?':'&')+'key='+encodeURIComponent(KEY),opt)
+    .then(function(r){return r.json();});
+}
+function gates(){
+  api('/api/admin/callingly/status').then(function(d){
+    ST=d;
+    var teams=(d.teams&&d.teams.length)?d.teams:[];
+    var wh=(d.webhooks&&d.webhooks.length)?d.webhooks.length:0;
+    var g='';
+    g+=gate(d.configured,'API key in Railway',
+      d.configured?'connected':'create one at callingly.com, Settings then API Keys, save as CALLINGLY_API_KEY in Railway, click Deploy on the staged banner');
+    g+=gate(!!d.team_id,'Ring team chosen',
+      d.team_id?('team '+d.team_id):(teams.length?'pick below':'connect the key first'));
+    g+=gate(wh>0,'Webhook registered',
+      wh>0?(wh+' registered'):'one click below once the key is in');
+    g+=gate(d.live,'LIVE',(d.live?'leads are ringing phones':'dark, nothing rings'));
+    document.getElementById('gates').innerHTML=g;
+    var a='';
+    if(d.configured&&teams.length&&!d.team_id){
+      teams.forEach(function(t){
+        a+='<button onclick="setTeam('+t.id+')">Use team: '+esc(t.name)+'</button>';
+      });
+    }
+    if(d.configured&&!wh){
+      a+='<button onclick="regWebhook()">Register webhook</button>';
+    }
+    document.getElementById('gate-actions').innerHTML=a;
+    var lb=document.getElementById('liveBtn');
+    lb.textContent=d.live?'Turn the lane OFF':'Go live';
+    lb.className=d.live?'':'danger';
+  });
+}
+function gate(on,label,why){
+  return '<div class="gate"><span class="dot '+(on?'d-on':'d-off')+'"></span>'+
+    '<b>'+esc(label)+'</b><span class="why">'+esc(why)+'</span></div>';
+}
+function setTeam(id){
+  api('/api/admin/callingly/configure',{team_id:id}).then(function(){gates();});
+}
+function regWebhook(){
+  document.getElementById('gate-msg').textContent='Registering...';
+  api('/api/admin/callingly/configure',{register_webhook:true}).then(function(d){
+    document.getElementById('gate-msg').textContent=
+      d.ok?'Webhook registered at Callingly.':('Failed: '+(d.error||''));
+    gates();
+  });
+}
+function roster(){
+  api('/api/admin/policy').then(function(d){
+    var h='';
+    (d.roster||[]).forEach(function(r){
+      if(['test','non_lead','inactive'].indexOf(r.status)>=0)return;
+      h+='<label><input type="checkbox" value="'+esc(r.agent)+'">'+
+        esc(r.agent)+'</label>';
+    });
+    document.getElementById('agents').innerHTML=
+      h||'No active agents found.';
+  });
+}
+function picked(){
+  var out=[];
+  document.querySelectorAll('#agents input:checked').forEach(function(c){
+    out.push(c.value);});
+  return out;
+}
+function syncTeam(apply){
+  var names=picked();
+  if(!names.length){alert('Tick at least one agent.');return;}
+  if(apply&&!confirm('Replace the Callingly ring team with: '+
+    names.join(', ')+'?'))return;
+  api('/api/admin/callingly/sync-team',{agents:names,apply:!!apply})
+    .then(function(d){
+      var el=document.getElementById('sync-out');
+      el.hidden=false;
+      el.textContent=JSON.stringify(d,null,1);
+      document.getElementById('applyBtn').disabled=
+        !(d.ok&&d.matched&&d.matched.length&&!d.applied);
+      if(d.applied)document.getElementById('applyBtn').disabled=true;
+    });
+}
+function testRing(){
+  var ph=document.getElementById('testPhone').value.trim();
+  if(!ph){alert('Enter the number to use as the pretend lead.');return;}
+  if(!confirm('Ring the configured team now, bridging to '+ph+'?'))return;
+  document.getElementById('test-msg').textContent='Ringing...';
+  api('/api/admin/callingly/test-ring',{phone:ph,confirm:'ring',
+    name:'Command Center Test'}).then(function(d){
+      document.getElementById('test-msg').textContent=
+        d.ok?'Ring fired. Phones on the team should ring within seconds.':
+        ('Failed: '+(d.error||''));
+      setTimeout(score,15000);
+    });
+}
+function toggleLive(){
+  var goingLive=!(ST&&ST.live);
+  var word=goingLive?'LIVE':'OFF';
+  var typed=prompt('Type '+word+' to confirm.');
+  if((typed||'').trim().toUpperCase()!==word)return;
+  api('/api/admin/callingly/configure',{live:goingLive}).then(function(d){
+    document.getElementById('live-msg').textContent=
+      d.ok?(goingLive?'Live. New Realtor.com leads now ring phones.':
+      'Dark. Claim buttons own the lane again.'):'Failed.';
+    gates();
+  });
+}
+function score(){
+  api('/api/admin/callingly/scoreboard').then(function(d){
+    if(!d.ok||!d.by_status||!Object.keys(d.by_status).length)return;
+    var h='<div class="row">';
+    h+='<b>'+(d.answer_rate_pct!=null?d.answer_rate_pct+'% answered':'')+'</b>';
+    Object.keys(d.by_status).forEach(function(k){
+      h+='<span class="why" style="color:var(--muted)">'+k+': '+
+        d.by_status[k]+'</span>';
+    });
+    h+='</div><table><thead><tr><th>Lead</th><th>Status</th><th>Agent</th>'+
+      '<th>Outcome</th></tr></thead><tbody>';
+    (d.recent||[]).forEach(function(r){
+      h+='<tr><td>'+esc(r.lead)+'</td><td class="'+
+        (r.status==='answered'?'ok':r.status==='fallback'?'warn':'bad')+'">'+
+        esc(r.status)+'</td><td>'+esc(r.agent||'')+'</td><td>'+
+        esc(r.outcome||'')+'</td></tr>';
+    });
+    h+='</tbody></table>';
+    document.getElementById('score').innerHTML=h;
+  });
+}
+gates();roster();score();
+setInterval(gates,60000);
+</script>
+</body>
+</html>
