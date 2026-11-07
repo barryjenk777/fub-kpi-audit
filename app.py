@@ -7492,7 +7492,11 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
 
 def scheduled_ai_nurture_router():
     """Twice a day (10:30am and 3:30pm ET). Rides the same live gate as
-    the desk: no routing while dispatch is dark."""
+    the desk: no routing while dispatch is dark. Job lock added Nov 7
+    after a deploy overlap ran two containers' schedulers at 3:30 and
+    double-fired the batch (10 leads instead of 5)."""
+    if not _db.try_acquire_job_lock("ai_nurture_router"):
+        return
     try:
         live, _ = _db.get_app_state("dispatch_ai_live")
         if (live or "").strip() != "1":
