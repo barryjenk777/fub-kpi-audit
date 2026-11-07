@@ -3,35 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&display=swap">
 <meta name="robots" content="noindex">
 <title>Roster Policy</title>
 <style>
-:root{--bg:#0f172a;--panel:#16213e;--line:#26365c;--ink:#e8eefc;
---muted:#93a4c4;--gold:#f5a623;--green:#37c98b;--red:#e5544b}
+:root{--bg:#f4f2ec;--panel:#fdfcf8;--line:#e1ddd0;--ink:#191b1e;
+--muted:#6e7268;--gold:#2340d6;--green:#0d7a4e;--red:#d7401f}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-size:14.5px;
-font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
+font-family:'Archivo',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
 .wrap{max-width:880px;margin:0 auto;padding:22px 16px 70px}
 h1{font-size:21px;margin:0 0 2px}
 .sub{color:var(--muted);font-size:12.5px;margin:0 0 16px;max-width:64ch}
 table{width:100%;border-collapse:collapse;background:var(--panel);
 border:1px solid var(--line);border-radius:10px;overflow:hidden}
-th{background:#1c2a4a;text-align:left;font-size:10.5px;letter-spacing:.07em;
+th{background:#f1eee6;text-align:left;font-size:10.5px;letter-spacing:.07em;
 text-transform:uppercase;color:var(--muted);padding:9px 10px}
 td{padding:8px 10px;border-top:1px solid var(--line);vertical-align:middle}
 .tag{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
 padding:2px 7px;border-radius:99px;white-space:nowrap}
-.t-in{background:rgba(55,201,139,.16);color:#79e5ba}
-.t-out{background:rgba(229,84,75,.14);color:#ff9d96}
-.t-pass{color:#79e5ba}.t-fail{color:var(--muted)}
-input[type=date]{background:#0d1729;border:1px solid var(--line);color:var(--ink);
+.t-in{background:#dff0e7;color:#0d7a4e}
+.t-out{background:#f9e3dc;color:#d7401f}
+.t-pass{color:#0d7a4e}.t-fail{color:var(--muted)}
+input[type=date]{background:#faf8f1;border:1px solid var(--line);color:var(--ink);
 border-radius:7px;padding:5px 7px;font-size:13px;color-scheme:dark}
 input[type=checkbox]{width:17px;height:17px;accent-color:var(--gold)}
 .stale{color:var(--red);font-size:10.5px}
-.btn{background:var(--gold);color:#241500;border:none;border-radius:9px;
+.btn{background:var(--gold);color:#191b1efff;border:none;border-radius:9px;
 padding:11px 22px;font-size:14.5px;font-weight:800;cursor:pointer;margin-top:14px}
 .btn:disabled{opacity:.6}
-.saved{color:#79e5ba;font-weight:700;margin-left:12px;font-size:13px}
+.saved{color:#0d7a4e;font-weight:700;margin-left:12px;font-size:13px}
 .note{background:var(--panel);border:1px solid var(--line);border-radius:10px;
 padding:11px 14px;font-size:12px;color:var(--muted);margin-top:16px;max-width:66ch}
 .src{font-size:11px;color:var(--muted);margin:0 0 10px}

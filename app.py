@@ -25753,31 +25753,31 @@ def revenue_page():
     html = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Revenue</title><style>
-body{margin:0;background:#0f172a;color:#e8eefc;font-family:-apple-system,
+body{margin:0;background:#f4f2ec;color:#191b1e;font-family:'Archivo',-apple-system,
 'Segoe UI',Arial,sans-serif;font-size:14px}
 .wrap{max-width:1100px;margin:0 auto;padding:24px 20px 60px}
 h1{font-size:22px;margin:0 0 4px}
-.sub{color:#93a4c4;font-size:12.5px;margin:0 0 18px}
+.sub{color:#6e7268;font-size:12.5px;margin:0 0 18px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
 gap:12px;margin:0 0 20px}
-.card{background:#16213e;border:1px solid #26365c;border-radius:10px;
+.card{background:#fdfcf8;border:1px solid #e1ddd0;border-radius:10px;
 padding:14px 16px}
 .label{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
-color:#93a4c4;font-weight:700}
+color:#6e7268;font-weight:700}
 .val{font-size:24px;font-weight:800;margin-top:4px}
-.sub2{font-size:12px;color:#93a4c4;margin-top:3px}
-table{width:100%%;border-collapse:collapse;background:#16213e;
-border:1px solid #26365c;border-radius:10px;overflow:hidden;
+.sub2{font-size:12px;color:#6e7268;margin-top:3px}
+table{width:100%%;border-collapse:collapse;background:#fdfcf8;
+border:1px solid #e1ddd0;border-radius:10px;overflow:hidden;
 margin-bottom:20px}
-th{background:#1c2a4a;text-align:left;font-size:10.5px;letter-spacing:.07em;
-text-transform:uppercase;color:#93a4c4;padding:9px 12px}
-td{padding:9px 12px;border-top:1px solid #26365c}
+th{background:#f1eee6;text-align:left;font-size:10.5px;letter-spacing:.07em;
+text-transform:uppercase;color:#6e7268;padding:9px 12px}
+td{padding:9px 12px;border-top:1px solid #e1ddd0}
 .sec{margin:20px 0 8px;font-size:15px;font-weight:700}
-.note{background:#16213e;border:1px solid #26365c;border-radius:10px;
-padding:12px 16px;font-size:12.5px;color:#93a4c4;margin-top:16px}
+.note{background:#fdfcf8;border:1px solid #e1ddd0;border-radius:10px;
+padding:12px 16px;font-size:12.5px;color:#6e7268;margin-top:16px}
 </style></head><body><div class="wrap">
 <a href="/" style="display:inline-block;margin-bottom:.8rem;font-size:.78rem;
-font-weight:700;color:#f5a623;text-decoration:none">&larr; Command Center</a>
+font-weight:700;color:#2340d6;text-decoration:none">&larr; Command Center</a>
 <h1>Revenue</h1>
 <p class="sub">FUB deals and appointments, nothing estimated &middot;
 as of %s &middot; coverage: %d deals, %d with price, %d with commission,
@@ -25790,7 +25790,7 @@ as of %s &middot; coverage: %d deals, %d with price, %d with commission,
 <div class="sec">Under contract now</div>
 <table><thead><tr><th>Deal</th><th>Projected close</th><th>Price</th>
 <th>Net GCI</th><th>Source</th></tr></thead><tbody>%s</tbody></table>
-<div class="sec" style="color:#ffcb72">Unattributed money (%d) &middot;
+<div class="sec" style="color:#b45309">Unattributed money (%d) &middot;
 Ana clears these in the Deal Desk</div>
 <table><thead><tr><th>Deal</th><th>Stage</th><th>Missing</th>
 <th>Aging</th></tr></thead><tbody>%s</tbody></table>

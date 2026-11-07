@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&display=swap">
 <meta name="robots" content="noindex">
 <title>Callingly Console</title>
 <style>
-:root{--bg:#0f172a;--panel:#16213e;--line:#26365c;--ink:#e8eefc;
---muted:#93a4c4;--gold:#f5a623;--green:#37c98b;--red:#e5544b}
+:root{--bg:#f4f2ec;--panel:#fdfcf8;--line:#e1ddd0;--ink:#191b1e;
+--muted:#6e7268;--gold:#2340d6;--green:#0d7a4e;--red:#d7401f}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-size:14.5px;
-font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
+font-family:'Archivo',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
 .wrap{max-width:860px;margin:0 auto;padding:22px 16px 70px}
 h1{font-size:21px;margin:0 0 2px}
 .sub{color:var(--muted);font-size:12.5px;margin:0 0 16px;max-width:66ch}
@@ -22,31 +23,31 @@ h2{font-size:14px;margin:0 0 10px;letter-spacing:.04em}
 .d-on{background:var(--green)}.d-off{background:var(--red)}
 .d-warn{background:var(--gold)}
 .gate .why{color:var(--muted);font-size:12px}
-button{background:#2a3a5e;color:var(--ink);border:none;border-radius:9px;
+button{background:#ece9e0;color:var(--ink);border:none;border-radius:9px;
 padding:9px 16px;font-size:13.5px;font-weight:700;cursor:pointer}
-button.primary{background:var(--gold);color:#241500}
-button.danger{background:var(--red);color:#fff}
+button.primary{background:var(--gold);color:#191b1efff}
+button.danger{background:var(--red);color:#191b1e}
 button:disabled{opacity:.45;cursor:default}
-input[type=text],input[type=tel]{background:#0d1729;border:1px solid var(--line);
+input[type=text],input[type=tel]{background:#faf8f1;border:1px solid var(--line);
 color:var(--ink);border-radius:8px;padding:8px 10px;font-size:13.5px;width:100%;
 max-width:260px}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0}
 .agents{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px}
-.agents label{display:flex;gap:8px;align-items:center;background:#0d1729;
+.agents label{display:flex;gap:8px;align-items:center;background:#faf8f1;
 border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;
 cursor:pointer}
 input[type=checkbox]{width:16px;height:16px;accent-color:var(--gold)}
-pre{background:#0d1729;border:1px solid var(--line);border-radius:8px;
+pre{background:#faf8f1;border:1px solid var(--line);border-radius:8px;
 padding:10px 12px;font-size:12px;overflow-x:auto;color:var(--muted);
 white-space:pre-wrap;margin:8px 0 0}
 table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
 th{text-align:left;font-size:10px;letter-spacing:.07em;text-transform:uppercase;
 color:var(--muted);padding:5px 8px 5px 0;border-bottom:1px solid var(--line)}
-td{padding:6px 8px 6px 0;border-bottom:1px solid #1a2440}
+td{padding:6px 8px 6px 0;border-bottom:1px solid #e7e4d8}
 .ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--gold)}
 .msg{font-size:12.5px;margin-top:8px}
-.live-warning{background:rgba(229,84,75,.12);border:1px solid rgba(229,84,75,.4);
-border-radius:9px;padding:10px 12px;font-size:12.5px;color:#ff9d96;margin:8px 0}
+.live-warning{background:#fbeae4;border:1px solid #eec7bb;
+border-radius:9px;padding:10px 12px;font-size:12.5px;color:#d7401f;margin:8px 0}
 </style>
 </head>
 <body>

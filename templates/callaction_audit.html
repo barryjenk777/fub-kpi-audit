@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&display=swap">
 <title>CallAction Audit</title>
 <style>
-:root{--bg:#0f172a;--panel:#16213e;--line:#26365c;--ink:#e8eefc;
---muted:#93a4c4;--gold:#f5a623;--green:#37c98b;--red:#e5544b;--blue:#4b8ef1}
+:root{--bg:#f4f2ec;--panel:#fdfcf8;--line:#e1ddd0;--ink:#191b1e;
+--muted:#6e7268;--gold:#2340d6;--green:#0d7a4e;--red:#d7401f;--blue:#2340d6}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-size:15px;
-font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
+font-family:'Archivo',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif}
 .wrap{max-width:720px;margin:0 auto;padding:20px 14px 70px}
 h1{font-size:20px;margin:0 0 2px}
 .sub{color:var(--muted);font-size:12.5px;margin:0 0 14px}
@@ -29,24 +30,24 @@ padding:14px 16px;margin-bottom:12px}
 .nm a:hover{color:var(--gold)}
 .chip{font-size:10.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
 padding:3px 9px;border-radius:99px}
-.chip.pos{background:rgba(55,201,139,.18);color:#79e5ba}
-.chip.neu{background:rgba(245,166,35,.18);color:#ffcb72}
-.chip.neg{background:rgba(229,84,75,.18);color:#ff9d96}
-.chip.unread{background:rgba(75,142,241,.18);color:#8fbcff}
-.msg{background:#0d1729;border-radius:9px;padding:10px 12px;margin:10px 0 6px;
+.chip.pos{background:#dff0e7;color:#0d7a4e}
+.chip.neu{background:#f6ead6;color:#b45309}
+.chip.neg{background:#f9e3dc;color:#d7401f}
+.chip.unread{background:#e3eafc;color:#2340d6}
+.msg{background:#faf8f1;border-radius:9px;padding:10px 12px;margin:10px 0 6px;
 font-size:14.5px;white-space:pre-wrap}
 .msg.empty{color:var(--muted);font-style:italic}
 .why{font-size:12px;color:var(--muted);margin-bottom:10px}
 .btns{display:flex;gap:8px;margin-top:8px}
 .btn{flex:1;border:none;border-radius:9px;padding:12px 10px;font-size:14px;
 font-weight:700;cursor:pointer}
-.keep{background:var(--green);color:#06281a}
-.trash{background:#2a3a5e;color:var(--muted)}
+.keep{background:var(--green);color:#191b1efff}
+.trash{background:#ece9e0;color:var(--muted)}
 .btn:disabled{opacity:.6}
 a.btn{display:block;text-align:center;text-decoration:none;
-background:#1d2c4e;color:#8fbcff;border:1px solid var(--line)}
+background:#e3eafc;color:#2340d6;border:1px solid var(--line)}
 .dossier{font-size:12px;color:var(--muted);margin-top:4px}
-.replyline{font-size:12.5px;color:#ffcb72;margin-top:8px;font-weight:600}
+.replyline{font-size:12.5px;color:#b45309;margin-top:8px;font-weight:600}
 .empty-state{background:var(--panel);border:1px solid var(--line);border-radius:12px;
 padding:26px;text-align:center;color:var(--muted)}
 .spin{color:var(--muted);padding:26px;text-align:center}
@@ -119,7 +120,7 @@ function load(){
         h+='<div class="card '+k+'" id="row-'+r.id+'">'+
           '<div class="top"><span class="nm"><a target="_blank" href="'+fub+'" style="text-decoration:underline">'+esc(r.person_name||'Unknown')+'</a></span>'+
           '<span>'+chip+' '+
-          '<span style="font-size:11px;color:#93a4c4">'+rel(r.created_at)+'</span></span></div>'+
+          '<span style="font-size:11px;color:#6e7268">'+rel(r.created_at)+'</span></span></div>'+
           (dossier.length? '<div class="dossier">'+dossier.join(' · ')+'</div>':'')+
           (r.message? '<div class="msg">'+esc(r.message)+'</div>'
             : (c.read_why? '<div class="msg">Signals, not words: '+esc(c.read_why)+'. Their actual reply is one tap away in CallAction.</div>'
@@ -127,7 +128,7 @@ function load(){
           (reply? '<div class="replyline">'+reply+'</div>':'')+
           (r.reason&&r.message? '<div class="why">'+esc(r.reason)+'</div>':'')+
           '<div class="btns">'+
-          (c.ca_link? '<a class="btn" target="_blank" href="'+esc(c.ca_link)+'" style="background:#2b4a2f;color:#9fe2b0;border-color:#3c6442">Read reply in CallAction</a>':'')+
+          (c.ca_link? '<a class="btn" target="_blank" href="'+esc(c.ca_link)+'" style="background:#e4f2ea;color:#0d7a4e;border-color:#bcdccb">Read reply in CallAction</a>':'')+
           '<a class="btn" target="_blank" href="'+fub+'">Open in FUB &#8599;</a>'+
           (c.phone? '<a class="btn" href="tel:'+esc(c.phone)+'">Call '+first+'</a>':'')+
           '</div>'+
@@ -154,10 +155,10 @@ function decide(id,what,btn){
         btn.textContent=what==='keep'?'Worth my time':'Trash to pond';
         alert(d.error||'Did not save');return;}
       card.style.opacity='0.45';
-      card.innerHTML='<div style="font-size:13px;color:'+(what==='keep'?'#79e5ba':'#93a4c4')+
+      card.innerHTML='<div style="font-size:13px;color:'+(what==='keep'?'#0d7a4e':'#6e7268')+
         '">'+(what==='keep'?'&#10003; Yours. It stays in FUB wherever it lives.':
         '&#10003; Moved to Storage Pond.')+
-        (d.warning? ' <b style="color:#ffcb72">'+esc(d.warning)+'</b>':'')+'</div>';
+        (d.warning? ' <b style="color:#b45309">'+esc(d.warning)+'</b>':'')+'</div>';
       setTimeout(function(){card.remove(); load();}, 900);
     })
     .catch(function(){card.querySelectorAll('button').forEach(function(b){b.disabled=false;});});
