@@ -615,9 +615,22 @@ class LeadScorer:
         if not people:
             return []
 
-        # Fetch recent calls and texts for contact history
+        # Fetch recent calls and texts for contact history.
+        # Nov 6 2026 audit fix: FUB's calls endpoint silently ignores its
+        # userId filter AND hard-caps pagination at 2,000 records, so the
+        # old live fetch returned a truncated, team-wide list attributed to
+        # this agent. The calls cache is complete (nightly repair sweep) and
+        # we scope it to the agent here. The per-person fallback in
+        # _hours_since_last_contact still catches anything older.
         since = self.now - timedelta(days=LEADSTREAM_REENGAGE_MAX_DAYS)
-        calls = self.client.get_calls(user_id=agent_id, since=since)
+        try:
+            import db as _dbc
+            calls = [c for c in _dbc.get_cached_calls(since=since)
+                     if c.get("userId") == agent_id]
+        except Exception as e:
+            logger.warning("calls cache read failed, scoring without bulk "
+                           "call history (per-person fallback covers it): %s", e)
+            calls = []
         texts = self._get_agent_texts_by_person(agent_id, since)
 
         # Score each lead

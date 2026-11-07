@@ -8518,16 +8518,50 @@ def api_onboarding_digest_preview():
 # Transaction Manager portal — scoped access, no Command Center
 # ---------------------------------------------------------------------------
 
+def _tm_active_key() -> str:
+    """The TM portal key in force: the env var when set, else a random
+    key generated once and kept in app_state (Nov 6 2026 audit: the old
+    'tm-2026' fallback was guessable)."""
+    expected = (getattr(config, "TM_PORTAL_KEY", "") or "").strip()
+    if expected:
+        return expected
+    try:
+        stored, _ = _db.get_app_state("tm_portal_key")
+        if (stored or "").strip():
+            return stored.strip()
+        import secrets as _sec
+        fresh = "tm-" + _sec.token_urlsafe(12)
+        _db.set_app_state("tm_portal_key", fresh)
+        return fresh
+    except Exception as e:
+        logger.error("TM key generation failed, portal locked: %s", e)
+        return ""
+
+
 def _tm_auth() -> bool:
     """Transaction-manager key. Separate from the admin key so it can be rotated
     or revoked without touching Barry's access, and grants ONLY /tm."""
-    expected = getattr(config, "TM_PORTAL_KEY", "")
+    expected = _tm_active_key()
     if not expected:
         return False
     provided = (request.args.get("k", "").strip()
                 or (request.get_json(silent=True) or {}).get("k", "")
                 or request.headers.get("X-TM-Key", "").strip())
     return provided == expected
+
+
+@app.route("/api/admin/tm/link")
+def api_tm_link():
+    """Ana's working portal link, for Barry to send her. Rotate by setting
+    TM_PORTAL_KEY in Railway (then Deploy), or POST {"rotate": true} here
+    to regenerate the stored key (old links die instantly)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    base = (os.environ.get("BASE_URL") or request.url_root).rstrip("/")
+    return jsonify({"ok": True,
+                    "link": "%s/tm?k=%s" % (base, _tm_active_key()),
+                    "source": "env" if (getattr(config, "TM_PORTAL_KEY", "")
+                                        or "").strip() else "generated"})
 
 
 def _tm_due_soon(txs):
@@ -20745,6 +20779,217 @@ def sync_calls_cache():
     return len(calls) if calls else 0
 
 
+def run_calls_warehouse_repair(days=7):
+    """Nov 6 2026 audit, punch list #3. Two jobs in one nightly pass.
+
+    REPAIR: re-walk the last `days` ET days of FUB calls one day at a
+    time (a single day sits far under FUB's 2,000-record pagination cap;
+    a day that somehow clips gets re-fetched in two half-day windows)
+    and upsert into calls_cache. Watermark gaps from deploys or missed
+    30-minute syncs heal within a day instead of living forever.
+
+    RECONCILE: after repair, compare the cache's per-day row count to
+    the fresh FUB count. A day still off by more than 2% or 10 records
+    after repair means something structural (deleted calls, upsert
+    failures) and pages Barry on email and Slack. A quiet morning means
+    the call data was verified complete overnight, every night."""
+    from zoneinfo import ZoneInfo
+    ET = ZoneInfo("America/New_York")
+    today_et = datetime.now(ET).date()
+    client = FUBClient()
+    report = {"ok": True, "days": [], "repaired_rows": 0, "alarms": []}
+    for back in range(1, days + 1):
+        day = today_et - timedelta(days=back)
+        d0 = datetime.combine(day, datetime.min.time(), tzinfo=ET) \
+            .astimezone(timezone.utc)
+        d1 = d0 + timedelta(days=1)
+        before = _db.count_cached_calls(d0, d1)
+        fresh = []
+        try:
+            fresh = client.get_calls(since=d0.replace(tzinfo=None),
+                                     until=d1.replace(tzinfo=None))
+            if len(fresh) >= 1900:
+                # Day clipped at the cap: refetch in two half-day windows.
+                mid = d0 + timedelta(hours=12)
+                fresh = (client.get_calls(since=d0.replace(tzinfo=None),
+                                          until=mid.replace(tzinfo=None))
+                         + client.get_calls(since=mid.replace(tzinfo=None),
+                                            until=d1.replace(tzinfo=None)))
+        except Exception as e:
+            report["days"].append({"day": day.isoformat(),
+                                   "error": str(e)[:120]})
+            continue
+        upserted = 0
+        if fresh:
+            try:
+                upserted = _db.upsert_calls_cache(fresh)
+            except Exception as e:
+                logger.warning("[WAREHOUSE] upsert failed for %s: %s", day, e)
+        after = _db.count_cached_calls(d0, d1)
+        gap_healed = max(0, after - before)
+        report["repaired_rows"] += gap_healed
+        drift = abs(after - len(fresh))
+        bad = drift > max(10, int(0.02 * max(len(fresh), 1)))
+        row = {"day": day.isoformat(), "fub": len(fresh),
+               "cache_before": before, "cache_after": after,
+               "healed": gap_healed, "drift_after_repair": drift,
+               "alarm": bad}
+        report["days"].append(row)
+        if bad:
+            report["alarms"].append(
+                "%s: FUB shows %d calls, the warehouse holds %d after "
+                "repair (off by %d)." % (day.isoformat(), len(fresh),
+                                         after, drift))
+        if gap_healed:
+            _db.log_automation_event(
+                event_type="calls_warehouse_repair", person_id=None,
+                person_name=None, agent_name=None,
+                payload=row, triggered_by="warehouse")
+    if report["alarms"] and _db.claim_once(
+            "warehouse_alarm_%s" % today_et.isoformat()):
+        body = ("The nightly call-data reconciliation found a mismatch "
+                "that repair could not close. Audit, scoring, and "
+                "coaching numbers may be off for these days until it is "
+                "resolved: " + " ".join(report["alarms"]))
+        logger.error("[WAREHOUSE] %s", body)
+        try:
+            import postmark_client as _pm
+            _pm.send(to=config.EMAIL_FROM, from_email=config.EMAIL_FROM,
+                     subject="Call data reconciliation: mismatch found",
+                     html="<p>%s</p><p>Manual rerun: POST "
+                          "/api/admin/calls-warehouse/repair</p>" % body)
+        except Exception as e:
+            logger.warning("[WAREHOUSE] alarm email failed: %s", e)
+        try:
+            import slack_client as _sl
+            import dispatch as _dp
+            bid = _dp._slack_user_id("Barry Jenkins")
+            if _sl.is_available() and bid:
+                _sl.dm_user(bid, "⚠️ %s" % body)
+        except Exception:
+            pass
+    return report
+
+
+def scheduled_calls_warehouse_repair():
+    """Nightly 2:40am ET."""
+    if not _db.try_acquire_job_lock("calls_warehouse_repair"):
+        return
+    try:
+        rep = run_calls_warehouse_repair()
+        logger.info("[WAREHOUSE] nightly repair: %d rows healed, %d alarms",
+                    rep.get("repaired_rows", 0), len(rep.get("alarms", [])))
+    except Exception as e:
+        _alert_on_job_failure("calls_warehouse_repair", str(e))
+
+
+@app.route("/api/admin/calls-warehouse/repair", methods=["POST"])
+def api_calls_warehouse_repair():
+    """Manual run. Body: {"days": 7}. Returns the full per-day report."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    days = max(1, min(int(body.get("days") or 7), 30))
+    return jsonify(run_calls_warehouse_repair(days=days))
+
+
+def scheduled_appt_confirm_nudge(dry_run=False):
+    """Nov 6 2026 audit, punch list #6 (the show-rate machine, step one).
+    The 90-day funnel shows 354 appointments set and 149 met (42%).
+    Every day at 5pm ET: for each appointment on TOMORROW's calendar,
+    nudge the owning agent to confirm with the lead today. Confirmed
+    appointments show at roughly double the rate of unconfirmed ones.
+    One nudge per appointment ever (claim_once); gated and excluded
+    agents are skipped; never shames, always hands the agent the exact
+    text to send."""
+    from zoneinfo import ZoneInfo
+    ET = ZoneInfo("America/New_York")
+    tomorrow = datetime.now(ET).date() + timedelta(days=1)
+    t0 = datetime.combine(tomorrow, datetime.min.time(), tzinfo=ET) \
+        .astimezone(timezone.utc)
+    t1 = t0 + timedelta(days=1)
+    gated = set()
+    try:
+        gated = _db.get_onboarding_gated() | _db.get_lead_gated_agents()
+    except Exception:
+        pass
+    excluded = set(getattr(config, "EXCLUDED_USERS", ()) or ())
+    rows = []
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT fub_appt_id, agent_name, person_name, start_time
+                    FROM appointments
+                    WHERE start_time >= %s AND start_time < %s
+                      AND COALESCE(status, '') NOT IN ('canceled')
+                      AND agent_name IS NOT NULL
+                """, (t0, t1))
+                rows = cur.fetchall()
+    except Exception as e:
+        logger.warning("[APPT CONFIRM] read failed: %s", e)
+        return {"ok": False, "error": str(e)[:120]}
+    sent = []
+    for appt_id, agent, lead, start in rows:
+        if not agent or agent in excluded or agent in gated:
+            continue
+        if not dry_run and not _db.claim_once("apptconfirm_%s" % appt_id):
+            continue
+        try:
+            when = start.astimezone(ET).strftime("%-I:%M%p").lower()
+        except Exception:
+            when = "your scheduled time"
+        first = agent.split()[0]
+        lead_first = (lead or "your appointment").split()[0]
+        msg = ("%s, you have %s tomorrow at %s. Confirm today: a "
+               "confirmed appointment shows up at about twice the rate "
+               "of an unconfirmed one. Send this now: \"Looking forward "
+               "to seeing you tomorrow at %s. Does that still work for "
+               "you?\"" % (first, lead_first, when, when))
+        if dry_run:
+            sent.append({"agent": agent, "lead": lead,
+                         "when": when, "dry_run": True})
+            continue
+        delivered = False
+        try:
+            import slack_client as _sl
+            import dispatch as _dp
+            sid = _dp._slack_user_id(agent)
+            if _sl.is_available() and sid:
+                delivered = bool(_sl.dm_user(sid, msg))
+        except Exception:
+            pass
+        if not delivered:
+            try:
+                prof = next((p for p in
+                             (_db.get_agent_profiles(active_only=True) or [])
+                             if p["agent_name"] == agent), None)
+                if prof:
+                    _db.queue_agent_imessage(
+                        agent, prof.get("fub_user_id"), prof.get("phone"),
+                        msg, week_day="appt_confirm")
+                    delivered = True
+            except Exception as e:
+                logger.warning("[APPT CONFIRM] queue failed for %s: %s",
+                               agent, e)
+        sent.append({"agent": agent, "lead": lead, "when": when,
+                     "delivered": delivered})
+    if sent:
+        logger.info("[APPT CONFIRM] %d nudge(s) for tomorrow", len(sent))
+    return {"ok": True, "tomorrow": tomorrow.isoformat(), "nudges": sent}
+
+
+@app.route("/api/admin/appt-confirm/run", methods=["POST"])
+def api_appt_confirm_run():
+    """Manual run. Body: {"dry_run": true}. dry_run defaults TRUE."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    dry = body.get("dry_run")
+    dry = True if dry is None else bool(dry)
+    return jsonify(scheduled_appt_confirm_nudge(dry_run=dry))
+
+
 def scheduled_sync_calls_cache():
     """APScheduler wrapper for sync_calls_cache() — every 30 minutes."""
     if not _db.try_acquire_job_lock("calls_cache_sync"):
@@ -24121,6 +24366,26 @@ def revenue_page():
                       _money(r["price"]) if r["price"] else "no price",
                       _money(r["net_gci"]) if r["net_gci"] else "unknown",
                       r["bucket"] or "unlinked"))
+    # Attribution exceptions (audit punch list #5): named, aging, Ana's.
+    exrows = ""
+    for x in (s.get("exceptions") or {}).get("items") or []:
+        age = ("%d days" % x["age_days"]) if x.get("age_days") is not None \
+            else "age unknown"
+        exrows += ('<tr><td>%s</td><td>%s</td>'
+                   '<td style="color:#ffcb72">%s</td><td>%s</td></tr>'
+                   % (x["name"] or ("deal %s" % x["deal_id"]), x["stage"],
+                      ", ".join(x["missing"]), age))
+    # Show rate by agent, 90d (audit punch list #6): the funnel's by_agent
+    # split, worst show rate first, minimum 3 set so tiny samples don't rank.
+    shrows = ""
+    _by_agent = ((s.get("funnel_90d") or {}).get("appointments") or {}) \
+        .get("by_agent") or {}
+    _sh = [(a, v["set"], v["met"]) for a, v in _by_agent.items()
+           if v.get("set", 0) >= 3]
+    _sh.sort(key=lambda t: (t[2] / t[1]) if t[1] else 0)
+    for a, nset, nmet in _sh:
+        shrows += ('<tr><td>%s</td><td>%d</td><td>%d</td><td>%d%%</td></tr>'
+                   % (a, nset, nmet, round(100.0 * nmet / nset)))
     html = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Revenue</title><style>
@@ -24161,6 +24426,13 @@ as of %s &middot; coverage: %d deals, %d with price, %d with commission,
 <div class="sec">Under contract now</div>
 <table><thead><tr><th>Deal</th><th>Projected close</th><th>Price</th>
 <th>Net GCI</th><th>Source</th></tr></thead><tbody>%s</tbody></table>
+<div class="sec" style="color:#ffcb72">Unattributed money (%d) &middot;
+Ana clears these in the Deal Desk</div>
+<table><thead><tr><th>Deal</th><th>Stage</th><th>Missing</th>
+<th>Aging</th></tr></thead><tbody>%s</tbody></table>
+<div class="sec">Show rate by agent, 90 days (3+ appointments set)</div>
+<table><thead><tr><th>Agent</th><th>Set</th><th>Met</th><th>Show rate</th>
+</tr></thead><tbody>%s</tbody></table>
 <div class="note">%s</div>
 </div></body></html>""" % (
         s["as_of"][:16].replace("T", " ") + "Z",
@@ -24172,6 +24444,12 @@ as of %s &middot; coverage: %d deals, %d with price, %d with commission,
                  'Dotloop/FUB and this fills in.</td></tr>',
         ucrows or '<tr><td colspan="5" style="color:#93a4c4">No deals '
                   'under contract.</td></tr>',
+        (s.get("exceptions") or {}).get("count") or 0,
+        exrows or '<tr><td colspan="4" style="color:#7ee2a8">Empty. Every '
+                  'closing and contract carries its lead, price, and '
+                  'commission.</td></tr>',
+        shrows or '<tr><td colspan="4" style="color:#93a4c4">No agents '
+                  'with 3+ appointments set in the window.</td></tr>',
         "<br>".join(s["notes"]))
     return html
 
@@ -27547,6 +27825,22 @@ def start_scheduler():
                        CronTrigger(minute="*/30", timezone=ET),
                        id="calls_cache_sync", name="Calls cache sync (every 30 min)",
                        max_instances=1, misfire_grace_time=120)
+
+    # Nov 6 2026 audit, punch list #3: nightly re-walk of the last 7 days
+    # of FUB calls heals watermark gaps, then reconciles cache vs FUB per
+    # day and pages Barry on any mismatch repair cannot close.
+    _scheduler.add_job(scheduled_calls_warehouse_repair,
+                       CronTrigger(hour=2, minute=40, timezone=ET),
+                       id="calls_warehouse_repair",
+                       name="Calls warehouse repair + reconcile (2:40am)",
+                       max_instances=1, misfire_grace_time=3600)
+
+    # Punch list #6: day-before appointment confirmation nudges (5pm ET).
+    _scheduler.add_job(scheduled_appt_confirm_nudge,
+                       CronTrigger(hour=17, minute=0, timezone=ET),
+                       id="appt_confirm_nudge",
+                       name="Appointment confirmation nudges (5pm)",
+                       max_instances=1, misfire_grace_time=1800)
 
     # Weekly self audit: Friday 7am ET — data consistency checks, emails only findings
     _scheduler.add_job(scheduled_system_self_audit,

@@ -3685,6 +3685,24 @@ def get_cached_calls(since, until=None):
         return []
 
 
+def count_cached_calls(since, until):
+    """Row count in calls_cache for a window. The reconciliation job's
+    read side (Nov 6 2026 audit, punch list #3)."""
+    if not is_available():
+        return 0
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) FROM calls_cache
+                    WHERE created >= %s AND created < %s
+                """, (since, until))
+                return int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        logger.warning("count_cached_calls failed: %s", e)
+        return 0
+
+
 def get_calls_cache_watermark():
     """Return the most recent 'created' timestamp in calls_cache, or None if empty."""
     if not is_available():

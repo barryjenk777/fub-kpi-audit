@@ -53,6 +53,18 @@ _CACHE_TTL = 30 * 60
 _LOCK = threading.Lock()
 
 
+def gci_from(price, commission_value):
+    """FUB's commissionValue arrives two ways in this book (probe Nov 4
+    2026: "3" on a $725k deal): a small number is a PERCENT of price, a
+    large one is dollars. <= 10 with a price = percent. Returns dollars
+    or None. Covered by tests/test_money_paths.py."""
+    cv = float(commission_value or 0)
+    price_v = float(price or 0)
+    if 0 < cv <= 10 and price_v:
+        return round(price_v * cv / 100.0, 2)
+    return cv or None
+
+
 def bucket_for(source):
     """Map a FUB source string to a revenue bucket."""
     s = (source or "").strip().lower()
@@ -193,15 +205,7 @@ def build_snapshot(client):
             under_contract.append(d)
 
     def _row(d):
-        # FUB's commissionValue arrives two ways in this book (probe Nov
-        # 4 2026: "3" on a $725k deal): a small number is a PERCENT of
-        # price, a large one is dollars. <= 10 with a price = percent.
-        cv = float(d.get("commissionValue") or 0)
-        price_v = float(d.get("price") or 0)
-        if 0 < cv <= 10 and price_v:
-            gci = round(price_v * cv / 100.0, 2)
-        else:
-            gci = cv or None
+        gci = gci_from(d.get("price"), d.get("commissionValue"))
         bucket = _deal_bucket(d)
         fee = REFERRAL_FEES.get(bucket or "", 0.0)
         return {
@@ -219,6 +223,35 @@ def build_snapshot(client):
 
     closed_rows = [_row(d) for d in closed]
     uc_rows = [_row(d) for d in under_contract]
+
+    # Attribution exceptions (Nov 6 2026 audit, punch list #5): every
+    # closing or under-contract deal missing the data that makes money
+    # reporting true is a NAMED, AGING item until Ana clears it in the
+    # TM Deal Desk. Oldest first, so the list shames the backlog, not
+    # the fresh deal from this morning.
+    exceptions = []
+    today = now.date()
+    for d, kind in [(x, "closed") for x in closed] + \
+                   [(x, "under contract") for x in under_contract]:
+        missing = []
+        if not d.get("people"):
+            missing.append("lead link")
+        if not d.get("price"):
+            missing.append("price")
+        if float(d.get("commissionValue") or 0) <= 0:
+            missing.append("commission")
+        if not missing:
+            continue
+        entered = (d.get("enteredStageAt") or d.get("updated") or "")[:10]
+        try:
+            age = (today - datetime.strptime(entered, "%Y-%m-%d").date()).days
+        except (ValueError, TypeError):
+            age = None
+        exceptions.append({"deal_id": d.get("id"),
+                           "name": (d.get("name") or "")[:80],
+                           "stage": kind, "missing": missing,
+                           "age_days": age})
+    exceptions.sort(key=lambda x: -(x["age_days"] or 0))
 
     cutoff_90 = (now - timedelta(days=90)).date().isoformat()
     closed_90 = [r for r in closed_rows
@@ -263,6 +296,11 @@ def build_snapshot(client):
             "next_90d": _window(uc_rows, 90),
         },
         "closed_90d_rows": closed_90,
+        "exceptions": {"count": len(exceptions), "items": exceptions,
+                       "note": "Deals that represent money but are missing "
+                               "the data to attribute it. Each one is Ana's "
+                               "to clear in the TM Deal Desk; the list ages "
+                               "oldest first until it is empty."},
         "notes": [
             "Every figure comes from FUB deals/pipelines and synced "
             "appointments. Nothing is estimated. One format rule: a "

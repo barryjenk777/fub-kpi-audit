@@ -324,7 +324,10 @@ MANAGER_UPDATE_KEY = "joe-weekly-2026"
 # Ana works every contract, so she is the one person who can close the ROI loop:
 # which lead source produced this deal, what it actually paid, and when it closes.
 # She gets a scoped page, NOT Command Center. Rotate this key to revoke access.
-TM_PORTAL_KEY  = _os.environ.get("TM_PORTAL_KEY", "tm-2026")
+# Nov 6 2026 audit, punch list #8: no guessable default. When the env var
+# is unset, the app generates a random key once, stores it in app_state,
+# and GET /api/admin/tm/link hands Barry the working portal link.
+TM_PORTAL_KEY  = _os.environ.get("TM_PORTAL_KEY", "")
 TM_FIRST       = "Ana"
 TM_EMAIL       = "ana@yourfriendlyagent.net"
 
