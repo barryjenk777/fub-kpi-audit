@@ -14436,6 +14436,44 @@ def api_callingly_solo_teams():
                     "report": report})
 
 
+@app.route("/api/admin/drip/config", methods=["GET", "POST"])
+def api_drip_config():
+    """Realtor.com drip wiring. GET: current plan id + whether FUB still
+    has it. POST {"plan_name": "..."} finds the plan by name in FUB and
+    records it; {"plan_id": N} records directly; {"clear": true} unwires
+    (new leads stop getting the drip; running sends are untouched)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    if request.method == "POST":
+        if body.get("clear"):
+            _db.set_app_state("realtor_drip_plan_id", "")
+        elif body.get("plan_id"):
+            _db.set_app_state("realtor_drip_plan_id",
+                              str(int(body["plan_id"])))
+        elif body.get("plan_name"):
+            want = str(body["plan_name"]).strip().lower()
+            match = next((p for p in FUBClient().get_action_plans()
+                          if (p.get("name") or "").strip().lower()
+                          == want), None)
+            if not match:
+                return jsonify({"ok": False,
+                                "error": "no FUB action plan named %r"
+                                         % body["plan_name"]}), 404
+            _db.set_app_state("realtor_drip_plan_id", str(match["id"]))
+    raw, _ = _db.get_app_state("realtor_drip_plan_id")
+    out = {"ok": True, "plan_id": (raw or "").strip() or None}
+    if out["plan_id"]:
+        try:
+            plan = next((p for p in FUBClient().get_action_plans()
+                         if str(p.get("id")) == out["plan_id"]), None)
+            out["plan_name"] = (plan or {}).get("name")
+            out["in_fub"] = bool(plan)
+        except Exception as e:
+            out["fub_check_error"] = str(e)[:200]
+    return jsonify(out)
+
+
 @app.route("/api/admin/cadence/status")
 def api_cadence_status():
     """Active and recent 5-in-5 cadences with receipts."""
