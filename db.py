@@ -3789,9 +3789,168 @@ def ensure_callingly_table():
                     );
                     CREATE INDEX IF NOT EXISTS idx_callingly_pending
                         ON callingly_rings (status, created_at);
+                    CREATE TABLE IF NOT EXISTS call_cadences (
+                        id            SERIAL PRIMARY KEY,
+                        person_id     TEXT NOT NULL,
+                        lead_name     TEXT,
+                        agent_name    TEXT NOT NULL,
+                        source        TEXT NOT NULL DEFAULT 'Realtor.com',
+                        attempt       INTEGER NOT NULL DEFAULT 0,
+                        max_attempts  INTEGER NOT NULL DEFAULT 5,
+                        next_date     DATE,
+                        last_fired_at TIMESTAMPTZ,
+                        last_call_id  TEXT,
+                        last_outcome  TEXT,
+                        initial_stage TEXT,
+                        started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        stopped_at    TIMESTAMPTZ,
+                        stop_reason   TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_cadence_due
+                        ON call_cadences (stopped_at, next_date);
                 """)
     except Exception as e:
         logger.warning("ensure_callingly_table failed: %s", e)
+
+
+def create_call_cadence(person_id, lead_name, agent_name,
+                        source="Realtor.com", initial_stage=None,
+                        max_attempts=5):
+    """Start a 5-in-5-days follow-up cadence. One active cadence per
+    lead; a second start is a no-op returning None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id FROM call_cadences
+                    WHERE person_id = %s AND stopped_at IS NULL
+                      AND attempt < max_attempts
+                """, (str(person_id),))
+                if cur.fetchone():
+                    return None
+                cur.execute("""
+                    INSERT INTO call_cadences
+                        (person_id, lead_name, agent_name, source,
+                         initial_stage, max_attempts, next_date)
+                    VALUES (%s,%s,%s,%s,%s,%s,
+                            (NOW() AT TIME ZONE 'US/Eastern')::date
+                            + INTERVAL '1 day')
+                    RETURNING id
+                """, (str(person_id), lead_name, agent_name, source,
+                      initial_stage, int(max_attempts)))
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.warning("create_call_cadence failed: %s", e)
+        return None
+
+
+def due_call_cadences():
+    """Active cadences whose next_date has arrived (ET) and that have
+    not fired today. The sweep applies the agent's call-block time."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, person_id, lead_name, agent_name, source,
+                           attempt, max_attempts, initial_stage, started_at
+                    FROM call_cadences
+                    WHERE stopped_at IS NULL
+                      AND attempt < max_attempts
+                      AND next_date <= (NOW() AT TIME ZONE
+                                        'US/Eastern')::date
+                      AND (last_fired_at IS NULL OR
+                           (last_fired_at AT TIME ZONE 'US/Eastern')::date
+                           < (NOW() AT TIME ZONE 'US/Eastern')::date)
+                    ORDER BY next_date, id
+                    LIMIT 25
+                """)
+                cols = ("id", "person_id", "lead_name", "agent_name",
+                        "source", "attempt", "max_attempts",
+                        "initial_stage", "started_at")
+                return [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("due_call_cadences failed: %s", e)
+        return []
+
+
+def fire_call_cadence(cadence_id, call_id=None):
+    """Consume one attempt: stamps the fire, schedules tomorrow."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE call_cadences
+                    SET attempt = attempt + 1, last_fired_at = NOW(),
+                        last_call_id = %s,
+                        next_date = (NOW() AT TIME ZONE
+                                     'US/Eastern')::date + INTERVAL '1 day'
+                    WHERE id = %s AND stopped_at IS NULL
+                """, (str(call_id) if call_id else None, int(cadence_id)))
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("fire_call_cadence failed: %s", e)
+        return False
+
+
+def stop_call_cadence(cadence_id, reason):
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE call_cadences
+                    SET stopped_at = NOW(), stop_reason = %s
+                    WHERE id = %s AND stopped_at IS NULL
+                """, (reason, int(cadence_id)))
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("stop_call_cadence failed: %s", e)
+        return False
+
+
+def cadence_for_call(call_id):
+    """Match a Callingly webhook back to the cadence that fired it."""
+    if not is_available() or not call_id:
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, person_id, lead_name, agent_name, attempt,
+                           max_attempts
+                    FROM call_cadences
+                    WHERE last_call_id = %s AND stopped_at IS NULL
+                """, (str(call_id),))
+                r = cur.fetchone()
+                if not r:
+                    return None
+                cols = ("id", "person_id", "lead_name", "agent_name",
+                        "attempt", "max_attempts")
+                return dict(zip(cols, r))
+    except Exception as e:
+        logger.warning("cadence_for_call failed: %s", e)
+        return None
+
+
+def set_cadence_outcome(cadence_id, outcome):
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE call_cadences SET last_outcome = %s
+                    WHERE id = %s
+                """, (outcome, int(cadence_id)))
+    except Exception as e:
+        logger.warning("set_cadence_outcome failed: %s", e)
 
 
 def add_callingly_ring(person_id, lead_name, team_id):

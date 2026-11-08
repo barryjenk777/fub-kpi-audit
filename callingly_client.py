@@ -112,6 +112,13 @@ def set_team_agents(team_id, agent_ids):
                 json_data={"agents": [str(a) for a in agent_ids]})
 
 
+def create_team(name):
+    """Best-effort team creation. Callingly's docs are thin here; if the
+    API refuses, the fallback is 30 seconds in the dashboard and the
+    caller reports exactly that."""
+    return _req("POST", "/teams", json_data={"name": name})
+
+
 def create_webhook(name, target_url, team_id=None):
     """Register our call_completed webhook (explicit admin action)."""
     body = {"name": name, "event": "call_completed",

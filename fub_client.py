@@ -836,6 +836,43 @@ class FUBClient:
             return None
         return self._request("PUT", f"people/{person_id}", json_data=fields)
 
+    # ── Action plans (drips live in FUB; we apply, watch, and stop) ──────
+    def get_action_plans(self):
+        """All action plans. FUB has no API to CREATE one — plans are
+        authored in the FUB UI; we drive them from here."""
+        d = self._request("GET", "actionPlans", params={"limit": 100}) or {}
+        return next((v for v in d.values() if isinstance(v, list)), [])
+
+    def apply_action_plan(self, person_id, plan_id):
+        """Start a plan for a person (POST actionPlansPeople)."""
+        return self._request("POST", "actionPlansPeople", json_data={
+            "personId": int(person_id), "actionPlanId": int(plan_id)})
+
+    def get_action_plan_people(self, plan_id, status="Running", limit=100):
+        """Subscriptions for one plan, paged (enough for a per-source
+        drip; the watcher runs every 30 minutes)."""
+        rows, nxt = [], None
+        for _ in range(10):
+            params = {"actionPlanId": int(plan_id), "status": status,
+                      "limit": limit}
+            if nxt:
+                params["next"] = nxt
+            d = self._request("GET", "actionPlansPeople",
+                              params=params) or {}
+            page = next((v for v in d.values() if isinstance(v, list)), [])
+            rows.extend(page)
+            nxt2 = (d.get("_metadata") or {}).get("next")
+            if not page or not nxt2 or nxt2 == nxt:
+                break
+            nxt = nxt2
+        return rows
+
+    def stop_action_plan_person(self, subscription_id, status="Paused"):
+        """Stop/pause one person's run of a plan."""
+        return self._request("PUT",
+                             f"actionPlansPeople/{int(subscription_id)}",
+                             json_data={"status": status})
+
     def get_people_by_tag(self, tag):
         """Fetch leads and client-side filter by tag.
 

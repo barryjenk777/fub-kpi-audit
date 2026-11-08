@@ -14040,6 +14040,175 @@ def _callingly_fallback_sweep():
             pass
 
 
+def _cadence_solo_team(agent_name):
+    """The agent's one-person Callingly team for follow-up rings.
+    Mapping lives in app_state callingly_solo_teams {agent: team_id}."""
+    try:
+        raw, _ = _db.get_app_state("callingly_solo_teams")
+        return (json.loads(raw or "{}") or {}).get(agent_name)
+    except Exception:
+        return None
+
+
+def _cadence_webhook_outcome(cad, call, _dig):
+    """A cadence ring finished. Contacted stops the cadence; a missed
+    ring (agent never pressed 1) gets a soft DM so the call still
+    happens today. Never touches routing."""
+    status = str(_dig(call, "status") or "").lower()
+    lead_status = str(_dig(call, "lead_status") or
+                      _dig(call, "human_result") or "").lower()
+    is_vm = bool(_dig(call, "is_voicemail"))
+    outcome = ("contacted" if lead_status == "contacted"
+               else "voicemail" if is_vm
+               else lead_status or status or "unknown")
+    _db.set_cadence_outcome(cad["id"], outcome)
+    if outcome == "contacted":
+        _db.stop_call_cadence(cad["id"], "contacted")
+    _db.log_automation_event(
+        event_type="cadence_call", person_id=cad["person_id"],
+        person_name=cad["lead_name"], agent_name=cad["agent_name"],
+        payload={"attempt": cad["attempt"], "outcome": outcome},
+        triggered_by="callingly")
+    if status in ("missed", "offline", "failed"):
+        # The nudge ring itself went unanswered: tell the agent quietly.
+        try:
+            import slack_client as _sl
+            import dispatch as _dp
+            sid = _dp._slack_user_id(cad["agent_name"])
+            if sid and _sl.is_available():
+                _sl.dm_user(sid,
+                    "Your follow-up ring for %s (attempt %d of %d) went "
+                    "unanswered. They still need a call today: "
+                    "https://yourfriendlyagent.followupboss.com/2/people/"
+                    "view/%s" % (cad["lead_name"] or "your lead",
+                                 cad["attempt"], cad["max_attempts"],
+                                 cad["person_id"]))
+        except Exception:
+            pass
+    return jsonify({"ok": True, "result": "cadence", "outcome": outcome})
+
+
+def scheduled_drip_stage_watch():
+    """Every 30 minutes: any lead running the Realtor.com drip whose
+    stage moved off 'Lead' gets the plan paused. FUB already pauses on
+    a reply; this covers the stage door (Barry, Nov 7: 'have the drip
+    turn off based on changing from lead stage')."""
+    if not _db.try_acquire_job_lock("drip_stage_watch"):
+        return
+    try:
+        plan_raw, _ = _db.get_app_state("realtor_drip_plan_id")
+        if not (plan_raw or "").strip():
+            return
+        client = FUBClient()
+        subs = client.get_action_plan_people(int(plan_raw),
+                                             status="Running") or []
+        for s in subs:
+            pid = s.get("personId")
+            sub_id = s.get("id")
+            if not pid or not sub_id:
+                continue
+            try:
+                person = client.get_person(pid) or {}
+            except Exception:
+                continue
+            stage = (person.get("stage") or "").strip()
+            if stage and stage.lower() != "lead":
+                try:
+                    client.stop_action_plan_person(sub_id, "Paused")
+                    _db.log_automation_event(
+                        event_type="drip_stopped", person_id=str(pid),
+                        person_name=person.get("name"), agent_name=None,
+                        payload={"stage": stage, "plan_id": int(plan_raw)},
+                        triggered_by="drip_stage_watch")
+                except Exception as e:
+                    logger.warning("[DRIP] stop failed for %s: %s", pid, e)
+    except Exception as e:
+        logger.warning("drip stage watch failed: %s", e)
+
+
+def scheduled_call_cadence_sweep():
+    """Every 10 minutes, 8am-9pm ET. Each active cadence fires once a
+    day AT OR AFTER the agent's own call block (power_hour_time from
+    goal setup; 10:00 default): Callingly rings THE AGENT's phone,
+    whispers the lead and attempt, and press-1 dials the lead. Before
+    ringing we stop dead cadences: lead responded, stage changed, or
+    the lead was reassigned."""
+    if not _db.try_acquire_job_lock("call_cadence_sweep"):
+        return
+    import callingly_client as _cc
+    if not _cc.is_configured():
+        return
+    live, _ = _db.get_app_state("callingly_live")
+    if (live or "").strip() != "1":
+        return
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        now_et = datetime.now(timezone.utc) - timedelta(hours=5)
+    for cad in _db.due_call_cadences():
+        try:
+            # Agent's call block: fire at/after it, never before.
+            block = "10:00"
+            try:
+                ident = _db.get_agent_identity(cad["agent_name"]) or {}
+                block = (ident.get("power_hour_time") or "10:00")[:5]
+            except Exception:
+                pass
+            if now_et.strftime("%H:%M") < block:
+                continue  # their block is later today; next sweep gets it
+            team_id = _cadence_solo_team(cad["agent_name"])
+            if not team_id:
+                _db.stop_call_cadence(cad["id"], "no_solo_team")
+                logger.warning("[CADENCE] no solo team for %s, stopped",
+                               cad["agent_name"])
+                continue
+            person = {}
+            try:
+                person = FUBClient().get_person(cad["person_id"]) or {}
+            except Exception:
+                pass
+            # Stop checks, cheapest truth first.
+            started_h = max(1, int((datetime.now(timezone.utc)
+                            - (cad["started_at"] or
+                               datetime.now(timezone.utc)))
+                            .total_seconds() // 3600))
+            if _had_inbound_within(cad["person_id"],
+                                   hours=min(started_h, 24 * 6)):
+                _db.stop_call_cadence(cad["id"], "lead_responded")
+                continue
+            stage = (person.get("stage") or "")
+            if cad["initial_stage"] and stage \
+                    and stage != cad["initial_stage"]:
+                _db.stop_call_cadence(cad["id"], "stage_changed")
+                continue
+            assigned = (person.get("assignedTo") or "").strip()
+            if assigned and assigned != cad["agent_name"]:
+                _db.stop_call_cadence(cad["id"], "reassigned")
+                continue
+            phones = person.get("phones") or []
+            phone = next((p.get("value") for p in phones
+                          if p.get("value")), None)
+            if not phone:
+                _db.stop_call_cadence(cad["id"], "no_phone")
+                continue
+            nm = (cad["lead_name"] or "Lead").split()
+            res = _cc.create_call(
+                team_id, nm[0], " ".join(nm[1:]), phone,
+                cad["person_id"],
+                "Follow-up %d of %d - Realtor.com"
+                % (cad["attempt"] + 1, cad["max_attempts"]))
+            call_id = (res or {}).get("id") if isinstance(res, dict) \
+                else None
+            _db.fire_call_cadence(cad["id"], call_id=call_id)
+            logger.info("[CADENCE] rang %s for %s (attempt %d)",
+                        cad["agent_name"], cad["lead_name"],
+                        cad["attempt"] + 1)
+        except Exception as e:
+            logger.warning("[CADENCE] sweep row failed (%s): %s",
+                           cad.get("id"), e)
+
+
 @app.route("/api/callingly/webhook/<secret>", methods=["POST"])
 def callingly_webhook(secret):
     """call_completed receiver. Callingly payloads are unsigned and the
@@ -14084,6 +14253,12 @@ def callingly_webhook(secret):
                            "webhook body: %s", call_id, e)
     pid = _dig(call, "crm_id", "lead.crm_id", "lead.source_id")
     pid = str(pid) if pid else None
+    # Cadence ring? (solo-team follow-up fired by the 5-in-5 sweep.)
+    # Handled here and returned: cadence calls never touch intake
+    # routing, shootouts, or assignment.
+    cad = _db.cadence_for_call(str(call_id)) if call_id else None
+    if cad:
+        return _cadence_webhook_outcome(cad, call, _dig)
     lead_name = (_dig(call, "lead.fname") or "") + " " + \
                 (_dig(call, "lead.lname") or "")
     lead_name = lead_name.strip() or _dig(call, "lead_name") or "the lead"
@@ -14160,6 +14335,29 @@ def callingly_webhook(secret):
             person_name=lead_name, agent_name=agent_name,
             payload={"voicemail": is_vm, "status": status,
                      "lead_status": lead_status}, triggered_by="callingly")
+        # Pressed 1, lead didn't pick up (voicemail): start the 5-in-5
+        # cadence (Barry, Nov 7). The agent who won the ring keeps
+        # calling, once a day for five days, nudged by their own phone
+        # ringing inside their call block.
+        if is_vm:
+            try:
+                stage0 = None
+                try:
+                    pp = FUBClient().get_person(pid) or {}
+                    stage0 = pp.get("stage")
+                except Exception:
+                    pass
+                cid = _db.create_call_cadence(pid, lead_name, agent_name,
+                                              source="Realtor.com",
+                                              initial_stage=stage0)
+                if cid:
+                    _db.log_automation_event(
+                        event_type="cadence_started", person_id=pid,
+                        person_name=lead_name, agent_name=agent_name,
+                        payload={"cadence_id": cid, "max": 5},
+                        triggered_by="callingly")
+            except Exception as e:
+                logger.warning("[CADENCE] start failed for %s: %s", pid, e)
         return jsonify({"ok": True, "result": "answered",
                         "agent": agent_name})
 
@@ -14179,6 +14377,93 @@ def callingly_webhook(secret):
                      "agents": [m["agent_name"] for m in (made or [])]},
             triggered_by="callingly")
     return jsonify({"ok": True, "result": "fallback"})
+
+
+@app.route("/api/admin/callingly/solo-teams", methods=["GET", "POST"])
+def api_callingly_solo_teams():
+    """One-person Callingly teams for the 5-in-5 cadence rings.
+    GET: current mapping + which ring-team agents are missing one.
+    POST {"apply": true}: create 'Solo - <name>' via API for each
+    missing agent and wire the roster; reports per agent (if the API
+    refuses creation, the report says so and the fallback is 30 seconds
+    in the Callingly dashboard, then POST {"map": {...}} to record ids
+    made by hand)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import callingly_client as _cc
+    if not _cc.is_configured():
+        return jsonify({"ok": False, "error": "CALLINGLY_API_KEY not set"})
+    raw, _ = _db.get_app_state("callingly_solo_teams")
+    mapping = {}
+    try:
+        mapping = json.loads(raw or "{}") or {}
+    except Exception:
+        pass
+    body = request.get_json(silent=True) or {}
+    if request.method == "POST" and isinstance(body.get("map"), dict):
+        mapping.update({str(k): int(v) for k, v in body["map"].items()})
+        _db.set_app_state("callingly_solo_teams", json.dumps(mapping))
+    tid_raw, _ = _db.get_app_state("callingly_team_id")
+    report = []
+    try:
+        members = _cc.get_team_agents(int(tid_raw)) or []
+    except Exception as e:
+        return jsonify({"ok": False, "error": "team read failed: %s"
+                        % str(e)[:200]})
+    if request.method == "POST" and body.get("apply"):
+        for m in members:
+            name = (m.get("name") or "").strip()
+            aid = m.get("id")
+            if not name or name in mapping:
+                continue
+            try:
+                t = _cc.create_team("Solo - %s" % name) or {}
+                new_id = t.get("id")
+                if not new_id:
+                    raise RuntimeError("no team id in response: %r"
+                                       % (t,))
+                _cc.set_team_agents(new_id, [aid])
+                mapping[name] = int(new_id)
+                report.append({"agent": name, "team_id": new_id,
+                               "created": True})
+            except Exception as e:
+                report.append({"agent": name, "created": False,
+                               "error": str(e)[:200]})
+        _db.set_app_state("callingly_solo_teams", json.dumps(mapping))
+    missing = [m.get("name") for m in members
+               if (m.get("name") or "").strip() not in mapping]
+    return jsonify({"ok": True, "solo_teams": mapping, "missing": missing,
+                    "report": report})
+
+
+@app.route("/api/admin/cadence/status")
+def api_cadence_status():
+    """Active and recent 5-in-5 cadences with receipts."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    rows = []
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, lead_name, agent_name, attempt,
+                           max_attempts, next_date, last_outcome,
+                           stopped_at, stop_reason, started_at
+                    FROM call_cadences
+                    ORDER BY started_at DESC LIMIT 40
+                """)
+                cols = ("person_id", "lead_name", "agent_name", "attempt",
+                        "max_attempts", "next_date", "last_outcome",
+                        "stopped_at", "stop_reason", "started_at")
+                for r in cur.fetchall():
+                    d = dict(zip(cols, r))
+                    for k in ("next_date", "stopped_at", "started_at"):
+                        if d.get(k):
+                            d[k] = str(d[k])
+                    rows.append(d)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:200]})
+    return jsonify({"ok": True, "cadences": rows})
 
 
 @app.route("/api/admin/callingly/status")
@@ -14472,6 +14757,21 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
         pass
     city = ((person.get("addresses") or [{}])[0] or {}).get("city")
     import dispatch as _dp
+    # Email drip (Barry, Nov 7 2026): the FUB action plan starts the
+    # moment the lead lands, in parallel with the ring. FUB sends each
+    # step from the lead's assigned agent at send time and pauses on a
+    # reply natively; our 30-min watcher kills it on any stage change.
+    try:
+        plan_raw, _ = _db.get_app_state("realtor_drip_plan_id")
+        if (plan_raw or "").strip():
+            FUBClient().apply_action_plan(pid, int(plan_raw))
+            _db.log_automation_event(
+                event_type="drip_applied", person_id=pid,
+                person_name=person.get("name"), agent_name=None,
+                payload={"plan_id": int(plan_raw), "source": "Realtor.com"},
+                triggered_by=triggered_by)
+    except Exception as e:
+        logger.warning("[DRIP] apply failed for %s: %s", pid, e)
     # Callingly ring-first (Nov 7 2026, pilot): when the lane is live,
     # the paid lead rings agents' actual phones before any claim button
     # exists. First press-1 is bridged straight to the lead. No answer
@@ -29265,6 +29565,20 @@ def start_scheduler():
                        id="ai_nurture_fast",
                        name="AI nurture fast sweep (10min, 8a-9p)",
                        max_instances=1, misfire_grace_time=300)
+
+    # 5-in-5 call cadence (Barry, Nov 7 2026): pressed 1, lead didn't
+    # pick up → the agent's phone re-rings them once a day for five days
+    # at their own call block. Plus the Realtor drip stage watcher.
+    _scheduler.add_job(scheduled_call_cadence_sweep,
+                       CronTrigger(minute="*/10", hour="8-20", timezone=ET),
+                       id="call_cadence_sweep",
+                       name="5-in-5 call cadence sweep (10min, 8a-9p)",
+                       max_instances=1, misfire_grace_time=300)
+    _scheduler.add_job(scheduled_drip_stage_watch,
+                       CronTrigger(minute="12,42", timezone=ET),
+                       id="drip_stage_watch",
+                       name="Realtor drip stage watcher (30min)",
+                       max_instances=1, misfire_grace_time=600)
 
     # Phoenix tag expiry: daily 6:10am ET — removes PHOENIX tags 7+ days old
     # so the LeadStream boost doesn't outlive the resurrection moment.
