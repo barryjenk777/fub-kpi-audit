@@ -14805,7 +14805,7 @@ def api_conversions_correction_email():
 <div style="background:#fff;border-radius:10px;padding:20px 24px;margin-top:14px;border:1px solid #e5e7eb">
   <p style="margin:0 0 8px;font-size:15px;font-weight:800;color:#0f172a">What this means for you</p>
   <p style="margin:0 0 8px;font-size:14px;color:#374151;line-height:1.6">
-    The machine is feeding. When a CALL NOW task lands on your board, that is a real person who just talked to our AI, and the clock on them is measured in minutes, not days. Work those tasks the hour they land.</p>
+    The machine is feeding, and it reaches you two ways. If the lead is already yours, a CALL NOW task lands in your Follow Up Boss. If the lead is up for grabs, a claim card hits Slack and the first tap wins it. Either way, that is a real person who just talked to our AI, and the clock on them is measured in minutes, not days.</p>
   <p style="margin:0;font-size:14px;color:#374151;line-height:1.6">
     Make your calls. Hold your spot on the board. The dam was never dry, we just could not see the water. Now we can.</p>
 </div>
