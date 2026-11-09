@@ -14690,6 +14690,53 @@ def api_callingly_solo_teams():
                     "report": report})
 
 
+@app.route("/api/admin/transfers/recent")
+def api_transfers_recent():
+    """The transfer ledger with receipts: every ISA transfer stamp in
+    the window, classified VERIFIED (real conversation evidence) or
+    ATTEMPT-ONLY (handoff fired off voicemail-prone triggers). Built
+    Nov 9 2026 so a correction email can carry exact truth.
+    ?days=14 (default 14, max 31)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = min(int(request.args.get("days") or 14), 31)
+    rows = []
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, lead_name, transfer_type,
+                           transfer_date
+                    FROM isa_transfers
+                    WHERE transfer_date >= NOW()
+                          - (%s || ' days')::interval
+                    ORDER BY transfer_date DESC
+                """, (days,))
+                rows = [{"person_id": r[0], "lead_name": r[1],
+                         "type": r[2],
+                         "stamped": r[3].isoformat() if r[3] else None}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:200]})
+    fresh_h = 24 * 7
+    for r in rows:
+        try:
+            voice = _fresh_ai_voice_outcome(r["person_id"],
+                                            hours=fresh_h)
+            inbound = _had_inbound_within(r["person_id"], hours=fresh_h)
+            r["evidence"] = {
+                "voice_disposition": voice,
+                "inbound_within_7d": bool(inbound)}
+            r["verified"] = bool(voice or inbound)
+        except Exception as e:
+            r["evidence"] = {"error": str(e)[:120]}
+            r["verified"] = None
+    return jsonify({"ok": True, "days": days, "rows": rows,
+                    "verified": sum(1 for r in rows if r["verified"]),
+                    "attempt_only": sum(1 for r in rows
+                                        if r["verified"] is False)})
+
+
 @app.route("/api/admin/desk/ai-text-conversions", methods=["POST"])
 def api_ai_text_conversions():
     """Manual run of the conversion tagger. Body: {"dry_run": true|false,
