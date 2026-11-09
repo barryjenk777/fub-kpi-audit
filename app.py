@@ -14766,6 +14766,72 @@ def api_callingly_solo_teams():
                     "report": report})
 
 
+@app.route("/api/admin/email/conversions-correction", methods=["POST"])
+def api_conversions_correction_email():
+    """One-shot team email correcting two weeks of 'zero AI transfers'.
+    {"send": false} (default) returns the HTML preview; {"send": true}
+    sends to every FUB user via the same Postmark pipe as the Sunday
+    email. Numbers are the verified, named, dated conversions audited
+    Nov 9 2026 — receipts in the transfer ledger and alert notes."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body_in = request.get_json(silent=True) or {}
+    html = """
+<html><head><meta charset="utf-8"></head><body style="margin:0;background:#f5f7fa">
+<div style="max-width:640px;margin:0 auto;font-family:-apple-system,'Segoe UI',Arial,sans-serif;padding:16px">
+<div style="background:#0f172a;border-radius:12px;padding:26px;text-align:center">
+  <p style="margin:0;color:#f59e0b;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:2px">A correction, and good news</p>
+  <h1 style="margin:8px 0 0;color:#fff;font-size:26px;font-weight:800">The board undercounted you.</h1>
+</div>
+<div style="background:#fff;border-radius:10px;border:2px solid #f59e0b;padding:22px 24px;margin-top:16px">
+  <p style="margin:0 0 12px;font-size:15px;color:#0f172a;line-height:1.6">
+    The last two Sunday emails said zero AI transfers. That was wrong, and I want to be candid about it. The counting broke, not the AI, and definitely not you.</p>
+  <p style="margin:0 0 6px;font-size:14px;color:#374151;line-height:1.6">Here is what actually happened over the last two weeks, verified lead by lead:</p>
+  <table style="width:100%;border-collapse:collapse;margin:12px 0;font-size:14px">
+    <tr><td style="padding:8px 4px;border-bottom:1px solid #e5e7eb;color:#374151"><b>AI text conversations</b> (lead talked with our AI by text)</td>
+        <td style="padding:8px 4px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:20px;font-weight:900;color:#0f172a">9</td></tr>
+    <tr><td style="padding:8px 4px;border-bottom:1px solid #e5e7eb;color:#374151"><b>AI voice conversations</b> (including a successful live transfer)</td>
+        <td style="padding:8px 4px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:20px;font-weight:900;color:#0f172a">2</td></tr>
+    <tr><td style="padding:8px 4px;border-bottom:1px solid #e5e7eb;color:#374151"><b>Human ISA conversions</b> (Fhalen, working the phones)</td>
+        <td style="padding:8px 4px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:20px;font-weight:900;color:#0f172a">9</td></tr>
+    <tr><td style="padding:10px 4px;color:#0f172a;font-weight:800">Real conversations with real people</td>
+        <td style="padding:10px 4px;text-align:right;font-size:28px;font-weight:900;color:#0d7a4e">20</td></tr>
+  </table>
+  <p style="margin:0 0 10px;font-size:14px;color:#374151;line-height:1.6">
+    Twenty conversions in fourteen days while the board said zero. These are not estimates. Every one is a named lead with a dated reply, a recorded conversation, or a live transfer on the books.</p>
+  <p style="margin:0;font-size:14px;color:#374151;line-height:1.6">
+    The counting is fixed, and it took three days of digging to make it right. From now on the Sunday number counts conversations, not noise, and when it says zero it will mean zero.</p>
+</div>
+<div style="background:#fff;border-radius:10px;padding:20px 24px;margin-top:14px;border:1px solid #e5e7eb">
+  <p style="margin:0 0 8px;font-size:15px;font-weight:800;color:#0f172a">What this means for you</p>
+  <p style="margin:0 0 8px;font-size:14px;color:#374151;line-height:1.6">
+    The machine is feeding. When a CALL NOW task lands on your board, that is a real person who just talked to our AI, and the clock on them is measured in minutes, not days. Work those tasks the hour they land.</p>
+  <p style="margin:0;font-size:14px;color:#374151;line-height:1.6">
+    Make your calls. Hold your spot on the board. The dam was never dry, we just could not see the water. Now we can.</p>
+</div>
+<p style="text-align:center;color:#9ca3af;font-size:12px;margin:18px 0 6px">Legacy Home Team · Command Center</p>
+</div></body></html>"""
+    if not body_in.get("send"):
+        return html
+    try:
+        import email_report as _er
+        import postmark_client as _pm
+        to_emails = FUBClient().get_all_user_emails()
+        valid = [(n, e) for n, e in to_emails if e]
+        _pm.send(to=", ".join("%s <%s>" % (n, e) for n, e in valid),
+                 from_email=config.EMAIL_FROM,
+                 subject="The board undercounted you. 20 conversions "
+                         "in 14 days.",
+                 html=html)
+        _db.log_automation_event(
+            event_type="correction_email_sent", person_id=None,
+            person_name=None, agent_name=None,
+            payload={"recipients": len(valid)}, triggered_by="barry")
+        return jsonify({"ok": True, "sent_to": len(valid)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
 @app.route("/api/admin/transfers/recent")
 def api_transfers_recent():
     """The transfer ledger with receipts: every ISA transfer stamp in
