@@ -47,7 +47,10 @@ def is_available():
 @contextmanager
 def get_conn():
     import psycopg2
-    conn = psycopg2.connect(_get_url())
+    # connect_timeout is load-bearing (Nov 9 2026): without it a dead or
+    # restarting Postgres hangs every web worker on TCP forever and the
+    # whole site reads as down. 5s then fail fast and let pages degrade.
+    conn = psycopg2.connect(_get_url(), connect_timeout=5)
     conn.autocommit = False
     try:
         yield conn
