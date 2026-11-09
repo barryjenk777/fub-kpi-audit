@@ -225,7 +225,11 @@ a.qbtn:hover{background:var(--card);border-color:var(--ink);
   font-family:var(--sans);text-decoration:none}
 .sheethead a:hover,.sheethead button:hover{color:var(--ink);
   border-color:var(--ink);text-decoration:none}
-.sheet iframe{flex:1;border:none;width:100%;background:var(--paper)}
+.sheet iframe{flex:1;border:none;width:100%;background:var(--paper);
+  transition:opacity .15s}
+.sheet.loading iframe{opacity:.3}
+.sheet.loading .sheethead b::after{content:" · loading…";color:var(--muted);
+  font-family:var(--sans);font-size:12px;font-weight:400}
 @media (prefers-reduced-motion: reduce){.sheet{transition:none}}
 
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
@@ -391,7 +395,12 @@ function openView(path,push){
   if(path===VIEWOPEN)return;
   toggleMenu(false);
   var fr=document.getElementById('sheetframe');
-  if(fr.getAttribute('src')!==path)fr.setAttribute('src',path);
+  if(fr.getAttribute('src')!==path){
+    document.getElementById('sheet').classList.add('loading');
+    fr.onload=function(){
+      document.getElementById('sheet').classList.remove('loading');};
+    fr.setAttribute('src',path);
+  }
   document.getElementById('sheettitle').textContent=viewLabel(path);
   document.getElementById('sheetfull').setAttribute('href',path);
   document.getElementById('sheetveil').hidden=false;
