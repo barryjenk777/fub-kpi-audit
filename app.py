@@ -3412,6 +3412,19 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
     # ── 4. All FUB user emails ────────────────────────────────────────────────
     to_emails = client.get_all_user_emails()
 
+    # ── 5. Desk routes, auto-counted from OUR ledger (reliable, unlike FUB
+    # tag counting): nurture conversation routes + Callingly ring answers
+    # in the last 7 days. Barry, Nov 8 2026: nurture sends belong in this
+    # email's distribution number.
+    desk_routes = {}
+    try:
+        desk_routes["nurture"] = _db.count_recent_offer_leads(
+            "ai_nurture", hours=168)
+        desk_routes["ring_wins"] = _db.count_recent_offer_leads(
+            "callingly", hours=168)
+    except Exception as _dr:
+        logger.warning("hype-email: desk route count failed: %s", _dr)
+
     return {
         "agents":         agents,
         "period_label":   period_label,
@@ -3421,6 +3434,7 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
         "fhalen_name":    fhalen_name,
         "thresholds":     audit.get("thresholds", {}),
         "to_emails":      to_emails,
+        "desk_routes":    desk_routes,
     }
 
 
@@ -3585,6 +3599,7 @@ def api_preview_hype_email():
             fhalen_appts=data["fhalen_appts"],
             fhalen_name=data["fhalen_name"],
             thresholds=data.get("thresholds", {}),
+            desk_routes=data.get("desk_routes"),
         )
         # Inject a preview banner so it's obvious this hasn't been sent yet
         banner = """
@@ -3704,6 +3719,7 @@ def api_send_hype_email():
             fhalen_name=data["fhalen_name"],
             to_emails=data["to_emails"],
             thresholds=data.get("thresholds", {}),
+            desk_routes=data.get("desk_routes"),
         )
         if success:
             logger.info("hype-email sent: %s", msg)

@@ -573,7 +573,8 @@ LIVE_TRANSFER_NUMBER_RAW = "7579601491"
 
 
 def build_hype_email(agents, period_label, ai_text_count, ai_voice_count,
-                     fhalen_appts, fhalen_name="Fhalen", thresholds=None):
+                     fhalen_appts, fhalen_name="Fhalen", thresholds=None,
+                     desk_routes=None):
     """
     Build the weekly KPI hype email.
 
@@ -604,7 +605,15 @@ def build_hype_email(agents, period_label, ai_text_count, ai_voice_count,
     avg_convos = total_convos / n_agents
 
     # ── Lead distribution total ─────────────────────────────────────────────
-    total_leads = ai_text_count + ai_voice_count + fhalen_appts
+    # desk_routes: auto-counted from the Command Center's OWN offer ledger
+    # (Barry, Nov 8 2026: "didn't we send some nurture leads? Shouldn't
+    # that be included?"). These are verified routes with dated evidence,
+    # never FUB tag guesses: {'nurture': N, 'ring_wins': M}.
+    desk_routes = desk_routes or {}
+    nurture_routed = int(desk_routes.get("nurture") or 0)
+    ring_wins = int(desk_routes.get("ring_wins") or 0)
+    total_leads = (ai_text_count + ai_voice_count + fhalen_appts
+                   + nurture_routed + ring_wins)
 
     # ── Build per-agent performance narrative ────────────────────────────────
     def agent_narrative(a):
@@ -654,7 +663,7 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
     # the auto-count was about to claim "3 leads distributed" off exactly
     # those). The context line lives in app_state hype_zero_context so
     # Barry can retire the reactivation framing when that era ends.
-    if (ai_text_count + ai_voice_count) == 0:
+    if total_leads == 0:
         zero_ctx = ("Here's what's actually happening: we just woke up "
                     "200,000 contacts in our database and the AI is "
                     "working them around the clock right now. "
@@ -688,6 +697,10 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
             detail_parts.append(f"{ai_voice_count} AI voice")
         if fhalen_appts > 0:
             detail_parts.append(f"{fhalen_appts} Human ISA appointments")
+        if nurture_routed > 0:
+            detail_parts.append(f"{nurture_routed} AI conversation routes")
+        if ring_wins > 0:
+            detail_parts.append(f"{ring_wins} Realtor.com ring answers")
         detail_str = " + ".join(detail_parts)
 
         html += f"""
@@ -867,7 +880,8 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
 
 
 def send_hype_email(agents, period_label, ai_text_count, ai_voice_count,
-                    fhalen_appts, fhalen_name, to_emails, thresholds=None):
+                    fhalen_appts, fhalen_name, to_emails, thresholds=None,
+                    desk_routes=None):
     """
     Send the weekly KPI hype email to all team members.
     to_emails: list of (name, email) tuples from get_all_user_emails()
@@ -876,6 +890,7 @@ def send_hype_email(agents, period_label, ai_text_count, ai_voice_count,
     html_body = build_hype_email(
         agents, period_label, ai_text_count, ai_voice_count,
         fhalen_appts, fhalen_name, thresholds=thresholds,
+        desk_routes=desk_routes,
     )
 
     passing_count = sum(1 for a in agents if a["evaluation"]["overall_pass"])
