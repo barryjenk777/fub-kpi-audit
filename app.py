@@ -7543,14 +7543,16 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
         out["proof_checks"] = out.get("proof_checks", 0) + 1
         if out["proof_checks"] > 40:
             break  # bound the FUB calls; the rest wait for the next batch
-        # Proof, three doors: a fresh inbound text/connected call, OR a
-        # fresh AI VOICE disposition that marks a real conversation, OR
-        # a fresh ISA transfer stamp in our own ledger (the strongest
-        # conversion signal there is). Voice conversions log as OUTBOUND
-        # calls, so inbound checks alone are blind to them.
+        # Proof, two doors: a fresh inbound text/connected call, OR a
+        # fresh AI VOICE disposition that marks a real conversation.
+        # Voice conversions log as OUTBOUND calls, so inbound checks
+        # alone are blind to them. ISA_TRANSFER_FRESH is NOT a door
+        # (Nov 9 2026): Barry's own Warm Handoff automation in FUB adds
+        # that tag off attempt-prone triggers (voicemails included), so
+        # a stamp proves a handoff fired, never that a conversation
+        # happened.
         voice = _fresh_ai_voice_outcome(pid, hours=fresh_h)
-        if not voice and not _db.recent_transfer_within(pid, hours=fresh_h) \
-                and not _had_inbound_within(pid, hours=fresh_h):
+        if not voice and not _had_inbound_within(pid, hours=fresh_h):
             # No fresh conversation YET. Skip without burning the
             # once-ever ledger: if they talk to our AI next week, that
             # conversation routes them then. (Burning here was the old
@@ -7616,6 +7618,99 @@ def scheduled_ai_nurture_router():
                                   for r in res["routed"]))
     except Exception as e:
         logger.warning("ai nurture router failed: %s", e)
+
+
+def run_ai_text_conversion_tagger(dry_run=True, cap=20):
+    """Detect VERIFIED Ylopo AI text conversions and apply the
+    Claude_Text_Converted tag, which hands the lead to Barry's Warm
+    Handoff automation in FUB (Nov 9 2026, his design: Command Center
+    detects, FUB does the handoff — stamp, CALL NOW task, escalation).
+
+    Why this exists: Ylopo prospecting AI conversations never land in
+    FUB's textMessages API, so tags and message queries are both blind
+    to them. The ONLY machine-readable proof is Ylopo's dated PRIORITY
+    note, and only its strict variant counts: "successfully engage"
+    (in conversation). The loose "has engaged X and they need follow
+    up" variant fires on attempts and NEVER qualifies (truth test)."""
+    import re as _re
+    client = FUBClient()
+    since = (datetime.now(timezone.utc) - timedelta(days=2)) \
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(timezone.utc)
+    pool = {}
+    for tag in ("AI_NEEDS_FOLLOW_UP", "Y_AI_PRIORITY"):
+        try:
+            d = client._request("GET", "people", params={
+                "tags": tag, "updatedAfter": since, "limit": 30,
+                "sort": "-created",
+                "fields": "id,name,tags,assignedTo"}) or {}
+            for p in d.get("people") or []:
+                pool[str(p["id"])] = p
+        except Exception as e:
+            logger.warning("[CONVERT TAGGER] people fetch failed: %s", e)
+    out = {"ok": True, "dry_run": bool(dry_run), "scanned": len(pool),
+           "tagged": [], "skipped": {"already_tagged": 0,
+                                     "no_strict_alert": 0}}
+    for pid, p in pool.items():
+        if len(out["tagged"]) >= cap:
+            break
+        tags = p.get("tags") or []
+        if "Claude_Text_Converted" in tags:
+            out["skipped"]["already_tagged"] += 1
+            continue
+        hit = None
+        try:
+            nd = client._request("GET", "notes", params={
+                "personId": pid, "limit": 15}) or {}
+            for n in nd.get("notes") or []:
+                body = (n.get("body") or "")
+                if "successfully engage" not in body.lower():
+                    continue
+                when = n.get("created") or ""
+                try:
+                    dt = datetime.strptime(when[:19],
+                                           "%Y-%m-%dT%H:%M:%S") \
+                        .replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if (now - dt) <= timedelta(hours=48):
+                    hit = when
+                    break
+        except Exception:
+            continue
+        if not hit:
+            out["skipped"]["no_strict_alert"] += 1
+            continue
+        if not dry_run:
+            try:
+                client.add_tag_fast(pid, "Claude_Text_Converted", tags)
+                _db.log_automation_event(
+                    event_type="claude_text_converted", person_id=pid,
+                    person_name=p.get("name"), agent_name=None,
+                    payload={"alert_at": hit},
+                    triggered_by="conversion_tagger")
+            except Exception as e:
+                logger.warning("[CONVERT TAGGER] tag failed for %s: %s",
+                               pid, e)
+                continue
+        out["tagged"].append({"person_id": pid, "lead": p.get("name"),
+                              "alert_at": hit[:16]})
+    return out
+
+
+def scheduled_ai_text_conversion_tagger():
+    """Every 15 minutes, 8am-9pm ET, when sweep jobs are enabled."""
+    if not _db.try_acquire_job_lock("ai_convert_tagger"):
+        return
+    try:
+        res = run_ai_text_conversion_tagger(dry_run=False, cap=10)
+        if res.get("tagged"):
+            logger.info("[CONVERT TAGGER] tagged %d: %s",
+                        len(res["tagged"]),
+                        ", ".join(t["lead"] or t["person_id"]
+                                  for t in res["tagged"]))
+    except Exception as e:
+        logger.warning("conversion tagger failed: %s", e)
 
 
 def scheduled_ylopo_ai_heartbeat():
@@ -14593,6 +14688,21 @@ def api_callingly_solo_teams():
                if (m.get("name") or "").strip() not in mapping]
     return jsonify({"ok": True, "solo_teams": mapping, "missing": missing,
                     "report": report})
+
+
+@app.route("/api/admin/desk/ai-text-conversions", methods=["POST"])
+def api_ai_text_conversions():
+    """Manual run of the conversion tagger. Body: {"dry_run": true|false,
+    "cap": 20}. dry_run defaults TRUE and only lists who would get
+    Claude_Text_Converted; a real run applies the tag and Barry's FUB
+    Warm Handoff automation takes it from there."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    dry = body.get("dry_run")
+    dry = True if dry is None else bool(dry)
+    return jsonify(run_ai_text_conversion_tagger(
+        dry_run=dry, cap=int(body.get("cap") or 20)))
 
 
 @app.route("/api/admin/drip/config", methods=["GET", "POST"])
@@ -29802,6 +29912,12 @@ def start_scheduler():
                            id="ylopo_ai_heartbeat",
                            name="Ylopo AI heartbeat (daily 7:40am)",
                            max_instances=1, misfire_grace_time=3600)
+        _scheduler.add_job(scheduled_ai_text_conversion_tagger,
+                           CronTrigger(minute="3,18,33,48", hour="8-20",
+                                       timezone=ET),
+                           id="ai_convert_tagger",
+                           name="AI text conversion tagger (15min)",
+                           max_instances=1, misfire_grace_time=300)
 
     # Phoenix tag expiry: daily 6:10am ET — removes PHOENIX tags 7+ days old
     # so the LeadStream boost doesn't outlive the resurrection moment.
