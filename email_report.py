@@ -612,6 +612,13 @@ def build_hype_email(agents, period_label, ai_text_count, ai_voice_count,
     desk_routes = desk_routes or {}
     nurture_routed = int(desk_routes.get("nurture") or 0)
     ring_wins = int(desk_routes.get("ring_wins") or 0)
+    # Verified conversions lead the number (Barry, Nov 9 2026). When
+    # the auto-counts exist they ride on top of any manually-entered
+    # MaverickRE figures, never double-counted below zero.
+    text_convos = int(desk_routes.get("text_convos") or 0)
+    voice_convos = int(desk_routes.get("voice_convos") or 0)
+    ai_text_count = max(ai_text_count, text_convos)
+    ai_voice_count = max(ai_voice_count, voice_convos)
     total_leads = (ai_text_count + ai_voice_count + fhalen_appts
                    + nurture_routed + ring_wins)
 

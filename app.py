@@ -2936,11 +2936,23 @@ def api_isa_transfers():
         stage_changed = stage not in ("Lead", ISA_TRANSFER_WARM_STAGE, "", "Unknown")
 
         agent_name = (person.get("assignedTo") or "Unassigned").strip() or "Unassigned"
-
-        # Skip team leaders, ISA, and admins — they're not being held accountable here
-        if agent_name.lower() in excluded:
-            continue
         lead_name  = (person.get("name") or "Unknown").strip() or "Unknown"
+
+        # Skip team leaders, ISA, and admins — they're not being held
+        # accountable here. But STAMP THE LEDGER FIRST (Nov 9 2026:
+        # pond/Barry transfers were never recorded because this skip ran
+        # before the stamp, which hid exactly the unowned conversions
+        # that matter most from every weekly count).
+        if agent_name.lower() in excluded:
+            if not (db_rows.get(pid, {}) or {}).get("transfer_date"):
+                try:
+                    _db.record_isa_transfer(
+                        pid, lead_name=lead_name, agent_name=agent_name,
+                        transfer_type=_db.classify_transfer_type(
+                            person.get("tags")))
+                except Exception:
+                    pass
+            continue
 
         # Transfer date: prefer DB record, fall back to today
         db_row = db_rows.get(pid, {})
@@ -3431,6 +3443,38 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
             "callingly", hours=168)
     except Exception as _dr:
         logger.warning("hype-email: desk route count failed: %s", _dr)
+    # Verified AI conversions, auto-counted (Barry, Nov 9 2026: "we
+    # should be prioritizing our conversion to the agents via that
+    # weekly email"). Text = Claude_Text_Converted ledger events (each
+    # one backed by Ylopo's strict conversation alert). Voice = recent
+    # transfer stamps that carry a real conversational disposition.
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(DISTINCT person_id)
+                    FROM automation_event_log
+                    WHERE event_type = 'claude_text_converted'
+                      AND created_at > NOW() - INTERVAL '7 days'
+                """)
+                desk_routes["text_convos"] = int(cur.fetchone()[0] or 0)
+    except Exception as _tc:
+        logger.warning("hype-email: text convo count failed: %s", _tc)
+    try:
+        voice_n = 0
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id FROM isa_transfers
+                    WHERE transfer_date > NOW() - INTERVAL '7 days'
+                """)
+                pids = [r[0] for r in cur.fetchall()]
+        for _pid in pids[:25]:
+            if _fresh_ai_voice_outcome(_pid, hours=24 * 7):
+                voice_n += 1
+        desk_routes["voice_convos"] = voice_n
+    except Exception as _vc:
+        logger.warning("hype-email: voice convo count failed: %s", _vc)
 
     return {
         "agents":         agents,
@@ -7543,16 +7587,20 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
         out["proof_checks"] = out.get("proof_checks", 0) + 1
         if out["proof_checks"] > 40:
             break  # bound the FUB calls; the rest wait for the next batch
-        # Proof, two doors: a fresh inbound text/connected call, OR a
-        # fresh AI VOICE disposition that marks a real conversation.
-        # Voice conversions log as OUTBOUND calls, so inbound checks
-        # alone are blind to them. ISA_TRANSFER_FRESH is NOT a door
-        # (Nov 9 2026): Barry's own Warm Handoff automation in FUB adds
-        # that tag off attempt-prone triggers (voicemails included), so
-        # a stamp proves a handoff fired, never that a conversation
-        # happened.
+        # Proof, three doors (Barry, Nov 9: "AI text, AI voice, and
+        # Fhalen is the cornerstone of my business"):
+        #   1. a fresh inbound text/connected call,
+        #   2. a fresh AI VOICE disposition marking a real conversation
+        #      (voice conversions log as OUTBOUND calls),
+        #   3. Ylopo's STRICT "successfully engaged in conversation"
+        #      alert (prospecting AI text threads are invisible to the
+        #      message APIs; the dated alert is the only proof).
+        # ISA_TRANSFER_FRESH is NOT a door: the Warm Handoff automation
+        # adds it off attempt-prone triggers, so a stamp proves a
+        # handoff fired, never that a conversation happened.
         voice = _fresh_ai_voice_outcome(pid, hours=fresh_h)
-        if not voice and not _had_inbound_within(pid, hours=fresh_h):
+        if not voice and not _fresh_strict_ai_alert(pid, hours=fresh_h) \
+                and not _had_inbound_within(pid, hours=fresh_h):
             # No fresh conversation YET. Skip without burning the
             # once-ever ledger: if they talk to our AI next week, that
             # conversation routes them then. (Burning here was the old
@@ -13973,6 +14021,34 @@ def _fresh_ai_voice_outcome(person_id, hours=48):
         logger.warning("ai voice outcome check failed for %s: %s",
                        person_id, e)
         return None
+
+
+def _fresh_strict_ai_alert(person_id, hours=48):
+    """ISO timestamp of Ylopo's STRICT priority alert ("successfully
+    engage" — the conversation-confirmed variant) inside the window, or
+    None. Ylopo prospecting AI text threads never land in FUB's message
+    APIs, so this dated note is the only machine-readable proof those
+    conversations happened. The loose "has engaged X and they need
+    follow up" variant fires on attempts and never counts."""
+    now = datetime.now(timezone.utc)
+    try:
+        nd = FUBClient()._request("GET", "notes", params={
+            "personId": person_id, "limit": 15}) or {}
+        for n in nd.get("notes") or []:
+            if "successfully engage" not in (n.get("body") or "").lower():
+                continue
+            when = n.get("created") or ""
+            try:
+                dt = datetime.strptime(when[:19], "%Y-%m-%dT%H:%M:%S") \
+                    .replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if (now - dt) <= timedelta(hours=hours):
+                return when
+    except Exception as e:
+        logger.warning("strict alert check failed for %s: %s",
+                       person_id, e)
+    return None
 
 
 def _promote_to_shark_tank(pid, person, reason, triggered_by="system"):
@@ -29932,11 +30008,11 @@ def start_scheduler():
     # verified AI conversation (48h wall) go out as calm claim offers
     # minutes after the conversation, not next morning. 2 per sweep,
     # 10 distinct leads per rolling day, once-ever per lead.
-    # STABILITY QUARANTINE (Nov 9 2026): the container began wedging
-    # after these four jobs shipped; until the wedge is understood from
-    # Railway logs they stay unregistered. The site being up outranks
-    # every one of them. Manual runs still work via their endpoints.
-    if (os.environ.get("ENABLE_SWEEP_JOBS") or "").strip() == "1":
+    # Sweep jobs ON by default (Nov 9 2026): the "wedge" turned out to
+    # be Railway's platform outage (spoofed-IP network blocks), not
+    # these jobs. DISABLE_SWEEP_JOBS=1 is the kill switch if ever
+    # needed; the site being up still outranks every one of them.
+    if (os.environ.get("DISABLE_SWEEP_JOBS") or "").strip() != "1":
         _scheduler.add_job(scheduled_ai_nurture_fast,
                            CronTrigger(minute="*/10", hour="8-20",
                                        timezone=ET),
