@@ -1395,6 +1395,7 @@ def classify_stage(stage_raw: str) -> "str | None":
 # moment we first see ISA_TRANSFER_FRESH, before FUB swaps tags on success.
 TRANSFER_TEXT_TAGS  = {"AI_ENGAGED", "AI_NEEDS_FOLLOW_UP"}
 TRANSFER_VOICE_TAGS = {"AI_VOICE_NEEDS_FOLLOW_UP",
+                       "YLOPO_AI_VOICE",
                        "ISA_TRANSFER_SUCCESSFUL",
                        "ISA_TRANSFER_UNSUCCESSFUL"}
 # YLOPO_AI_VOICE_COMPLETED = the AI voice cadence dialed and nobody answered.
@@ -1418,6 +1419,27 @@ def classify_transfer_type(tags) -> str:
     if tagset & TRANSFER_NO_ANSWER_TAGS:
         return "no_answer"
     return "unknown"
+
+
+def recent_transfer_within(person_id, hours=48):
+    """True when OUR transfer ledger stamped this lead inside the window.
+    An ISA_TRANSFER_FRESH stamp is the strongest 'the AI converted them'
+    signal there is, and it comes from our own dated table."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM isa_transfers
+                    WHERE person_id = %s
+                      AND transfer_date > NOW() - make_interval(hours => %s)
+                    LIMIT 1
+                """, (str(person_id), int(hours)))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("recent_transfer_within failed: %s", e)
+        return False
 
 
 def record_isa_transfer(person_id: str, lead_name: str = None,

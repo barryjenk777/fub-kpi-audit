@@ -2956,9 +2956,16 @@ def api_isa_transfers():
                 days_since = 0
         else:
             days_since = 0
-            # Opportunistically record in DB so future runs have a date
+            # Opportunistically record in DB so future runs have a date.
+            # transfer_type stamps HERE (Nov 8 2026: it only ever stamped
+            # via the manual backfill, so every live transfer landed
+            # 'unknown' and the Sunday email announced zero while eight
+            # real transfers sat in the ledger).
             try:
-                _db.record_isa_transfer(pid, lead_name=lead_name, agent_name=agent_name)
+                _db.record_isa_transfer(
+                    pid, lead_name=lead_name, agent_name=agent_name,
+                    transfer_type=_db.classify_transfer_type(
+                        person.get("tags")))
             except Exception:
                 pass
 
@@ -7536,11 +7543,14 @@ def run_ai_nurture_router(batch_cap=None, dry_run=False):
         out["proof_checks"] = out.get("proof_checks", 0) + 1
         if out["proof_checks"] > 40:
             break  # bound the FUB calls; the rest wait for the next batch
-        # Proof, two doors: a fresh inbound text/connected call, OR a
-        # fresh AI VOICE disposition that marks a real conversation —
-        # voice conversions often never log an inbound call record.
+        # Proof, three doors: a fresh inbound text/connected call, OR a
+        # fresh AI VOICE disposition that marks a real conversation, OR
+        # a fresh ISA transfer stamp in our own ledger (the strongest
+        # conversion signal there is). Voice conversions log as OUTBOUND
+        # calls, so inbound checks alone are blind to them.
         voice = _fresh_ai_voice_outcome(pid, hours=fresh_h)
-        if not voice and not _had_inbound_within(pid, hours=fresh_h):
+        if not voice and not _db.recent_transfer_within(pid, hours=fresh_h) \
+                and not _had_inbound_within(pid, hours=fresh_h):
             # No fresh conversation YET. Skip without burning the
             # once-ever ledger: if they talk to our AI next week, that
             # conversation routes them then. (Burning here was the old
@@ -7627,9 +7637,12 @@ def scheduled_ylopo_ai_heartbeat():
         for tag in ("AI_VOICE_NEEDS_FOLLOW_UP", "AI_NEEDS_FOLLOW_UP",
                     "Y_AI_PRIORITY"):
             try:
+                # sort=-created is load-bearing: FUB returns OLDEST first
+                # without it, and a 10-lead sample of 2023 pond fossils
+                # reads as a dead AI (Nov 8 2026: it did exactly that).
                 d = client._request("GET", "people", params={
                     "tags": tag, "updatedAfter": since, "limit": 10,
-                    "fields": "id,name"}) or {}
+                    "sort": "-created", "fields": "id,name"}) or {}
                 for p in d.get("people") or []:
                     pool[str(p["id"])] = p
             except Exception:
@@ -7648,6 +7661,17 @@ def scheduled_ylopo_ai_heartbeat():
             except Exception:
                 pass
             try:
+                cd = client._request("GET", "calls", params={
+                    "personId": pid, "limit": 15}) or {}
+                for c in next((v for v in cd.values()
+                               if isinstance(v, list)), []):
+                    if "Call Disposition" in (c.get("note") or ""):
+                        w = c.get("created") or ""
+                        if newest is None or w > newest:
+                            newest = w
+            except Exception:
+                pass
+            try:
                 nd = client._request("GET", "notes", params={
                     "personId": pid, "limit": 100}) or {}
                 for n in nd.get("notes") or []:
@@ -7657,6 +7681,20 @@ def scheduled_ylopo_ai_heartbeat():
                             newest = w
             except Exception:
                 pass
+        # Our own transfer ledger is a sample-proof signal: the newest
+        # ISA transfer stamp counts as AI life regardless of sampling.
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT MAX(transfer_date) FROM isa_transfers")
+                    row = cur.fetchone()
+            if row and row[0]:
+                w = row[0].strftime("%Y-%m-%dT%H:%M:%SZ")
+                if newest is None or w > newest:
+                    newest = w
+        except Exception:
+            pass
         prev, _ = _db.get_app_state("ylopo_ai_last_activity")
         if newest and (not prev or newest > prev):
             _db.set_app_state("ylopo_ai_last_activity", newest)
@@ -13791,6 +13829,23 @@ def _fresh_ai_voice_outcome(person_id, hours=48):
     try:
         client = FUBClient()
         newest = None
+        # The disposition rides the CALL record's note now (Nov 8 2026:
+        # Melvina's conversion lived only there; the notes feed carries
+        # the old format). Calls first, then the legacy notes walk.
+        try:
+            cd = client._request("GET", "calls", params={
+                "personId": person_id, "limit": 25}) or {}
+            for c in next((v for v in cd.values()
+                           if isinstance(v, list)), []):
+                body = c.get("note") or ""
+                if "Call Disposition" not in body:
+                    continue
+                m = _re.search(r"Call Disposition:\s*([A-Za-z_ ]+)", body)
+                when = c.get("created") or ""
+                if m and (newest is None or when > newest[1]):
+                    newest = (m.group(1).strip(), when)
+        except Exception:
+            pass
         for offset in (0, 100):
             data = client._request("GET", "notes", params={
                 "personId": person_id, "limit": 100,

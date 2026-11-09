@@ -197,6 +197,19 @@ def evidence_line(person_id):
                 bits.append(("called in %s"
                              % (inc[-1].get("created") or "")[:10],
                              inc[-1].get("created") or ""))
+            # AI voice dispositions ride the call record's note now
+            # (Nov 8 2026 format change).
+            for c in calls:
+                body = c.get("note") or ""
+                if "Call Disposition" in body:
+                    disp = _re.search(
+                        r"Call Disposition:\s*([A-Za-z_ ]+)", body)
+                    when = (c.get("created") or "")[:10]
+                    if disp:
+                        bits.append(("AI call %s on %s"
+                                     % (disp.group(1).strip(), when),
+                                     c.get("created") or ""))
+                        break
         except Exception:
             pass
         try:
