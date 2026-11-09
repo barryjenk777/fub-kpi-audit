@@ -29775,30 +29775,33 @@ def start_scheduler():
     # verified AI conversation (48h wall) go out as calm claim offers
     # minutes after the conversation, not next morning. 2 per sweep,
     # 10 distinct leads per rolling day, once-ever per lead.
-    _scheduler.add_job(scheduled_ai_nurture_fast,
-                       CronTrigger(minute="*/10", hour="8-20", timezone=ET),
-                       id="ai_nurture_fast",
-                       name="AI nurture fast sweep (10min, 8a-9p)",
-                       max_instances=1, misfire_grace_time=300)
-
-    # 5-in-5 call cadence (Barry, Nov 7 2026): pressed 1, lead didn't
-    # pick up → the agent's phone re-rings them once a day for five days
-    # at their own call block. Plus the Realtor drip stage watcher.
-    _scheduler.add_job(scheduled_call_cadence_sweep,
-                       CronTrigger(minute="*/10", hour="8-20", timezone=ET),
-                       id="call_cadence_sweep",
-                       name="5-in-5 call cadence sweep (10min, 8a-9p)",
-                       max_instances=1, misfire_grace_time=300)
-    _scheduler.add_job(scheduled_drip_stage_watch,
-                       CronTrigger(minute="12,42", timezone=ET),
-                       id="drip_stage_watch",
-                       name="Realtor drip stage watcher (30min)",
-                       max_instances=1, misfire_grace_time=600)
-    _scheduler.add_job(scheduled_ylopo_ai_heartbeat,
-                       CronTrigger(hour=7, minute=40, timezone=ET),
-                       id="ylopo_ai_heartbeat",
-                       name="Ylopo AI heartbeat (daily 7:40am)",
-                       max_instances=1, misfire_grace_time=3600)
+    # STABILITY QUARANTINE (Nov 9 2026): the container began wedging
+    # after these four jobs shipped; until the wedge is understood from
+    # Railway logs they stay unregistered. The site being up outranks
+    # every one of them. Manual runs still work via their endpoints.
+    if (os.environ.get("ENABLE_SWEEP_JOBS") or "").strip() == "1":
+        _scheduler.add_job(scheduled_ai_nurture_fast,
+                           CronTrigger(minute="*/10", hour="8-20",
+                                       timezone=ET),
+                           id="ai_nurture_fast",
+                           name="AI nurture fast sweep (10min, 8a-9p)",
+                           max_instances=1, misfire_grace_time=300)
+        _scheduler.add_job(scheduled_call_cadence_sweep,
+                           CronTrigger(minute="*/10", hour="8-20",
+                                       timezone=ET),
+                           id="call_cadence_sweep",
+                           name="5-in-5 call cadence sweep (10min, 8a-9p)",
+                           max_instances=1, misfire_grace_time=300)
+        _scheduler.add_job(scheduled_drip_stage_watch,
+                           CronTrigger(minute="12,42", timezone=ET),
+                           id="drip_stage_watch",
+                           name="Realtor drip stage watcher (30min)",
+                           max_instances=1, misfire_grace_time=600)
+        _scheduler.add_job(scheduled_ylopo_ai_heartbeat,
+                           CronTrigger(hour=7, minute=40, timezone=ET),
+                           id="ylopo_ai_heartbeat",
+                           name="Ylopo AI heartbeat (daily 7:40am)",
+                           max_instances=1, misfire_grace_time=3600)
 
     # Phoenix tag expiry: daily 6:10am ET — removes PHOENIX tags 7+ days old
     # so the LeadStream boost doesn't outlive the resurrection moment.
