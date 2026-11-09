@@ -7608,6 +7608,94 @@ def scheduled_ai_nurture_router():
         logger.warning("ai nurture router failed: %s", e)
 
 
+def scheduled_ylopo_ai_heartbeat():
+    """Daily 7:40am ET: is Ylopo's AI actually talking to anyone?
+    Born Nov 8 2026 when the AI turned out to have been silent since
+    Oct 30 while tag churn kept the lane LOOKING busy. Samples the
+    freshest AI-tagged leads in FUB for a voice disposition or an
+    inbound text; when the newest sign of life is older than 72 hours,
+    Barry gets one DM a week. The finding lands in app_state
+    ylopo_ai_last_activity so /system can show it cheaply."""
+    if not _db.try_acquire_job_lock("ylopo_ai_heartbeat"):
+        return
+    import re as _re
+    try:
+        client = FUBClient()
+        since = (datetime.now(timezone.utc) - timedelta(days=3)) \
+            .strftime("%Y-%m-%dT%H:%M:%SZ")
+        pool = {}
+        for tag in ("AI_VOICE_NEEDS_FOLLOW_UP", "AI_NEEDS_FOLLOW_UP",
+                    "Y_AI_PRIORITY"):
+            try:
+                d = client._request("GET", "people", params={
+                    "tags": tag, "updatedAfter": since, "limit": 10,
+                    "fields": "id,name"}) or {}
+                for p in d.get("people") or []:
+                    pool[str(p["id"])] = p
+            except Exception:
+                continue
+        newest = None  # ISO string of freshest AI sign of life
+        for pid in list(pool)[:15]:
+            try:
+                tm = client._request("GET", "textMessages", params={
+                    "personId": pid, "limit": 15}) or {}
+                for t in next((v for v in tm.values()
+                               if isinstance(v, list)), []):
+                    if t.get("isIncoming"):
+                        w = t.get("created") or ""
+                        if newest is None or w > newest:
+                            newest = w
+            except Exception:
+                pass
+            try:
+                nd = client._request("GET", "notes", params={
+                    "personId": pid, "limit": 100}) or {}
+                for n in nd.get("notes") or []:
+                    if "Call Disposition" in (n.get("body") or ""):
+                        w = n.get("created") or ""
+                        if newest is None or w > newest:
+                            newest = w
+            except Exception:
+                pass
+        prev, _ = _db.get_app_state("ylopo_ai_last_activity")
+        if newest and (not prev or newest > prev):
+            _db.set_app_state("ylopo_ai_last_activity", newest)
+        best = max(filter(None, [newest, (prev or "").strip() or None]),
+                   default=None)
+        if not best:
+            age_h = None
+        else:
+            try:
+                dt = datetime.strptime(best[:19], "%Y-%m-%dT%H:%M:%S") \
+                    .replace(tzinfo=timezone.utc)
+                age_h = (datetime.now(timezone.utc) - dt) \
+                    .total_seconds() / 3600
+            except ValueError:
+                age_h = None
+        if (age_h is None or age_h > 72) and _db.claim_once(
+                "ylopo_ai_quiet_%s"
+                % datetime.now(timezone.utc).strftime("%G%V")):
+            try:
+                import slack_client as _sl
+                import dispatch as _dp
+                bid = _dp._slack_user_id("Barry Jenkins")
+                if _sl.is_available() and bid:
+                    _sl.dm_user(bid,
+                        "Ylopo AI heartbeat: no voice dispositions and no "
+                        "lead replies across a %d-lead sample of fresh "
+                        "AI-tagged leads. Newest sign of life: %s. The "
+                        "tags keep churning, but nobody is being talked "
+                        "to. Worth a look in the Hub."
+                        % (min(15, len(pool)),
+                           best[:10] if best else "none found"))
+            except Exception:
+                pass
+        logger.info("[AI HEARTBEAT] sampled %d, newest activity %s",
+                    min(15, len(pool)), best or "none")
+    except Exception as e:
+        logger.warning("ylopo ai heartbeat failed: %s", e)
+
+
 def scheduled_ai_nurture_fast():
     """Every 10 minutes, 8am-9pm ET: the event-speed path (Barry, Nov 7:
     'I want it best in class'). A lead who talks to the AI at 4:05 is on
@@ -22244,6 +22332,24 @@ def _feed_watch_scan():
         stale.append(("Maverick call grades",
                       "check failed: %s" % str(e)[:80],
                       "Grading coverage unknown."))
+    # Ylopo AI heartbeat: sampled daily by its own job (FUB calls are
+    # too heavy for a page-load scan); read the finding cheaply here.
+    try:
+        last_ai, _ = _db.get_app_state("ylopo_ai_last_activity")
+        if (last_ai or "").strip():
+            _dt = datetime.strptime(last_ai[:19], "%Y-%m-%dT%H:%M:%S") \
+                .replace(tzinfo=timezone.utc)
+            _age = (now - _dt).total_seconds() / 3600.0
+            if _age > 72:
+                stale.append(("Ylopo AI conversations",
+                              "quiet for %d hours (last sign of life: %s)"
+                              % (int(_age), _dt.strftime("%b %d")),
+                              "The AI is tagging but not talking: no "
+                              "voice dispositions, no lead replies. "
+                              "Conversions cannot happen. Check the "
+                              "Ylopo Hub."))
+    except Exception:
+        pass
     # 18h, not 3h: the newest row is the newest CALL, and the team does
     # not dial overnight. A dead sync still trips by mid-afternoon.
     _check("Calls warehouse sync",
@@ -29633,6 +29739,11 @@ def start_scheduler():
                        id="drip_stage_watch",
                        name="Realtor drip stage watcher (30min)",
                        max_instances=1, misfire_grace_time=600)
+    _scheduler.add_job(scheduled_ylopo_ai_heartbeat,
+                       CronTrigger(hour=7, minute=40, timezone=ET),
+                       id="ylopo_ai_heartbeat",
+                       name="Ylopo AI heartbeat (daily 7:40am)",
+                       max_instances=1, misfire_grace_time=3600)
 
     # Phoenix tag expiry: daily 6:10am ET — removes PHOENIX tags 7+ days old
     # so the LeadStream boost doesn't outlive the resurrection moment.
