@@ -14832,6 +14832,41 @@ def api_conversions_correction_email():
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 
+@app.route("/api/admin/desk/ledger-amnesty", methods=["POST"])
+def api_ledger_amnesty():
+    """One-time repair (Nov 9 2026): Friday's router burned leads into
+    the once-ever ledger when they merely FAILED the proof check, so
+    genuinely fresh conversions (Sheila, Janice) read as already-seen
+    forever. Clears ai_nurture ledger pairs for leads that never
+    actually received an ai_nurture offer. {"apply": true} executes;
+    default reports what would clear."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    apply_it = bool((request.get_json(silent=True) or {}).get("apply"))
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id FROM desk_tag_seen
+                    WHERE tag = 'ai_nurture'
+                      AND person_id NOT IN (
+                        SELECT DISTINCT person_id FROM dispatch_offers
+                        WHERE source = 'ai_nurture')
+                """)
+                victims = [r[0] for r in cur.fetchall()]
+                if apply_it and victims:
+                    cur.execute("""
+                        DELETE FROM desk_tag_seen
+                        WHERE tag = 'ai_nurture'
+                          AND person_id = ANY(%s)
+                    """, (victims,))
+        return jsonify({"ok": True, "applied": apply_it,
+                        "cleared" if apply_it else "would_clear":
+                        len(victims)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
 @app.route("/api/admin/transfers/recent")
 def api_transfers_recent():
     """The transfer ledger with receipts: every ISA transfer stamp in
