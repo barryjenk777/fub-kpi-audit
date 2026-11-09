@@ -105,7 +105,11 @@ def auto_detect_agents(client):
             continue
         if full_name.lower() in excluded_lower:
             continue
-        # Include agents and brokers not in excluded list
+        # ONLY the Agent role is tracked (Barry, Nov 9 2026). FUB's UI
+        # Admin = API role "Broker"; Lender = "Lender". Neither belongs
+        # on the KPI audit, scoreboards, or the accountability rhythm.
+        if role != "agent":
+            continue
         agent_map[full_name] = user
 
     return agent_map

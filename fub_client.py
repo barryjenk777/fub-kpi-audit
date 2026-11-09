@@ -314,6 +314,14 @@ class FUBClient:
             email = u.get("email", "")
             if not email:
                 continue
+            # ONLY the Agent role enters agent tracking (Barry, Nov 9
+            # 2026: "I don't want admin or lender to be in agent
+            # track"). FUB's UI labels map to API roles as Agent →
+            # "Agent", Admin → "Broker", Lender → "Lender". Anyone
+            # else never gets onboarding, goals, KPI audit, or roster.
+            role = str(u.get("role") or "").strip().lower()
+            if role != "agent":
+                continue
             # FUB stores phone on the user object under several possible keys
             fub_phone = (u.get("mobilePhone") or u.get("phone") or
                          u.get("phoneNumber") or u.get("mobile") or "")
