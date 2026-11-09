@@ -22861,20 +22861,27 @@ def build_operator_home():
                 and int(h.get("course_days_idle") or 0) >= 3]
     except Exception as e:
         logger.warning("[OPERATOR] onboarding read failed: %s", e)
-    stage("onboarding", "Onboarding", len(hires) or None, "hires",
-          {"formula": "hires on the onboarding board, not yet complete",
-           "source": "onboarding board (course progress + pipeline "
-                     "tasks, synced from the Fast Track course)",
-           "door": "/team/onboarding"},
-          "/team/onboarding",
-          breakdown=[{"label": "%s%s" % (h.get("agent"),
-                      " · idle %d days" % int(h.get("course_days_idle"))
-                      if int(h.get("course_days_idle") or 0) >= 3 else ""),
-                      "value": int(h.get("course_percent") or 0),
-                      "fmt": "pct"}
-                     for h in sorted(hires,
-                                     key=lambda x: -(x.get("course_percent")
-                                                     or 0))])
+    # Zero hires = no node at all (Nov 9 2026: a "?" tile led the page
+    # and read as a bug; an empty stage earns no strip space).
+    if hires:
+        stage("onboarding", "Onboarding", len(hires), "hires",
+              {"formula": "hires on the onboarding board, not yet "
+                          "complete",
+               "source": "onboarding board (course progress + pipeline "
+                         "tasks, synced from the Fast Track course)",
+               "door": "/team/onboarding"},
+              "/team/onboarding",
+              breakdown=[{"label": "%s%s" % (h.get("agent"),
+                          " · idle %d days"
+                          % int(h.get("course_days_idle"))
+                          if int(h.get("course_days_idle") or 0) >= 3
+                          else ""),
+                          "value": int(h.get("course_percent") or 0),
+                          "fmt": "pct"}
+                         for h in sorted(hires,
+                                         key=lambda x:
+                                         -(x.get("course_percent")
+                                           or 0))])
 
     # ── Leads routed (30d), by lane ─────────────────────────────────────
     leads_30, lane_rows = 0, []
