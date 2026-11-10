@@ -15937,6 +15937,41 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # pond or no pond; pond leads carry an empty assignedTo, which
             # is a dark owner, so pond routing is unchanged.
             _owned = not _desk_dark_owner(_own_name)
+            # Claim beats FUB (Barry, Nov 10 2026): "my agent answers
+            # Callingly, the lead is theirs; if Ylopo converts it later,
+            # notify my agent, never route it to someone else." If the
+            # press-1 assignment failed or Callingly's name didn't match
+            # the roster, FUB shows no owner but our ledger has the claim.
+            # Honor the claim, repair FUB, and treat the lead as owned.
+            if not _owned:
+                try:
+                    _claimer = next(
+                        (o.get("agent") for o in reversed(
+                            _db.dispatch_person_state(pid, hours=72) or [])
+                         if o.get("accepted") and o.get("agent")
+                         and not _desk_dark_owner(o.get("agent"))), None)
+                except Exception as _ce:
+                    _claimer = None
+                    logger.warning("claim lookup failed for %s: %s", pid, _ce)
+                if _claimer:
+                    _db.log_automation_event(
+                        event_type="owner_from_claim", person_id=pid,
+                        person_name=person.get("name"), agent_name=_claimer,
+                        payload={"fub_assigned_to": _own_name, "tags": _fresh},
+                        triggered_by=triggered_by)
+                    try:
+                        _cprof = next((p for p in (_db.get_agent_profiles(
+                            active_only=True) or [])
+                            if p["agent_name"] == _claimer), None)
+                        if _cprof and _cprof.get("fub_user_id"):
+                            FUBClient().update_person_fields(
+                                pid, {"assignedUserId": _cprof["fub_user_id"]})
+                    except Exception as _ae:
+                        logger.warning("claim repair assign failed for %s: %s",
+                                       pid, _ae)
+                    _own_name = _claimer
+                    person["assignedTo"] = _claimer
+                    _owned = True
             # The truth test (Barry, Nov 4 2026: false fire drills were
             # devaluing every notification): a CONVERSION is a human-ask
             # tag plus a real inbound communication. Everything else is
