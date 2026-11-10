@@ -16355,6 +16355,69 @@ def api_webhook_stats():
     return jsonify({"ok": True, "stats": stats or {"note": "no events received yet"}})
 
 
+_FUB_WEBHOOK_EVENTS = ("peopleCreated", "peopleTagsCreated", "eventsCreated",
+                       "appointmentsCreated", "appointmentsUpdated",
+                       "appointmentsDeleted", "callsCreated",
+                       "textMessagesCreated")
+
+
+@app.route("/api/admin/fub/webhooks", methods=["GET", "POST"])
+def api_admin_fub_webhooks():
+    """Owner-only. GET lists the FUB webhooks registered under this app's
+    system (X-System / X-System-Key from Railway, the only credentials FUB
+    will show them to). POST registers any of _FUB_WEBHOOK_EVENTS that are
+    missing, pointed at this deployment's /webhook/fub. Added Nov 10 2026
+    so eventsCreated (Realtor.com inquiries on existing people) could be
+    turned on from a phone; FUB answers with the exact error if an event
+    name is wrong, and nothing already registered is touched."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import requests as _rq
+    headers = {"X-System": os.environ.get("FUB_SYSTEM", "LegacyCommandCenter")}
+    if os.environ.get("FUB_SYSTEM_KEY"):
+        headers["X-System-Key"] = os.environ["FUB_SYSTEM_KEY"]
+    auth = (os.environ.get("FUB_API_KEY", ""), "")
+    base = os.environ.get("BASE_URL",
+                          "https://web-production-3363cc.up.railway.app").rstrip("/")
+    hook_url = base + "/webhook/fub"
+    try:
+        r = _rq.get("https://api.followupboss.com/v1/webhooks",
+                    auth=auth, headers=headers, timeout=20)
+        existing = (r.json() or {}).get("webhooks") or [] if r.ok else []
+        listing = {"status": r.status_code, "webhooks": existing}
+    except Exception as e:
+        return jsonify({"ok": False, "error": "list failed: %s" % e}), 502
+    have = {w.get("event") for w in existing
+            if (w.get("url") or "").rstrip("/") == hook_url}
+    missing = [ev for ev in _FUB_WEBHOOK_EVENTS if ev not in have]
+    if request.method == "GET":
+        return jsonify({"ok": True, "hook_url": hook_url,
+                        "system_key_set": bool(os.environ.get("FUB_SYSTEM_KEY")),
+                        "registered_here": sorted(have), "missing": missing,
+                        "fub": listing})
+    wanted = (request.get_json(silent=True) or {}).get("events") or missing
+    results = []
+    for ev in wanted:
+        if ev in have:
+            results.append({"event": ev, "status": "already"})
+            continue
+        try:
+            pr = _rq.post("https://api.followupboss.com/v1/webhooks",
+                          auth=auth, headers=headers, timeout=20,
+                          json={"event": ev, "url": hook_url})
+            results.append({"event": ev, "status": pr.status_code,
+                            "body": (pr.text or "")[:300]})
+        except Exception as e:
+            results.append({"event": ev, "status": "error", "body": str(e)[:300]})
+    _db.log_automation_event(
+        event_type="fub_webhooks_registered", person_id=None, person_name=None,
+        agent_name=None, payload={"results": results, "hook_url": hook_url},
+        triggered_by="admin")
+    return jsonify({"ok": all(isinstance(x["status"], int) and x["status"] < 300
+                              or x["status"] == "already" for x in results),
+                    "hook_url": hook_url, "results": results})
+
+
 @app.route("/webhook/fub", methods=["POST"])
 def webhook_fub():
     """
