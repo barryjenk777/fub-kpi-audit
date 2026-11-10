@@ -44,22 +44,85 @@ def is_available():
     return bool(_get_url())
 
 
+_pool = None
+_pool_lock = None
+
+
+def _get_pool():
+    """Lazily build one ThreadedConnectionPool per process (Nov 2026 audit:
+    338 call sites each opened and closed a fresh TCP+TLS connection to
+    Railway Postgres, so a page with 20 queries paid 20 handshakes).
+    DB_POOL=0 restores the old connect-per-call path. DB_POOL_MAX caps the
+    pool; when it is exhausted get_conn() falls back to a direct connection
+    rather than failing, so a burst of webhook threads degrades instead of
+    erroring."""
+    global _pool, _pool_lock
+    if _pool is not None:
+        return _pool
+    import threading
+    if _pool_lock is None:
+        _pool_lock = threading.Lock()
+    with _pool_lock:
+        if _pool is None:
+            from psycopg2 import pool as _pgpool
+            maxc = int(os.environ.get("DB_POOL_MAX") or 12)
+            _pool = _pgpool.ThreadedConnectionPool(
+                1, max(2, maxc), _get_url(),
+                connect_timeout=int(os.environ.get("DB_CONNECT_TIMEOUT") or 5))
+    return _pool
+
+
 @contextmanager
 def get_conn():
     import psycopg2
-    # connect_timeout is load-bearing (Nov 9 2026): without it a dead or
-    # restarting Postgres hangs every web worker on TCP forever and the
-    # whole site reads as down. 5s then fail fast and let pages degrade.
-    conn = psycopg2.connect(_get_url(), connect_timeout=5)
+    use_pool = (os.environ.get("DB_POOL") or "1").strip() != "0"
+    pool = None
+    conn = None
+    if use_pool:
+        try:
+            pool = _get_pool()
+            conn = pool.getconn()
+            if conn.closed:
+                # Server dropped it while idle (Railway restarts, idle
+                # timeouts): discard and take a fresh one.
+                pool.putconn(conn, close=True)
+                conn = pool.getconn()
+        except Exception as e:
+            logger.info("db pool unavailable (%s), using a direct connection", e)
+            if pool is not None and conn is not None:
+                try:
+                    pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+            pool, conn = None, None
+    if conn is None:
+        conn = psycopg2.connect(
+            _get_url(),
+            connect_timeout=int(os.environ.get("DB_CONNECT_TIMEOUT") or 5))
     conn.autocommit = False
+    broken = False
     try:
         yield conn
         conn.commit()
-    except Exception:
-        conn.rollback()
+    except Exception as e:
+        if isinstance(e, (psycopg2.OperationalError, psycopg2.InterfaceError)):
+            broken = True
+        try:
+            conn.rollback()
+        except Exception:
+            broken = True
         raise
     finally:
-        conn.close()
+        if pool is not None:
+            try:
+                pool.putconn(conn, close=broken or conn.closed)
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        else:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1460,13 +1523,27 @@ def record_isa_transfer(person_id: str, lead_name: str = None,
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # transfer_date is frozen on first insert. A later call may
+                # only fill in a missing/unknown transfer_type or a missing
+                # agent (the panel records "Unassigned"); it never overwrites
+                # a real value. (xmax = 0) is true only for the INSERT path,
+                # so callers still learn whether the row is new.
                 cur.execute(
                     """INSERT INTO isa_transfers (person_id, lead_name, agent_name, transfer_type)
                        VALUES (%s, %s, %s, %s)
-                       ON CONFLICT (person_id) DO NOTHING""",
+                       ON CONFLICT (person_id) DO UPDATE SET
+                         transfer_type = COALESCE(
+                             NULLIF(isa_transfers.transfer_type, 'unknown'),
+                             EXCLUDED.transfer_type),
+                         lead_name = COALESCE(isa_transfers.lead_name, EXCLUDED.lead_name),
+                         agent_name = COALESCE(
+                             NULLIF(isa_transfers.agent_name, 'Unassigned'),
+                             EXCLUDED.agent_name)
+                       RETURNING (xmax = 0) AS inserted""",
                     (str(person_id), lead_name, agent_name, transfer_type)
                 )
-                return cur.rowcount > 0
+                row = cur.fetchone()
+                return bool(row and row[0])
     except Exception as e:
         logger.warning("record_isa_transfer failed for %s: %s", person_id, e)
         return False
@@ -10832,6 +10909,28 @@ def resolve_dispatch_offer(offer_id, outcome, reason=None):
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                if outcome == "accepted":
+                    # One winner per LEAD, not per offer row (Nov 2026
+                    # audit): a shootout gives each agent their own row, so
+                    # two taps in the same second both used to resolve and
+                    # both agents were told "yours". Serialize on the person
+                    # for this transaction, then refuse if anyone already
+                    # won this lead in the last hour.
+                    cur.execute("SELECT person_id FROM dispatch_offers WHERE id = %s",
+                                (offer_id,))
+                    prow = cur.fetchone()
+                    if not prow:
+                        return None
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                                (str(prow[0]),))
+                    cur.execute("""
+                        SELECT 1 FROM dispatch_offers
+                         WHERE person_id = %s AND id <> %s
+                           AND accepted_at IS NOT NULL
+                           AND accepted_at > NOW() - INTERVAL '1 hour'
+                         LIMIT 1""", (prow[0], offer_id))
+                    if cur.fetchone():
+                        return None
                 cur.execute("""
                     UPDATE dispatch_offers
                     SET %s = NOW(), pass_reason = COALESCE(%%s, pass_reason)

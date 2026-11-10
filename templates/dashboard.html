@@ -258,7 +258,7 @@ button{cursor:pointer;border:none;background:none;font-family:inherit;font-size:
 .panel.open .panel-body{display:block}
 
 /* ── TABLE ── */
-.tbl-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:1.2rem}
+.tbl-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:1.2rem}
 table{width:100%;border-collapse:collapse;font-size:.8rem}
 thead th{padding:.55rem .9rem;text-align:left;font-size:.62rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);background:var(--surface2);white-space:nowrap}
 tbody td{padding:.72rem .9rem;border-bottom:1px solid var(--border-sub);vertical-align:middle}
@@ -1409,7 +1409,7 @@ let _showMinimized=false;
 
 async function loadMinimized(){
   try{
-    const r=await fetch('/api/admin/minimized-agents?key=lht-perp-2026');
+    const r=await fetch('/api/admin/minimized-agents');
     const d=await r.json();
     if(d.ok) _minimizedAgents=d.minimized||[];
   }catch(e){ /* non-fatal: worst case nothing is hidden */ }
@@ -1417,7 +1417,7 @@ async function loadMinimized(){
 
 async function toggleMinimize(agent,hide){
   try{
-    const r=await fetch('/api/admin/minimized-agents?key=lht-perp-2026',{
+    const r=await fetch('/api/admin/minimized-agents',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({agent:agent,minimized:!!hide})});
     const d=await r.json();

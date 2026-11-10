@@ -125,7 +125,13 @@ def run_handoff_scan(dry_run=False):
                 and person.get("createdById") == person.get("assignedUserId")
                 and person.get("createdById") != config.ISA_USER_ID):
             continue
-        is_new = _db.record_isa_transfer(pid, lead_name=lead_name, agent_name=agent)
+        # Type the transfer at record time (Nov 2026 audit): this scan runs
+        # every 10 min and used to insert untyped rows, so the weekly hype
+        # counts (text + voice only) read as zero. The upsert in db.py keeps
+        # the first date and only ever fills in a missing type.
+        is_new = _db.record_isa_transfer(
+            pid, lead_name=lead_name, agent_name=agent,
+            transfer_type=_db.classify_transfer_type(person.get("tags") or []))
         if not is_new:
             continue
         # Fossil guard: the transfer is recorded above either way (so it

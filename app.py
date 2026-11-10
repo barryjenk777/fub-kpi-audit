@@ -331,7 +331,11 @@ _cache = {}  # In-memory cache: {"audit:2026-03-26": {...}, "manager:2026-03-26"
 
 def _cache_key(endpoint):
     """Generate a cache key like 'audit:2026-03-26'."""
-    return f"{endpoint}:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+    # ET date, not UTC: with a UTC key every daily cache went cold at 8pm
+    # ET and stayed cold until the 6am warm, so evening tab clicks paid a
+    # multi-minute FUB build.
+    from zoneinfo import ZoneInfo as _ZI
+    return f"{endpoint}:{datetime.now(_ZI('America/New_York')).strftime('%Y-%m-%d')}"
 
 
 def cache_get(endpoint):
@@ -5483,6 +5487,32 @@ def _dispatch_accept(offer):
     profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
                     if p["agent_name"] == agent), None)
     uid = (profile or {}).get("fub_user_id")
+    # Ownership re-check (Nov 2026 audit): the offer's owner snapshot can be
+    # 15 minutes old by the time someone claims. If FUB's own routing, an
+    # answered voice transfer, the cash lane or a human put a WORKING agent
+    # on this lead in between, never overwrite them. Alarm instead.
+    prior_owner = None
+    try:
+        _live = client.get_person(offer["person_id"]) or {}
+        prior_owner = (_live.get("assignedTo") or "").strip() or None
+        if prior_owner and prior_owner != agent \
+                and not _desk_dark_owner(prior_owner):
+            _db.log_automation_event(
+                event_type="dispatch_accept_blocked",
+                person_id=offer["person_id"], person_name=offer["lead_name"],
+                agent_name=agent,
+                payload={"source": offer["source"], "hop": offer["hop"],
+                         "from": prior_owner},
+                triggered_by="dispatch")
+            _desk_intake_alarm(
+                offer["person_id"], offer["lead_name"],
+                "%s claimed this lead but FUB already shows %s working it "
+                "since the offer went out. Nothing was reassigned; sort out "
+                "who keeps it." % (agent, prior_owner))
+            return False
+    except Exception as e:
+        logger.warning("[DISPATCH] ownership re-check failed for %s: %s",
+                       offer["person_id"], e)
     assign_ok = False
     if uid:
         try:
@@ -5502,8 +5532,10 @@ def _dispatch_accept(offer):
     _db.log_automation_event(
         event_type="dispatch_accept", person_id=offer["person_id"],
         person_name=offer["lead_name"], agent_name=agent,
-        payload={"source": offer["source"], "hop": offer["hop"]},
+        payload={"source": offer["source"], "hop": offer["hop"],
+                 "from": prior_owner, "assign_ok": assign_ok},
         triggered_by="dispatch")
+    return assign_ok
 
 
 @app.route("/j/<token>")
@@ -5564,7 +5596,14 @@ def dispatch_accept_page(token):
         if action == "accept":
             lat = _db.resolve_dispatch_offer(offer["id"], "accepted")
             if lat is not None:
-                _dispatch_accept(offer)
+                if _dispatch_accept(offer) is False:
+                    return ("<div style='font-family:sans-serif;padding:3rem;"
+                            "text-align:center;max-width:440px;margin:0 auto'>"
+                            "<h2 style='color:#b45309'>Hold on</h2>"
+                            "<p>FUB shows another agent already working %s "
+                            "since this offer went out, so nothing was "
+                            "reassigned. Fhalen and Barry have the details."
+                            "</p></div>" % lead_first)
                 if offer["source"] == "realtor":
                     _realtor_post_claim(offer, claim_secs=lat)
                 return ("<div style='font-family:sans-serif;padding:3rem;"
@@ -6364,7 +6403,11 @@ def api_slack_actions():
                 if lat is None:
                     _say("Someone beat you to it by a heartbeat.")
                     return
-                _dispatch_accept(offer)
+                if _dispatch_accept(offer) is False:
+                    _say("Hold on. FUB shows another agent already working "
+                         "this lead since the offer went out, so it was not "
+                         "reassigned. Fhalen and Barry have the details.")
+                    return
                 if offer["source"] == "realtor":
                     _realtor_post_claim(offer, claim_secs=lat)
                 fub_link = ("https://yourfriendlyagent.followupboss.com"
@@ -13941,10 +13984,15 @@ def _had_inbound_within(person_id, hours=24):
                     and _within(cl.get("created")):
                 return True
     except Exception as e:
-        logger.warning("inbound check failed for %s: %s", person_id, e)
-        # On an API hiccup, err toward the loud path: a missed real
-        # conversion costs more than one extra ping.
-        return True
+        # Nov 2026 audit: this used to return True on any API error, so a
+        # FUB 429 storm turned every follow-up tag into "engaged the AI,
+        # ready for a human" plus an escalation ladder, the exact fire
+        # drill the truth test exists to prevent. Unverified is treated as
+        # not engaged: the lead is still promoted, mirrored and softly
+        # pinged to its owner, and the 10-minute sweep gets another look.
+        logger.warning("inbound check failed for %s (treated as unverified): %s",
+                       person_id, e)
+        return False
     return False
 
 
@@ -15225,13 +15273,36 @@ def api_callingly_test_ring():
         person_name=" ".join(name), agent_name=None,
         payload={"team_id": int(tid)}, triggered_by="admin")
     return jsonify({"ok": True, "created": res})
+def _desk_dark_owner(name):
+    """True when the name on a lead's assignedTo is not a working owner:
+    empty (pond), Barry, Fhalen, an excluded or paused agent, or anyone no
+    longer on the active roster (departed agents keep their name on leads
+    in FUB forever). One definition for intake, the Realtor lane and the
+    claim re-check, so a lead can never be "owned" by nobody."""
+    n = (name or "").strip()
+    if not n or n in ("Fhalen Tendencia", "Barry Jenkins"):
+        return True
+    if n in set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()) or ()):
+        return True
+    if n in set(getattr(config, "EXCLUDED_USERS", []) or ()):
+        return True
+    try:
+        active = {p["agent_name"]
+                  for p in (_db.get_agent_profiles(active_only=True) or [])}
+        if active and n not in active:
+            return True
+    except Exception as e:
+        logger.warning("dark-owner roster check failed: %s", e)
+    return False
 
 
 def _realtor_intake(pid, person, triggered_by="webhook_fub"):
     """Realtor.com shootout lane front door (Barry, Nov 2 2026: purchased
     SHARED leads, competing agents outside the team get the same lead).
-    Returns True when the person belongs to this lane (routed or
-    deliberately suppressed), False to fall through to the tag lanes.
+    Returns True ONLY when a shootout was actually opened; every other exit
+    returns False so the lead falls through to the tag lanes. (Nov 2026
+    audit: the gated/stale/already-claimed exits used to return True, which
+    swallowed every later AI-conversion tag on every Realtor.com lead.)
     Guards: live gate, once-per-lead, 48h freshness (import protection),
     already-assigned stand-down, and the desk flood breaker."""
     kw = (getattr(config, "REALTOR_SOURCE_KEYWORD", "realtor") or "").lower()
@@ -15244,9 +15315,9 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
             event_type="realtor_gated", person_id=pid,
             person_name=person.get("name"), agent_name=None,
             payload={"source": src}, triggered_by=triggered_by)
-        return True
+        return False
     if not _db.claim_once("realtorlead_%s" % pid):
-        return True
+        return False
     # Freshness: a purchased lead routes minutes after birth. Anything
     # older reaching this path is a re-import or an edit echo, and the
     # Oct 30 import taught us what routing fossils costs.
@@ -15263,19 +15334,17 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
             person_name=person.get("name"), agent_name=None,
             payload={"source": src, "created": person.get("created")},
             triggered_by=triggered_by)
-        return True
+        return False
     # Already in an agent's hands (FUB's own routing beat us): never
     # double-route. Point FUB's Realtor.com routing at Barry or a pond so
     # the desk owns assignment, same doctrine as the AI lane.
     _own = (person.get("assignedTo") or "").strip()
-    _dark = {"", "Fhalen Tendencia", "Barry Jenkins"} | set(
-        getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
-    if _own not in _dark:
+    if not _desk_dark_owner(_own):
         _db.log_automation_event(
             event_type="realtor_already_assigned", person_id=pid,
             person_name=person.get("name"), agent_name=_own,
             payload={"source": src}, triggered_by=triggered_by)
-        return True
+        return False
     try:
         if _db.count_recent_dispatch_offers(60) >= 30:
             _db.log_automation_event(
@@ -15283,7 +15352,7 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
                 person_name=person.get("name"), agent_name=None,
                 payload={"lane": "realtor", "source": src},
                 triggered_by=triggered_by)
-            return True
+            return False
     except Exception:
         pass
     city = ((person.get("addresses") or [{}])[0] or {}).get("city")
@@ -15844,7 +15913,7 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # hands. A lead with an active agent's name on it is owned,
             # pond or no pond; pond leads carry an empty assignedTo, which
             # is a dark owner, so pond routing is unchanged.
-            _owned = _own_name not in _dark_owners
+            _owned = not _desk_dark_owner(_own_name)
             # The truth test (Barry, Nov 4 2026: false fire drills were
             # devaluing every notification): a CONVERSION is a human-ask
             # tag plus a real inbound communication. Everything else is
@@ -22312,7 +22381,16 @@ def _already_fired_recently(job_id, within_hours=4):
 
 
 def _alert_on_job_failure(job_name: str, error: str):
-    """Send a quick email to Barry when a scheduled job throws an unhandled exception."""
+    """Send a quick email to Barry when a scheduled job throws an unhandled
+    exception. At most one email per job per 6h (the APScheduler listener
+    already did this; direct callers used to bypass it, so a job failing
+    every 30 minutes sent 48 emails a day)."""
+    now = time.time()
+    if now - _job_error_email_times.get(job_name, 0) < _JOB_ERROR_EMAIL_COOLDOWN_SECS:
+        logger.warning("job %s failed again (email suppressed, 6h cooldown): %s",
+                       job_name, (error or "")[:300])
+        return
+    _job_error_email_times[job_name] = now
     try:
         api_key = os.environ.get("SENDGRID_API_KEY")
         if not api_key:
@@ -27769,6 +27847,10 @@ def scheduled_friday_meeting_text():
     try:
         queued, failed = [], []
         for p in _friday_meeting_recipients():
+            if p["agent_name"] in getattr(config, "TEXT_PAUSED_AGENTS", set()):
+                print("[SCHEDULER] Friday meeting text: %s paused, skipped"
+                      % p["agent_name"])
+                continue
             phone = (p.get("phone") or "").strip()
             if not phone and p["agent_name"] not in getattr(
                     config, "EMAIL_DELIVERY_AGENTS", set()):
@@ -30031,7 +30113,14 @@ def start_scheduler():
         print("[SCHEDULER] APScheduler not installed — skipping scheduled jobs")
         return
 
-    _scheduler = BackgroundScheduler(timezone="US/Eastern")
+    # Cap concurrent job threads (default was 10). Four heavy FUB walkers
+    # at once is already the whole API budget; more just queue on 429s.
+    try:
+        from apscheduler.executors.pool import ThreadPoolExecutor as _APExec
+        _execs = {"default": _APExec(int(os.environ.get("SCHEDULER_THREADS") or 4))}
+    except Exception:
+        _execs = None
+    _scheduler = BackgroundScheduler(timezone="US/Eastern", executors=_execs)
     ET = "US/Eastern"  # passed explicitly to every CronTrigger so Railway (UTC) honors ET
 
     # Error listener: log + email Barry on any job failure (6h per-job cooldown)
@@ -30083,7 +30172,7 @@ def start_scheduler():
                        max_instances=1, misfire_grace_time=300)
 
     # LeadStream pond refresh: hourly at :37
-    _scheduler.add_job(scheduled_run_leadstream_pond, CronTrigger(minute=37, timezone=ET),
+    _scheduler.add_job(scheduled_run_leadstream_pond, CronTrigger(minute=50, timezone=ET),
                        id="leadstream_pond", name="LeadStream pond refresh (hourly)",
                        max_instances=1, misfire_grace_time=120)
 
@@ -30547,7 +30636,7 @@ def start_scheduler():
     # YPRIORITY -> Shark Tank promoter: IDX-behavior wake-ups out of the
     # 200k storage pool into the scored pond. Gated by ypriority_live.
     _scheduler.add_job(scheduled_ypriority_promoter,
-                       CronTrigger(minute="8,38", timezone=ET),
+                       CronTrigger(minute="15,45", timezone=ET),
                        id="ypriority_promoter",
                        name="YPRIORITY Shark Tank promoter (every 30 min)",
                        max_instances=1, coalesce=True)
@@ -31605,8 +31694,14 @@ if __name__ == "__main__":
 else:
     # Running under gunicorn
     _load_cooldown_state()
-    warmup_cache()
-    start_scheduler()
+    # RUN_SCHEDULER=0 turns this process into a pure web server; worker.py
+    # then runs the 77 cron jobs in its own Railway service (see README).
+    # Default stays "1" so a deploy without the env var behaves as before.
+    if (os.environ.get("RUN_SCHEDULER") or "1").strip() != "0":
+        warmup_cache()
+        start_scheduler()
+    else:
+        print("[SCHEDULER] RUN_SCHEDULER=0: web-only process, no cron jobs here")
     # Ensure pond email/reply/SMS log tables exist
     _db.ensure_pond_email_log_table()
     _db.ensure_pond_reply_log_table()

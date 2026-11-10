@@ -5,7 +5,10 @@ Handles authentication, pagination, and rate limiting.
 
 import logging
 import os
+import random
+import threading
 import time
+from collections import deque
 import requests
 from datetime import datetime, timedelta
 
@@ -170,9 +173,66 @@ def _build_sms_note(sms_body, lead_type, channel="sms_only"):
     return note
 
 
+class _FubThrottle:
+    """Process-wide Follow Up Boss budget: a sliding one-minute window shared
+    by every FUBClient instance and thread, a cap on in-flight requests, and
+    a global pause whenever FUB answers 429 (honoring Retry-After).
+
+    FUB allows 200 requests/min per key. FUB_RPM (env) sets this process's
+    share; when the web app and the scheduler run as two Railway services
+    give them shares that add up to under 200 (e.g. 60 and 120)."""
+
+    def __init__(self, per_minute=None, max_inflight=None):
+        self.per_minute = int(per_minute or os.environ.get("FUB_RPM") or 150)
+        self.max_inflight = int(max_inflight or os.environ.get("FUB_MAX_INFLIGHT") or 4)
+        self._lock = threading.Lock()
+        self._stamps = deque()
+        self._backoff_until = 0.0
+        self._inflight = threading.BoundedSemaphore(self.max_inflight)
+
+    def acquire(self):
+        """Block until a request may be sent. Pairs with release()."""
+        self._inflight.acquire()
+        try:
+            while True:
+                with self._lock:
+                    now = time.monotonic()
+                    wait = self._backoff_until - now
+                    if wait <= 0:
+                        cutoff = now - 60.0
+                        while self._stamps and self._stamps[0] < cutoff:
+                            self._stamps.popleft()
+                        if len(self._stamps) < self.per_minute:
+                            self._stamps.append(now)
+                            return
+                        wait = self._stamps[0] + 60.0 - now
+                time.sleep(max(0.05, min(wait, 5.0)))
+        except BaseException:
+            self._inflight.release()
+            raise
+
+    def release(self):
+        self._inflight.release()
+
+    def rate_limited(self, retry_after, attempt):
+        """FUB said 429: pause every caller. Returns the seconds to wait."""
+        try:
+            wait = float(retry_after)
+        except (TypeError, ValueError):
+            wait = 3.0 * (2 ** attempt)          # 3, 6, 12, 24, 48
+        wait = min(90.0, max(1.0, wait)) + random.uniform(0.0, 1.0)
+        with self._lock:
+            self._backoff_until = max(self._backoff_until,
+                                      time.monotonic() + wait)
+        return wait
+
+
+_THROTTLE = _FubThrottle()
+
+
 class FUBClient:
     BASE_URL = "https://api.followupboss.com/v1"
-    RATE_LIMIT_DELAY = 0.35  # ~170 requests/min to stay under 200/min limit
+    RATE_LIMIT_DELAY = 0.35  # legacy; pacing now lives in _FubThrottle (FUB_RPM)
     REQUEST_TIMEOUT = (10, 30)  # (connect, read) seconds — prevents indefinite hangs
 
     def __init__(self, api_key=None):
@@ -191,28 +251,34 @@ class FUBClient:
         self._request_count = 0
 
     def _request(self, method, endpoint, params=None, json_data=None):
-        """Make a rate-limited request to the FUB API with 429 retry backoff."""
-        url = f"{self.BASE_URL}/{endpoint}"
-        time.sleep(self.RATE_LIMIT_DELAY)
-        self._request_count += 1
+        """Make a request to the FUB API through the process-wide throttle.
 
-        for attempt in range(5):  # Nov 7 2026: 3 attempts lost tag
-            # writes under sustained 429 pressure (LeadStream lists
-            # visibly thinned). 5 attempts, honoring Retry-After.
-            response = self.session.request(
-                method, url, params=params, json=json_data,
-                timeout=self.REQUEST_TIMEOUT,
-            )
-            if response.status_code == 429:
-                try:
-                    wait = float(response.headers.get("Retry-After") or 0)
-                except (TypeError, ValueError):
-                    wait = 0
-                wait = max(wait, 3 * (attempt + 1))  # >=3,6,9,12,15s
-                time.sleep(min(wait, 30))
-                continue
-            response.raise_for_status()
-            return response.json()
+        Every FUBClient in this process shares ONE budget (see _FubThrottle):
+        before Nov 2026 each instance slept 0.35s on its own, so a dozen
+        scheduler jobs and webhook threads each believed they had the whole
+        200/min, FUB answered 429 all night, and the jobs failed after three
+        blind retries. Now a 429 pauses every caller for Retry-After (or a
+        growing backoff), and the request is retried up to 5 times."""
+        url = f"{self.BASE_URL}/{endpoint}"
+        self._request_count += 1
+        response = None
+        for attempt in range(5):
+            _THROTTLE.acquire()
+            try:
+                response = self.session.request(
+                    method, url, params=params, json=json_data,
+                    timeout=self.REQUEST_TIMEOUT,
+                )
+            finally:
+                _THROTTLE.release()
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response.json()
+            wait = _THROTTLE.rate_limited(response.headers.get("Retry-After"),
+                                          attempt)
+            logger.warning("FUB 429 on %s %s (attempt %d/5), pausing all "
+                           "callers %.1fs", method, endpoint, attempt + 1, wait)
+            time.sleep(wait)
 
         # All retries exhausted — raise the last response
         response.raise_for_status()
