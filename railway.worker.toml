@@ -1,0 +1,11 @@
+# Railway config for the SCHEDULER WORKER service only.
+#
+# The web service keeps using railway.toml (healthcheck on /api/health).
+# In the worker service's settings, set "Config file path" to
+# railway.worker.toml so this file applies instead. The worker runs
+# APScheduler in a loop and never opens a port, so it must not have a
+# healthcheckPath: Railway would wait on a check that can never pass.
+
+[deploy]
+startCommand = "python worker.py"
+restartPolicyType = "ALWAYS"
