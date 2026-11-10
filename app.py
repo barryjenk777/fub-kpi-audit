@@ -7259,6 +7259,16 @@ def scheduled_desk_sweep(window_min=40, _force=False):
                     logger.info("[DESK SWEEP] %d realtor-lane lead(s) in "
                                 "window", len(_rids))
                     _desk_intake_people(_rids, triggered_by="desk_sweep")
+                # Inquiry events on EXISTING people (Nov 10 2026): the
+                # webhook is the fast path, this is the net under it.
+                _edata = client._request("GET", "events", params={
+                    "type": "Property Inquiry", "limit": 50,
+                    "sort": "-created"}) or {}
+                _recent = [ev for ev in (_edata.get("events") or [])
+                           if (ev.get("created") or "") >= since]
+                if _recent:
+                    _realtor_inquiry_intake(events=_recent,
+                                            triggered_by="desk_sweep")
         except Exception as _rwe:
             logger.warning("realtor sweep failed: %s", _rwe)
         if not candidates:
@@ -15296,6 +15306,44 @@ def _desk_dark_owner(name):
     return False
 
 
+def _realtor_inquiry_owner_ping(pid, person, owner, inquiry):
+    """DM the owning agent about a fresh Realtor.com inquiry on their lead."""
+    try:
+        prop = inquiry.get("property") or {}
+        street = (prop.get("street") or "").strip()
+        msg_txt = (inquiry.get("message") or "").strip()
+        lead1 = ((person.get("name") or "your lead").strip().split() or
+                 ["your lead"])[0]
+        flink = ("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
+                 % pid)
+        line = "\U0001f3e0 %s, your lead %s just inquired on Realtor.com" % (
+            owner.split()[0], lead1)
+        if street:
+            line += " about %s" % street
+        if prop.get("price"):
+            try:
+                line += " ($%s)" % format(int(float(prop["price"])), ",")
+            except (TypeError, ValueError):
+                pass
+        line += ". Already yours, nobody else is being offered this."
+        if msg_txt:
+            line += "\nThey wrote: \"%s\"" % msg_txt[:240]
+        line += "\nCall now: %s" % flink
+        import slack_client as _sl
+        import dispatch as _dpw
+        sid = _dpw._slack_user_id(owner) if _sl.is_available() else None
+        if sid:
+            _sl.dm_user(sid, line)
+        _db.log_automation_event(
+            event_type="realtor_inquiry_owner_ping", person_id=pid,
+            person_name=person.get("name"), agent_name=owner,
+            payload={"inquiry_id": inquiry.get("id"), "street": street,
+                     "slack": bool(sid)},
+            triggered_by="realtor_inquiry")
+    except Exception as e:
+        logger.warning("[REALTOR] owner ping failed for %s: %s", pid, e)
+
+
 def _realtor_in_flight(pid):
     """True while the Realtor lane still owns this lead's next minute: a
     Callingly ring nobody has answered yet, or a shootout offer that is
@@ -15315,7 +15363,44 @@ def _realtor_in_flight(pid):
     return False
 
 
-def _realtor_intake(pid, person, triggered_by="webhook_fub"):
+def _realtor_inquiry_intake(event_ids=None, events=None,
+                            triggered_by="webhook_fub"):
+    """Realtor.com inquiries arrive as FUB EVENTS ("Property Inquiry",
+    source Realtor.com), and most of them land on a person FUB already
+    knows (Barry, Nov 10 2026: a six-month-old Ylopo lead re-inquired on
+    Realtor.com and never rang Callingly because the lane keyed on the
+    person's source and birth date). Route on the inquiry itself: the
+    event is fresh even when the person is not."""
+    kw = (getattr(config, "REALTOR_SOURCE_KEYWORD", "realtor") or "").lower()
+    evs = list(events or [])
+    if event_ids:
+        client = FUBClient()
+        for eid in event_ids:
+            try:
+                ev = client._request("GET", "events/%s" % eid) or {}
+                if ev:
+                    evs.append(ev)
+            except Exception as e:
+                logger.warning("[REALTOR] event fetch failed for %s: %s", eid, e)
+    routed = []
+    for ev in evs:
+        if kw not in ((ev.get("source") or "").lower()):
+            continue
+        if (ev.get("type") or "").strip().lower() != "property inquiry":
+            continue
+        pid = str(ev.get("personId") or "")
+        if not pid:
+            continue
+        try:
+            person = FUBClient().get_person(pid) or {}
+            if _realtor_intake(pid, person, triggered_by, inquiry=ev):
+                routed.append(pid)
+        except Exception as e:
+            logger.warning("[REALTOR] inquiry intake failed for %s: %s", pid, e)
+    return routed
+
+
+def _realtor_intake(pid, person, triggered_by="webhook_fub", inquiry=None):
     """Realtor.com shootout lane front door (Barry, Nov 2 2026: purchased
     SHARED leads, competing agents outside the team get the same lead).
     Returns True only when a ring or shootout was opened, or one is still
@@ -15327,6 +15412,10 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
     already-assigned stand-down, and the desk flood breaker."""
     kw = (getattr(config, "REALTOR_SOURCE_KEYWORD", "realtor") or "").lower()
     src = (person.get("source") or "").strip().lower()
+    if inquiry:
+        # An inquiry EVENT carries its own source; the person may have
+        # been born from Ylopo, a sign call, or an import months ago.
+        src = (inquiry.get("source") or src or "").strip().lower()
     if not kw or kw not in src:
         return False
     live, _ = _db.get_app_state("realtor_live")
@@ -15336,7 +15425,9 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
             person_name=person.get("name"), agent_name=None,
             payload={"source": src}, triggered_by=triggered_by)
         return False
-    if not _db.claim_once("realtorlead_%s" % pid):
+    _once_key = ("realtorinq_%s" % inquiry.get("id")
+                 if inquiry and inquiry.get("id") else "realtorlead_%s" % pid)
+    if not _db.claim_once(_once_key):
         # Already routed by this lane once. Stay out of the tag lanes
         # while the ring or shootout is still in flight; after that the
         # lead is an ordinary owned or unowned lead.
@@ -15346,8 +15437,9 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
     # Oct 30 import taught us what routing fossils costs.
     _fresh = False
     try:
-        _c = datetime.fromisoformat(
-            (person.get("created") or "").replace("Z", "+00:00"))
+        _stamp = ((inquiry.get("occurred") or inquiry.get("created"))
+                  if inquiry else person.get("created")) or ""
+        _c = datetime.fromisoformat(_stamp.replace("Z", "+00:00"))
         _fresh = (datetime.now(timezone.utc) - _c) <= timedelta(hours=48)
     except (ValueError, TypeError):
         _fresh = False
@@ -15366,7 +15458,13 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
         _db.log_automation_event(
             event_type="realtor_already_assigned", person_id=pid,
             person_name=person.get("name"), agent_name=_own,
-            payload={"source": src}, triggered_by=triggered_by)
+            payload={"source": src,
+                     "inquiry_id": (inquiry or {}).get("id")},
+            triggered_by=triggered_by)
+        if inquiry:
+            # Barry, Nov 10 2026: a lead my agent already owns never
+            # routes to anyone else; the owner just hears about it.
+            _realtor_inquiry_owner_ping(pid, person, _own, inquiry)
         return False
     try:
         if _db.count_recent_dispatch_offers(60) >= 30:
@@ -15400,6 +15498,13 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
     # exists. First press-1 is bridged straight to the lead. No answer
     # inside the window and the cascade sweep fires the exact shootout
     # below, so a lead is never worse off than the old path.
+    if inquiry and _realtor_in_flight(pid):
+        _db.log_automation_event(
+            event_type="realtor_inquiry_in_flight", person_id=pid,
+            person_name=person.get("name"), agent_name=None,
+            payload={"inquiry_id": inquiry.get("id")},
+            triggered_by=triggered_by)
+        return True
     if _callingly_ring_first(pid, person, triggered_by):
         return True
     made = _dp.make_shootout(
@@ -16191,6 +16296,10 @@ def _fub_process_webhook(event, uri, resource_ids):
             # fires no tag event for tags present at birth — two real
             # conversions went invisible before this line existed.
             _desk_intake_people(resource_ids)
+        elif event == "eventsCreated":
+            # Realtor.com inquiries ride FUB events, on new AND existing
+            # people. Everything else in the event stream is ignored here.
+            _realtor_inquiry_intake(resource_ids, triggered_by="webhook_fub")
         elif event in ("callsCreated", "textMessagesCreated"):
             seen = set()
             for r in _fub_fetch_webhook_resources(uri):
