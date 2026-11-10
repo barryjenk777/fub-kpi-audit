@@ -4115,6 +4115,25 @@ def stamp_callingly_offer(offer_id):
         return False
 
 
+def has_ringing_callingly(person_id):
+    """True while a Callingly ring for this lead is still unanswered."""
+    if not is_available():
+        return False
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM callingly_rings
+                    WHERE person_id = %s AND status = 'ringing'
+                      AND created_at > NOW() - INTERVAL '2 hours'
+                    LIMIT 1
+                """, (str(person_id),))
+                return cur.fetchone() is not None
+    except Exception as e:
+        logger.warning("has_ringing_callingly failed: %s", e)
+        return False
+
+
 def stale_callingly_rings(minutes=4):
     """Rings still unanswered after the window: fallback candidates."""
     if not is_available():

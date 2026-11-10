@@ -15296,11 +15296,31 @@ def _desk_dark_owner(name):
     return False
 
 
+def _realtor_in_flight(pid):
+    """True while the Realtor lane still owns this lead's next minute: a
+    Callingly ring nobody has answered yet, or a shootout offer that is
+    still open. Later webhooks for the lead (Ylopo tags, edits) must not
+    pull it into the tag lanes mid-ring; once the ring or shootout has
+    resolved, the lead is either owned (tag lanes soft-ping the owner) or
+    unowned (tag lanes may offer it), which is the right outcome."""
+    try:
+        if _db.has_ringing_callingly(pid):
+            return True
+        for o in (_db.dispatch_person_state(pid, hours=1) or []):
+            if not (o.get("accepted") or o.get("passed") or o.get("expired")) \
+                    and int(o.get("secs_left") or 0) > 0:
+                return True
+    except Exception as e:
+        logger.warning("realtor in-flight check failed for %s: %s", pid, e)
+    return False
+
+
 def _realtor_intake(pid, person, triggered_by="webhook_fub"):
     """Realtor.com shootout lane front door (Barry, Nov 2 2026: purchased
     SHARED leads, competing agents outside the team get the same lead).
-    Returns True ONLY when a shootout was actually opened; every other exit
-    returns False so the lead falls through to the tag lanes. (Nov 2026
+    Returns True only when a ring or shootout was opened, or one is still
+    in flight from an earlier pass; every other exit returns False so the
+    lead falls through to the tag lanes. (Nov 2026
     audit: the gated/stale/already-claimed exits used to return True, which
     swallowed every later AI-conversion tag on every Realtor.com lead.)
     Guards: live gate, once-per-lead, 48h freshness (import protection),
@@ -15317,7 +15337,10 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub"):
             payload={"source": src}, triggered_by=triggered_by)
         return False
     if not _db.claim_once("realtorlead_%s" % pid):
-        return False
+        # Already routed by this lane once. Stay out of the tag lanes
+        # while the ring or shootout is still in flight; after that the
+        # lead is an ordinary owned or unowned lead.
+        return _realtor_in_flight(pid)
     # Freshness: a purchased lead routes minutes after birth. Anything
     # older reaching this path is a re-import or an edit echo, and the
     # Oct 30 import taught us what routing fossils costs.
