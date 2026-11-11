@@ -4013,23 +4013,24 @@ def api_agent_sheet(agent_name):
         return jsonify({"error": "Unauthorized"}), 401
     name = agent_name.strip()
     out = {"ok": True, "agent": name}
+    _k = os.environ.get("PERPLEXITY_API_KEY", "")
     with app.test_client() as tc:
         try:
-            d = tc.get("/api/agents/money").get_json() or {}
+            d = tc.get("/api/agents/money?key=%s" % _k).get_json() or {}
             out["money"] = next((a for a in d.get("agents", [])
                                  if a.get("agent") == name), None)
             out["weeks_left"] = d.get("weeks_left")
         except Exception:
             out["money"] = None
         try:
-            d = tc.get("/api/goals/scorecard").get_json() or {}
+            d = tc.get("/api/goals/scorecard?key=%s" % _k).get_json() or {}
             out["score"] = next((r for r in d.get("scorecard", [])
                                  if r.get("agent_name") == name), None)
             out["streak"] = (d.get("streaks") or {}).get(name)
         except Exception:
             out["score"] = None
         try:
-            d = tc.get("/api/manager").get_json() or {}
+            d = tc.get("/api/manager?key=%s" % _k).get_json() or {}
             out["trend"] = next((r for r in d.get("agent_trends", [])
                                  if (r.get("agent_name") or r.get("agent")) == name),
                                 None)
@@ -4037,7 +4038,7 @@ def api_agent_sheet(agent_name):
         except Exception:
             out["trend"] = None
         try:
-            d = tc.get("/api/salesfloor").get_json() or {}
+            d = tc.get("/api/salesfloor?key=%s" % _k).get_json() or {}
             out["floor"] = next((c for c in d.get("cards", [])
                                  if c.get("agent") == name), None)
         except Exception:
@@ -22974,10 +22975,11 @@ def scheduled_metric_snapshots():
     if not _db.try_acquire_job_lock("metric_snapshots"):
         return
     snaps = {}
+    _k = os.environ.get("PERPLEXITY_API_KEY", "")
     try:
         with app.test_client() as tc:
             try:
-                d = tc.get("/api/agents/money").get_json() or {}
+                d = tc.get("/api/agents/money?key=%s" % _k).get_json() or {}
                 rows = [a for a in d.get("agents", []) if not a.get("paused")]
                 behind = [a for a in rows
                           if (a.get("pace_pct") or 0) < 70 and not a.get("is_new")]
@@ -22995,21 +22997,21 @@ def scheduled_metric_snapshots():
             except Exception:
                 pass
             try:
-                d = tc.get("/api/pond-mailer/dashboard").get_json() or {}
+                d = tc.get("/api/pond-mailer/dashboard?key=%s" % _k).get_json() or {}
                 out = (d.get("insight") or {}).get("outcomes") or {}
                 snaps["outreach_uncalled"] = len(out.get("uncalled") or [])
                 snaps["outreach_positive"] = (d.get("funnel") or {}).get("positive")
             except Exception:
                 pass
             try:
-                d = tc.get("/api/leadstream/insight").get_json() or {}
+                d = tc.get("/api/leadstream/insight?key=%s" % _k).get_json() or {}
                 sb = d.get("scoreboard") or []
                 snaps["leadstream_zero_touch"] = sum(
                     (r.get("tagged") or 0) - (r.get("actioned") or 0) for r in sb)
             except Exception:
                 pass
             try:
-                d = tc.get("/api/isa").get_json() or {}
+                d = tc.get("/api/isa?key=%s" % _k).get_json() or {}
                 snaps["isa_convos"] = (d.get("current") or {}).get("convos")
             except Exception:
                 pass
@@ -23171,7 +23173,8 @@ def scheduled_team_board_warm():
         return
     try:
         with app.test_client() as tc:
-            r = tc.get("/api/goals/scorecard")
+            r = tc.get("/api/goals/scorecard?key=%s"
+                       % os.environ.get("PERPLEXITY_API_KEY", ""))
             print(f"[SCHEDULER] team board warm: HTTP {r.status_code}")
     except Exception as e:
         print(f"[SCHEDULER] team board warm FAILED: {e}")
