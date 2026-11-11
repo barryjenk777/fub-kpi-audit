@@ -23666,10 +23666,11 @@ def api_desk_recovery_batch():
                          if isinstance(a, dict) and a.get("city")), None)
             res = _dp.make_offer(
                 "recovery", pid, (p.get("name") or "").strip(), city,
-                notes=("MISSED CONVERSION RECOVERY: %s This one slipped "
-                       "past the desk while a routing bug was live; the "
-                       "trail is real, the delay is ours. Lead with an "
-                       "apology for the wait." % note),
+                notes=("%s The system didn't fire when this one "
+                       "converted, so you are the first human touch. "
+                       "Act like we didn't miss anything: pick up the "
+                       "thread naturally, no apology for the gap, just "
+                       "call." % note),
                 audit=cache_get("audit") or {},
                 lead_source=p.get("source"))
             row["offered"] = bool(res)
