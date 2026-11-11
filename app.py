@@ -23034,14 +23034,26 @@ def api_desk_fossil_audit():
     body = request.get_json(silent=True) or {}
     days = min(int(body.get("days", 10) or 10), 30)
     apply = bool(body.get("apply"))
+    skip = int(body.get("skip", 0) or 0)
     events = _db.get_automation_events("desk_batch_artifact",
                                        days=days, limit=200)
-    seen, real, dead = set(), [], 0
+    # Railway's edge kills ~120s responses; 40 proof checks per call,
+    # continue with {"skip": N} from the previous response.
+    seen, real, dead, checks = set(), [], 0, 0
     for ev in events:
         pid = str(ev.get("person_id") or "")
         if not pid or pid in seen:
             continue
         seen.add(pid)
+        if len(seen) <= skip:
+            continue
+        if checks >= 40:
+            return jsonify({"ok": True, "partial": True,
+                            "checked": checks, "fossils_confirmed": dead,
+                            "real_conversions_suppressed": real,
+                            "applied": apply,
+                            "continue_with_skip": len(seen) - 1})
+        checks += 1
         # Evidence windows run from NOW, so widen by the event's age:
         # a disposition that was 1 day old at suppression time is older
         # now but still proof of that conversation.
@@ -23082,8 +23094,9 @@ def api_desk_fossil_audit():
         real.append(row)
         if len(real) >= 25:
             break
-    return jsonify({"ok": True, "checked": len(seen), "fossils_confirmed": dead,
-                    "real_conversions_suppressed": real, "applied": apply})
+    return jsonify({"ok": True, "checked": checks, "fossils_confirmed": dead,
+                    "real_conversions_suppressed": real, "applied": apply,
+                    "done": True})
 
 
 @app.route("/api/admin/snapshots/run", methods=["POST"])
