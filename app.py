@@ -23104,8 +23104,13 @@ def api_roi_realtor():
             logger.warning("roi: appts query failed: %s", e)
     for pid, l in leads.items():
         l["appts"] = appts.get(pid) or {"set": 0, "held": 0}
-    rows = sorted(leads.values(), key=lambda l: l.get("created") or "",
-                  reverse=True)
+    # RDC injects a "Test Consumer" when an order activates; it proves the
+    # pipe, not the spend, so it never counts toward cost per lead.
+    tests = [l for l in leads.values()
+             if (l.get("name") or "").strip().lower()
+             in ("test consumer", "test test", "test lead")]
+    rows = sorted((l for l in leads.values() if l not in tests),
+                  key=lambda l: l.get("created") or "", reverse=True)
     n = len(rows)
     pace_monthly = round(n / (days_live / 30.44), 1)
     cpl = round(spend["to_date"] / n, 2) if n else None
@@ -23116,6 +23121,7 @@ def api_roi_realtor():
         "cost_per_lead": cpl,
         "appts_set": sum(l["appts"]["set"] for l in rows),
         "appts_held": sum(l["appts"]["held"] for l in rows),
+        "test_leads_excluded": len(tests),
         "deal_terms": _rev.SOURCE_DEAL_TERMS,
         "referral_fees": {k: int(v * 100)
                           for k, v in _rev.REFERRAL_FEES.items()},
