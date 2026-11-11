@@ -55,6 +55,7 @@ DRIP_COOLDOWN_DAYS = 10   # 5 gaps × 10 days = 50-day drip (emails 4-9)
 # SMS channel has its own cooldown, separate from email cadence.
 # 5 days minimum between texts to the same lead (TCPA/carrier best practice).
 import config  # noqa: E402
+import desk_route  # noqa: E402
 from config import SMS_COOLDOWN_DAYS  # noqa: E402
 # Was 15 days — tightened because active searchers go cold waiting that long.
 
@@ -3004,11 +3005,112 @@ OUTPUT (JSON only, no markdown fences):
     return json.loads(raw)
 
 
-def run_new_lead_mailer(dry_run=True):
+def new_lead_email_recipient(to_email, to_override=None):
+    """Address the new-lead immediate email is sent to.
+
+    Production calls pass no override, so the lead's own address is used.
+    `to_override` is an explicit test redirect (same idea as run_pond_mailer).
+    An empty override is ignored. This used to read a name that was never
+    defined in run_new_lead_mailer, so every live send raised NameError
+    after the cooldown row was written.
+    """
+    return to_override or to_email
+
+
+def deliver_new_lead_email(*, pid, name, to_email, subject, body_text,
+                           body_html, behavior, dry_run, to_override=None,
+                           send_fn=None, db=None):
+    """Send one new-lead email. Record the cooldown only if the send returns.
+
+    The cooldown row is inserted first so a crash after the provider accepts
+    cannot double-email. If the send raises, or the provider result is not
+    an acknowledgement, that row is removed so a later run inside the
+    lookback window can retry. A failure is never logged as sent.
+
+    The routing line carries the person id and the outcome. It does not
+    carry the address, subject, or body.
+    """
+    import db as _db_mod
+    db = db or _db_mod
+    send_fn = send_fn or send_email
+    recipient = new_lead_email_recipient(to_email, to_override)
+    attempted = datetime.now(timezone.utc).isoformat()
+    log_id = db.log_pond_email(
+        person_id=pid, person_name=name, email_address=to_email,
+        subject=subject, strategy="new_lead_immediate",
+        leadstream_tier="NEW_LEAD",
+        behavior_summary=(
+            "views:%s saves:%s" % (behavior.get("view_count", 0),
+                                   behavior.get("save_count", 0))),
+        sequence_num=1, dry_run=dry_run, sg_message_id=None,
+    )
+
+    def _rollback():
+        if not log_id:
+            return False
+        try:
+            return bool(db.delete_pond_email_log(log_id))
+        except Exception as del_err:
+            logger.warning("new-lead cooldown rollback failed for %s: %s",
+                           pid, type(del_err).__name__)
+            return False
+
+    def _audit(decision, reason, error, success):
+        line = desk_route.routing_delivery_line(
+            person_id=pid, event_class="new_lead_email", decision=decision,
+            reason=reason, destination="email", attempted_at=attempted,
+            slack_ts="", error=error)
+        logger.info(line)
+        audit = getattr(db, "log_automation_event", None)
+        if not audit:
+            return
+        try:
+            audit(event_type="routing_delivery", person_id=pid,
+                  channel="email",
+                  payload={"class": "new_lead_email", "decision": decision,
+                           "reason": reason, "destination": "email",
+                           "attempted_at": attempted, "error": error or None},
+                  triggered_by="pond_mailer.new_lead", success=success,
+                  error_message=error or None)
+        except Exception as audit_err:
+            logger.warning("new-lead routing audit failed for %s: %s",
+                           pid, type(audit_err).__name__)
+
+    try:
+        result = send_fn(recipient, subject, body_text, body_html,
+                         dry_run=dry_run)
+    except Exception as e:
+        removed = _rollback()
+        err = type(e).__name__
+        if log_id and not removed:
+            err = err + "_cooldown_kept"
+        _audit("not_sent", "send_exception", err, False)
+        raise
+    status = (result or {}).get("status") if isinstance(result, dict) else None
+    if status not in ("sent", "dry_run"):
+        removed = _rollback()
+        err = "not_acknowledged" if removed or not log_id else "not_acknowledged_cooldown_kept"
+        _audit("not_sent", "provider_not_acknowledged", err, False)
+        raise RuntimeError("new lead email was not acknowledged")
+    if result.get("sg_message_id") and log_id:
+        db.update_pond_email_sg_id(log_id, result["sg_message_id"])
+    if dry_run:
+        _audit("dry_run", "dry_run_not_sent", "", True)
+    else:
+        _audit("sent", "provider_accepted", "", True)
+    return {"ok": True, "recipient": recipient, "log_id": log_id,
+            "result": result}
+
+
+def run_new_lead_mailer(dry_run=True, to_override=None):
     """
     Check Shark Tank (pond 4) for leads created in the last NEW_LEAD_LOOKBACK_MINUTES
     minutes who haven't received the new_lead_immediate email yet, and fire the
     "I caught you at the computer" opener after a NEW_LEAD_EMAIL_DELAY_MINUTES delay.
+
+    to_override: optional test redirect. Production callers omit it and the
+    email goes to the lead. Never leave this unbound — a missing name used
+    to abort every send with NameError.
 
     Runs every 5 minutes via scheduler. Typically processes 0–3 leads per run.
 
@@ -3178,22 +3280,18 @@ def run_new_lead_mailer(dry_run=True):
                 print(f"    Created: {person.get('created', 'unknown')}")
                 print(f"    Subject: {subject}")
 
-                # Log before send
-                log_id = _db.log_pond_email(
-                    person_id=pid, person_name=name, email_address=to_email,
-                    subject=subject, strategy="new_lead_immediate",
-                    leadstream_tier="NEW_LEAD",
-                    behavior_summary=f"views:{behavior.get('view_count',0)} saves:{behavior.get('save_count',0)}",
-                    sequence_num=1, dry_run=dry_run, sg_message_id=None,
-                )
-
                 try:
-                    _send_to = to_override or to_email
-                    result = send_email(_send_to, subject, body_text, body_html, dry_run=dry_run)
-                    if result.get("sg_message_id") and log_id:
-                        _db.update_pond_email_sg_id(log_id, result["sg_message_id"])
+                    result = deliver_new_lead_email(
+                        pid=pid, name=name, to_email=to_email, subject=subject,
+                        body_text=body_text, body_html=body_html,
+                        behavior=behavior, dry_run=dry_run,
+                        to_override=to_override,
+                    )["result"]
                     _did_something = True
-                    logger.info("New lead immediate email sent to %s (%s)", name, to_email)
+                    if dry_run:
+                        logger.info("New lead immediate email dry run for person %s", pid)
+                    else:
+                        logger.info("New lead immediate email sent to %s (%s)", name, to_email)
                     if not dry_run:
                         try:
                             _db.log_automation_event(

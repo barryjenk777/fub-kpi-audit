@@ -18,8 +18,11 @@ import hmac
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 import requests
+
+from desk_route import routing_delivery_line
 
 logger = logging.getLogger("slack")
 _API = "https://slack.com/api"
@@ -27,6 +30,10 @@ _API = "https://slack.com/api"
 
 def is_available():
     return bool(os.environ.get("SLACK_BOT_TOKEN"))
+
+
+def _attempted_at():
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _auth_header():
@@ -49,7 +56,17 @@ def post_message(channel, text, blocks=None, _cc=True):
                           json=payload, timeout=15).json()
         if not r.get("ok"):
             logger.warning("slack post failed (%s): %s", channel, r.get("error"))
+            logger.info(routing_delivery_line(
+                person_id="", event_class="slack_post", decision="not_sent",
+                reason="slack_api_error", destination=channel,
+                attempted_at=_attempted_at(), slack_ts="",
+                error=r.get("error") or "not_ok"))
             return None
+        logger.info(routing_delivery_line(
+            person_id="", event_class="slack_post", decision="sent",
+            reason="slack_ack", destination=channel,
+            attempted_at=_attempted_at(), slack_ts=r.get("ts") or "",
+            error=""))
         if _cc:
             try:
                 _cc_barry(channel, text)
@@ -148,8 +165,25 @@ def group_dm(user_ids, text, blocks=None):
     except Exception as e:
         logger.warning("group dm error: %s — falling back to singles", e)
     ts = None
+    failed = []
     for u in ids:
-        ts = post_message(u, text, blocks=blocks) or ts
+        one = post_message(u, text, blocks=blocks)
+        if one:
+            ts = one
+        else:
+            failed.append(str(u))
+    # A ts means at least one single DM was acknowledged. It is not a claim
+    # that every recipient got the message; partial failure stays on the
+    # error token so a later reader cannot treat it as a full group send.
+    logger.info(routing_delivery_line(
+        person_id="", event_class="slack_group_dm_fallback",
+        decision="sent" if ts and not failed else "not_sent",
+        reason="singles_after_group_open_failed",
+        destination="slack_dm",
+        attempted_at=_attempted_at(),
+        slack_ts=ts or "",
+        error=("" if ts and not failed else
+               "partial" if ts else "unacked")))
     return ts
 
 
