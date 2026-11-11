@@ -14283,7 +14283,15 @@ DESK_CONVERSION_TAGS = ("ai_needs_follow_up",
                         "sms_conversion", "claude_text_converted",
                         "isa_transfer_unsuccessful",
                         "isa_attempted_transfer_realtor_unavailable",
-                        "y_ai_priority")
+                        "y_ai_priority",
+                        # Barry's ruling, Nov 11 2026: a NEWLY APPLIED
+                        # ISA_TRANSFER_FRESH stamp (his Warm Handoff
+                        # automation) is a driver of transfers. The
+                        # evidence doors and the 12h retry park remain
+                        # the junk filter; the nightly expiry job clears
+                        # this tag's ledger rows so every re-application
+                        # is genuinely new.
+                        "isa_transfer_fresh")
 
 
 def _desk_signs_of_life(person, created_days=7, comm_hours=72):
@@ -16536,7 +16544,11 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             if (live or "").strip() == "1" and not _owned \
                     and _ask and _engaged:
                 import dispatch as _dp
-                src_kind = ("ai_voice" if any(t in _fresh for t in
+                # When only the fresh stamp is new (underlying tags long
+                # burned), classify voice/text from the lead's full tag
+                # list, not just the fresh set.
+                src_kind = ("ai_voice" if any((t in _fresh or t in tags_l)
+                            for t in
                             ("ai_voice_needs_follow_up",
                              "isa_transfer_unsuccessful",
                              "isa_attempted_transfer_realtor_unavailable"))
@@ -23463,6 +23475,109 @@ def scheduled_coach_brief():
         print(f"[SCHEDULER] coach brief FAILED: {e}")
 
 
+@app.route("/api/admin/isa/live-credit", methods=["POST"])
+def api_isa_live_credit():
+    """Credit Fhalen's live transfers that no tag flow ever stamped:
+    her calls of 3+ minutes on a lead owned by an active agent (Alva
+    Clever, Nov 11 2026: a 12-minute inbound she handed to Mitch, who
+    booked next week — zero credit). {"days": 3, "apply": false}."""
+    if not _dispatch_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    days = min(int(body.get("days", 3) or 3), 14)
+    apply = bool(body.get("apply"))
+    isa_uid = int(getattr(config, "ISA_USER_ID", 0) or 0)
+    if not isa_uid:
+        return jsonify({"error": "ISA_USER_ID not configured"}), 500
+    rows = []
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT ON (person_id)
+                           person_id, created, duration
+                    FROM calls_cache
+                    WHERE user_id = %s AND duration >= 180
+                      AND created >= NOW() - make_interval(days => %s)
+                      AND person_id IS NOT NULL
+                    ORDER BY person_id, created DESC
+                    LIMIT 40
+                """, (isa_uid, days))
+                rows = cur.fetchall()
+    except Exception as e:
+        return jsonify({"error": str(e)[:200]}), 500
+    client = FUBClient()
+    out = []
+    for pid, created, duration in rows:
+        pid = str(pid)
+        try:
+            p = client._request("GET", "people/%s" % pid, params={
+                "fields": "id,name,assignedTo,stage"}) or {}
+        except Exception:
+            continue
+        owner = (p.get("assignedTo") or "").strip()
+        if _desk_dark_owner(owner):
+            continue  # her own pipeline or pond: not an agent handoff
+        row = {"person_id": pid, "lead": p.get("name"), "agent": owner,
+               "call_minutes": round(duration / 60, 1),
+               "called_at": created.isoformat() if created else None,
+               "stage": p.get("stage")}
+        if apply:
+            row["credited"] = _db.record_isa_transfer(
+                pid, lead_name=p.get("name"), agent_name=owner,
+                transfer_type="live")
+        out.append(row)
+    return jsonify({"ok": True, "applied": apply, "candidates": out})
+
+
+def scheduled_isa_live_credit():
+    """Daily 7:40pm ET: stamp the day's unstamped Fhalen live transfers."""
+    if not _db.try_acquire_job_lock("isa_live_credit"):
+        return
+    try:
+        with app.test_client() as tc:
+            r = tc.post("/api/admin/isa/live-credit?key=%s"
+                        % os.environ.get("PERPLEXITY_API_KEY", ""),
+                        json={"days": 2, "apply": True})
+            d = r.get_json() or {}
+            newly = [c for c in d.get("candidates", []) if c.get("credited")]
+            print("[SCHEDULER] isa live credit: %d stamped (%s)"
+                  % (len(newly), ", ".join(c["lead"] or "?" for c in newly)
+                     or "none"))
+    except Exception as e:
+        print(f"[SCHEDULER] isa live credit FAILED: {e}")
+
+
+@app.route("/api/admin/desk/routing-health")
+def api_routing_health():
+    """One answer to 'are leads routing': 7-day counts of every desk
+    outcome plus the leads that converted and never got a human action."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = min(int(request.args.get("days", 7) or 7), 30)
+    counts = {}
+    for et in ("desk_intake", "ai_convert_seen", "desk_batch_artifact",
+               "desk_evidence_pending", "desk_evidence_recovered",
+               "desk_flood_suppressed", "transfer_already_routed",
+               "owner_from_claim", "realtor_stale_skip", "realtor_shootout"):
+        counts[et] = len(_db.get_automation_events(et, days=days, limit=500))
+    # The misses: conversions seen on a DARK owner (should have routed).
+    misses = []
+    for ev in _db.get_automation_events("ai_convert_seen", days=days,
+                                        limit=200):
+        owner = (ev.get("payload") or {}).get("assigned_to")
+        if _desk_dark_owner(owner):
+            misses.append({"lead": ev.get("person_name"),
+                           "person_id": ev.get("person_id"),
+                           "owner": owner, "at": ev.get("at")})
+    return jsonify({"ok": True, "days": days, "counts": counts,
+                    "dark_owner_mirrored": misses[:25],
+                    "note": ("dark_owner_mirrored = conversions the desk "
+                             "mirrored instead of routing although nobody "
+                             "real owns the lead; should be empty going "
+                             "forward")})
+
+
 @app.route("/api/admin/desk/clear-tags", methods=["POST"])
 def api_desk_clear_tags():
     """Owner tool: un-burn specific desk ledger rows for one lead so the
@@ -25425,6 +25540,10 @@ def scheduled_expire_isa_transfers():
             try:
                 client.remove_tag(person_id, ISA_TRANSFER_FRESH_TAG)
                 _db.delete_isa_transfer(person_id)
+                # Fresh is a routing driver (Barry, Nov 11 2026): once the
+                # tag comes off, forget we ever saw it, so the next Warm
+                # Handoff stamp on this lead is NEW and routes again.
+                _db.clear_desk_tags(person_id, ["isa_transfer_fresh"])
                 removed += 1
             except Exception as e:
                 failed += 1
@@ -31645,6 +31764,13 @@ def start_scheduler():
                        CronTrigger(hour="7,19", minute=50, timezone=ET),
                        id="metric_snapshots", name="Metric snapshots (2x/day)",
                        max_instances=1, misfire_grace_time=600)
+
+    # Fhalen live-transfer credit: daily 7:40pm.
+    _scheduler.add_job(scheduled_isa_live_credit,
+                       CronTrigger(hour=19, minute=40, timezone=ET),
+                       id="isa_live_credit",
+                       name="Fhalen live transfer credit (7:40pm)",
+                       max_instances=1, misfire_grace_time=3600)
 
     # Evidence recheck: parked conversions re-tested every 10 minutes.
     _scheduler.add_job(scheduled_evidence_recheck,
