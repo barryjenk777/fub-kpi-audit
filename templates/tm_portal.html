@@ -304,7 +304,7 @@ function searchLead(id){
     .then(function(r){return r.json();})
     .then(function(d){
       var m=d.matches||[];
-      if(!m.length){ res.innerHTML='<div class="empty">No FUB lead matches that. Try the other phone or email on the file.</div>'; return; }
+      if(!m.length){ res.innerHTML='<div class="empty">No FUB lead matches that. Try the other phone on the file, the email, or the client\'s NAME (first and last).</div>'; return; }
       var h='';
       m.forEach(function(p){
         h+='<label style="display:block;font-size:12.5px;padding:5px 2px;border-bottom:1px solid #f0f0ea;cursor:pointer">'+
@@ -325,6 +325,13 @@ function pickLead(id,pid,assigned){
 }
 function linkDeal(id){
   var btn=document.getElementById('save-'+id);
+  if(!PICKED[id]){
+    if(!confirm('No lead is picked for this deal yet, so the lead link '
+      +'will STILL be missing after this save (and the deal stays out of '
+      +'the revenue report). Search the client\'s phone, email, or name '
+      +'above and tap the matching lead first.\n\nSave without the lead '
+      +'anyway?')) return;
+  }
   btn.disabled=true; btn.textContent='Saving...';
   var body={k:KEY, deal_id:id,
             person_id:PICKED[id]||null,
@@ -337,8 +344,15 @@ function linkDeal(id){
       if(!d.ok){ btn.disabled=false; btn.textContent='Save to FUB'; alert(d.error||'Could not save'); return; }
       var card=document.getElementById('deal-'+id);
       var extra = d.bucket? (' &middot; source: '+esc(d.bucket)+(d.referral_fee_pct?' ('+d.referral_fee_pct+'% referral fee)':'')) : '';
-      card.innerHTML='<div style="font-size:13px;color:#2e7d4f"><b>&#10003; Saved to FUB</b>'+
-        (d.lead? ' &middot; linked to '+esc(d.lead):'')+(d.agent? ' &middot; agent '+esc(d.agent):'')+extra+'</div>';
+      if(d.lead){
+        card.innerHTML='<div style="font-size:13px;color:#2e7d4f"><b>&#10003; Saved to FUB</b>'+
+          ' &middot; linked to '+esc(d.lead)+(d.agent? ' &middot; agent '+esc(d.agent):'')+extra+'</div>';
+      }else{
+        card.innerHTML='<div style="font-size:13px;color:#a06a00"><b>Saved, but the lead link is '
+          +'still missing</b>'+(d.agent? ' &middot; agent '+esc(d.agent):'')
+          +' &middot; this deal will come back on this list until a lead is linked. '
+          +'If no CRM lead exists for this client, tell Barry and he can have one created.</div>';
+      }
     })
     .catch(function(){ btn.disabled=false; btn.textContent='Save to FUB'; });
 }
