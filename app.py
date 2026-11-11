@@ -1110,6 +1110,34 @@ def _start_cc_build():
     return True
 
 
+def _deal_address(deal_name):
+    """Parse a street address out of a FUB deal name.
+
+    "6115 Trumpet Drive, Suffolk, VA 23435, USA [Dotloop 123]"
+      -> ("6115", "Trumpet", "Suffolk", "6115 Trumpet Drive, Suffolk")
+    Returns None for non-property deal names (onboarding rows,
+    commission agreements). Street name is passed without its
+    suffix word so the MLS match is forgiving.
+    """
+    import re
+    s = re.sub(r"\s*\[[^\]]*\]\s*$", "", deal_name or "").strip()
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    if len(parts) < 2:
+        return None
+    m = re.match(r"^(\d+)\s+(.+)$", parts[0])
+    if not m:
+        return None
+    street_number, street = m.group(1), m.group(2)
+    toks = street.split()
+    street_name = " ".join(toks[:-1]) if len(toks) > 1 else street
+    city = parts[1]
+    if re.match(r"^(va|virginia)$", city, re.I) or city[0].isdigit():
+        return None  # second part is a state/zip, not a city
+        # (exact match only: "Virginia Beach" is a city, not a state)
+    display = f"{parts[0]}, {city}"
+    return street_number, street_name, city, display
+
+
 @app.route("/api/recruiting/export")
 def api_recruiting_export():
     """Read-only export for the Social Engine's recruiting stream:
@@ -1198,11 +1226,34 @@ def api_recruiting_export():
                     """)
                 for name, deal, price, when in cur.fetchall():
                     if name in agents:
-                        agents[name]["recent_closings"].append({
+                        row = {
                             "deal": deal,
                             "price": float(price) if price else None,
                             "closed_at": when.isoformat()
-                                          if when else None})
+                                          if when else None}
+                        # Real-house photo for the closing post.
+                        # FUB deal names are usually the address
+                        # ("6115 Trumpet Drive, Suffolk, VA, USA
+                        # [Dotloop 123]"); non-property deals
+                        # (onboarding, commission agreements) parse
+                        # to None and ship without a photo.
+                        addr = _deal_address(deal)
+                        if addr:
+                            num, sname, city, display = addr
+                            row["address"] = display
+                            row["city"] = city
+                            try:
+                                from repliers_client import \
+                                    get_sold_listing_photo
+                                ph = get_sold_listing_photo(
+                                    num, sname, city)
+                                if ph:
+                                    row["photo_url"] = ph["photo_url"]
+                            except Exception as e:
+                                logger.warning(
+                                    "closing photo lookup failed "
+                                    "for %s: %s", display, e)
+                        agents[name]["recent_closings"].append(row)
         out["agents"] = list(agents.values())
         return jsonify(out)
     except Exception as e:

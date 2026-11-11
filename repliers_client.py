@@ -20,6 +20,8 @@ Current state:
   REIN board will return real Hampton Roads listings once activated.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -63,6 +65,52 @@ def _get(endpoint, params=None):
     except Exception as e:
         logger.warning("Repliers request failed: %s", e)
         return None
+
+
+# ---------------------------------------------------------------------------
+# 0. Sold-listing photo — the ACTUAL closed home for recruiting posts
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=256)
+def get_sold_listing_photo(street_number: str, street_name: str,
+                           city: str = None) -> dict | None:
+    """Find the listing at an address and return its hero photo.
+
+    Used by /api/recruiting/export: closing celebration posts show
+    the ACTUAL home (licensed via the brokerage's MLS membership).
+    Prefers the sold record, falls back to the newest match.
+    Returns {"photo_url", "mls_number", "status"} or None. Returns
+    None quietly until REIN is activated on the key (demo board has
+    no Hampton Roads inventory).
+    """
+    params = {
+        "streetNumber": street_number,
+        "streetName": street_name,
+        "fields": "address,images,status,lastStatus,soldDate,mlsNumber",
+        "pageSize": 10,
+    }
+    if city:
+        params["city"] = city
+    data = _get("listings", params)
+    listings = (data or {}).get("listings") or []
+    if not listings and city:
+        # city spellings drift between FUB and MLS; retry without it
+        data = _get("listings", {k: v for k, v in params.items()
+                                 if k != "city"})
+        listings = (data or {}).get("listings") or []
+    if not listings:
+        return None
+    sold = [l for l in listings if l.get("status") == "U"]
+    pick = (sorted(sold, key=lambda l: l.get("soldDate") or "",
+                   reverse=True) or listings)[0]
+    imgs = pick.get("images") or []
+    if not imgs:
+        return None
+    return {
+        "photo_url": f"https://cdn.repliers.io/{imgs[0]}?class=large",
+        "mls_number": pick.get("mlsNumber"),
+        "status": pick.get("status"),
+    }
 
 
 # ---------------------------------------------------------------------------
