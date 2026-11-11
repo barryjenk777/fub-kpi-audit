@@ -16410,8 +16410,15 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             _alive = _desk_signs_of_life(person)
             if not _alive:
                 try:
-                    _alive = bool(_fresh_ai_voice_outcome(pid, hours=48)) \
-                             or _had_inbound_within(pid, hours=48)
+                    # Three evidence doors, cheapest first. Our own reply
+                    # ledger comes before FUB: replies through sendblue
+                    # never reach FUB's text feed, and FUB's feeds lag the
+                    # tag webhook by minutes (Gorg Joyner, Nov 11 2026:
+                    # a seller replied with an address and a price two
+                    # seconds before this gate called him a fossil).
+                    _alive = (_db.person_replied_within(pid, hours=48)
+                              or bool(_fresh_ai_voice_outcome(pid, hours=48))
+                              or _had_inbound_within(pid, hours=48))
                 except Exception as _sle:
                     logger.warning("desk life recheck failed for %s: %s",
                                    pid, _sle)
@@ -23336,17 +23343,20 @@ def api_desk_fossil_audit():
             ev_age_h = 0
         window = int(min(ev_age_h + 48, 24 * 14))
         try:
-            voice = _fresh_ai_voice_outcome(pid, hours=window)
-            inbound = False if voice else _had_inbound_within(pid, hours=window)
+            own = _db.person_replied_within(pid, hours=window)
+            voice = None if own else _fresh_ai_voice_outcome(pid, hours=window)
+            inbound = False if (own or voice) \
+                else _had_inbound_within(pid, hours=window)
         except Exception:
-            voice, inbound = None, False
-        if not voice and not inbound:
+            own, voice, inbound = False, None, False
+        if not own and not voice and not inbound:
             dead += 1
             continue
         row = {"person_id": pid, "lead": ev.get("person_name"),
                "suppressed_at": ev.get("at"),
-               "evidence": ("voice disposition: %s" % voice) if voice
-                           else "inbound message",
+               "evidence": ("reply in our own channel" if own else
+                            ("voice disposition: %s" % voice) if voice
+                            else "inbound message"),
                "tags": (ev.get("payload") or {}).get("tags"),
                # The freshness wall holds here too: a conversion that sat
                # suppressed past 48h is reported, never auto-routed.

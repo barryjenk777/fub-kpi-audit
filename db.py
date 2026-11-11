@@ -11988,3 +11988,35 @@ def get_metric_deltas(metrics):
     except Exception as e:
         logger.warning("get_metric_deltas failed: %s", e)
     return out
+
+
+def person_replied_within(person_id, hours=48):
+    """Life evidence from OUR OWN channels: a reply_received automation
+    event (pond mailer / sendblue / email reply) or a CallAction response
+    row inside the window. Born Nov 11 2026 (Gorg Joyner): a zBuyer
+    seller replied with an address and a price through sendblue, which
+    never syncs into FUB's text feed, so every FUB-side evidence door was
+    blind and the desk filed a live seller as a fossil."""
+    try:
+        pid = str(person_id)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM automation_event_log
+                    WHERE event_type = 'reply_received'
+                      AND person_id::text = %s
+                      AND created_at >= NOW() - make_interval(hours => %s)
+                    LIMIT 1
+                """, (pid, int(hours)))
+                if cur.fetchone():
+                    return True
+                cur.execute("""
+                    SELECT 1 FROM ca_responses
+                    WHERE person_id::text = %s
+                      AND created_at >= NOW() - make_interval(hours => %s)
+                    LIMIT 1
+                """, (pid, int(hours)))
+                return bool(cur.fetchone())
+    except Exception as e:
+        logger.warning("person_replied_within failed: %s", e)
+        return False
