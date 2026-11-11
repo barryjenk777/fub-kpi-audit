@@ -7389,9 +7389,10 @@ def _film_text_llm(agent_first, facts):
             "parens.\n"
             "5. Name the lead by first name. Say the ONE specific thing "
             "from this call that matters most (use the coaching tip or "
-            "objection facts), then ONE concrete action for today. If "
-            "the action is a practice rep, the practice line is "
-            "1-337-486-3563.\n"
+            "objection facts), then ONE concrete action for today. When "
+            "kind is coach, the action is a practice rep: tell them to "
+            "call the AI role play bot at the exact number in "
+            "practice_line_for_this_call and run that objection twice.\n"
             "6. Never state the numeric grade. If kind is praise, say "
             "exactly what was good and tell them to do it again today; "
             "no action item needed beyond that.\n"
@@ -7420,8 +7421,23 @@ def _film_text_llm(agent_first, facts):
         return None
 
 
+def _practice_line_for(pick):
+    """The role play bot matched to THIS call's lead type, formatted for
+    dialing. Buyers get the buyer line; sellers get the standard
+    seller-buyer scenario line."""
+    lt = (pick.get("lead_type") or "").lower()
+    if "seller" in lt:
+        raw = (getattr(config, "MAVERICK_SELLER_BUYER_SCENARIOS", [{}])
+               [0].get("phone") or "")
+        d = "".join(c for c in raw if c.isdigit())[-10:]
+        if len(d) == 10:
+            return "1-%s-%s-%s" % (d[:3], d[3:6], d[6:])
+    return getattr(config, "AI_SALES_COACH_PHONE_BUYERS", "1-337-486-3563")
+
+
 def _film_facts(pick, kind):
     return {
+        "practice_line_for_this_call": _practice_line_for(pick),
         "kind": kind,
         "lead_first": (pick.get("lead_name") or "the lead").split()[0],
         "objection": _clean_objection_text(pick.get("objections")) or None,
