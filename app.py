@@ -8868,6 +8868,21 @@ def api_lead_trace(person_id):
         } for c in _calls]
     except Exception as e:
         out["calls"] = [{"error": str(e)[:120]}]
+    # The NOTES feed: Ylopo transfer alerts and human notes — what a
+    # person reading FUB actually sees.
+    try:
+        r = FUBClient()._request("GET", "notes", params={
+            "personId": pid, "limit": 6}) or {}
+        _notes = r.get("notes") or next(
+            (v for v in r.values() if isinstance(v, list)), [])
+        out["notes"] = [{
+            "created": n.get("created"),
+            "by": n.get("createdByName") or n.get("createdBy"),
+            "subject": (n.get("subject") or "")[:120],
+            "body": (n.get("body") or "")[:500],
+        } for n in _notes]
+    except Exception as e:
+        out["notes"] = [{"error": str(e)[:120]}]
     def _q(key, sql, args):
         try:
             with _db.get_conn() as conn:
