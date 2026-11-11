@@ -8852,6 +8852,22 @@ def api_lead_trace(person_id):
         }
     except Exception as e:
         out["fub"] = {"error": str(e)}
+    # The CALLS feed: who called, who answered, the Ylopo disposition.
+    # This is where "who took the transfer" lives (Deborah, Nov 11 2026).
+    try:
+        r = FUBClient()._request("GET", "calls", params={
+            "personId": pid, "limit": 10}) or {}
+        _calls = next((v for v in r.values() if isinstance(v, list)), [])
+        out["calls"] = [{
+            "created": c.get("created"),
+            "incoming": c.get("isIncoming"),
+            "answered_by": c.get("userName") or c.get("userId"),
+            "duration_s": c.get("duration"),
+            "outcome": c.get("outcome"),
+            "note": (c.get("note") or "")[:300],
+        } for c in _calls]
+    except Exception as e:
+        out["calls"] = [{"error": str(e)[:120]}]
     def _q(key, sql, args):
         try:
             with _db.get_conn() as conn:
