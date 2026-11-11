@@ -6005,23 +6005,64 @@ def _ca_build_context(client, r):
         return None
 
 
+def _ca_load_blob():
+    """Merge the shared dossier blob (built by the worker) into this
+    process's cache. The web and worker are separate processes since the
+    scheduler split, so Postgres is the only cache they share."""
+    try:
+        blob = _db.db_cache_get("ca_dossiers", max_age_hours=12) or {}
+        now_ts = time.time()
+        for pid, pair in blob.items():
+            ts, ctx = pair[0], pair[1]
+            if now_ts - ts < _CA_CTX_TTL and pid not in _ca_ctx_cache:
+                _ca_ctx_cache[pid] = (ts, ctx)
+    except Exception:
+        pass
+
+
+def _ca_save_blob():
+    try:
+        now_ts = time.time()
+        blob = {pid: [ts, ctx] for pid, (ts, ctx) in _ca_ctx_cache.items()
+                if ctx and now_ts - ts < _CA_CTX_TTL}
+        _db.db_cache_set("ca_dossiers", blob)
+    except Exception:
+        pass
+
+
 def _ca_enrich_background(rows):
     """Fill dossiers for the rows one request couldn't afford, so the NEXT
-    page load has them. One thread at a time; its own FUB client."""
+    page load has them. One thread at a time; its own FUB client; persists
+    to the shared blob so the other process benefits too."""
     if not _ca_bg_enriching.acquire(blocking=False):
         return
     try:
         client = FUBClient()
-        for r in rows[:40]:
+        for r in rows[:60]:
             key = str(r["person_id"])
             hit = _ca_ctx_cache.get(key)
             if hit and time.time() - hit[0] < _CA_CTX_TTL:
                 continue
             _ca_build_context(client, r)
+        _ca_save_blob()
     except Exception as e:
         logger.warning("callaction background enrich failed: %s", e)
     finally:
         _ca_bg_enriching.release()
+
+
+def scheduled_ca_dossier_warm():
+    """Worker job, every 10 min working hours: prebuild CallAction dossiers
+    into the shared blob so page views never spend the web's FUB budget."""
+    if not _db.try_acquire_job_lock("ca_dossier_warm"):
+        return
+    try:
+        _ca_load_blob()
+        rows = _db.get_ca_responses(pending_only=True, limit=200)
+        _ca_enrich_background(rows)
+        print("[SCHEDULER] callaction dossier warm: %d pending rows" % len(rows))
+    except Exception as e:
+        print(f"[SCHEDULER] callaction dossier warm FAILED: {e}")
 
 
 @app.route("/api/dispatch/callaction")
@@ -6050,7 +6091,10 @@ def api_ca_list():
                 r.update({"message": msg, "sentiment": s, "score": sc,
                           "reason": why})
     # Dossier enrichment (Barry, Nov 7 2026: cards without text were "a
-    # waste of space"). Served from cache; see _ca_build_context.
+    # waste of space"). Served from the shared blob the worker prebuilds;
+    # at most 4 built inline, never while a background fill is running,
+    # so a page view cannot drain the web process's FUB budget.
+    _ca_load_blob()
     now_ts = time.time()
     to_build = []
     for r in rows[:30]:
@@ -6060,12 +6104,12 @@ def api_ca_list():
         else:
             r["context"] = None
             to_build.append(r)
-    if to_build:
+    if to_build and not _ca_bg_enriching.locked():
         client = client or FUBClient()
-        for r in to_build[:8]:
+        for r in to_build[:4]:
             r["context"] = _ca_build_context(client, r)
-        if len(to_build) > 8:
-            pending_bg = [{"person_id": r["person_id"]} for r in to_build[8:]]
+        if len(to_build) > 4:
+            pending_bg = [{"person_id": r["person_id"]} for r in to_build[4:]]
             threading.Thread(target=_ca_enrich_background,
                              args=(pending_bg,), daemon=True).start()
     rows.sort(key=lambda r: ((r["sentiment"] != "positive"),
@@ -30520,6 +30564,13 @@ def start_scheduler():
                        CronTrigger(minute="*/10", hour="7-20", timezone=ET),
                        id="leadstream_dash_warm",
                        name="LeadStream dashboard warm (10 min)",
+                       max_instances=1, misfire_grace_time=120)
+
+    # CallAction dossier warm: same idea for Fhalen's audit page.
+    _scheduler.add_job(scheduled_ca_dossier_warm,
+                       CronTrigger(minute="4-54/10", hour="7-20", timezone=ET),
+                       id="ca_dossier_warm",
+                       name="CallAction dossier warm (10 min)",
                        max_instances=1, misfire_grace_time=120)
 
     # LeadStream nightly cleanup: 3am ET
