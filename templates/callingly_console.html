@@ -221,7 +221,13 @@ function toggleLive(){
 }
 function score(){
   api('/api/admin/callingly/scoreboard').then(function(d){
-    if(!d.ok||!d.by_status||!Object.keys(d.by_status).length)return;
+    if(!d.ok||!d.by_status||!Object.keys(d.by_status).length){
+      document.getElementById('score').innerHTML=
+        '<div class="why" style="color:var(--muted)">No rings yet. The lane is dark '+
+        'until the training rollout flips it live; the scoreboard fills with the '+
+        'first real ring.</div>';
+      return;
+    }
     var h='<div class="row">';
     h+='<b>'+(d.answer_rate_pct!=null?d.answer_rate_pct+'% answered':'')+'</b>';
     Object.keys(d.by_status).forEach(function(k){
