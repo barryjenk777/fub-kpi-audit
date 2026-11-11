@@ -15052,6 +15052,12 @@ def api_callingly_solo_teams():
     except Exception as e:
         return jsonify({"ok": False, "error": "team read failed: %s"
                         % str(e)[:200]})
+    # Callingly wraps the list ({"agents": [...]}); iterating the raw
+    # dict hands back string keys and 500s the endpoint (found Nov 11).
+    if isinstance(members, dict):
+        members = next((v for v in members.values()
+                        if isinstance(v, list)), [])
+    members = [m for m in members if isinstance(m, dict)]
     if request.method == "POST" and body.get("apply"):
         for m in members:
             name = (m.get("name") or "").strip()
