@@ -6059,8 +6059,23 @@ def scheduled_ca_dossier_warm():
     try:
         _ca_load_blob()
         rows = _db.get_ca_responses(pending_only=True, limit=200)
+        # Heal first: rows whose text had not synced when the tag landed.
+        client = None
+        healed = 0
+        for r in rows:
+            if r.get("message") or r.get("sentiment") != "unread":
+                continue
+            if healed >= 25:
+                break
+            healed += 1
+            client = client or FUBClient()
+            msg, found = _ca_read_inbound(r["person_id"], client)
+            if found:
+                s, sc, why = _ca_sentiment(msg, r.get("person_name"))
+                _db.update_ca_response_read(r["id"], msg, s, sc, why)
         _ca_enrich_background(rows)
-        print("[SCHEDULER] callaction dossier warm: %d pending rows" % len(rows))
+        print("[SCHEDULER] callaction dossier warm: %d pending, %d healed"
+              % (len(rows), healed))
     except Exception as e:
         print(f"[SCHEDULER] callaction dossier warm FAILED: {e}")
 
@@ -6076,11 +6091,16 @@ def api_ca_list():
         return jsonify({"error": "Unauthorized"}), 401
     rows = _db.get_ca_responses(pending_only=True, limit=200)
     client = None
+    # While a background fill holds the FUB budget, every extra call from
+    # this request queues behind it for up to a minute (seen live: 55s
+    # page views). The worker's warm job heals and enriches on its own
+    # budget, so when the lock is held we serve what we have and stop.
+    bg_busy = _ca_bg_enriching.locked()
     heal_reads = 0
     for r in rows:
         if r.get("message") or r.get("sentiment") != "unread":
             continue
-        if heal_reads >= 10:
+        if bg_busy or heal_reads >= 10:
             break
         heal_reads += 1
         client = client or FUBClient()
@@ -6104,7 +6124,7 @@ def api_ca_list():
         else:
             r["context"] = None
             to_build.append(r)
-    if to_build and not _ca_bg_enriching.locked():
+    if to_build and not bg_busy and not _ca_bg_enriching.locked():
         client = client or FUBClient()
         for r in to_build[:4]:
             r["context"] = _ca_build_context(client, r)
