@@ -16536,13 +16536,12 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                         _prospecting = "prospecting" in (
                             (person.get("source") or "").strip().lower())
                         if _ask and _prospecting and not _engaged:
-                            _msg = ("\U0001f525 %s, your lead %s replied "
-                                    "to Ylopo's cold text and just became "
-                                    "yours. Prospecting AI threads do not "
-                                    "sync into FUB, so read the "
-                                    "conversation in Ylopo Stars first, "
-                                    "then call while it is warm. "
-                                    "<%s|Open %s in FUB>."
+                            # Barry's exact wording (Nov 11 2026).
+                            _msg = ("%s, your homeowner %s responded to "
+                                    "Ylopo's AI text indicating interest "
+                                    "in possibly selling their home. "
+                                    "Here is the link in FUB: "
+                                    "<%s|%s>."
                                     % (_owner.split()[0], _lead1,
                                        _flink, _lead1))
                         elif _ask and _engaged:
