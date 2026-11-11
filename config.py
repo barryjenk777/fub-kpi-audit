@@ -981,4 +981,12 @@ REALTOR_CALL_YANK_MIN = 10           # claimed, no dial: claim released
 # coaching-class text per day. Overflow becomes a Slack DM instead.
 # Urgent/operational kinds are exempt and always deliver.
 DAILY_COACHING_TEXT_BUDGET = 1
-TEXT_BUDGET_EXEMPT_KINDS = {"dispatch", "callsave", "savebot"}
+# Exempt = never counted against the budget and never rerouted to Slack.
+# Two kinds of exemption: lead-critical (a text about a live lead must
+# reach the phone) and work orders (the hot sheet is the day's job, not
+# coaching). Found Nov 11 2026: hotsheet was NOT exempt, so it ate the
+# daily budget at 8:15 and the 8:20 game-film coaching text silently
+# rerouted to Slack every weekday.
+TEXT_BUDGET_EXEMPT_KINDS = {"dispatch", "handoff", "appt_confirm",
+                            "phoenix", "friday_meeting", "hotsheet",
+                            "callsave", "savebot"}

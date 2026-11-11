@@ -1041,6 +1041,43 @@ def run_command_sheet(dry_run=True, email_to_barry=False,
     except Exception:
         gaps.append("transfer counts unavailable")
 
+    # ── Your money: Realtor.com (folded in Nov 11 2026; the standalone
+    # Friday ROI email is retired — one Friday read, not three) ────────
+    rdc_html = ""
+    try:
+        import requests as _rq
+        _r = _rq.get(
+            (getattr(config, "BASE_URL",
+                     "https://www.legacycommandcenter.com")
+             + "/api/roi/realtor"),
+            params={"key": os.environ.get("PERPLEXITY_API_KEY", "")},
+            timeout=90).json()
+        if _r.get("ok"):
+            _s = _r.get("spend") or {}
+            rdc_html = (
+                "<div style='background:#fff;border:2px solid #f59e0b;"
+                "border-radius:10px;padding:16px 20px;margin:16px 0'>"
+                "<p style='margin:0;font-size:12px;font-weight:800;"
+                "letter-spacing:.15em;color:#b45309;text-transform:"
+                "uppercase'>Your money: Realtor.com</p>"
+                "<p style='margin:6px 0 0;font-size:14px;color:#0f172a'>"
+                "Spent <b>$%s</b> so far ($%s a month). <b>%s</b> leads "
+                "earned%s, <b>%s</b> appointments set. Pace <b>%s a "
+                "month</b> against the 30 promised.</p>"
+                "<p style='margin:6px 0 0;font-size:12px'>"
+                "<a href='%s/roi'>The full ledger, lead by lead</a></p>"
+                "</div>"
+                % ("{:,.0f}".format(_s.get("to_date") or 0),
+                   "{:,.0f}".format(_s.get("monthly") or 0),
+                   _r.get("lead_count", 0),
+                   (" ($%s each)" % "{:,.0f}".format(_r["cost_per_lead"]))
+                   if _r.get("cost_per_lead") else "",
+                   _r.get("appts_set", 0), _r.get("pace_monthly", "?"),
+                   getattr(config, "BASE_URL",
+                           "https://www.legacycommandcenter.com")))
+    except Exception:
+        gaps.append("realtor roi section unavailable")
+
     # ── Render + send ──────────────────────────────────────────────────
     html = render_html({
         "period_label": period_label,
@@ -1055,6 +1092,8 @@ def run_command_sheet(dry_run=True, email_to_barry=False,
         "phoenix_pond_unclaimed": pond_unclaimed,
     })
 
+    if rdc_html:
+        html += rdc_html
     summary["subject"] = subject
     summary["html"] = html
     summary["lever"] = ({k: v for k, v in lever.items()} if lever else None)

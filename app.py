@@ -30691,6 +30691,100 @@ def api_goal_setup_outreach():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+def _monday_digest_html():
+    """Monday sections for the owner brief: the week's verdicts with deep
+    links, replacing what used to be three separate Monday emails (KPI
+    audit 8:30, ISA 10:00, Tape of the Week 7:30 — retired Nov 11 2026,
+    'my Monday is spam'). Receipts live in the app; the email carries the
+    verdicts."""
+    from zoneinfo import ZoneInfo as _ZI
+    if datetime.now(_ZI("America/New_York")).weekday() != 0:
+        return ""
+    base = getattr(config, "BASE_URL", "https://www.legacycommandcenter.com")
+    sec = []
+
+    def h3(t):
+        return ("<h3 style='font-size:14px;text-transform:uppercase;"
+                "color:#888;margin:20px 0 8px;border-bottom:1px solid "
+                "#eee;padding-bottom:4px'>%s</h3>" % t)
+    # Tape of the Week: the best real call of the last 7 days.
+    try:
+        rows = _db.get_maverick_calls(days=7, limit=200) or []
+        convos = [c for c in rows if c.get("call_grade") is not None
+                  and (c.get("duration_sec") or 0) >= 120]
+        if convos:
+            b = max(convos, key=lambda c: float(c["call_grade"]))
+            sec.append(
+                h3("Tape of the Week") +
+                "<p style='margin:4px 0;font-size:13.5px'><b>%s</b> with "
+                "%s: grade %.0f, %.0f minutes%s.<br>"
+                "<span style='color:#666'>%s</span><br>"
+                "<a href='%s/calls?agent=%s&q=%s'>Read the transcript"
+                "</a></p>"
+                % (b.get("agent_name"), b.get("lead_name"),
+                   float(b["call_grade"]),
+                   (b.get("duration_sec") or 0) / 60,
+                   ", appointment set" if b.get("appointment_set") else "",
+                   (b.get("summary") or "")[:220], base,
+                   (b.get("agent_name") or "").replace(" ", "%20"),
+                   (b.get("lead_name") or "").replace(" ", "%20")))
+    except Exception as e:
+        logger.warning("monday digest tape failed: %s", e)
+    # ISA week: Fhalen's funnel in one line.
+    try:
+        with app.test_client() as tc:
+            d = tc.get("/api/isa?key=%s"
+                       % os.environ.get("PERPLEXITY_API_KEY", "")
+                       ).get_json() or {}
+        f = d.get("funnel") or {}
+        flag = next((i for i in d.get("insights", [])
+                     if i.get("type") == "warning"), None)
+        sec.append(
+            h3("Fhalen's week") +
+            "<p style='margin:4px 0;font-size:13.5px'>%s dials, %s "
+            "conversations, %s appointments set, %s met.%s<br>"
+            "<a href='%s/isa'>The full scorecard</a></p>"
+            % (f.get("dialed", 0), f.get("conversations", 0),
+               f.get("appts_set", 0), f.get("appts_met", 0),
+               (" <span style='color:#b45309'>Flag: %s.</span>"
+                % flag["title"]) if flag else "", base))
+    except Exception as e:
+        logger.warning("monday digest isa failed: %s", e)
+    # Team pace: the behind-pace read from the money board.
+    try:
+        with app.test_client() as tc:
+            d = tc.get("/api/agents/money?key=%s"
+                       % os.environ.get("PERPLEXITY_API_KEY", "")
+                       ).get_json() or {}
+        rows2 = [a for a in d.get("agents", []) if not a.get("paused")]
+        behind = sorted(
+            [a for a in rows2 if (a.get("pace_pct") or 0) < 70
+             and not a.get("is_new")],
+            key=lambda a: a.get("pace_pct") or 0)
+        if behind:
+            names = ", ".join("%s (%s%%)" % (a["agent"].split()[0],
+                                             a.get("pace_pct") or 0)
+                              for a in behind[:4])
+            body = ("%d agent%s behind pace with %s weeks left: %s."
+                    % (len(behind), "" if len(behind) == 1 else "s",
+                       d.get("weeks_left", "?"), names))
+        else:
+            body = "Everyone with a goal is on pace or new."
+        sec.append(h3("Pace to goal") +
+                   "<p style='margin:4px 0;font-size:13.5px'>%s<br>"
+                   "<a href='%s/team'>The money board</a></p>"
+                   % (body, base))
+    except Exception as e:
+        logger.warning("monday digest pace failed: %s", e)
+    if not sec:
+        return ""
+    return ("<div style='background:#f8f6f0;border-radius:10px;"
+            "padding:4px 16px 12px;margin-top:18px'>"
+            "<p style='margin:10px 0 0;font-size:11px;font-weight:800;"
+            "letter-spacing:.15em;color:#b45309;text-transform:uppercase'>"
+            "Monday digest</p>%s</div>" % "".join(sec))
+
+
 def scheduled_owner_daily_brief():
     """
     Daily job (7am ET): build the owner brief and email it to Barry.
@@ -30905,6 +30999,7 @@ def scheduled_owner_daily_brief():
 {gd_html}
 <h3 style='font-size:14px;text-transform:uppercase;color:#888;margin:20px 0 8px;border-bottom:1px solid #eee;padding-bottom:4px'>Top 3 Actions Today</h3>
 <ol style='margin:0;padding-left:20px'>{action_html}</ol>
+{_monday_digest_html()}
 
 <p style='margin:24px 0 4px;font-size:12px;color:#aaa'>
   <a href='{os.environ.get("BASE_URL", "https://web-production-3363cc.up.railway.app")}/api/owner/daily-brief'>Full JSON brief</a> ·
@@ -31336,10 +31431,12 @@ def start_scheduler():
     #                    id="manager_email", name="Sunday sales-manager coaching email",
     #                    max_instances=1, coalesce=True)
 
-    # KPI Audit email: Monday 8:30am ET
-    _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET),
-                       id="audit_email", name="Monday KPI audit email",
-                       max_instances=1, coalesce=True)
+    # KPI Audit email RETIRED Nov 11 2026 (Barry: "my Monday is spam").
+    # The verdicts ride the Monday digest inside the Owner Brief; the full
+    # audit lives at /classic and /revenue. Restore by uncommenting.
+    # _scheduler.add_job(scheduled_send_audit_email, CronTrigger(day_of_week="mon", hour=8, minute=30, timezone=ET),
+    #                    id="audit_email", name="Monday KPI audit email",
+    #                    max_instances=1, coalesce=True)
 
     # Friday Command Sheet: Friday 6:30am ET — Barry's one meeting email.
     # Runs after the 6am cache warm so the audit read is a cache hit.
@@ -31461,10 +31558,11 @@ def start_scheduler():
     except Exception as _e:
         logger.warning("[SCHEDULER] Nudge engine failed to load (Twilio not required to run): %s", _e)
 
-    # Fhalen ISA email: Monday 10am ET
-    _scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0, timezone=ET),
-                       id="isa_email", name="Monday ISA email",
-                       max_instances=1, coalesce=True)
+    # Monday ISA email RETIRED Nov 11 2026: folded into the Owner Brief's
+    # Monday digest ("Fhalen's week" section); the full scorecard is /isa.
+    # _scheduler.add_job(scheduled_send_isa_email, CronTrigger(day_of_week="mon", hour=10, minute=0, timezone=ET),
+    #                    id="isa_email", name="Monday ISA email",
+    #                    max_instances=1, coalesce=True)
 
     # Appointment accountability email: Tuesday 9am ET
     _scheduler.add_job(scheduled_send_appointment_email, CronTrigger(day_of_week="tue", hour=9, minute=0, timezone=ET),
@@ -31517,10 +31615,12 @@ def start_scheduler():
                        CronTrigger(hour=6, minute=40, timezone=ET),
                        id="ooc_sweep", name="Maverick OOC flag age ledger (6:40am)",
                        max_instances=1, coalesce=True)
-    _scheduler.add_job(scheduled_tape_of_week,
-                       CronTrigger(day_of_week="mon", hour=7, minute=30, timezone=ET),
-                       id="tape_of_week", name="Tape of the Week to Barry (Mon 7:30am)",
-                       max_instances=1, coalesce=True)
+    # Tape of the Week RETIRED as a standalone email Nov 11 2026: it is
+    # the lead section of the Owner Brief's Monday digest now.
+    # _scheduler.add_job(scheduled_tape_of_week,
+    #                    CronTrigger(day_of_week="mon", hour=7, minute=30, timezone=ET),
+    #                    id="tape_of_week", name="Tape of the Week to Barry (Mon 7:30am)",
+    #                    max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_nurture_run,
                        CronTrigger(day_of_week="tue", hour=10, minute=30, timezone=ET),
                        id="nurture_run", name="Nurture Run weekly email (Tue 10:30am)",
@@ -31735,10 +31835,13 @@ def start_scheduler():
                        CronTrigger(hour=19, minute=0, timezone=ET),
                        id="realtor_ladder", name="Realtor ladder sweep (7pm)",
                        max_instances=1, coalesce=True)
-    _scheduler.add_job(scheduled_realtor_roi_email,
-                       CronTrigger(day_of_week="fri", hour=8, minute=30, timezone=ET),
-                       id="realtor_roi", name="Realtor ROI email (Fri 8:30am)",
-                       max_instances=1, coalesce=True)
+    # Realtor ROI standalone email RETIRED Nov 11 2026: its verdict rides
+    # the Friday Command Sheet ("Your money: Realtor.com" section) and
+    # the lead-by-lead ledger lives at /roi.
+    # _scheduler.add_job(scheduled_realtor_roi_email,
+    #                    CronTrigger(day_of_week="fri", hour=8, minute=30, timezone=ET),
+    #                    id="realtor_roi", name="Realtor ROI email (Fri 8:30am)",
+    #                    max_instances=1, coalesce=True)
     # 1-on-1 commitment checker: after the 7:30pm activity sync, so
     # today's dials are already in daily_activity. Logs misses for
     # Barry's surfaces only; never texts the agent.
