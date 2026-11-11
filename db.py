@@ -12020,3 +12020,105 @@ def person_replied_within(person_id, hours=48):
     except Exception as e:
         logger.warning("person_replied_within failed: %s", e)
         return False
+
+
+# ── Desk evidence retry (Nov 11 2026, Gorg/Gregory/Katherine): the tag
+#    webhook beats evidence into every feed, so a failed evidence check
+#    parks here and gets rechecked instead of buried forever ─────────────
+_evidence_retry_ready = False
+
+
+def _ensure_evidence_retry():
+    global _evidence_retry_ready
+    if _evidence_retry_ready or not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS desk_evidence_retry (
+                        person_id   TEXT PRIMARY KEY,
+                        person_name TEXT,
+                        tags        JSONB,
+                        first_seen  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        last_check  TIMESTAMPTZ,
+                        checks      INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+        _evidence_retry_ready = True
+    except Exception as e:
+        logger.warning("ensure desk_evidence_retry failed: %s", e)
+
+
+def add_evidence_retry(person_id, person_name, tags):
+    try:
+        _ensure_evidence_retry()
+        import json as _j
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO desk_evidence_retry
+                        (person_id, person_name, tags)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (person_id) DO NOTHING
+                """, (str(person_id), person_name, _j.dumps(tags or [])))
+        return True
+    except Exception as e:
+        logger.warning("add_evidence_retry failed: %s", e)
+        return False
+
+
+def get_evidence_retries(limit=20):
+    try:
+        _ensure_evidence_retry()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, person_name, tags, first_seen, checks
+                    FROM desk_evidence_retry
+                    ORDER BY first_seen LIMIT %s
+                """, (limit,))
+                return [{"person_id": r[0], "person_name": r[1],
+                         "tags": r[2] or [], "first_seen": r[3],
+                         "checks": r[4]} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_evidence_retries failed: %s", e)
+        return []
+
+
+def touch_evidence_retry(person_id):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE desk_evidence_retry
+                    SET last_check = NOW(), checks = checks + 1
+                    WHERE person_id = %s
+                """, (str(person_id),))
+    except Exception:
+        pass
+
+
+def delete_evidence_retry(person_id):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM desk_evidence_retry "
+                            "WHERE person_id = %s", (str(person_id),))
+    except Exception:
+        pass
+
+
+def clear_desk_tags(person_id, tags):
+    """Un-burn specific desk ledger rows so the sweep re-sees the tags."""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM desk_tag_seen
+                    WHERE person_id = %s AND tag = ANY(%s)
+                """, (str(person_id), list(tags or [])))
+                return cur.rowcount
+    except Exception as e:
+        logger.warning("clear_desk_tags failed: %s", e)
+        return 0

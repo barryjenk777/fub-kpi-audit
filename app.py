@@ -16423,8 +16423,16 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                     logger.warning("desk life recheck failed for %s: %s",
                                    pid, _sle)
             if not _alive:
+                # Not buried: PARKED. The tag webhook beats evidence into
+                # every feed, so a failed check joins the retry queue and
+                # the desk re-tests all three doors every 10 minutes for
+                # 12 hours (Barry, Nov 11 2026: "this is becoming a
+                # problem" — three real conversions lost to this race in
+                # one day). Evidence appears -> routes automatically.
+                # Nothing after 12h -> fossil for real.
+                _db.add_evidence_retry(pid, person.get("name"), _fresh)
                 _db.log_automation_event(
-                    event_type="desk_batch_artifact", person_id=pid,
+                    event_type="desk_evidence_pending", person_id=pid,
                     person_name=person.get("name"), agent_name=None,
                     payload={"tags": _fresh,
                              "created": person.get("created"),
@@ -23485,6 +23493,54 @@ def api_callfilm_preview():
                     "grade": pick.get("call_grade"),
                     "text": txt or "(fallback template would send)"})
     return jsonify({"ok": True, "previews": out})
+
+
+def scheduled_evidence_recheck():
+    """Every 10 min: re-test the three evidence doors for leads parked by
+    the fossil gate. Pass -> un-burn their ledger rows so the desk sweep
+    routes them within minutes. 12 hours with nothing -> fossil, final."""
+    if not _db.try_acquire_job_lock("evidence_recheck"):
+        return
+    try:
+        rows = _db.get_evidence_retries(limit=20)
+        recovered, expired = 0, 0
+        for r in rows:
+            pid = r["person_id"]
+            try:
+                alive = (_db.person_replied_within(pid, hours=48)
+                         or bool(_fresh_ai_voice_outcome(pid, hours=48))
+                         or _had_inbound_within(pid, hours=48))
+            except Exception:
+                alive = False
+            if alive:
+                cleared = _db.clear_desk_tags(pid, r["tags"])
+                _db.delete_evidence_retry(pid)
+                _db.log_automation_event(
+                    event_type="desk_evidence_recovered", person_id=pid,
+                    person_name=r["person_name"], agent_name=None,
+                    payload={"tags": r["tags"], "ledger_cleared": cleared,
+                             "checks": r["checks"] + 1},
+                    triggered_by="evidence_recheck")
+                recovered += 1
+                continue
+            age_h = ((datetime.now(timezone.utc) - r["first_seen"])
+                     .total_seconds() / 3600) if r.get("first_seen") else 0
+            if age_h >= 12:
+                _db.delete_evidence_retry(pid)
+                _db.log_automation_event(
+                    event_type="desk_batch_artifact", person_id=pid,
+                    person_name=r["person_name"], agent_name=None,
+                    payload={"tags": r["tags"], "final": True,
+                             "checks": r["checks"] + 1},
+                    triggered_by="evidence_recheck")
+                expired += 1
+            else:
+                _db.touch_evidence_retry(pid)
+        if rows:
+            print("[SCHEDULER] evidence recheck: %d parked, %d recovered, "
+                  "%d expired" % (len(rows), recovered, expired))
+    except Exception as e:
+        print(f"[SCHEDULER] evidence recheck FAILED: {e}")
 
 
 def scheduled_sheet_followup():
@@ -31559,6 +31615,13 @@ def start_scheduler():
                        CronTrigger(hour="7,19", minute=50, timezone=ET),
                        id="metric_snapshots", name="Metric snapshots (2x/day)",
                        max_instances=1, misfire_grace_time=600)
+
+    # Evidence recheck: parked conversions re-tested every 10 minutes.
+    _scheduler.add_job(scheduled_evidence_recheck,
+                       CronTrigger(minute="3-53/10", timezone=ET),
+                       id="evidence_recheck",
+                       name="Desk evidence recheck (10 min)",
+                       max_instances=1, misfire_grace_time=120)
 
     # Same-day sheet follow-up: 1:15pm, zero-called agents only.
     _scheduler.add_job(scheduled_sheet_followup,
