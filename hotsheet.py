@@ -30,7 +30,44 @@ logger = logging.getLogger(__name__)
 _EXCLUDED = set(getattr(config, "EXCLUDED_USERS", [])) \
     | set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
 
-_PEOPLE_FIELDS = "id,name,assignedUserId,tags,stage,lastCommunication,customLeadStreamScore"
+_PEOPLE_FIELDS = ("id,name,assignedUserId,tags,stage,lastCommunication,"
+                  "customLeadStreamScore,source")
+
+
+def _opener(client, pid, lead_first, reason=""):
+    """The words to open with for the TOP pick: matched to the lead's
+    source and this week's real behavior, Barry's texting voice, no
+    invented specifics. One opener only, the sheet stays a text, not a
+    memo (Nov 11 2026 comms overhaul)."""
+    n = (lead_first or "there").lower()
+    try:
+        if reason.startswith("Fhalen"):
+            return ("hey %s, fhalen on our team passed your info my way so "
+                    "you would not get lost in the shuffle. where are you "
+                    "at in the search these days?" % n)
+        p = client._request("GET", "people/%s" % pid, params={
+            "fields": "id,source"}) or {}
+        src = (p.get("source") or "").lower()
+        try:
+            events = client.get_events_for_person(pid, days=7) or []
+        except Exception:
+            events = []
+        saves = sum(1 for e in events if "Saved" in (e.get("type") or ""))
+        views = sum(1 for e in events if "Viewed" in (e.get("type") or ""))
+        if "realtor.com" in src or src == "realtor":
+            return ("hey %s, you had reached out on realtor.com about a "
+                    "home. did you ever get in to see it, or still looking "
+                    "around?" % n)
+        if saves:
+            return ("hey %s, saw you saved a home or two this week. want "
+                    "me to line up a quick look at your favorite?" % n)
+        if views >= 3:
+            return ("hey %s, noticed you were back browsing homes this "
+                    "week. anything worth a real walkthrough yet?" % n)
+        return ("hey %s, you have been on my list to check in with. where "
+                "did the home search land for you?" % n)
+    except Exception:
+        return ""
 
 
 _JUNK_NAMES = {"no", "yes", "unknown", "test", "n/a", "na", "none", "null",
@@ -477,10 +514,14 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
         if coach_msg:
             sections.append(coach_msg.strip())
         if picks:
-            sections.append(
+            _pick_text = (
                 _scoreboard_line(_first(agent), scoreboard.get(agent, (0, 0)))
                 + _compose(_first(agent), [(n, r) for _, n, r in picks],
                            greeting=not coach_msg))
+            _op = _opener(client, picks[0][0], picks[0][1], picks[0][2])
+            if _op:
+                _pick_text += ' Open with: "%s"' % _op
+            sections.append(_pick_text)
         elif scoreboard.get(agent, (0, 0))[1]:
             sections.append(_scoreboard_line(_first(agent), scoreboard[agent]).strip())
         prep_body = ""
