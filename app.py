@@ -22842,6 +22842,19 @@ def scheduled_leadstream_dashboard_warm():
         print(f"[SCHEDULER] leadstream dashboard warm FAILED: {e}")
 
 
+def scheduled_team_board_warm():
+    """Every 30 min working hours: keep the goals scorecard cache hot so
+    /team paints fast instead of paying the ~30s cold build."""
+    if not _db.try_acquire_job_lock("team_board_warm"):
+        return
+    try:
+        with app.test_client() as tc:
+            r = tc.get("/api/goals/scorecard")
+            print(f"[SCHEDULER] team board warm: HTTP {r.status_code}")
+    except Exception as e:
+        print(f"[SCHEDULER] team board warm FAILED: {e}")
+
+
 def scheduled_cache_warm():
     """Called by APScheduler 3x/day to keep cache fresh."""
     if not _db.try_acquire_job_lock("cache_warm"):
@@ -30621,6 +30634,13 @@ def start_scheduler():
                        id="leadstream_dash_warm",
                        name="LeadStream dashboard warm (10 min)",
                        max_instances=1, misfire_grace_time=120)
+
+    # Team board warm: goals scorecard hot for /team.
+    _scheduler.add_job(scheduled_team_board_warm,
+                       CronTrigger(minute="7,37", hour="7-20", timezone=ET),
+                       id="team_board_warm",
+                       name="Team board warm (30 min)",
+                       max_instances=1, misfire_grace_time=300)
 
     # CallAction dossier warm: same idea for Fhalen's audit page.
     _scheduler.add_job(scheduled_ca_dossier_warm,
