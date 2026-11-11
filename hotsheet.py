@@ -326,12 +326,19 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
 
     # Ghosted-after-held leads from the appointment money layer
     ghosted_by_agent = {}
+    no_outcome_by_agent = {}
     try:
         import appt_insight as _ai
         cached = _ai.get_cached() or {}
         for g in cached.get("ghosted_after_held") or []:
             if g.get("agent"):
                 ghosted_by_agent.setdefault(g["agent"], []).append(g)
+        # Unlogged outcomes ride the sheet (Barry, Nov 11 2026): Maverick
+        # already texts agents 1-2h after an appointment and 18 still sat
+        # unlogged, so the debt goes where they already look each morning.
+        for g in cached.get("no_outcome_list") or []:
+            if g.get("agent"):
+                no_outcome_by_agent.setdefault(g["agent"], []).append(g)
     except Exception as e:
         logger.warning("[HOT SHEET] appt insight read failed: %s", e)
 
@@ -559,6 +566,18 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
                 body = body[len(first_prefix):]
             prep_body = body
             sections.append(body)
+
+        # The outcome debt line: one lead named, plain ask, only when owed.
+        owed = no_outcome_by_agent.get(agent) or []
+        if owed:
+            first_owed = ((owed[0].get("lead") or "your").split() or
+                          ["your"])[0]
+            more = (" (%d more waiting)" % (len(owed) - 1)) if len(owed) > 1 \
+                else ""
+            sections.append(
+                "Also: what happened with %s's appointment? Mark it met, "
+                "no show, or rescheduled in FUB%s. Thirty seconds, and "
+                "your numbers stay honest." % (first_owed, more))
 
         dojo_info = None
         rx = dojo_rx.get(agent)
