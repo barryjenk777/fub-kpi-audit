@@ -18,11 +18,37 @@ h1{font-size:1.5rem;font-weight:900;margin:.25rem 0 1rem}
 .links{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1.4rem}
 .links a{background:#fdfcf8;border:1px solid #e1ddd0;border-radius:10px;padding:.5rem .85rem;color:#2340d6;text-decoration:none;font-size:.85rem;font-weight:700}
 .stamp{font-size:.68rem;color:#9b9e93;margin-top:1.2rem}
+.askbox{background:#fdfcf8;border:1px solid #e1ddd0;border-radius:14px;padding:1rem 1.1rem;margin-top:1.5rem}
+.askbox .ttl{font-weight:800;font-size:.95rem;margin-bottom:.15rem}
+.askbox .sub{font-size:.78rem;color:#55584f;margin-bottom:.7rem}
+.askrow{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.55rem}
+.askrow select{flex:1;min-width:160px;border:1px solid #e1ddd0;border-radius:9px;padding:.5rem .6rem;font-family:inherit;font-size:.85rem;background:#fff;color:#191b1e}
+.askbox textarea{width:100%;box-sizing:border-box;border:1px solid #e1ddd0;border-radius:9px;padding:.6rem .7rem;font-family:inherit;font-size:.9rem;min-height:64px;resize:vertical;background:#fff;color:#191b1e}
+.askbox button{margin-top:.55rem;background:#2340d6;color:#fff;border:none;border-radius:9px;padding:.55rem 1rem;font-family:inherit;font-weight:800;font-size:.85rem;cursor:pointer}
+.askbox button:disabled{opacity:.5;cursor:default}
+.answer{white-space:pre-wrap;font-size:.88rem;line-height:1.55;margin-top:.8rem;border-top:1px solid #e1ddd0;padding-top:.8rem;display:none}
+.chips{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.5rem}
+.chips a{font-size:.72rem;color:#2340d6;background:#eef0fb;border-radius:99px;padding:.25rem .6rem;text-decoration:none;cursor:pointer}
 </style></head><body><div class="wrap">
 <div class="kick">Legacy Command Center</div>
 <h1>Today</h1>
 <div id="verdict" class="verdict"></div>
 <div id="items"></div>
+<div class="askbox">
+  <div class="ttl">Ask the board</div>
+  <div class="sub">Live numbers behind every answer. Ask about the whole team, or pick a name for 1-on-1 prep.</div>
+  <div class="askrow">
+    <select id="ask-scope"><option value="">The whole team</option></select>
+  </div>
+  <textarea id="ask-q" placeholder="Who needs a push this week? What should I open the huddle with?"></textarea>
+  <button id="ask-btn" onclick="ask()">Ask</button>
+  <div class="chips">
+    <a onclick="quick('What is the one thing costing us the most money right now?')">biggest leak</a>
+    <a onclick="quick('What should I open the morning huddle with?')">huddle opener</a>
+    <a onclick="quick('What should we cover in our 1-on-1 this week?')">1-on-1 prep</a>
+  </div>
+  <div class="answer" id="ask-a"></div>
+</div>
 <div class="links">
   <a href="/salesfloor">Sales Floor</a>
   <a href="/dispatch">Lead Claims</a>
@@ -49,4 +75,51 @@ async function load(){
   }catch(e){}
 }
 load(); setInterval(load, 300000);
+
+async function roster(){
+  try{
+    const d = await (await fetch("/api/goals/agents-list")).json();
+    const sel = document.getElementById("ask-scope");
+    (d.agents||[]).forEach(a=>{
+      const o = document.createElement("option");
+      o.value = a.name; o.textContent = a.name;
+      sel.appendChild(o);
+    });
+  }catch(e){}
+}
+roster();
+
+function quick(q){
+  document.getElementById("ask-q").value = q;
+  ask();
+}
+
+async function ask(){
+  const q = document.getElementById("ask-q").value.trim();
+  if(!q) return;
+  const who = document.getElementById("ask-scope").value;
+  const btn = document.getElementById("ask-btn");
+  const out = document.getElementById("ask-a");
+  btn.disabled = true; btn.textContent = "Thinking…";
+  out.style.display = "block";
+  out.textContent = who ? "Reading " + who + "'s numbers…" : "Reading the team's numbers…";
+  try{
+    const question = who
+      ? "For a 1-on-1 with " + who + " (answer about this one agent): " + q
+      : q;
+    const r = await fetch("/api/ask-claude", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question}),
+      signal: AbortSignal.timeout(90000)
+    });
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    out.textContent = d.answer || "(no response)";
+  }catch(e){
+    out.textContent = "Could not get an answer (" + e.message + "). Hit Ask to retry.";
+  }finally{
+    btn.disabled = false; btn.textContent = "Ask";
+  }
+}
 </script></div></body></html>
