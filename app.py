@@ -16526,7 +16526,26 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                         _flink = ("https://yourfriendlyagent."
                                   "followupboss.com/2/people/view/%s"
                                   % pid)
-                        if _ask and _engaged:
+                        # Ylopo Prospecting is a cold-text source: Ylopo
+                        # assigns the lead ONLY after the person replies,
+                        # and those AI threads never sync into FUB's API
+                        # (Jack Gaines canon). So for this source the
+                        # assignment IS the reply evidence, and "no reply
+                        # logged" is false (Miranda, Nov 11 2026: Barry
+                        # corrected the Salma ping).
+                        _prospecting = "prospecting" in (
+                            (person.get("source") or "").strip().lower())
+                        if _ask and _prospecting and not _engaged:
+                            _msg = ("\U0001f525 %s, your lead %s replied "
+                                    "to Ylopo's cold text and just became "
+                                    "yours. Prospecting AI threads do not "
+                                    "sync into FUB, so read the "
+                                    "conversation in Ylopo Stars first, "
+                                    "then call while it is warm. "
+                                    "<%s|Open %s in FUB>."
+                                    % (_owner.split()[0], _lead1,
+                                       _flink, _lead1))
+                        elif _ask and _engaged:
                             _msg = ("\U0001f525 %s, your lead %s just "
                                     "engaged the AI (%s) and is ready for "
                                     "a human. Already yours, no button to "
