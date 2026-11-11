@@ -23276,6 +23276,63 @@ def api_desk_fossil_audit():
                     "done": True})
 
 
+@app.route("/api/admin/coach-brief", methods=["POST"])
+def api_coach_brief():
+    """Danny's Monday brief. {"send": false} returns data + HTML preview;
+    {"send": true} emails it to the coach. {"days": 14} default window."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import coach_brief as _cb
+    body = request.get_json(silent=True) or {}
+    days = min(int(body.get("days", 14) or 14), 30)
+    data = _cb.build_brief(days=days)
+    html = _cb.build_html(data)
+    if not body.get("send"):
+        return jsonify({"ok": True, "sent": False, "data": data,
+                        "html": html})
+    if not data["agents"]:
+        return jsonify({"ok": False, "sent": False,
+                        "error": "no met agents in the window; not sending"})
+    to = body.get("to") or getattr(config, "COACH_BRIEF_EMAIL",
+                                   "danny@crhometeam.com")
+    import postmark_client
+    r = postmark_client.send(
+        to, from_email=config.EMAIL_FROM,
+        subject="Coaching film: the %d agent%s you met, graded"
+                % (len(data["agents"]),
+                   "" if len(data["agents"]) == 1 else "s"),
+        html=html)
+    _db.log_coach_action("coach_brief_sent", None, to)
+    return jsonify({"ok": True, "sent": bool(r), "to": to,
+                    "agents": [a["agent"] for a in data["agents"]]})
+
+
+def scheduled_coach_brief():
+    """Monday 8:30am ET: Danny's film brief for the agents he met in the
+    last two weeks. Sends nothing when he met nobody."""
+    if not _db.try_acquire_job_lock("coach_brief"):
+        return
+    try:
+        import coach_brief as _cb
+        import postmark_client
+        data = _cb.build_brief(days=14)
+        if not data["agents"]:
+            print("[SCHEDULER] coach brief: no met agents, no email")
+            return
+        html = _cb.build_html(data)
+        to = getattr(config, "COACH_BRIEF_EMAIL", "danny@crhometeam.com")
+        postmark_client.send(
+            to, from_email=config.EMAIL_FROM,
+            subject="Coaching film: the %d agent%s you met, graded"
+                    % (len(data["agents"]),
+                       "" if len(data["agents"]) == 1 else "s"),
+            html=html)
+        print("[SCHEDULER] coach brief sent to %s: %s"
+              % (to, [a["agent"] for a in data["agents"]]))
+    except Exception as e:
+        print(f"[SCHEDULER] coach brief FAILED: {e}")
+
+
 @app.route("/api/admin/snapshots/run", methods=["POST"])
 def api_admin_snapshots_run():
     """Owner-key: take the metric snapshots now (primes the deltas layer)."""
@@ -31155,6 +31212,13 @@ def start_scheduler():
                        CronTrigger(hour="7,19", minute=50, timezone=ET),
                        id="metric_snapshots", name="Metric snapshots (2x/day)",
                        max_instances=1, misfire_grace_time=600)
+
+    # Danny's Monday coaching brief: film on the agents he met.
+    _scheduler.add_job(scheduled_coach_brief,
+                       CronTrigger(day_of_week="mon", hour=8, minute=30,
+                                   timezone=ET),
+                       id="coach_brief", name="Danny coaching brief (Mon 8:30am)",
+                       max_instances=1, misfire_grace_time=3600)
 
     # Operator pulse: the numbers come to Barry at 8:05am.
     _scheduler.add_job(scheduled_operator_pulse,

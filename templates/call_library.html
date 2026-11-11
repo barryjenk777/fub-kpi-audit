@@ -38,6 +38,17 @@ a{color:#2340d6}
 <div class="stamp"><a href="/salesfloor">Back to the Sales Floor</a> &middot; audio lives in Maverick; transcripts live here</div>
 <script>
 function esc(s){return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");}
+// Deep links from coaching emails: /calls?agent=Name&q=lead
+try{
+  const _p=new URLSearchParams(location.search);
+  if(_p.get("q")) document.getElementById("q").value=_p.get("q");
+  if(_p.get("agent")){
+    const sel=document.getElementById("agent");
+    const o=document.createElement("option");
+    o.value=_p.get("agent"); o.textContent=_p.get("agent"); o.selected=true;
+    sel.appendChild(o);
+  }
+}catch(e){}
 async function load(){
   const q = encodeURIComponent(document.getElementById("q").value||"");
   const agent = encodeURIComponent(document.getElementById("agent").value||"");
