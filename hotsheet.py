@@ -453,7 +453,7 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
                     or not _usable_name(row.get("lead")):
                 continue
             picks.append((pid, _first(row["lead"]),
-                          "Maverick has flagged this one for %d days. One call "
+                          "has needed a call for %d days. One call "
                           "clears it" % int(row["age_days"])))
             used_pids.add(pid)
 
@@ -541,20 +541,28 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
             need = int(rx["reps_required"])
             if done >= need:
                 dojo_info = {"done": done, "need": need, "complete": True}
-                sections.append("Dojo: all %d practice reps in. That is how "
-                                "Monday's email becomes Friday's paycheck." % need)
+                sections.append("All %d practice calls done this week. That "
+                                "is how practice becomes paychecks." % need)
             else:
                 d = "".join(c for c in (rx.get("scenario_phone") or "") if c.isdigit())[-10:]
                 pn = "(%s) %s-%s" % (d[:3], d[3:6], d[6:]) if len(d) == 10 else ""
                 dojo_info = {"done": done, "need": need, "complete": False,
                              "phone_digits": d if len(d) == 10 else "",
                              "label": rx.get("scenario_label") or "practice"}
-                sections.append("Dojo check: %d of %d practice reps done. Call the "
-                                "%s line now%s. Two minutes, pass is 7+. Your "
-                                "Phoenix bonus leads ride on finishing these."
+                # Plain language (Barry, Nov 11 2026: "assume the agent
+                # doesn't know anything about our team. Dojo check? too
+                # cute."). No Dojo, no Phoenix: say what to do and what
+                # it earns.
+                sections.append("You need to practice your sales skills: "
+                                "%d of %d practice calls done this week. "
+                                "Call the AI role play bot now%s and run "
+                                "the %s scenario. Two minutes, score 7 or "
+                                "better to pass. Finish all %d and you "
+                                "earn bonus leads."
                                 % (done, need,
-                                   rx.get("scenario_label") or "practice",
-                                   (": " + pn) if pn else ""))
+                                   (": " + pn) if pn else "",
+                                   (rx.get("scenario_label")
+                                    or "practice").lower(), need))
         message = "\n\n".join(s for s in sections if s)
         summary["messages"].append({"agent": agent, "message": message})
 
