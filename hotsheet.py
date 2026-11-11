@@ -35,16 +35,32 @@ _PEOPLE_FIELDS = ("id,name,assignedUserId,tags,stage,lastCommunication,"
 
 
 def _opener(client, pid, lead_first, reason=""):
-    """The words to open with for the TOP pick: matched to the lead's
-    source and this week's real behavior, Barry's texting voice, no
-    invented specifics. One opener only, the sheet stays a text, not a
-    memo (Nov 11 2026 comms overhaul)."""
+    """The words to open with for the TOP pick. The REASON the lead is on
+    the sheet anchors the opener first (a lead they met gets a meeting
+    follow-up, not a browsing line); source and behavior fill in after.
+    Two variants per situation, chosen per lead, so three agents never
+    get the identical line the same morning. Barry's texting voice, no
+    invented specifics (Nov 11 2026 comms overhaul)."""
     n = (lead_first or "there").lower()
+    v = sum(ord(c) for c in str(pid)) % 2
+
+    def pick2(a, b):
+        return (a if v == 0 else b) % n
     try:
         if reason.startswith("Fhalen"):
-            return ("hey %s, fhalen on our team passed your info my way so "
-                    "you would not get lost in the shuffle. where are you "
-                    "at in the search these days?" % n)
+            return pick2(
+                "hey %s, fhalen on our team passed your info my way so "
+                "you would not get lost in the shuffle. where are you at "
+                "in the search these days?",
+                "hey %s, fhalen told me you two spoke. i am picking up "
+                "from here so nothing falls through. what is the next "
+                "step you were hoping for?")
+        if reason.startswith("you met them"):
+            return pick2(
+                "hey %s, we sat down a while back and i owe you a follow "
+                "up. where did things land for you?",
+                "hey %s, been thinking about our meeting. did you end up "
+                "moving forward, or still weighing it?")
         p = client._request("GET", "people/%s" % pid, params={
             "fields": "id,source"}) or {}
         src = (p.get("source") or "").lower()
@@ -55,17 +71,28 @@ def _opener(client, pid, lead_first, reason=""):
         saves = sum(1 for e in events if "Saved" in (e.get("type") or ""))
         views = sum(1 for e in events if "Viewed" in (e.get("type") or ""))
         if "realtor.com" in src or src == "realtor":
-            return ("hey %s, you had reached out on realtor.com about a "
-                    "home. did you ever get in to see it, or still looking "
-                    "around?" % n)
+            return pick2(
+                "hey %s, you had reached out on realtor.com about a home. "
+                "did you ever get in to see it, or still looking around?",
+                "hey %s, following up on the home you asked about on "
+                "realtor.com. is that one still in the running?")
         if saves:
-            return ("hey %s, saw you saved a home or two this week. want "
-                    "me to line up a quick look at your favorite?" % n)
+            return pick2(
+                "hey %s, saw you saved a home or two this week. want me "
+                "to line up a quick look at your favorite?",
+                "hey %s, one of the homes you saved this week is worth a "
+                "real look. want me to check if we can walk it?")
         if views >= 3:
-            return ("hey %s, noticed you were back browsing homes this "
-                    "week. anything worth a real walkthrough yet?" % n)
-        return ("hey %s, you have been on my list to check in with. where "
-                "did the home search land for you?" % n)
+            return pick2(
+                "hey %s, noticed you were back browsing homes this week. "
+                "anything worth a real walkthrough yet?",
+                "hey %s, saw some fresh home browsing from you this week. "
+                "want a second set of eyes on any of them?")
+        return pick2(
+            "hey %s, you have been on my list to check in with. where "
+            "did the home search land for you?",
+            "hey %s, checking in on the home search. still on the back "
+            "burner, or warming up again?")
     except Exception:
         return ""
 

@@ -989,4 +989,4 @@ DAILY_COACHING_TEXT_BUDGET = 1
 # rerouted to Slack every weekday.
 TEXT_BUDGET_EXEMPT_KINDS = {"dispatch", "handoff", "appt_confirm",
                             "phoenix", "friday_meeting", "hotsheet",
-                            "callsave", "savebot"}
+                            "sheet_followup", "callsave", "savebot"}

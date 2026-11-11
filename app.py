@@ -23344,6 +23344,113 @@ def api_admin_snapshots_run():
     return jsonify({"ok": True})
 
 
+def scheduled_sheet_followup():
+    """1:15pm weekdays: the same-day loop. An agent whose morning names
+    have ZERO calls logged by lunch gets one line while the day can still
+    be saved; next-morning accountability alone lets a whole day leak
+    (Nov 11 2026 best-in-class pass). Work order class: never budgeted."""
+    if not _db.try_acquire_job_lock("sheet_followup"):
+        return
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+        et_now = datetime.now(_ZI("America/New_York"))
+        since = et_now.replace(hour=8, minute=0, second=0, microsecond=0
+                               ).astimezone(timezone.utc)
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, person_id, lead_name
+                    FROM hotsheet_log
+                    WHERE sheet_date = (NOW() AT TIME ZONE
+                                        'America/New_York')::date
+                    ORDER BY agent_name, id
+                """)
+                rows = cur.fetchall()
+        by_agent = {}
+        for agent, pid, lead in rows:
+            by_agent.setdefault(agent, []).append((str(pid), lead))
+        client = FUBClient()
+        profiles = {p["agent_name"]: p for p in
+                    (_db.get_agent_profiles(active_only=True) or [])}
+        nudged = 0
+        for agent, picks in by_agent.items():
+            prof = profiles.get(agent)
+            if not prof:
+                continue
+            called_any = False
+            for pid, _lead in picks[:3]:
+                try:
+                    r = client.get_calls(person_id=pid, since=since) or []
+                    if any(not c.get("isIncoming", True) for c in r):
+                        called_any = True
+                        break
+                except Exception:
+                    called_any = True  # never accuse on a failed check
+                    break
+            if called_any:
+                continue
+            first = agent.split()[0]
+            names = ", ".join((l or "").split()[0] for _p, l in picks[:3]
+                              if l)
+            top = ((picks[0][1] or "").split() or ["the first one"])[0]
+            msg = ("Quick check, %s. This morning's names have no call "
+                   "logged yet: %s. %s is the warm one. One dial now and "
+                   "the day still counts." % (first, names, top))
+            if _db.queue_agent_imessage(agent, prof.get("fub_user_id"),
+                                        prof.get("phone") or "", msg,
+                                        week_day="sheet_followup"):
+                nudged += 1
+        print("[SCHEDULER] sheet followup: %d agents nudged of %d with "
+              "sheets" % (nudged, len(by_agent)))
+    except Exception as e:
+        print(f"[SCHEDULER] sheet followup FAILED: {e}")
+
+
+def scheduled_evening_wins():
+    """6:30pm weekdays: close the loop in public. Any appointment set
+    TODAY on a lead from TODAY's sheet gets named in the team Slack
+    channel. Recognition that is immediate, specific and peer-visible
+    moves behavior more than any coaching text."""
+    if not _db.try_acquire_job_lock("evening_wins"):
+        return
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT h.agent_name, h.lead_name, h.person_id
+                    FROM hotsheet_log h
+                    JOIN appointments a
+                      ON a.person_id::text = h.person_id::text
+                    WHERE h.sheet_date = (NOW() AT TIME ZONE
+                                          'America/New_York')::date
+                      AND (a.fub_created_at AT TIME ZONE
+                           'America/New_York')::date =
+                          (NOW() AT TIME ZONE 'America/New_York')::date
+                """)
+                wins = cur.fetchall()
+        if not wins:
+            print("[SCHEDULER] evening wins: none today")
+            return
+        import slack_client as _sl
+        ch = os.environ.get("SLACK_DESK_OPS_CHANNEL", "")
+        if not (_sl.is_available() and ch):
+            print("[SCHEDULER] evening wins: no channel configured")
+            return
+        lines = []
+        for agent, lead, _pid in wins[:6]:
+            lines.append("%s set an appointment with %s, straight off "
+                         "this morning's sheet."
+                         % (agent.split()[0], (lead or "a lead").split()[0]))
+        text = ("\U0001f514 Today's sheet paid: \n"
+                + "\n".join("• " + l for l in lines)
+                + "\nThe names were on the sheet at 8:15. The calls "
+                  "happened. That is the whole system working.")
+        _sl.post_message(ch, text)
+        print("[SCHEDULER] evening wins: posted %d" % len(wins))
+    except Exception as e:
+        print(f"[SCHEDULER] evening wins FAILED: {e}")
+
+
 def scheduled_operator_pulse():
     """8:05am ET: the numbers come to Barry instead of waiting to be
     visited. One Slack DM, one sentence per item, only when something
@@ -31309,6 +31416,22 @@ def start_scheduler():
                        CronTrigger(hour="7,19", minute=50, timezone=ET),
                        id="metric_snapshots", name="Metric snapshots (2x/day)",
                        max_instances=1, misfire_grace_time=600)
+
+    # Same-day sheet follow-up: 1:15pm, zero-called agents only.
+    _scheduler.add_job(scheduled_sheet_followup,
+                       CronTrigger(day_of_week="mon-fri", hour=13, minute=15,
+                                   timezone=ET),
+                       id="sheet_followup",
+                       name="Hot sheet same-day follow-up (1:15pm)",
+                       max_instances=1, misfire_grace_time=1800)
+
+    # Evening wins: 6:30pm, sheet picks that became appointments, in public.
+    _scheduler.add_job(scheduled_evening_wins,
+                       CronTrigger(day_of_week="mon-fri", hour=18, minute=30,
+                                   timezone=ET),
+                       id="evening_wins",
+                       name="Evening wins broadcast (6:30pm)",
+                       max_instances=1, misfire_grace_time=1800)
 
     # Danny's Monday coaching brief: film on the agents he met.
     _scheduler.add_job(scheduled_coach_brief,
