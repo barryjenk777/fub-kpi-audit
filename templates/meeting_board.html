@@ -1,0 +1,109 @@
+{% extends "board_base.html" %}
+{% set active='meeting' %}
+{% block title %}1-on-1 — Legacy Home Team{% endblock %}
+{% block page_title %}🤝 1-on-1{% endblock %}
+{% block page_meta %}Walk in knowing the numbers and the one conversation each agent needs{% endblock %}
+{% block page_actions %}
+  <button class="btn btn-primary btn-sm" onclick="managerEmail(this)">📧 Send manager recap</button>
+{% endblock %}
+{% block content %}
+      <div class="banner">
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div class="dot dot-amber" id="v-dot"></div>
+          <div><div class="banner-text" id="v-text">Reading the week&hellip;</div>
+          <div class="banner-meta" id="v-meta"></div></div>
+        </div>
+      </div>
+
+      <div id="buckets" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-bottom:.4rem"></div>
+
+      <div class="section-header"><span class="icon">🗒️</span> Prep cards
+        <span style="font-weight:400;font-size:.72rem;margin-left:.5rem">grade, trend, and the opener for each conversation</span></div>
+      <div id="cards-wrap" class="cards"><div class="card"><div class="skeleton" style="height:140px"></div></div><div class="card"><div class="skeleton" style="height:140px"></div></div></div>
+
+      <div class="section-header"><span class="icon">🧠</span> Ask before you sit down</div>
+      <div class="card" id="askbox">
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem">
+          <select id="ask-scope" style="flex:1;min-width:160px;border:1px solid var(--border-sub);border-radius:9px;padding:.5rem .6rem;font-family:inherit;font-size:.85rem;background:#fff;color:var(--text)"><option value="">The whole team</option></select>
+        </div>
+        <textarea id="ask-q" placeholder="What should this 1-on-1 focus on? What is their trend telling me?" style="width:100%;box-sizing:border-box;border:1px solid var(--border-sub);border-radius:9px;padding:.6rem .7rem;font-family:inherit;font-size:.9rem;min-height:60px;resize:vertical;background:#fff;color:var(--text)"></textarea>
+        <button class="btn btn-primary btn-sm" style="margin-top:.5rem" id="ask-btn" onclick="ask()">Ask</button>
+        <div id="ask-a" style="white-space:pre-wrap;font-size:.88rem;line-height:1.55;margin-top:.8rem;border-top:1px solid var(--border-sub);padding-top:.8rem;display:none"></div>
+      </div>
+
+      <details style="margin-top:1.4rem">
+        <summary>⏰ Drill down: prospecting time blocks on file</summary>
+        <div id="blocks-wrap" style="margin-top:.6rem"></div>
+      </details>
+{% endblock %}
+{% block scripts %}
+<script>
+function bucket(title,names,color,sub){return '<div class="card"><div style="font-size:.63rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">'+title+'</div>'+
+  '<div style="font-weight:800;font-size:1rem;color:'+color+';margin:.2rem 0">'+(names&&names.length?names.map(esc).join(', '):'nobody this week')+'</div>'+
+  '<div style="font-size:.7rem;color:var(--muted)">'+sub+'</div></div>';}
+function gradeColor(g){return g==='A'?'var(--green)':(g==='B'||g==='C')?'var(--yellow)':'var(--red)';}
+async function load(){
+  try{
+    const d=await (await fetch('/api/manager',{signal:AbortSignal.timeout(90000)})).json();
+    const cs=d.coaching_summary||{};
+    const vt=document.getElementById('v-text'),vm=document.getElementById('v-meta'),vd=document.getElementById('v-dot');
+    vd.className='dot '+((cs.pct_meeting||0)>=50?'dot-green':(cs.pct_meeting||0)>=25?'dot-amber':'dot-rose');
+    vt.textContent=(cs.meeting_kpi||0)+' of '+(cs.total_agents||0)+' agents met the activity bar this week';
+    vm.textContent='Team call-to-conversation: '+(cs.team_call_to_convo||0)+'%. Numbers below are the week, trends are 4 weeks.';
+    document.getElementById('buckets').innerHTML=
+      bucket('Praise first',cs.praise_list,'var(--green)','name the win out loud in the huddle')+
+      bucket('Accountability talk',cs.need_accountability,'var(--red)','activity is the issue, not skill')+
+      bucket('Skill coaching',cs.need_skill,'var(--yellow)','working hard, conversion is the issue');
+    const rows=(d.agent_trends||[]);
+    const sel=document.getElementById('ask-scope');
+    document.getElementById('cards-wrap').innerHTML=rows.map(a=>{
+      const name=a.agent_name||a.agent||'';
+      if(name){const o=document.createElement('option');o.value=name;o.textContent=name;sel.appendChild(o);}
+      const c=a.current||{};
+      return '<div class="card">'+
+        '<div style="display:flex;justify-content:space-between;align-items:baseline">'+
+        '<span class="nm">'+esc(name)+'</span>'+
+        '<span class="pill" style="background:transparent;border:2px solid '+gradeColor(a.grade)+';color:'+gradeColor(a.grade)+'">'+esc(a.grade||'?')+'</span></div>'+
+        '<div class="meta">'+esc(a.coaching_type||'')+' \u00b7 calls '+(c.calls||0)+' ('+esc(a.calls_trend||'flat')+') \u00b7 convos '+(c.convos||0)+' ('+esc(a.convos_trend||'flat')+') \u00b7 appts set '+(c.appts_set||0)+'</div>'+
+        ((a.insights||[]).length?('<div style="font-size:.82rem;color:var(--subtle);margin-top:.5rem">'+esc(a.insights[0])+'</div>'):'')+
+        '<div class="row"><button class="btn btn-ghost btn-sm" onclick="prep(\''+esc(name).replace(/'/g,"\\'")+'\')">🧠 Prep this 1-on-1</button></div>'+
+        '</div>';
+    }).join('');
+    const blocks=d.prospecting_blocks||{};
+    document.getElementById('blocks-wrap').innerHTML='<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Days</th><th>Start</th><th>Minutes</th></tr></thead><tbody>'+
+      Object.values(blocks).map(b=>'<tr><td>'+esc(b.agent_name)+'</td><td>'+esc((b.prospecting_days||[]).join(', ')||'not set')+'</td><td>'+esc(b.start_time||'')+'</td><td>'+(b.duration_minutes||'')+'</td></tr>').join('')+
+      '</tbody></table></div>';
+  }catch(e){
+    document.getElementById('v-text').textContent='Could not load the coaching data.';
+    document.getElementById('v-meta').innerHTML='<a href="#" onclick="load();return false" style="text-decoration:underline">Try again</a>';
+  }
+}
+function prep(name){
+  document.getElementById('ask-scope').value=name;
+  document.getElementById('ask-q').value='What should we cover in our 1-on-1 this week?';
+  document.getElementById('askbox').scrollIntoView({behavior:'smooth'});
+  ask();
+}
+async function ask(){
+  const q=document.getElementById('ask-q').value.trim();if(!q)return;
+  const who=document.getElementById('ask-scope').value;
+  const btn=document.getElementById('ask-btn'),out=document.getElementById('ask-a');
+  btn.disabled=true;btn.textContent='Thinking\u2026';
+  out.style.display='block';
+  out.textContent=who?('Reading '+who+"'s numbers\u2026"):'Reading the team\u2019s numbers\u2026';
+  try{
+    const question=who?('For a 1-on-1 with '+who+' (answer about this one agent): '+q):q;
+    const r=await fetch('/api/ask-claude',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question}),signal:AbortSignal.timeout(90000)});
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    out.textContent=d.answer||'(no response)';
+  }catch(e){out.textContent='Could not get an answer ('+e.message+'). Hit Ask to retry.';}
+  finally{btn.disabled=false;btn.textContent='Ask';}
+}
+function managerEmail(btn){
+  if(!confirm('Send yourself the manager recap email now?'))return;
+  post('/api/send-manager-email',{},btn,'Sending\u2026','Manager recap sent');
+}
+load();
+</script>
+{% endblock %}

@@ -1,0 +1,123 @@
+{% extends "board_base.html" %}
+{% set active='team' %}
+{% block title %}Team — Legacy Home Team{% endblock %}
+{% block page_title %}🧑‍💼 Team{% endblock %}
+{% block page_meta %}Every agent's goal, their pace to it, and the one lever that closes the gap{% endblock %}
+{% block page_actions %}
+  <button class="btn btn-ghost btn-sm" onclick="timeBlockNudge(this)">⏰ Time-block nudge</button>
+  <button class="btn btn-primary btn-sm" onclick="goalEmails(this)">📧 Goal setup emails</button>
+{% endblock %}
+{% block content %}
+      <div class="banner" id="verdict">
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div class="dot dot-amber" id="v-dot"></div>
+          <div><div class="banner-text" id="v-text">Reading the board&hellip;</div>
+          <div class="banner-meta" id="v-meta"></div></div>
+        </div>
+        <div class="banner-meta" id="v-weeks"></div>
+      </div>
+
+      <div class="section-header"><span class="icon">💰</span> The money board
+        <span style="font-weight:400;font-size:.72rem;margin-left:.5rem">goal, pace, and the lever, agent by agent</span></div>
+      <div id="money-wrap"><div class="skeleton" style="height:220px"></div></div>
+
+      <div class="section-header"><span class="icon">🃏</span> Agent cards
+        <span style="font-weight:400;font-size:.72rem;margin-left:.5rem">streaks, activity pace, and one-tap coaching</span></div>
+      <div id="cards-wrap" class="cards"><div class="card"><div class="skeleton" style="height:150px"></div></div><div class="card"><div class="skeleton" style="height:150px"></div></div></div>
+
+      <details style="margin-top:1.4rem" id="dd-insight">
+        <summary>🧠 Drill down: what is working, what is not, the gaps</summary>
+        <div id="insight-wrap" style="margin-top:.6rem"><div class="skeleton" style="height:120px"></div></div>
+      </details>
+{% endblock %}
+{% block scripts %}
+<script>
+function paceColor(p){return p>=85?'var(--green)':p>=60?'var(--yellow)':'var(--red)';}
+
+async function loadMoney(){
+  try{
+    const d=await (await fetch('/api/agents/money',{signal:AbortSignal.timeout(30000)})).json();
+    const rows=(d.agents||[]).filter(a=>!a.paused).sort((a,b)=>(a.pace_pct||0)-(b.pace_pct||0));
+    const behind=rows.filter(a=>(a.pace_pct||0)<70&&!a.is_new);
+    const worst=behind[0];
+    const vd=document.getElementById('v-dot'),vt=document.getElementById('v-text'),vm=document.getElementById('v-meta');
+    if(worst){
+      vd.className='dot '+(behind.length>2?'dot-rose':'dot-amber');
+      vt.textContent=behind.length+' agent'+(behind.length===1?'':'s')+' behind pace with '+d.weeks_left+' weeks left';
+      vm.textContent='Biggest gap: '+worst.agent+', '+money(worst.gap)+' short of goal. Lever: '+(worst.lever||'book more appointments');
+    }else{
+      vd.className='dot dot-green';
+      vt.textContent='Everyone with a goal is on pace or new';
+      vm.textContent='Keep the streaks alive';
+    }
+    document.getElementById('v-weeks').textContent=d.weeks_left+' weeks left in the year';
+    document.getElementById('money-wrap').innerHTML='<div class="table-wrap"><table><thead><tr>'+
+      '<th>Agent</th><th>Goal</th><th>GCI YTD</th><th>On pace for</th><th>Gap</th><th style="min-width:150px">Pace</th><th>This week\u2019s lever</th></tr></thead><tbody>'+
+      rows.map(a=>'<tr><td style="font-weight:700">'+esc(a.agent)+(a.is_new?' <span class="pill pill-muted">new</span>':'')+'</td>'+
+        '<td>'+money(a.gci_goal)+'</td><td>'+money(a.gci_ytd)+'</td><td>'+money(a.on_pace_for)+'</td>'+
+        '<td style="color:'+((a.gap||0)>0?'var(--red)':'var(--green)')+';font-weight:700">'+money(a.gap)+'</td>'+
+        '<td><div style="display:flex;align-items:center;gap:.5rem"><div class="bar"><div style="width:'+Math.min(100,a.pace_pct||0)+'%;background:'+paceColor(a.pace_pct||0)+'"></div></div>'+
+        '<b style="color:'+paceColor(a.pace_pct||0)+'">'+(a.pace_pct||0)+'%</b></div></td>'+
+        '<td style="color:var(--subtle);font-size:.78rem">'+esc(a.lever||'')+'</td></tr>').join('')+
+      '</tbody></table></div>';
+  }catch(e){document.getElementById('money-wrap').innerHTML='<div style="color:var(--red);font-size:.8rem">Money board failed to load. <button class="btn btn-ghost btn-sm" onclick="loadMoney()">Retry</button></div>';}
+}
+
+async function loadCards(){
+  try{
+    const d=await (await fetch('/api/goals/scorecard',{signal:AbortSignal.timeout(120000)})).json();
+    const streaks=d.streaks||{};
+    const rows=d.scorecard||[];
+    document.getElementById('cards-wrap').innerHTML=rows.map(r=>{
+      const st=streaks[r.agent_name]||{};
+      const p=r.pace||{};
+      const chips=['calls','appointments'].map(k=>{
+        const m=p[k];if(!m)return '';
+        const cls=m.status==='green'?'pill-green':m.status==='red'?'pill-rose':'pill-amber';
+        return '<span class="pill '+cls+'">'+k+' '+(m.actual??0)+' / '+(m.target_ytd??0)+' ytd</span>';
+      }).join(' ');
+      return '<div class="card">'+
+        '<div style="display:flex;justify-content:space-between;align-items:baseline">'+
+        '<span class="nm">'+esc(r.agent_name)+'</span>'+
+        '<span class="meta">🔥 '+(st.current_streak||0)+' day streak (best '+(st.longest_streak||0)+')</span></div>'+
+        '<div class="meta">'+(r.start_date?('since '+esc(r.start_date)):'start date not set')+
+        (r.goal&&r.goal.gci_goal?(' \u00b7 goal '+money(r.goal.gci_goal)):' \u00b7 no goal on file')+'</div>'+
+        '<div class="row">'+chips+'</div>'+
+        '<div class="row">'+
+        '<button class="btn btn-ghost btn-sm" onclick="nudge(\''+esc(r.agent_name).replace(/'/g,"\\'")+'\',this)">👋 Nudge</button>'+
+        '<button class="btn btn-ghost btn-sm" onclick="logClosing(\''+esc(r.agent_name).replace(/'/g,"\\'")+'\')">🏠 Log closing</button>'+
+        (r.my_goals_url?('<a class="btn btn-ghost btn-sm" target="_blank" href="'+esc(r.my_goals_url)+'">🎯 Their goals</a>'):'')+
+        '</div></div>';
+    }).join('');
+    const ins=d.insight||{};
+    const list=(t,arr,color)=>arr&&arr.length?('<div style="margin-bottom:.8rem"><b style="color:'+color+'">'+t+'</b><ul style="margin:.3rem 0 0 1.2rem;font-size:.82rem;color:var(--subtle)">'+arr.map(x=>'<li>'+esc(typeof x==='string'?x:JSON.stringify(x))+'</li>').join('')+'</ul></div>'):'';
+    document.getElementById('insight-wrap').innerHTML=
+      list('Working',ins.working,'var(--green)')+
+      list('Not working',ins.not_working,'var(--red)')+
+      ((ins.gaps||[]).length?('<div class="table-wrap" style="margin-top:.4rem"><table><thead><tr><th>Agent</th><th>Goal</th><th>YTD</th><th>Gap</th><th>Status</th></tr></thead><tbody>'+
+        ins.gaps.map(g=>'<tr><td>'+esc(g.agent)+'</td><td>'+money(g.goal_gci)+'</td><td>'+money(g.gci_ytd)+'</td><td>'+money(g.gap)+'</td><td>'+esc(g.status||'')+'</td></tr>').join('')+'</tbody></table></div>'):'')+
+      ((ins.questions||[]).map(q=>'<div style="margin-top:.7rem"><b>'+esc(q.q)+'</b><div style="font-size:.82rem;color:var(--subtle)">'+esc(q.a)+'</div></div>').join(''));
+  }catch(e){document.getElementById('cards-wrap').innerHTML='<div style="color:var(--red);font-size:.8rem">Cards failed to load. <button class="btn btn-ghost btn-sm" onclick="loadCards()">Retry</button></div>';}
+}
+
+function nudge(agent,btn){
+  if(!confirm('Send '+agent+' their nudge email now?'))return;
+  post('/api/goals/send-nudge',{agent_name:agent},btn,'Sending\u2026','Nudge sent to '+agent);
+}
+function timeBlockNudge(btn){
+  if(!confirm('Send the time-block nudge to everyone missing a prospecting block?'))return;
+  post('/api/goals/send-time-block-nudge',{dry_run:false},btn,'Sending\u2026','Time-block nudges sent');
+}
+function goalEmails(btn){
+  if(!confirm('Send goal setup emails to agents without a goal on file?'))return;
+  post('/api/goals/send-emails',{},btn,'Sending\u2026','Goal setup emails sent');
+}
+function logClosing(agent){
+  const name=prompt('Deal name or address for '+agent+':');if(!name)return;
+  const price=prompt('Sale price (numbers only):');if(!price)return;
+  const date=prompt('Close date (YYYY-MM-DD), blank for today:')||undefined;
+  post('/api/goals/log-closing',{agent_name:agent,deal_name:name,sale_price:parseFloat(price),close_date:date},null,'','Closing logged for '+agent).then(()=>{loadMoney();loadCards();});
+}
+loadMoney();loadCards();
+</script>
+{% endblock %}

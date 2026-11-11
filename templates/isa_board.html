@@ -1,0 +1,76 @@
+{% extends "board_base.html" %}
+{% set active='isa' %}
+{% block title %}ISA — Fhalen — Legacy Home Team{% endblock %}
+{% block page_title %}📞 ISA — Fhalen{% endblock %}
+{% block page_meta %}Her week in one picture: dials to conversations to appointments, and where it leaks{% endblock %}
+{% block page_actions %}
+  <a class="btn btn-ghost btn-sm" href="/callaction">💬 Her reply audit</a>
+{% endblock %}
+{% block content %}
+      <div class="banner">
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div class="dot dot-amber" id="v-dot"></div>
+          <div><div class="banner-text" id="v-text">Reading the week&hellip;</div>
+          <div class="banner-meta" id="v-meta"></div></div>
+        </div>
+        <div class="banner-meta" id="v-period"></div>
+      </div>
+
+      <div class="section-header"><span class="icon">⛓️</span> The funnel, this week vs last</div>
+      <div id="funnel-wrap"><div class="skeleton" style="height:110px"></div></div>
+
+      <div class="section-header"><span class="icon">🧠</span> What the numbers say</div>
+      <div id="insights-wrap" class="cards"><div class="card"><div class="skeleton" style="height:90px"></div></div></div>
+
+      <div class="section-header"><span class="icon">🤝</span> Handoffs and her own pipeline</div>
+      <div id="hand-wrap" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))"></div>
+
+      <details style="margin-top:1.4rem">
+        <summary>🔎 Drill down: call durations, best hours, stale pipeline</summary>
+        <div id="detail-wrap" style="margin-top:.6rem"></div>
+      </details>
+{% endblock %}
+{% block scripts %}
+<script>
+function tile(v,l,sub,color){return '<div class="card" style="padding:.8rem 1rem"><div style="font-size:.63rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">'+l+'</div><div style="font-size:1.6rem;font-weight:800;'+(color?('color:'+color):'')+'">'+v+'</div><div style="font-size:.68rem;color:var(--muted)">'+(sub||'')+'</div></div>';}
+function delta(cur,prev){if(prev==null)return '';const d=cur-prev;if(!d)return 'flat vs last week';return (d>0?'+':'')+d+' vs last week';}
+async function load(){
+  try{
+    const d=await (await fetch('/api/isa',{signal:AbortSignal.timeout(60000)})).json();
+    const f=d.funnel||{}, cur=d.current||{}, prev=d.previous||{}, ins=(d.insights||[]);
+    const vt=document.getElementById('v-text'),vm=document.getElementById('v-meta'),vd=document.getElementById('v-dot');
+    const warn=ins.find(i=>i.type==='warning');
+    if(warn){vd.className='dot dot-amber';vt.textContent=warn.title;vm.textContent=(warn.detail||'').slice(0,160);}
+    else{vd.className='dot dot-green';vt.textContent='No flags this week';vm.textContent='Funnel below, receipts in the drill-down';}
+    document.getElementById('v-period').textContent=(d.period&&d.period.current)||'';
+    document.getElementById('funnel-wrap').innerHTML='<div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">'+
+      tile(f.dialed||0,'Dialed',delta(cur.calls,prev&&prev.calls))+
+      tile(f.connected||0,'Connected',(cur.connect_rate||0)+'% connect')+
+      tile(f.conversations||0,'Conversations',(cur.calls_per_convo||0)+' dials per convo')+
+      tile(f.appts_set||0,'Appts set','',(f.appts_set||0)>0?'var(--green)':null)+
+      tile(f.appts_met||0,'Appts met',(cur.show_rate||0)+'% show rate',(f.appts_met||0)===0?'var(--red)':'var(--green)')+
+      '</div>';
+    document.getElementById('insights-wrap').innerHTML=ins.map(i=>
+      '<div class="card"><b>'+esc(i.icon||'')+' '+esc(i.title)+'</b><div style="font-size:.82rem;color:var(--subtle);margin-top:.3rem">'+esc(i.detail)+'</div></div>').join('')||'<div style="color:var(--muted);font-size:.8rem">No insights generated this week.</div>';
+    const h=d.handoffs||{}, own=d.own_pipeline||{}, ap=d.appt_summary_30d||{};
+    document.getElementById('hand-wrap').innerHTML=
+      tile(h.active||0,'Active handoffs',(h.stale||0)+' stale')+
+      tile((h.success_rate||0)+'%','Handoff success','agent engaged after')+
+      tile(own.total||0,'Her own pipeline',(own.stuck_in_lead||0)+' stuck in Lead')+
+      tile((ap.pending||0),'Appts pending outcome','30 days',(ap.pending||0)>5?'var(--red)':null);
+    const db=d.duration_buckets||{};
+    document.getElementById('detail-wrap').innerHTML=
+      '<div class="card" style="margin-bottom:.7rem"><b>Call durations:</b> '+
+      ['no_answer','under_30s','30s_to_2m','2m_to_5m','over_5m'].map(k=>esc(k.replace(/_/g,' '))+': '+(db[k]||0)).join(' · ')+'</div>'+
+      '<div class="card" style="margin-bottom:.7rem"><b>Best hours to reach people:</b> '+
+      (d.best_hours||[]).map(b=>esc(b.hour)+' ('+b.count+')').join(' · ')+'</div>'+
+      (((own.leads)||[]).length?('<div class="table-wrap"><table><thead><tr><th>Stale lead</th><th>Stage</th><th>Source</th><th>Days stale</th></tr></thead><tbody>'+
+      own.leads.slice(0,20).map(l=>'<tr><td><a target="_blank" style="text-decoration:underline" href="'+fub(l.person_id)+'">'+esc(l.name)+'</a></td><td>'+esc(l.stage)+'</td><td>'+esc(l.source)+'</td><td>'+(l.days_stale||0)+'</td></tr>').join('')+'</tbody></table></div>'):'');
+  }catch(e){
+    document.getElementById('v-text').textContent='Could not load the ISA week.';
+    document.getElementById('v-meta').innerHTML='<a href="#" onclick="load();return false" style="text-decoration:underline">Try again</a>';
+  }
+}
+load();
+</script>
+{% endblock %}

@@ -1,0 +1,107 @@
+{% extends "board_base.html" %}
+{% set active='appointments' %}
+{% block title %}Appointments — Legacy Home Team{% endblock %}
+{% block page_title %}📅 Appointments{% endblock %}
+{% block page_meta %}Set is a promise, held is the money. This page finds the ones slipping between.{% endblock %}
+{% block page_actions %}
+  <button class="btn btn-ghost btn-sm" onclick="syncTags(this)">🔄 Sync tags</button>
+  <button class="btn btn-primary btn-sm" onclick="outcomeEmail(this)">📧 Outcome chaser email</button>
+{% endblock %}
+{% block content %}
+      <div class="banner">
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div class="dot dot-amber" id="v-dot"></div>
+          <div><div class="banner-text" id="v-text">Reading the calendar&hellip;</div>
+          <div class="banner-meta" id="v-meta"></div></div>
+        </div>
+        <div class="banner-meta" id="v-window"></div>
+      </div>
+
+      <div id="tiles" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:.4rem"></div>
+
+      <div class="section-header"><span class="icon">👻</span> Held, then ghosted
+        <span style="font-weight:400;font-size:.72rem;margin-left:.5rem">the appointment happened and then nothing did</span></div>
+      <div id="ghosted-wrap"><div class="skeleton" style="height:90px"></div></div>
+
+      <div class="section-header"><span class="icon">❓</span> No outcome logged
+        <span style="font-weight:400;font-size:.72rem;margin-left:.5rem">met, no-showed, rescheduled? Nobody wrote it down</span></div>
+      <div id="nooutcome-wrap"><div class="skeleton" style="height:90px"></div></div>
+
+      <div class="section-header"><span class="icon">⏳</span> At risk this week
+        <span style="font-weight:400;font-size:.72rem;margin-left:.5rem">upcoming appointments set long ago, confirm or lose them</span></div>
+      <div id="atrisk-wrap"><div class="skeleton" style="height:90px"></div></div>
+
+      <div class="section-header"><span class="icon">🧑‍💼</span> By agent</div>
+      <div id="byagent-wrap"><div class="skeleton" style="height:140px"></div></div>
+
+      <details style="margin-top:1.4rem">
+        <summary>📊 Drill down: by source, by lag, by weekday</summary>
+        <div id="cuts-wrap" style="margin-top:.6rem"><div class="skeleton" style="height:140px"></div></div>
+      </details>
+{% endblock %}
+{% block scripts %}
+<script>
+function rateColor(p){return p>=55?'var(--green)':p>=40?'var(--yellow)':'var(--red)';}
+function tile(v,l,sub,color){return '<div class="card" style="padding:.8rem 1rem"><div style="font-size:.63rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">'+l+'</div><div style="font-size:1.7rem;font-weight:800;'+(color?('color:'+color):'')+'">'+v+'</div><div style="font-size:.68rem;color:var(--muted)">'+(sub||'')+'</div></div>';}
+function namesTable(rows,cols){
+  if(!rows||!rows.length) return '<div style="color:var(--green);font-size:.82rem;background:var(--surface);border:1px solid var(--border-sub);border-radius:12px;padding:.7rem 1rem">Clean. Nothing in this bucket.</div>';
+  return '<div class="table-wrap"><table><thead><tr>'+cols.map(c=>'<th>'+c[0]+'</th>').join('')+'</tr></thead><tbody>'+
+    rows.map(r=>'<tr>'+cols.map(c=>'<td>'+(c[1](r)||'')+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
+}
+async function load(){
+  try{
+    const d=await (await fetch('/api/appointments/insight',{signal:AbortSignal.timeout(60000)})).json();
+    const t=d.totals||{}, leak=d.leak_dollars||{};
+    const vt=document.getElementById('v-text'),vm=document.getElementById('v-meta'),vd=document.getElementById('v-dot');
+    const bad=(t.no_outcome||0)+(leak.ghosted_count||0);
+    if(bad>0){
+      vd.className='dot '+(bad>10?'dot-rose':'dot-amber');
+      vt.textContent=money(leak.estimate)+' is walking out the door';
+      vm.textContent=(leak.ghosted_count||0)+' held appointments went silent after, and '+(t.no_outcome||0)+' have no outcome logged. '+(leak.note||'');
+    }else{
+      vd.className='dot dot-green';
+      vt.textContent='Every appointment has an outcome on file';
+      vm.textContent='That is how the money stays measurable';
+    }
+    document.getElementById('v-window').textContent='last '+(d.window_days||60)+' days';
+    document.getElementById('tiles').innerHTML=
+      tile(t.set||0,'Set','')+
+      tile(t.held||0,'Held','')+
+      tile((t.held_rate||0)+'%','Held rate','',rateColor(t.held_rate||0))+
+      tile(t.no_outcome||0,'No outcome','log it or lose it',(t.no_outcome||0)>8?'var(--red)':null);
+    document.getElementById('ghosted-wrap').innerHTML=namesTable(d.ghosted_after_held,[
+      ['Lead',r=>'<a target="_blank" style="text-decoration:underline" href="'+fub(r.person_id)+'">'+esc(r.lead)+'</a>'],
+      ['Agent',r=>esc(r.agent)],
+      ['Held',r=>(r.held_days_ago)+' days ago'],
+      ['Move',r=>'<span style="color:var(--subtle)">call them while the meeting is still warm</span>']]);
+    document.getElementById('nooutcome-wrap').innerHTML=namesTable(d.no_outcome_list,[
+      ['Lead',r=>esc(r.lead)],['Agent',r=>esc(r.agent)],['When',r=>esc((r.when||'').slice(0,10))]]);
+    document.getElementById('atrisk-wrap').innerHTML=namesTable(d.at_risk_upcoming,[
+      ['Lead',r=>'<a target="_blank" style="text-decoration:underline" href="'+fub(r.person_id)+'">'+esc(r.lead)+'</a>'],
+      ['Agent',r=>esc(r.agent)],
+      ['When',r=>esc((r.when||'').slice(0,16).replace('T',' '))],
+      ['Set',r=>(r.set_days_ago)+' days ago']]);
+    document.getElementById('byagent-wrap').innerHTML=namesTable(d.by_agent,[
+      ['Agent',r=>'<b>'+esc(r.agent)+'</b>'],['Set',r=>r.set],['Held',r=>r.held],
+      ['Held %',r=>'<b style="color:'+rateColor(r.held_rate||0)+'">'+(r.held_rate||0)+'%</b>'],
+      ['No show',r=>r.no_show],['No outcome',r=>r.no_outcome]]);
+    const cut=(title,rows,key)=>'<div class="section-header" style="margin-top:.8rem"><span class="icon">▸</span> '+title+'</div>'+
+      namesTable(rows,[[key[0],r=>esc(r[key[1]])],['Set',r=>r.set],['Held',r=>r.held],
+        ['Held %',r=>'<b style="color:'+rateColor(r.held_rate||0)+'">'+(r.held_rate||0)+'%</b>']]);
+    document.getElementById('cuts-wrap').innerHTML=
+      cut('By source',d.by_source,['Source','source'])+
+      cut('By set-to-appointment lag',d.by_lag,['Lag','bucket'])+
+      cut('By weekday',d.by_weekday,['Day','day']);
+  }catch(e){
+    document.getElementById('v-text').textContent='Could not load appointment insight.';
+    document.getElementById('v-meta').innerHTML='<a href="#" onclick="load();return false" style="text-decoration:underline">Try again</a>';
+  }
+}
+function syncTags(btn){post('/api/appointments/sync-tags',{},btn,'Syncing…','Appointment tags synced').then(load);}
+function outcomeEmail(btn){
+  if(!confirm('Send the outcome chaser email (asks agents to log their missing outcomes)?'))return;
+  post('/api/send-appointment-email',{},btn,'Sending…','Outcome chaser sent');
+}
+load();
+</script>
+{% endblock %}

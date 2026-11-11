@@ -3999,6 +3999,37 @@ def scheduled_sync_bounces():
 _ls_dashboard_cache = {"data": None, "time": None}
 _run_jobs = {}  # job_id -> {status, results, error, started}
 
+@app.route("/team")
+def team_board_page():
+    """Goals, pace, streaks, and one-tap coaching. The classic Agents tab,
+    lifted: verdict first, receipts behind every number."""
+    return render_template("team_board.html")
+
+
+@app.route("/appointments")
+def appointments_board_page():
+    """Set vs held with names. The classic Appointments tab, lifted."""
+    return render_template("appointments_board.html")
+
+
+@app.route("/outreach")
+def outreach_board_page():
+    """Pond mailer results and what happened after the yes."""
+    return render_template("outreach_board.html")
+
+
+@app.route("/meeting")
+def meeting_board_page():
+    """1-on-1 prep: praise, accountability, skill, and per-agent openers."""
+    return render_template("meeting_board.html")
+
+
+@app.route("/isa")
+def isa_board_page():
+    """Fhalen's scorecard: funnel, flags, handoffs, her own pipeline."""
+    return render_template("isa_board.html")
+
+
 @app.route("/leadstream")
 def leadstream_dashboard():
     return render_template("leadstream.html")

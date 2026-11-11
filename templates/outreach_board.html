@@ -1,0 +1,125 @@
+{% extends "board_base.html" %}
+{% set active='outreach' %}
+{% block title %}AI Outreach — Legacy Home Team{% endblock %}
+{% block page_title %}✉️ AI Outreach{% endblock %}
+{% block page_meta %}The pond mailer wakes dormant leads. This page shows what the machine caught and whether a human followed.{% endblock %}
+{% block page_actions %}
+  <button class="btn btn-ghost btn-sm" onclick="syncBounces(this)">🧹 Sync bounces</button>
+  <button class="btn btn-primary btn-sm" onclick="runMailer(this)">▶️ Run a batch</button>
+{% endblock %}
+{% block content %}
+      <div class="banner">
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div class="dot dot-amber" id="v-dot"></div>
+          <div><div class="banner-text" id="v-text">Reading the pond&hellip;</div>
+          <div class="banner-meta" id="v-meta"></div></div>
+        </div>
+      </div>
+
+      <div id="tiles" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));margin-bottom:.4rem"></div>
+
+      <div class="section-header"><span class="icon">✅</span> What is working / what is not</div>
+      <div id="worknot-wrap"><div class="skeleton" style="height:110px"></div></div>
+
+      <div class="section-header"><span class="icon">🏃</span> After the yes: who calls, and how fast</div>
+      <div id="speed-wrap"><div class="skeleton" style="height:110px"></div></div>
+
+      <div class="section-header"><span class="icon">💬</span> Recent replies</div>
+      <div id="replies-wrap"><div class="skeleton" style="height:110px"></div></div>
+
+      <details style="margin-top:1.4rem">
+        <summary>🧪 Drill down: message variants scoreboard</summary>
+        <div id="variants-wrap" style="margin-top:.6rem"><div class="skeleton" style="height:120px"></div></div>
+      </details>
+      <details style="margin-top:.6rem">
+        <summary>❓ Drill down: the questions the data answers</summary>
+        <div id="questions-wrap" style="margin-top:.6rem"></div>
+      </details>
+      <details style="margin-top:.6rem">
+        <summary>🔌 Drill down: webhook pulse</summary>
+        <div id="webhook-wrap" style="margin-top:.6rem"></div>
+      </details>
+{% endblock %}
+{% block scripts %}
+<script>
+function tile(v,l,sub,color){return '<div class="card" style="padding:.8rem 1rem"><div style="font-size:.63rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">'+l+'</div><div style="font-size:1.7rem;font-weight:800;'+(color?('color:'+color):'')+'">'+v+'</div><div style="font-size:.68rem;color:var(--muted)">'+(sub||'')+'</div></div>';}
+function list(t,arr,color){return arr&&arr.length?('<div class="card" style="margin-bottom:.7rem"><b style="color:'+color+'">'+t+'</b><ul style="margin:.3rem 0 0 1.2rem;font-size:.84rem;color:var(--subtle)">'+arr.map(x=>'<li style="margin:.2rem 0">'+esc(x)+'</li>').join('')+'</ul></div>'):'';}
+async function load(){
+  try{
+    const d=await (await fetch('/api/pond-mailer/dashboard',{signal:AbortSignal.timeout(60000)})).json();
+    const f=d.funnel||{}, ins=d.insight||{}, out=(ins.outcomes||{});
+    const uncalled=(out.uncalled||[]).length;
+    const vd=document.getElementById('v-dot'),vt=document.getElementById('v-text'),vm=document.getElementById('v-meta');
+    if(uncalled>0){
+      vd.className='dot dot-rose';
+      vt.textContent=uncalled+' lead'+(uncalled===1?'':'s')+' said yes to the AI and never got a call';
+      vm.textContent='Named below with the agent on the hook. Every one is money already paid for.';
+    }else if((f.positive||0)>0){
+      vd.className='dot dot-green';
+      vt.textContent=(f.positive||0)+' positive replies, every one followed by a human';
+      vm.textContent='Routed '+(f.routed||0)+' · appointments from the pond: '+(out.appts_60d||0)+' (60d)';
+    }else{
+      vd.className='dot dot-amber';
+      vt.textContent='The pond is quiet right now';
+      vm.textContent='Sent '+(f.sent||0)+' · replies '+(f.replied||0)+' in the window';
+    }
+    document.getElementById('tiles').innerHTML=
+      tile((f.sent||0).toLocaleString(),'Sent','sms + email')+
+      tile(f.replied||0,'Replied','')+
+      tile(f.positive||0,'Said yes','', (f.positive||0)>0?'var(--green)':null)+
+      tile(f.routed||0,'Routed to an agent','')+
+      tile((out.called_pct||0)+'%','Got a call after','median '+(out.median_hours_to_call??'?')+'h', (out.called_pct||0)>=80?'var(--green)':'var(--yellow)')+
+      tile(out.appts_60d||0,'Appointments (60d)','from the pond');
+    document.getElementById('worknot-wrap').innerHTML=
+      list('Working',ins.working,'var(--green)')+list('Not working',ins.not_working,'var(--red)');
+    const ag=(ins.agents||[]);
+    document.getElementById('speed-wrap').innerHTML=ag.length?
+      ('<div class="table-wrap"><table><thead><tr><th>Agent</th><th>Routed</th><th>Called</th><th>Called %</th><th>Median speed</th></tr></thead><tbody>'+
+      ag.map(a=>'<tr><td style="font-weight:700">'+esc(a.agent)+'</td><td>'+a.routed+'</td><td>'+a.called+'</td>'+
+        '<td><b style="color:'+((a.called_pct||0)>=80?'var(--green)':'var(--red)')+'">'+(a.called_pct||0)+'%</b></td>'+
+        '<td>'+(a.median_hours??'?')+'h</td></tr>').join('')+'</tbody></table></div>'+
+      (uncalled?('<div class="card" style="margin-top:.7rem"><b style="color:var(--red)">Never called:</b> '+
+        (out.uncalled||[]).map(u=>esc(typeof u==='string'?u:(u.name||u.person_name||JSON.stringify(u)))).join(' · ')+'</div>'):'')):
+      '<div style="color:var(--muted);font-size:.8rem">No routed leads in the window yet.</div>';
+    const reps=(d.recent_replies||[]).slice(0,12);
+    document.getElementById('replies-wrap').innerHTML=reps.length?
+      ('<div class="table-wrap"><table><thead><tr><th>Lead</th><th>Channel</th><th>When</th></tr></thead><tbody>'+
+      reps.map(r=>'<tr><td><a target="_blank" style="text-decoration:underline" href="'+fub(r.person_id)+'">'+esc(r.person_name)+'</a></td>'+
+        '<td>'+esc(r.channel)+'</td><td>'+esc((r.received_at||'').slice(0,16).replace('T',' '))+'</td></tr>').join('')+'</tbody></table></div>'):
+      '<div style="color:var(--muted);font-size:.8rem">No replies in the window.</div>';
+    document.getElementById('questions-wrap').innerHTML=(ins.questions||[]).map(q=>
+      '<div class="card" style="margin-bottom:.6rem"><b>'+esc(q.q)+'</b><div style="font-size:.84rem;color:var(--subtle);margin-top:.2rem">'+esc(q.a)+'</div></div>').join('');
+  }catch(e){
+    document.getElementById('v-text').textContent='Could not load the pond dashboard.';
+    document.getElementById('v-meta').innerHTML='<a href="#" onclick="load();return false" style="text-decoration:underline">Try again</a>';
+  }
+}
+async function loadVariants(){
+  try{
+    const d=await (await fetch('/api/admin/variants/scoreboard',{signal:AbortSignal.timeout(30000)})).json();
+    const rows=d.variants||[];
+    const flags=d.flags||[];
+    document.getElementById('variants-wrap').innerHTML=
+      (flags.length?('<div class="card" style="margin-bottom:.7rem"><b>Verdicts:</b> '+flags.map(f=>esc(f.variant)+' ('+esc(f.verdict)+')').join(' · ')+'</div>'):'')+
+      (rows.length?('<div class="table-wrap"><table><thead><tr><th>System</th><th>Variant</th><th>Sends</th><th>Outcomes</th><th>Rate</th></tr></thead><tbody>'+
+      rows.map(v=>'<tr><td>'+esc(v.system)+'</td><td>'+esc(v.variant)+'</td><td>'+v.sends+'</td><td>'+v.outcomes+'</td><td>'+(v.outcome_rate||0)+'%</td></tr>').join('')+'</tbody></table></div>'):
+      '<div style="color:var(--muted);font-size:.8rem">No variant data yet.</div>');
+  }catch(e){}
+}
+async function loadWebhooks(){
+  try{
+    const d=await (await fetch('/api/admin/webhook-stats',{signal:AbortSignal.timeout(20000)})).json();
+    const s=d.stats||{};
+    document.getElementById('webhook-wrap').innerHTML='<div class="card"><b>Last event:</b> '+esc(s.last_event||'none')+
+      ' at '+esc((s.last_at||'').slice(0,16).replace('T',' '))+'<div style="font-size:.8rem;color:var(--subtle);margin-top:.3rem">'+
+      Object.entries(s.counts||{}).map(([k,v])=>esc(k)+': '+v).join(' · ')+'</div></div>';
+  }catch(e){}
+}
+function runMailer(btn){
+  if(!confirm('Run a pond mailer batch now (live sends, limit 10)?'))return;
+  post('/api/pond-mailer/run',{dry_run:false,limit:10},btn,'Running…','Batch started. Results land on this page.').then(()=>setTimeout(load,4000));
+}
+function syncBounces(btn){post('/api/sync-bounces',{},btn,'Syncing…','Bounces synced');}
+load();loadVariants();loadWebhooks();
+</script>
+{% endblock %}
