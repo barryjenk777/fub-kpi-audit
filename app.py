@@ -23301,7 +23301,7 @@ def api_coach_brief():
         subject="Coaching film: the %d agent%s you met, graded"
                 % (len(data["agents"]),
                    "" if len(data["agents"]) == 1 else "s"),
-        html=html)
+        html=html, cc=body.get("cc"))
     _db.log_coach_action("coach_brief_sent", None, to)
     return jsonify({"ok": True, "sent": bool(r), "to": to,
                     "agents": [a["agent"] for a in data["agents"]]})
@@ -23326,7 +23326,9 @@ def scheduled_coach_brief():
             subject="Coaching film: the %d agent%s you met, graded"
                     % (len(data["agents"]),
                        "" if len(data["agents"]) == 1 else "s"),
-            html=html)
+            html=html,
+            cc=getattr(config, "COACH_BRIEF_CC",
+                       "barry@yourfriendlyagent.net"))
         print("[SCHEDULER] coach brief sent to %s: %s"
               % (to, [a["agent"] for a in data["agents"]]))
     except Exception as e:
