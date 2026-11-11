@@ -15042,7 +15042,9 @@ def api_callingly_solo_teams():
     except Exception:
         pass
     body = request.get_json(silent=True) or {}
-    if request.method == "POST" and isinstance(body.get("map"), dict):
+    _wire_map = (request.method == "POST"
+                 and isinstance(body.get("map"), dict))
+    if _wire_map:
         mapping.update({str(k): int(v) for k, v in body["map"].items()})
         _db.set_app_state("callingly_solo_teams", json.dumps(mapping))
     tid_raw, _ = _db.get_app_state("callingly_team_id")
@@ -15066,7 +15068,8 @@ def api_callingly_solo_teams():
                 continue
             try:
                 t = _cc.create_team("Solo - %s" % name) or {}
-                new_id = t.get("id")
+                # Callingly answers {"success": true, "team_id": N}.
+                new_id = t.get("team_id") or t.get("id")
                 if not new_id:
                     raise RuntimeError("no team id in response: %r"
                                        % (t,))
@@ -15078,6 +15081,19 @@ def api_callingly_solo_teams():
                 report.append({"agent": name, "created": False,
                                "error": str(e)[:200]})
         _db.set_app_state("callingly_solo_teams", json.dumps(mapping))
+    if _wire_map:
+        # Recording a map by hand also wires each team's one member, so
+        # a map POST fully repairs a half-created state.
+        for m in members:
+            name = (m.get("name") or "").strip()
+            if name in (body.get("map") or {}):
+                try:
+                    _cc.set_team_agents(int(mapping[name]), [m.get("id")])
+                    report.append({"agent": name, "wired": True,
+                                   "team_id": mapping[name]})
+                except Exception as e:
+                    report.append({"agent": name, "wired": False,
+                                   "error": str(e)[:200]})
     missing = [m.get("name") for m in members
                if (m.get("name") or "").strip() not in mapping]
     return jsonify({"ok": True, "solo_teams": mapping, "missing": missing,
