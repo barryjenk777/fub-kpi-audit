@@ -3999,6 +3999,69 @@ def scheduled_sync_bounces():
 _ls_dashboard_cache = {"data": None, "time": None}
 _run_jobs = {}  # job_id -> {status, results, error, started}
 
+@app.route("/agent/<path:agent_name>")
+def agent_sheet_page(agent_name):
+    """One person, whole story: goal, pace, week, appointments, coaching
+    read, and the action trail. Reached by clicking a name anywhere."""
+    return render_template("agent_sheet.html", agent_name=agent_name)
+
+
+@app.route("/api/agent-sheet/<path:agent_name>")
+def api_agent_sheet(agent_name):
+    """Joins the cached sources the boards already read; nothing slow."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    name = agent_name.strip()
+    out = {"ok": True, "agent": name}
+    with app.test_client() as tc:
+        try:
+            d = tc.get("/api/agents/money").get_json() or {}
+            out["money"] = next((a for a in d.get("agents", [])
+                                 if a.get("agent") == name), None)
+            out["weeks_left"] = d.get("weeks_left")
+        except Exception:
+            out["money"] = None
+        try:
+            d = tc.get("/api/goals/scorecard").get_json() or {}
+            out["score"] = next((r for r in d.get("scorecard", [])
+                                 if r.get("agent_name") == name), None)
+            out["streak"] = (d.get("streaks") or {}).get(name)
+        except Exception:
+            out["score"] = None
+        try:
+            d = tc.get("/api/manager").get_json() or {}
+            out["trend"] = next((r for r in d.get("agent_trends", [])
+                                 if (r.get("agent_name") or r.get("agent")) == name),
+                                None)
+            out["block"] = (d.get("prospecting_blocks") or {}).get(name)
+        except Exception:
+            out["trend"] = None
+        try:
+            d = tc.get("/api/salesfloor").get_json() or {}
+            out["floor"] = next((c for c in d.get("cards", [])
+                                 if c.get("agent") == name), None)
+        except Exception:
+            out["floor"] = None
+    try:
+        import appt_insight as _ai
+        c = _ai.get_cached() or {}
+        out["appts"] = {
+            "row": next((a for a in c.get("by_agent", [])
+                         if a.get("agent") == name), None),
+            "ghosted": [g for g in c.get("ghosted_after_held", [])
+                        if g.get("agent") == name],
+            "no_outcome": [g for g in c.get("no_outcome_list", [])
+                           if g.get("agent") == name],
+            "at_risk": [g for g in c.get("at_risk_upcoming", [])
+                        if g.get("agent") == name],
+        }
+    except Exception:
+        out["appts"] = None
+    out["actions"] = _db.recent_coach_actions(days=60, limit=25,
+                                              agent_name=name)
+    return jsonify(out)
+
+
 @app.route("/team")
 def team_board_page():
     """Goals, pace, streaks, and one-tap coaching. The classic Agents tab,
@@ -12224,7 +12287,12 @@ def api_agents_money():
             rows.append({
                 "agent": name,
                 "paused": name in paused,
-                "is_new": bool(pace.get("is_new_agent")),
+                # "new" exempts an agent from the behind-pace verdict, so it
+                # must mean NEW, not merely started-this-year (Mitch, hired
+                # in March, read as new all year and the verdict undercounted).
+                "is_new": bool(pace.get("is_new_agent"))
+                          and (pace.get("weeks_on_team") or 99) <= 8,
+                "weeks_on_team": pace.get("weeks_on_team"),
                 "gci_goal": round(gci_goal),
                 "gci_ytd": round(ytd),
                 "closings_ytd": closings,
@@ -22828,6 +22896,180 @@ def _alert_on_job_failure(job_name: str, error: str):
         pass  # Don't let alerting failures mask the original error
 
 
+# ── Coach action memory: one hook logs every coaching POST that succeeds,
+#    so buttons stop being slot machines ("did I already nudge her?") ──────
+_COACH_ACTION_ROUTES = {
+    "/api/goals/send-nudge": "nudge",
+    "/api/goals/send-time-block-nudge": "time_block_nudge",
+    "/api/goals/log-closing": "log_closing",
+    "/api/goals/send-emails": "goal_setup_emails",
+    "/api/goals/set-start-date": "set_start_date",
+    "/api/send-appointment-email": "outcome_chaser",
+    "/api/send-manager-email": "manager_recap",
+    "/api/pond-mailer/run": "pond_batch",
+    "/api/isa/tag-followup": "isa_followup_tag",
+}
+
+
+@app.after_request
+def _coach_action_logger(resp):
+    try:
+        if (request.method == "POST"
+                and request.path in _COACH_ACTION_ROUTES
+                and resp.status_code < 400):
+            body = request.get_json(silent=True) or {}
+            if not body.get("dry_run"):
+                detail = body.get("deal_name") or body.get("start_date")
+                if body.get("sale_price"):
+                    detail = "%s ($%s)" % (detail, body.get("sale_price"))
+                _db.log_coach_action(_COACH_ACTION_ROUTES[request.path],
+                                     body.get("agent_name"), detail)
+    except Exception:
+        pass
+    return resp
+
+
+@app.route("/api/coach/actions")
+def api_coach_actions():
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = min(int(request.args.get("days", 30) or 30), 120)
+    rows = _db.recent_coach_actions(days=days,
+                                    agent_name=request.args.get("agent"))
+    last = {}
+    for r in rows:
+        key = r["action"] + ("|" + r["agent_name"] if r["agent_name"] else "")
+        if key not in last:
+            last[key] = r["at"]
+    return jsonify({"ok": True, "actions": rows, "last": last})
+
+
+@app.route("/api/deltas")
+def api_deltas():
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    metrics = [m for m in (request.args.get("metrics") or "").split(",") if m][:12]
+    return jsonify({"ok": True, "deltas": _db.get_metric_deltas(metrics)})
+
+
+def scheduled_metric_snapshots():
+    """Twice a day: freeze the numbers every verdict compares against.
+    Reads the same cached sources the pages read; cheap by design."""
+    if not _db.try_acquire_job_lock("metric_snapshots"):
+        return
+    snaps = {}
+    try:
+        with app.test_client() as tc:
+            try:
+                d = tc.get("/api/agents/money").get_json() or {}
+                rows = [a for a in d.get("agents", []) if not a.get("paused")]
+                behind = [a for a in rows
+                          if (a.get("pace_pct") or 0) < 70 and not a.get("is_new")]
+                snaps["team_behind_pace"] = len(behind)
+                snaps["team_total_gap"] = sum(max(a.get("gap") or 0, 0) for a in rows)
+            except Exception:
+                pass
+            try:
+                import appt_insight as _ai
+                c = _ai.get_cached() or {}
+                t = c.get("totals") or {}
+                snaps["appts_no_outcome"] = t.get("no_outcome")
+                snaps["appts_held_rate"] = t.get("held_rate")
+                snaps["appts_ghosted"] = len(c.get("ghosted_after_held") or [])
+            except Exception:
+                pass
+            try:
+                d = tc.get("/api/pond-mailer/dashboard").get_json() or {}
+                out = (d.get("insight") or {}).get("outcomes") or {}
+                snaps["outreach_uncalled"] = len(out.get("uncalled") or [])
+                snaps["outreach_positive"] = (d.get("funnel") or {}).get("positive")
+            except Exception:
+                pass
+            try:
+                d = tc.get("/api/leadstream/insight").get_json() or {}
+                sb = d.get("scoreboard") or []
+                snaps["leadstream_zero_touch"] = sum(
+                    (r.get("tagged") or 0) - (r.get("actioned") or 0) for r in sb)
+            except Exception:
+                pass
+            try:
+                d = tc.get("/api/isa").get_json() or {}
+                snaps["isa_convos"] = (d.get("current") or {}).get("convos")
+            except Exception:
+                pass
+        for k, v in snaps.items():
+            _db.snapshot_metric(k, v)
+        print("[SCHEDULER] metric snapshots: %s" % snaps)
+    except Exception as e:
+        print(f"[SCHEDULER] metric snapshots FAILED: {e}")
+
+
+@app.route("/api/admin/snapshots/run", methods=["POST"])
+def api_admin_snapshots_run():
+    """Owner-key: take the metric snapshots now (primes the deltas layer)."""
+    if not _dispatch_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    scheduled_metric_snapshots()
+    return jsonify({"ok": True})
+
+
+def scheduled_operator_pulse():
+    """8:05am ET: the numbers come to Barry instead of waiting to be
+    visited. One Slack DM, one sentence per item, only when something
+    deserves it. Operational counts only, never conversion claims."""
+    if not _db.try_acquire_job_lock("operator_pulse"):
+        return
+    try:
+        import appt_insight as _ai
+        lines = []
+        c = _ai.get_cached() or {}
+        t = c.get("totals") or {}
+        deltas = _db.get_metric_deltas([
+            "appts_no_outcome", "appts_ghosted", "outreach_uncalled",
+            "leadstream_zero_touch", "team_behind_pace"])
+        def dline(key, now_val):
+            d = deltas.get(key) or {}
+            y = d.get("yesterday")
+            if y is None or now_val is None:
+                return ""
+            diff = now_val - y
+            if diff == 0:
+                return " (flat vs yesterday)"
+            return " (%s%d vs yesterday)" % ("+" if diff > 0 else "", diff)
+        no = t.get("no_outcome") or 0
+        if no >= 5:
+            lines.append("%d appointments still have no outcome logged%s. "
+                         "The page: %s/appointments"
+                         % (no, dline("appts_no_outcome", no), config.BASE_URL))
+        gh = len(c.get("ghosted_after_held") or [])
+        if gh:
+            names = ", ".join((g.get("lead") or "?") for g in
+                              (c.get("ghosted_after_held") or [])[:3])
+            lines.append("%d held appointments went silent after (%s). "
+                         "Warm beats re-cold." % (gh, names))
+        zt = (deltas.get("leadstream_zero_touch") or {}).get("latest")
+        zty = (deltas.get("leadstream_zero_touch") or {}).get("yesterday")
+        if zt is not None and zty is not None and zt > zty:
+            lines.append("Priority leads with zero touch grew to %d from %d "
+                         "yesterday. Huddle topic." % (int(zt), int(zty)))
+        un = (deltas.get("outreach_uncalled") or {}).get("latest")
+        if un:
+            lines.append("%d pond leads said yes to the AI and still have "
+                         "no call. Names: %s/outreach" % (int(un), config.BASE_URL))
+        if not lines:
+            print("[SCHEDULER] operator pulse: all quiet, no DM")
+            return
+        import escalation as _esc
+        text = ("Morning pulse. %d thing%s changed or needs you:\n"
+                % (len(lines), "" if len(lines) == 1 else "s")
+                + "\n".join("• " + l for l in lines))
+        sent = _esc._slack_dm("Barry Jenkins", text)
+        print("[SCHEDULER] operator pulse: %d lines, DM %s"
+              % (len(lines), "sent" if sent else "FAILED"))
+    except Exception as e:
+        print(f"[SCHEDULER] operator pulse FAILED: {e}")
+
+
 def scheduled_leadstream_dashboard_warm():
     """Every 10 min, working hours: precompute the LeadStream dashboard into
     the shared Postgres cache so no page view ever pays the ~20s FUB build.
@@ -30634,6 +30876,18 @@ def start_scheduler():
                        id="leadstream_dash_warm",
                        name="LeadStream dashboard warm (10 min)",
                        max_instances=1, misfire_grace_time=120)
+
+    # Metric snapshots: the "vs yesterday" layer under every verdict.
+    _scheduler.add_job(scheduled_metric_snapshots,
+                       CronTrigger(hour="7,19", minute=50, timezone=ET),
+                       id="metric_snapshots", name="Metric snapshots (2x/day)",
+                       max_instances=1, misfire_grace_time=600)
+
+    # Operator pulse: the numbers come to Barry at 8:05am.
+    _scheduler.add_job(scheduled_operator_pulse,
+                       CronTrigger(hour=8, minute=5, timezone=ET),
+                       id="operator_pulse", name="Operator pulse DM (8:05am)",
+                       max_instances=1, misfire_grace_time=600)
 
     # Team board warm: goals scorecard hot for /team.
     _scheduler.add_job(scheduled_team_board_warm,

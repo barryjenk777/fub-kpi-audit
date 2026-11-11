@@ -51,9 +51,18 @@ async function loadMoney(){
       vm.textContent='Keep the streaks alive';
     }
     document.getElementById('v-weeks').textContent=d.weeks_left+' weeks left in the year';
+    try{
+      const dd=await (await fetch('/api/deltas?metrics=team_behind_pace,team_total_gap')).json();
+      const b=(dd.deltas||{}).team_behind_pace||{};
+      if(b.yesterday!=null){
+        const diff=behind.length-b.yesterday;
+        document.getElementById('v-meta').textContent+=
+          ' · '+(diff===0?'same count as yesterday':((diff>0?'+':'')+diff+' vs yesterday'));
+      }
+    }catch(e){}
     document.getElementById('money-wrap').innerHTML='<div class="table-wrap"><table><thead><tr>'+
       '<th>Agent</th><th>Goal</th><th>GCI YTD</th><th>On pace for</th><th>Gap</th><th style="min-width:150px">Pace</th><th>This week\u2019s lever</th></tr></thead><tbody>'+
-      rows.map(a=>'<tr><td style="font-weight:700">'+esc(a.agent)+(a.is_new?' <span class="pill pill-muted">new</span>':'')+'</td>'+
+      rows.map(a=>'<tr><td style="font-weight:700"><a href="/agent/'+encodeURIComponent(a.agent)+'" style="text-decoration:underline">'+esc(a.agent)+'</a>'+(a.is_new?' <span class="pill pill-muted">new</span>':'')+'</td>'+
         '<td>'+money(a.gci_goal)+'</td><td>'+money(a.gci_ytd)+'</td><td>'+money(a.on_pace_for)+'</td>'+
         '<td style="color:'+((a.gap||0)>0?'var(--red)':'var(--green)')+';font-weight:700">'+money(a.gap)+'</td>'+
         '<td><div style="display:flex;align-items:center;gap:.5rem"><div class="bar"><div style="width:'+Math.min(100,a.pace_pct||0)+'%;background:'+paceColor(a.pace_pct||0)+'"></div></div>'+
@@ -63,8 +72,22 @@ async function loadMoney(){
   }catch(e){document.getElementById('money-wrap').innerHTML='<div style="color:var(--red);font-size:.8rem">Money board failed to load. <button class="btn btn-ghost btn-sm" onclick="loadMoney()">Retry</button></div>';}
 }
 
+let LAST_ACTIONS={};
+async function loadActions(){
+  try{
+    const d=await (await fetch('/api/coach/actions?days=30')).json();
+    LAST_ACTIONS=d.last||{};
+  }catch(e){}
+}
+function lastActed(agent){
+  const t=LAST_ACTIONS['nudge|'+agent];
+  if(!t)return '';
+  const dys=Math.floor((Date.now()-new Date(t))/86400000);
+  return '<div class="meta" style="color:var(--gold)">last nudged '+(dys===0?'today':dys+'d ago')+'</div>';
+}
 async function loadCards(){
   try{
+    await loadActions();
     const d=await (await fetch('/api/goals/scorecard',{signal:AbortSignal.timeout(120000)})).json();
     const streaks=d.streaks||{};
     const rows=d.scorecard||[];
@@ -73,16 +96,20 @@ async function loadCards(){
       const p=r.pace||{};
       const chips=['calls','appointments'].map(k=>{
         const m=p[k];if(!m)return '';
-        const cls=m.status==='green'?'pill-green':m.status==='red'?'pill-rose':'pill-amber';
-        return '<span class="pill '+cls+'">'+k+' '+(m.actual??0)+' / '+(m.target_ytd??0)+' ytd</span>';
+        const tgt=Math.round(m.target_ytd??0);
+        const ahead=(m.actual??0)>=tgt;
+        const cls=(ahead||m.status==='green')?'pill-green':m.status==='red'?'pill-rose':'pill-amber';
+        const label=tgt>0?(k+' '+(m.actual??0)+' ('+(ahead?'ahead of':'expected')+' '+tgt+')'):(k+' '+(m.actual??0)+', no target yet');
+        return '<span class="pill '+cls+'">'+label+'</span>';
       }).join(' ');
       return '<div class="card">'+
         '<div style="display:flex;justify-content:space-between;align-items:baseline">'+
-        '<span class="nm">'+esc(r.agent_name)+'</span>'+
+        '<a class="nm" href="/agent/'+encodeURIComponent(r.agent_name)+'" style="text-decoration:underline">'+esc(r.agent_name)+'</a>'+
         '<span class="meta">🔥 '+(st.current_streak||0)+' day streak (best '+(st.longest_streak||0)+')</span></div>'+
-        '<div class="meta">'+(r.start_date?('since '+esc(r.start_date)):'start date not set')+
+        '<div class="meta">'+(r.start_date?('since '+esc(r.start_date)):'<a href="#" style="text-decoration:underline" onclick="setStart(\''+esc(r.agent_name).replace(/'/g,"\\'")+'\');return false">set their start date</a>')+
         (r.goal&&r.goal.gci_goal?(' \u00b7 goal '+money(r.goal.gci_goal)):' \u00b7 no goal on file')+'</div>'+
         '<div class="row">'+chips+'</div>'+
+        lastActed(r.agent_name)+
         '<div class="row">'+
         '<button class="btn btn-ghost btn-sm" onclick="nudge(\''+esc(r.agent_name).replace(/'/g,"\\'")+'\',this)">👋 Nudge</button>'+
         '<button class="btn btn-ghost btn-sm" onclick="logClosing(\''+esc(r.agent_name).replace(/'/g,"\\'")+'\')">🏠 Log closing</button>'+
@@ -111,6 +138,10 @@ function timeBlockNudge(btn){
 function goalEmails(btn){
   if(!confirm('Send goal setup emails to agents without a goal on file?'))return;
   post('/api/goals/send-emails',{},btn,'Sending\u2026','Goal setup emails sent');
+}
+function setStart(agent){
+  const d=prompt('Start date for '+agent+' (YYYY-MM-DD):');if(!d)return;
+  post('/api/goals/set-start-date',{agent_name:agent,start_date:d},null,'','Start date saved for '+agent).then(loadCards);
 }
 function logClosing(agent){
   const name=prompt('Deal name or address for '+agent+':');if(!name)return;

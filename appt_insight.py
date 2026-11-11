@@ -154,7 +154,7 @@ def build_insight(days=60):
                 LIMIT 40
             """)
             no_outcome = _q(cur, """
-                SELECT person_name, agent_name, start_time
+                SELECT person_name, agent_name, start_time, person_id
                 FROM appointments
                 WHERE outcome IS NULL AND status NOT IN ('canceled','showed')
                   AND start_time < NOW() - INTERVAL '1 day'
@@ -180,8 +180,36 @@ def build_insight(days=60):
                             "held_days_ago": (now - start).days})
     out["at_risk_upcoming"] = at_risk
     out["ghosted_after_held"] = ghosted
-    out["no_outcome_list"] = [
-        {"lead": r[0], "agent": r[1], "when": r[2].isoformat()} for r in no_outcome]
+    # A row that cannot name its lead is not a receipt: resolve missing
+    # names from FUB (bounded; this build runs nightly, not per view).
+    resolved = 0
+    no_outcome_rows = []
+    for r in no_outcome:
+        name, agent, when, pid = r[0], r[1], r[2], (r[3] if len(r) > 3 else None)
+        if (not name or name == "Unknown") and pid and resolved < 10:
+            try:
+                p = client._request("GET", "people/%s" % pid,
+                                    params={"fields": "id,name"}) or {}
+                if p.get("name"):
+                    name = p["name"]
+                resolved += 1
+            except Exception:
+                pass
+        no_outcome_rows.append({"lead": name or None, "agent": agent,
+                                "when": when.isoformat(),
+                                "person_id": str(pid) if pid else None})
+    out["no_outcome_list"] = no_outcome_rows
+
+    # Departed agents stay in the math but must say so on the page.
+    try:
+        active = {p.get("agent_name") for p in
+                  (_db.get_agent_profiles(active_only=True) or [])}
+        active.add("Barry Jenkins")
+        for a in out["by_agent"]:
+            a["active"] = a["agent"] in active
+    except Exception:
+        for a in out["by_agent"]:
+            a["active"] = True
 
     # ── dollars left on the table ───────────────────────────────────────
     team_set = sum(a["set"] for a in out["by_agent"]) or 0

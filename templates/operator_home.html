@@ -553,7 +553,7 @@ function render(d,fresh){
       s+='<div class="'+cls+'">'+ring+
         '<div class="nlabel">'+esc(st.label)+'</div>'+
         '<div class="nval" data-k="'+st.key+'">'+val+'</div>'+
-        '<div class="nunit">'+esc(st.unit||'')+'</div>'+
+        '<div class="nunit">'+esc(st.unit==='%'?'':(st.unit||''))+'</div>'+
         '<div class="fold"><button class="rtoggle" data-k="'+st.key+
         '" onclick="toggleReceipt(\''+st.key+'\',\''+esc(st.label)+
         '\')">How this is made</button></div></div>';

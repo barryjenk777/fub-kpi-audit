@@ -1,0 +1,110 @@
+{% extends "board_base.html" %}
+{% set active='team' %}
+{% block title %}{{ agent_name }} — Legacy Home Team{% endblock %}
+{% block page_title %}🧑‍💼 {{ agent_name }}{% endblock %}
+{% block page_meta %}The whole story on one sheet: goal, week, appointments, coaching read, action trail{% endblock %}
+{% block page_actions %}
+  <button class="btn btn-ghost btn-sm" onclick="nudge(this)">👋 Nudge</button>
+  <a class="btn btn-ghost btn-sm" href="/meeting">🤝 1-on-1 board</a>
+{% endblock %}
+{% block content %}
+      <div class="banner">
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div class="dot dot-amber" id="v-dot"></div>
+          <div><div class="banner-text" id="v-text">Reading their story&hellip;</div>
+          <div class="banner-meta" id="v-meta"></div></div>
+        </div>
+        <div class="banner-meta" id="v-grade"></div>
+      </div>
+
+      <div id="tiles" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:.4rem"></div>
+
+      <div class="section-header"><span class="icon">📞</span> This week</div>
+      <div id="week-wrap"><div class="skeleton" style="height:80px"></div></div>
+
+      <div class="section-header"><span class="icon">📅</span> Their appointments that need something</div>
+      <div id="appts-wrap"><div class="skeleton" style="height:80px"></div></div>
+
+      <div class="section-header"><span class="icon">🧠</span> The coaching read</div>
+      <div id="coach-wrap"><div class="skeleton" style="height:80px"></div></div>
+
+      <div class="section-header"><span class="icon">🧾</span> Action trail
+        <span style="font-weight:400;font-size:.72rem;margin-left:.5rem">what you did and when, so you never double-tap</span></div>
+      <div id="trail-wrap"><div class="skeleton" style="height:60px"></div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const AGENT = {{ agent_name|tojson }};
+const ACTION_WORDS = {nudge:'nudged', time_block_nudge:'time-block nudge',
+  log_closing:'closing logged', goal_setup_emails:'goal setup email',
+  set_start_date:'start date set', outcome_chaser:'outcome chaser',
+  manager_recap:'manager recap', pond_batch:'pond batch', isa_followup_tag:'follow-up tagged'};
+function tile(v,l,sub,color){return '<div class="card" style="padding:.8rem 1rem"><div style="font-size:.63rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">'+l+'</div><div style="font-size:1.6rem;font-weight:800;'+(color?('color:'+color):'')+'">'+v+'</div><div style="font-size:.68rem;color:var(--muted)">'+(sub||'')+'</div></div>';}
+function ago(iso){const m=Math.floor((Date.now()-new Date(iso))/60000);if(m<60)return m+'m ago';if(m<1440)return Math.floor(m/60)+'h ago';return Math.floor(m/1440)+'d ago';}
+async function load(){
+  try{
+    const d=await (await fetch('/api/agent-sheet/'+encodeURIComponent(AGENT),{signal:AbortSignal.timeout(90000)})).json();
+    const m=d.money||{}, tr=d.trend||{}, st=d.streak||{}, fl=d.floor||{};
+    const vt=document.getElementById('v-text'),vm=document.getElementById('v-meta'),vd=document.getElementById('v-dot');
+    const pct=m.pace_pct||0;
+    vd.className='dot '+(pct>=70?'dot-green':pct>=40?'dot-amber':'dot-rose');
+    if(m.gci_goal){
+      vt.textContent=money(m.gci_ytd)+' of a '+money(m.gci_goal)+' goal ('+pct+'% of pace, '+(d.weeks_left??'?')+' weeks left)';
+      vm.textContent='Lever: '+(m.lever||'book more appointments')+(m.is_new?' · still in the new-agent window':'');
+    }else{
+      vt.textContent='No goal on file yet';
+      vm.textContent='Set it together in the next 1-on-1; pace means nothing without it';
+    }
+    document.getElementById('v-grade').textContent=(tr.grade?('week grade '+tr.grade+' · '+(tr.coaching_type||'')):'');
+    const c=tr.current||{};
+    document.getElementById('tiles').innerHTML=
+      tile(money(m.gap||0),'Gap to goal','',(m.gap||0)>0?'var(--red)':'var(--green)')+
+      tile('🔥 '+(st.current_streak||0),'Streak','best '+(st.longest_streak||0))+
+      tile((fl.avg_grade_30d??'?'),'Call grade 30d',(fl.graded_30d||0)+' graded')+
+      tile((fl.ask_rate_30d!=null?fl.ask_rate_30d+'%':'?'),'Ask rate 30d','asked for the appointment');
+    document.getElementById('week-wrap').innerHTML='<div class="card">'+
+      'calls <b>'+(c.calls||0)+'</b> ('+esc(tr.calls_trend||'flat')+') · '+
+      'conversations <b>'+(c.convos||0)+'</b> ('+esc(tr.convos_trend||'flat')+') · '+
+      'appts set <b>'+(c.appts_set||0)+'</b> · appts met <b>'+(c.appts_met||0)+'</b>'+
+      (d.block&&d.block.prospecting_days&&d.block.prospecting_days.length?('<div style="font-size:.78rem;color:var(--muted);margin-top:.3rem">prospecting block: '+esc(d.block.prospecting_days.join(', '))+' at '+esc(d.block.start_time||'')+'</div>'):'<div style="font-size:.78rem;color:var(--yellow);margin-top:.3rem">no prospecting time block on file</div>')+
+      '</div>';
+    const ap=d.appts||{};
+    const probs=[].concat(
+      (ap.ghosted||[]).map(g=>({t:'held then silent',lead:g.lead,pid:g.person_id,extra:(g.held_days_ago||0)+'d ago'})),
+      (ap.no_outcome||[]).map(g=>({t:'no outcome logged',lead:g.lead,pid:g.person_id,extra:(g.when||'').slice(0,10)})),
+      (ap.at_risk||[]).map(g=>({t:'upcoming, confirm it',lead:g.lead,pid:g.person_id,extra:(g.when||'').slice(0,16).replace('T',' ')})));
+    const row=ap.row||{};
+    document.getElementById('appts-wrap').innerHTML=
+      '<div class="card" style="margin-bottom:.6rem">60 days: set <b>'+(row.set||0)+'</b> · held <b>'+(row.held||0)+'</b> ('+(row.held_rate||0)+'%) · no outcome <b>'+(row.no_outcome||0)+'</b></div>'+
+      (probs.length?('<div class="table-wrap"><table><tbody>'+probs.map(p=>'<tr><td>'+(p.pid?('<a target="_blank" style="text-decoration:underline" href="'+fub(p.pid)+'">'+esc(p.lead||'?')+'</a>'):esc(p.lead||'?'))+'</td><td>'+esc(p.t)+'</td><td style="color:var(--muted)">'+esc(p.extra)+'</td></tr>').join('')+'</tbody></table></div>'):
+      '<div style="color:var(--green);font-size:.82rem">Nothing slipping. Clean book.</div>');
+    document.getElementById('coach-wrap').innerHTML='<div class="card">'+
+      ((tr.insights||[]).map(i=>'<div style="margin-bottom:.4rem">'+esc(i)+'</div>').join('')||'<span style="color:var(--muted)">No coaching flags this week.</span>')+
+      '<div style="margin-top:.5rem"><button class="btn btn-primary btn-sm" onclick="prepAsk()">🧠 Ask the board about '+esc(AGENT.split(' ')[0])+'</button></div>'+
+      '<div id="ask-a" style="white-space:pre-wrap;font-size:.88rem;line-height:1.55;margin-top:.7rem;display:none;border-top:1px solid var(--border-sub);padding-top:.7rem"></div></div>';
+    document.getElementById('trail-wrap').innerHTML=(d.actions||[]).length?
+      ('<div class="table-wrap"><table><tbody>'+d.actions.map(a=>'<tr><td>'+esc(ACTION_WORDS[a.action]||a.action)+'</td><td style="color:var(--muted)">'+esc(a.detail||'')+'</td><td style="color:var(--muted)">'+ago(a.at)+'</td></tr>').join('')+'</tbody></table></div>'):
+      '<div style="color:var(--muted);font-size:.82rem">No actions logged yet. They start recording from today.</div>';
+  }catch(e){
+    document.getElementById('v-text').textContent='Could not load the sheet.';
+    document.getElementById('v-meta').innerHTML='<a href="#" onclick="load();return false" style="text-decoration:underline">Try again</a>';
+  }
+}
+async function prepAsk(){
+  const out=document.getElementById('ask-a');
+  out.style.display='block';out.textContent='Reading '+AGENT+"'s numbers…";
+  try{
+    const r=await fetch('/api/ask-claude',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({question:'For a 1-on-1 with '+AGENT+' (answer about this one agent): what should we cover this week, and what deserves praise first?'}),
+      signal:AbortSignal.timeout(90000)});
+    const d=await r.json();
+    out.textContent=d.answer||d.error||'(no response)';
+  }catch(e){out.textContent='Could not get an answer ('+e.message+').';}
+}
+function nudge(btn){
+  if(!confirm('Send '+AGENT+' their nudge email now?'))return;
+  post('/api/goals/send-nudge',{agent_name:AGENT},btn,'Sending…','Nudge sent').then(load);
+}
+load();
+</script>
+{% endblock %}

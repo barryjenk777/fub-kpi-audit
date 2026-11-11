@@ -62,7 +62,7 @@ async function load(){
       const c=a.current||{};
       return '<div class="card">'+
         '<div style="display:flex;justify-content:space-between;align-items:baseline">'+
-        '<span class="nm">'+esc(name)+'</span>'+
+        '<a class="nm" href="/agent/'+encodeURIComponent(name)+'" style="text-decoration:underline">'+esc(name)+'</a>'+
         '<span class="pill" style="background:transparent;border:2px solid '+gradeColor(a.grade)+';color:'+gradeColor(a.grade)+'">'+esc(a.grade||'?')+'</span></div>'+
         '<div class="meta">'+esc(a.coaching_type||'')+' \u00b7 calls '+(c.calls||0)+' ('+esc(a.calls_trend||'flat')+') \u00b7 convos '+(c.convos||0)+' ('+esc(a.convos_trend||'flat')+') \u00b7 appts set '+(c.appts_set||0)+'</div>'+
         ((a.insights||[]).length?('<div style="font-size:.82rem;color:var(--subtle);margin-top:.5rem">'+esc(a.insights[0])+'</div>'):'')+

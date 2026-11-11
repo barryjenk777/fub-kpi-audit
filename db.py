@@ -11845,3 +11845,146 @@ def outbound_call_counts(person_ids):
     except Exception as e:
         logger.warning("outbound_call_counts failed: %s", e)
         return {}
+
+
+# ── Coach action ledger (Nov 2026): every nudge/email/closing logged, so
+#    the UI can answer "when did I last act, and on whom" ──────────────────
+_coach_actions_ready = False
+
+
+def _ensure_coach_actions():
+    global _coach_actions_ready
+    if _coach_actions_ready or not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS coach_actions (
+                        id         SERIAL PRIMARY KEY,
+                        action     TEXT NOT NULL,
+                        agent_name TEXT,
+                        detail     TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_coach_actions_recent
+                        ON coach_actions (created_at DESC);
+                """)
+        _coach_actions_ready = True
+    except Exception as e:
+        logger.warning("ensure coach_actions failed: %s", e)
+
+
+def log_coach_action(action, agent_name=None, detail=None):
+    """Fire-and-forget: a failed log must never fail the action itself."""
+    try:
+        _ensure_coach_actions()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO coach_actions (action, agent_name, detail)"
+                    " VALUES (%s, %s, %s)",
+                    (action, agent_name, detail))
+        return True
+    except Exception as e:
+        logger.warning("log_coach_action failed: %s", e)
+        return False
+
+
+def recent_coach_actions(days=30, limit=200, agent_name=None):
+    try:
+        _ensure_coach_actions()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if agent_name:
+                    cur.execute("""
+                        SELECT action, agent_name, detail, created_at
+                        FROM coach_actions
+                        WHERE created_at >= NOW() - make_interval(days => %s)
+                          AND agent_name = %s
+                        ORDER BY created_at DESC LIMIT %s
+                    """, (days, agent_name, limit))
+                else:
+                    cur.execute("""
+                        SELECT action, agent_name, detail, created_at
+                        FROM coach_actions
+                        WHERE created_at >= NOW() - make_interval(days => %s)
+                        ORDER BY created_at DESC LIMIT %s
+                    """, (days, limit))
+                return [{"action": r[0], "agent_name": r[1], "detail": r[2],
+                         "at": r[3].isoformat()} for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("recent_coach_actions failed: %s", e)
+        return []
+
+
+# ── Metric snapshots: one number per metric per day, so every verdict can
+#    say "vs yesterday / vs last week" ────────────────────────────────────
+_metric_snapshots_ready = False
+
+
+def _ensure_metric_snapshots():
+    global _metric_snapshots_ready
+    if _metric_snapshots_ready or not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS metric_snapshots (
+                        metric   TEXT NOT NULL,
+                        taken_on DATE NOT NULL DEFAULT CURRENT_DATE,
+                        value    DOUBLE PRECISION,
+                        PRIMARY KEY (metric, taken_on)
+                    );
+                """)
+        _metric_snapshots_ready = True
+    except Exception as e:
+        logger.warning("ensure metric_snapshots failed: %s", e)
+
+
+def snapshot_metric(metric, value):
+    if value is None:
+        return False
+    try:
+        _ensure_metric_snapshots()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO metric_snapshots (metric, value)
+                    VALUES (%s, %s)
+                    ON CONFLICT (metric, taken_on)
+                    DO UPDATE SET value = EXCLUDED.value
+                """, (metric, float(value)))
+        return True
+    except Exception as e:
+        logger.warning("snapshot_metric(%s) failed: %s", metric, e)
+        return False
+
+
+def get_metric_deltas(metrics):
+    """For each metric: latest value, yesterday's, and the one from 7 days
+    ago (nearest earlier snapshot in both cases)."""
+    out = {}
+    try:
+        _ensure_metric_snapshots()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for m in metrics:
+                    cur.execute("""
+                        SELECT taken_on, value FROM metric_snapshots
+                        WHERE metric = %s AND taken_on >= CURRENT_DATE - 10
+                        ORDER BY taken_on DESC
+                    """, (m,))
+                    rows = cur.fetchall()
+                    if not rows:
+                        continue
+                    from datetime import date, timedelta
+                    today = date.today()
+                    latest = rows[0][1]
+                    yest = next((v for d, v in rows if d <= today - timedelta(days=1)), None)
+                    week = next((v for d, v in rows if d <= today - timedelta(days=7)), None)
+                    out[m] = {"latest": latest, "yesterday": yest, "week_ago": week}
+    except Exception as e:
+        logger.warning("get_metric_deltas failed: %s", e)
+    return out

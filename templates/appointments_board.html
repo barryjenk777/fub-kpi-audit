@@ -64,6 +64,14 @@ async function load(){
       vm.textContent='That is how the money stays measurable';
     }
     document.getElementById('v-window').textContent='last '+(d.window_days||60)+' days';
+    try{
+      const dd=await (await fetch('/api/deltas?metrics=appts_no_outcome,appts_held_rate')).json();
+      const n=(dd.deltas||{}).appts_no_outcome||{};
+      if(n.yesterday!=null){
+        const diff=(t.no_outcome||0)-n.yesterday;
+        vm.textContent+=' · unlogged '+(diff===0?'flat vs yesterday':((diff>0?'+':'')+diff+' vs yesterday'));
+      }
+    }catch(e){}
     document.getElementById('tiles').innerHTML=
       tile(t.set||0,'Set','')+
       tile(t.held||0,'Held','')+
@@ -75,14 +83,17 @@ async function load(){
       ['Held',r=>(r.held_days_ago)+' days ago'],
       ['Move',r=>'<span style="color:var(--subtle)">call them while the meeting is still warm</span>']]);
     document.getElementById('nooutcome-wrap').innerHTML=namesTable(d.no_outcome_list,[
-      ['Lead',r=>esc(r.lead)],['Agent',r=>esc(r.agent)],['When',r=>esc((r.when||'').slice(0,10))]]);
+      ['Lead',r=>r.lead?(r.person_id?('<a target="_blank" style="text-decoration:underline" href="'+fub(r.person_id)+'">'+esc(r.lead)+'</a>'):esc(r.lead)):'<span style="color:var(--muted)">name not synced yet</span>'],
+      ['Agent',r=>esc(r.agent)],['When',r=>esc((r.when||'').slice(0,10))]]);
     document.getElementById('atrisk-wrap').innerHTML=namesTable(d.at_risk_upcoming,[
       ['Lead',r=>'<a target="_blank" style="text-decoration:underline" href="'+fub(r.person_id)+'">'+esc(r.lead)+'</a>'],
       ['Agent',r=>esc(r.agent)],
       ['When',r=>esc((r.when||'').slice(0,16).replace('T',' '))],
       ['Set',r=>(r.set_days_ago)+' days ago']]);
-    document.getElementById('byagent-wrap').innerHTML=namesTable(d.by_agent,[
-      ['Agent',r=>'<b>'+esc(r.agent)+'</b>'],['Set',r=>r.set],['Held',r=>r.held],
+    const byA=(d.by_agent||[]).slice().sort((a,b)=>(b.active===a.active)?(b.set-a.set):(a.active?-1:1));
+    document.getElementById('byagent-wrap').innerHTML=namesTable(byA,[
+      ['Agent',r=>'<a href="/agent/'+encodeURIComponent(r.agent)+'" style="text-decoration:underline'+(r.active===false?';color:var(--muted)':'')+';font-weight:700">'+esc(r.agent)+'</a>'+(r.active===false?' <span class="pill pill-muted">off the roster</span>':'')],
+      ['Set',r=>r.set],['Held',r=>r.held],
       ['Held %',r=>'<b style="color:'+rateColor(r.held_rate||0)+'">'+(r.held_rate||0)+'%</b>'],
       ['No show',r=>r.no_show],['No outcome',r=>r.no_outcome]]);
     const cut=(title,rows,key)=>'<div class="section-header" style="margin-top:.8rem"><span class="icon">▸</span> '+title+'</div>'+

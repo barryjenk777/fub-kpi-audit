@@ -865,6 +865,17 @@ async function loadInsight(){
     const d=await r.json();
     if(d.error)throw new Error(d.error);
     renderVerdict(d);
+    try{
+      const sb=d.scoreboard||[];
+      const zt=sb.reduce((s,r)=>s+((r.tagged||0)-(r.actioned||0)),0);
+      const dd=await (await fetch('/api/deltas?metrics=leadstream_zero_touch')).json();
+      const z=(dd.deltas||{}).leadstream_zero_touch||{};
+      if(z.yesterday!=null){
+        const diff=zt-z.yesterday;
+        document.getElementById('verdict-meta').textContent+=
+          ' · zero-touch '+(diff===0?'flat vs yesterday':((diff>0?'+':'')+diff+' vs yesterday'));
+      }
+    }catch(e){}
     renderLeaks(d.leaks||[]);
     renderScoreboard(d.scoreboard||[]);
     renderSources(d.sources||[]);

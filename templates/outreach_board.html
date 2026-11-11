@@ -63,6 +63,14 @@ async function load(){
       vt.textContent='The pond is quiet right now';
       vm.textContent='Sent '+(f.sent||0)+' · replies '+(f.replied||0)+' in the window';
     }
+    try{
+      const dd=await (await fetch('/api/deltas?metrics=outreach_uncalled,outreach_positive')).json();
+      const u=(dd.deltas||{}).outreach_uncalled||{};
+      if(u.yesterday!=null){
+        const diff=uncalled-u.yesterday;
+        vm.textContent+=' · uncalled '+(diff===0?'flat vs yesterday':((diff>0?'+':'')+diff+' vs yesterday'));
+      }
+    }catch(e){}
     document.getElementById('tiles').innerHTML=
       tile((f.sent||0).toLocaleString(),'Sent','sms + email')+
       tile(f.replied||0,'Replied','')+
