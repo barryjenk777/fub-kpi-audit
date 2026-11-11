@@ -7361,11 +7361,89 @@ def _clean_objection_text(raw, max_len=110):
     return best
 
 
+def _film_text_llm(agent_first, facts):
+    """One coaching text composed from THIS call's real facts, in Barry's
+    voice. Returns None on any failure so the template fallback sends
+    instead (Barry, Nov 11 2026: the two fixed templates 'aren't good').
+    Facts in, words out: the model may not invent events or numbers."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+    try:
+        import anthropic as _an
+        import json as _json
+        system = (
+            "You write one short morning coaching text from Barry Jenkins "
+            "to one real estate agent on his team, about one real call "
+            "from yesterday. You are given the call's facts as JSON. "
+            "Rules, all hard:\n"
+            "1. Use ONLY the facts given. Never invent events, quotes, "
+            "names or numbers.\n"
+            "2. Two to four sentences, under 400 characters. It is a "
+            "text message, not an email.\n"
+            "3. Barry's voice: conversational, direct, warm. Teaching "
+            "over pushing. Never shame, always reframe. Short punchy "
+            "sentences. No corporate motivational language, never the "
+            "words crush, hustle, grind, or beast.\n"
+            "4. NO em-dashes or en-dashes anywhere. Periods, commas, "
+            "parens.\n"
+            "5. Name the lead by first name. Say the ONE specific thing "
+            "from this call that matters most (use the coaching tip or "
+            "objection facts), then ONE concrete action for today. If "
+            "the action is a practice rep, the practice line is "
+            "1-337-486-3563.\n"
+            "6. Never state the numeric grade. If kind is praise, say "
+            "exactly what was good and tell them to do it again today; "
+            "no action item needed beyond that.\n"
+            "7. Plain language. No team jargon: no Dojo, no Phoenix, no "
+            "Maverick, no game film. Say 'yesterday's calls' or "
+            "'your call with <name>'.\n"
+            "Return ONLY the text message, nothing else.")
+        msg = _an.Anthropic(api_key=api_key).messages.create(
+            model="claude-sonnet-5-5", max_tokens=500,
+            system=system,
+            messages=[{"role": "user", "content": _json.dumps(
+                {"agent_first": agent_first, **facts}, default=str)}])
+        out = next((b.text for b in (msg.content or [])
+                    if getattr(b, "type", "") == "text"), "").strip()
+        # Guardrails: length, dashes, and it must mention the lead.
+        if not out or len(out) > 520:
+            return None
+        if "—" in out or "–" in out:
+            out = out.replace("—", ",").replace("–", ",")
+        lead1 = (facts.get("lead_first") or "").lower()
+        if lead1 and lead1 not in out.lower():
+            return None
+        return out
+    except Exception as e:
+        logger.warning("film text llm failed: %s", e)
+        return None
+
+
+def _film_facts(pick, kind):
+    return {
+        "kind": kind,
+        "lead_first": (pick.get("lead_name") or "the lead").split()[0],
+        "objection": _clean_objection_text(pick.get("objections")) or None,
+        "how_they_handled_it": (pick.get("objection_handling") or "")[:240]
+                               or None,
+        "coaching_tip": (pick.get("coaching_tips") or "")[:240] or None,
+        "call_summary": (pick.get("summary") or "")[:280] or None,
+        "minutes": round((pick.get("duration_sec") or 0) / 60, 1),
+        "agent_talk_share_pct": pick.get("agent_talk_time_percent"),
+        "appointment_set": bool(pick.get("appointment_set")),
+        "outcome": pick.get("outcome"),
+    }
+
+
 def scheduled_call_coaching():
     """Weekdays 8:20am ET — game-film texts from yesterday's graded calls.
     One text per agent, maximum: either an objection replay from their
     most instructive low call, or specific praise for their best. Grades
-    are never broadcast; the text goes only to that agent (never-shame)."""
+    are never broadcast; the text goes only to that agent (never-shame).
+    Nov 11 2026: each text is composed fresh from the call's real facts
+    (objection, how it was handled, Maverick's tip, talk share) in
+    Barry's voice; the old fixed templates are the fallback only."""
     if _already_fired_recently("call_coaching", within_hours=20):
         return
     if not _db.try_acquire_job_lock("call_coaching"):
@@ -7409,12 +7487,13 @@ def scheduled_call_coaching():
                 obj = _clean_objection_text(pick.get("objections"))
                 lead1 = (pick.get("lead_name") or "the lead").split()[0]
                 if obj:
-                    msg = ("%s, game film from yesterday. On your call with "
-                           "%s, the lead gave you this: \"%s\". That moment "
-                           "is winnable. Tonight's 5 minute rep: call the "
-                           "practice bot at 1-337-486-3563 and run that "
-                           "exact objection twice. Next time it shows up "
-                           "live, you own it." % (first, lead1, obj))
+                    msg = (_film_text_llm(first, _film_facts(pick, "coach"))
+                           or ("%s, on your call with %s yesterday, the "
+                               "lead gave you this: \"%s\". That moment is "
+                               "winnable. Five minutes today: call the AI "
+                               "role play bot at 1-337-486-3563 and run "
+                               "that exact objection twice."
+                               % (first, lead1, obj)))
                 else:
                     pick = None
             if pick is None and high:
@@ -7422,10 +7501,10 @@ def scheduled_call_coaching():
                 lead1 = (pick.get("lead_name") or "the lead").split()[0]
                 extra = " and the appointment is on the calendar" \
                     if pick.get("appointment_set") else ""
-                msg = ("%s, watched your film from yesterday. The %s call "
-                       "was the real thing%s. That's the standard on this "
-                       "team. Keep your pace."
-                       % (first, lead1, extra))
+                msg = (_film_text_llm(first, _film_facts(pick, "praise"))
+                       or ("%s, listened to your %s call from yesterday. "
+                           "That was the real thing%s. Do that again "
+                           "today." % (first, lead1, extra)))
             if not pick or not msg:
                 continue
             if not _db.claim_once("mavcoach_%s" % pick["call_id"]):
@@ -23342,6 +23421,44 @@ def api_admin_snapshots_run():
         return jsonify({"error": "Unauthorized"}), 401
     scheduled_metric_snapshots()
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/callfilm/preview", methods=["POST"])
+def api_callfilm_preview():
+    """Tomorrow's 8:20 coaching texts, composed now from yesterday's real
+    calls. Read-only: nothing queued, no one-shot claims burned."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    _eh = -4 if 3 <= datetime.now(timezone.utc).month <= 10 else -5
+    _ET2 = timezone(timedelta(hours=_eh))
+    y0 = (datetime.now(_ET2) - timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    calls = _db.get_maverick_calls_since(y0.isoformat())
+    excl = set(config.EXCLUDED_USERS) | set(
+        getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()))
+    by_agent = {}
+    for c in calls:
+        a = c.get("agent_name")
+        if a and a not in excl:
+            by_agent.setdefault(a, []).append(c)
+    out = []
+    for agent, rows in list(by_agent.items())[:12]:
+        first = agent.split()[0]
+        low = [c for c in rows if (c.get("call_grade") or 0) <= 6
+               and _clean_objection_text(c.get("objections"))]
+        high = [c for c in rows if (c.get("call_grade") or 0) >= 8]
+        if low:
+            pick, kind = min(low, key=lambda c: c.get("call_grade") or 0), "coach"
+        elif high:
+            pick, kind = max(high, key=lambda c: c.get("call_grade") or 0), "praise"
+        else:
+            continue
+        txt = _film_text_llm(first, _film_facts(pick, kind))
+        out.append({"agent": agent, "kind": kind,
+                    "lead": pick.get("lead_name"),
+                    "grade": pick.get("call_grade"),
+                    "text": txt or "(fallback template would send)"})
+    return jsonify({"ok": True, "previews": out})
 
 
 def scheduled_sheet_followup():
