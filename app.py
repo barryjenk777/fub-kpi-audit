@@ -16250,7 +16250,23 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # tags above, so a suppressed fossil can never route again;
             # the event log keeps the audit trail. No offer, no mirror
             # card, no owner ping for a lead with no signs of life.
-            if not _desk_signs_of_life(person):
+            # Nov 11 2026 (Gregory Clarkson, 148561): the webhook payload's
+            # lastCommunication is blind to Ylopo system activity, so an
+            # AI-voice conversion on a 2-year-old pond lead read as a
+            # fossil and was never routed. Before declaring fossil, spend
+            # two bounded reads on the evidence feeds themselves: a
+            # conversational voice disposition or a real inbound message
+            # within 48h is life. Tags stay hints; dispositions are
+            # evidence (VOICEMAIL/NO_ANSWER still never count).
+            _alive = _desk_signs_of_life(person)
+            if not _alive:
+                try:
+                    _alive = bool(_fresh_ai_voice_outcome(pid, hours=48)) \
+                             or _had_inbound_within(pid, hours=48)
+                except Exception as _sle:
+                    logger.warning("desk life recheck failed for %s: %s",
+                                   pid, _sle)
+            if not _alive:
                 _db.log_automation_event(
                     event_type="desk_batch_artifact", person_id=pid,
                     person_name=person.get("name"), agent_name=None,
@@ -23002,6 +23018,70 @@ def scheduled_metric_snapshots():
         print("[SCHEDULER] metric snapshots: %s" % snaps)
     except Exception as e:
         print(f"[SCHEDULER] metric snapshots FAILED: {e}")
+
+
+@app.route("/api/admin/desk/fossil-audit", methods=["POST"])
+def api_desk_fossil_audit():
+    """Recheck every conversion the fossil guard suppressed: was there
+    real evidence (conversational voice disposition or inbound message)
+    the guard was blind to? Body {"days": 10, "apply": false}. Read-only
+    by default; apply:true clears the desk ledger rows for the confirmed
+    ones so the 10-minute sweep re-sees their tags and routes them."""
+    if not _dispatch_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    days = min(int(body.get("days", 10) or 10), 30)
+    apply = bool(body.get("apply"))
+    events = _db.get_automation_events("desk_batch_artifact",
+                                       days=days, limit=200)
+    seen, real, dead = set(), [], 0
+    for ev in events:
+        pid = str(ev.get("person_id") or "")
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        # Evidence windows run from NOW, so widen by the event's age:
+        # a disposition that was 1 day old at suppression time is older
+        # now but still proof of that conversation.
+        try:
+            ev_age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                ev["at"])).total_seconds() / 3600
+        except (ValueError, TypeError, KeyError):
+            ev_age_h = 0
+        window = int(min(ev_age_h + 48, 24 * 14))
+        try:
+            voice = _fresh_ai_voice_outcome(pid, hours=window)
+            inbound = False if voice else _had_inbound_within(pid, hours=window)
+        except Exception:
+            voice, inbound = None, False
+        if not voice and not inbound:
+            dead += 1
+            continue
+        row = {"person_id": pid, "lead": ev.get("person_name"),
+               "suppressed_at": ev.get("at"),
+               "evidence": ("voice disposition: %s" % voice) if voice
+                           else "inbound message",
+               "tags": (ev.get("payload") or {}).get("tags"),
+               # The freshness wall holds here too: a conversion that sat
+               # suppressed past 48h is reported, never auto-routed.
+               "routable": ev_age_h <= 48}
+        if apply and row["routable"]:
+            try:
+                with _db.get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "DELETE FROM desk_tag_seen WHERE person_id = %s"
+                            " AND tag = ANY(%s)",
+                            (pid, list((ev.get("payload") or {}).get("tags")
+                                       or [])))
+                        row["ledger_cleared"] = cur.rowcount
+            except Exception as e:
+                row["ledger_cleared"] = "failed: %s" % str(e)[:80]
+        real.append(row)
+        if len(real) >= 25:
+            break
+    return jsonify({"ok": True, "checked": len(seen), "fossils_confirmed": dead,
+                    "real_conversions_suppressed": real, "applied": apply})
 
 
 @app.route("/api/admin/snapshots/run", methods=["POST"])
