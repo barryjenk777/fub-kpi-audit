@@ -265,7 +265,7 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
     <div class="topbar">
       <div class="topbar-left">
         <div class="topbar-title">⚡ LeadStream</div>
-        <div class="topbar-meta">Lead intelligence: where the money is leaking, who is working their leads, and whether the leads you buy are any good</div>
+        <div class="topbar-meta">The engine hand-picks who is worth calling. This page answers one question: are we calling them?</div>
       </div>
       <div class="topbar-actions">
         <button class="btn btn-ghost btn-sm" id="btn-pond" onclick="runNow(true)">🦈 Pond Only</button>
@@ -275,30 +275,21 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
 
     <div class="container">
 
-      <!-- Status Banner -->
-      <div class="status-banner" id="status-banner">
+      <!-- The verdict: one line, from the most urgent leak -->
+      <div class="status-banner" id="verdict-band">
         <div class="status-left">
-          <div class="status-dot dot-amber" id="status-dot"></div>
+          <div class="status-dot dot-amber" id="verdict-dot"></div>
           <div>
-            <div class="status-text" id="status-text">Loading&hellip;</div>
-            <div class="status-meta" id="status-meta"></div>
+            <div class="status-text" id="verdict-text">Reading the board&hellip;</div>
+            <div class="status-meta" id="verdict-meta"></div>
           </div>
         </div>
         <div class="status-right">
           <div style="text-align:right;margin-right:8px">
-            <div style="font-size:.68rem;color:var(--muted)">Next full run</div>
-            <div style="font-size:.83rem;font-weight:700" id="next-run">&mdash;</div>
+            <div style="font-size:.68rem;color:var(--muted)">Engine</div>
+            <div style="font-size:.78rem;font-weight:700" id="run-meta">&mdash;</div>
           </div>
         </div>
-      </div>
-
-      <!-- Stats -->
-      <div class="stat-grid" id="stats-row">
-        <div class="stat-card"><div class="label">Total Tagged</div><div class="value skeleton" style="height:36px;width:80px">&nbsp;</div></div>
-        <div class="stat-card"><div class="label">Actioned</div><div class="value skeleton" style="height:36px;width:60px">&nbsp;</div></div>
-        <div class="stat-card"><div class="label">Action Rate</div><div class="value skeleton" style="height:36px;width:70px">&nbsp;</div></div>
-        <div class="stat-card"><div class="label">Agent Leads</div><div class="value skeleton" style="height:36px;width:60px">&nbsp;</div></div>
-        <div class="stat-card"><div class="label">Pond Leads</div><div class="value skeleton" style="height:36px;width:60px">&nbsp;</div></div>
       </div>
 
       <!-- ══ INSIGHT LAYER (v2): leaks, scoreboard, sources, pond health ══ -->
@@ -319,7 +310,7 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
       <div id="pondhealth-wrap"><div class="skeleton" style="height:70px;border-radius:12px"></div></div>
 
       <!-- ══ DRILL-DOWN: the raw lists, folded ══ -->
-      <details style="margin-top:1.4rem">
+      <details style="margin-top:1.4rem" id="dd-agents">
         <summary style="cursor:pointer;font-weight:700;font-size:.9rem;padding:.5rem 0">👤 Drill down: per-agent priority lists</summary>
         <div class="agents-grid" id="agents-grid">
           <div class="agent-card"><div class="skeleton" style="height:200px"></div></div>
@@ -327,14 +318,14 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
         </div>
       </details>
 
-      <details style="margin-top:.6rem">
+      <details style="margin-top:.6rem" id="dd-pond">
         <summary style="cursor:pointer;font-weight:700;font-size:.9rem;padding:.5rem 0">🦈 Drill down: pond lead list</summary>
         <div id="pond-wrap">
           <div class="table-wrap"><div class="skeleton" style="height:240px"></div></div>
         </div>
       </details>
 
-      <details style="margin-top:.6rem">
+      <details style="margin-top:.6rem" id="dd-history">
         <summary style="cursor:pointer;font-weight:700;font-size:.9rem;padding:.5rem 0">📋 Drill down: run history + weekly engagement tracker</summary>
         <div class="history-grid" id="history-wrap"></div>
         <div class="section-header-row" style="margin-top:1rem">
@@ -410,68 +401,27 @@ function nextRunStr() {
   return `in ~${Math.floor(diffMin/60)}h`;
 }
 
-function renderStatus(data) {
-  const lastRun = data.last_run;
-  const minAgo = lastRun ? Math.floor((Date.now() - new Date(lastRun)) / 60000) : null;
-  const stale = minAgo === null || minAgo > 270; // >4.5h = missed a cycle
-  const warnings = data.api_warnings || [];
-
-  let dotClass = stale ? 'dot-amber' : 'dot-green';
-  let statusText = stale ? 'Scoring may be stale' : 'System Healthy';
-  if (warnings.length > 0) { dotClass = 'dot-amber'; statusText = 'Partial data — some API calls failed'; }
-
-  document.getElementById('status-dot').className = `status-dot ${dotClass}`;
-  document.getElementById('status-text').textContent = statusText;
-  document.getElementById('status-meta').textContent = lastRun
-    ? `Last run ${timeAgo(lastRun)} \u00b7 ${fmtTime(lastRun)} \u00b7 ${data.last_run_mode === 'pond_only' ? 'Pond only' : 'Full scoring'}`
-    : 'No runs recorded yet';
-  document.getElementById('next-run').textContent = nextRunStr();
-
-  // Show API warning banner if activity data is incomplete
-  let warnEl = document.getElementById('api-warning-banner');
-  if (warnings.length > 0) {
-    if (!warnEl) {
-      warnEl = document.createElement('div');
-      warnEl.id = 'api-warning-banner';
-      warnEl.style.cssText = 'background:#422006;border:1px solid #92400e;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:13px;color:#fbbf24;';
-      document.querySelector('.container').insertBefore(warnEl, document.getElementById('stats-row').parentElement);
-    }
-    warnEl.innerHTML = '⚠️ <strong>Activity data may be incomplete:</strong> ' + warnings.map(w => `<span>${w}</span>`).join(' &middot; ');
-  } else if (warnEl) {
-    warnEl.remove();
+function renderVerdict(d) {
+  // One plain line from the most urgent leak; the leak cards below are
+  // the receipts.
+  const leaks = d.leaks || [];
+  const worst = leaks.find(l => l.severity === 'red') || leaks.find(l => l.severity === 'amber');
+  const dot = document.getElementById('verdict-dot');
+  const txt = document.getElementById('verdict-text');
+  const meta = document.getElementById('verdict-meta');
+  if (worst) {
+    dot.className = 'status-dot ' + (worst.severity === 'red' ? 'dot-rose' : 'dot-amber');
+    txt.textContent = `${worst.count} ${worst.label}`;
+    meta.textContent = worst.detail || '';
+  } else {
+    dot.className = 'status-dot dot-green';
+    txt.textContent = 'Clean board. Every hand-picked lead has been touched.';
+    meta.textContent = 'Nothing urgent in the stream right now';
   }
-}
-
-function renderStats(data) {
-  const t = data.totals;
-  const rateColor = t.action_rate >= 50 ? 'var(--green)' : t.action_rate >= 25 ? 'var(--yellow)' : 'var(--red)';
-  document.getElementById('stats-row').innerHTML = `
-    <div class="stat-card">
-      <div class="label">Total Tagged</div>
-      <div class="value">${t.total}</div>
-      <div class="sub">agents + pond</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Actioned</div>
-      <div class="value" style="color:var(--green)">${t.actioned}</div>
-      <div class="sub">called or texted</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Action Rate</div>
-      <div class="value" style="color:${rateColor}">${t.action_rate}%</div>
-      <div class="sub">since last run</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Agent Leads</div>
-      <div class="value">${t.agent_leads}</div>
-      <div class="sub">across all agents</div>
-    </div>
-    <div class="stat-card">
-      <div class="label">Pond Leads</div>
-      <div class="value" style="color:var(--purple)">${t.pond_leads}</div>
-      <div class="sub">shared pool</div>
-    </div>
-  `;
+  const lr = d.last_run
+    ? `${timeAgo(d.last_run)} \u00b7 ${d.last_run_mode === 'pond_only' ? 'pond only' : 'full'}`
+    : 'no runs yet';
+  document.getElementById('run-meta').textContent = `last run ${lr} \u00b7 next full ${nextRunStr()}`;
 }
 
 function renderAgents(agents) {
@@ -602,17 +552,18 @@ function showToast(msg, isError=false) {
 
 async function loadDashboard() {
   try {
-    const res = await fetch('/api/leadstream/dashboard');
+    const res = await fetch('/api/leadstream/dashboard', {signal: AbortSignal.timeout(90000)});
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    renderStatus(data);
-    renderStats(data);
     renderAgents(data.agents);
     renderPond(data.pond);
     renderHistory(data.run_history);
+    if ((data.api_warnings || []).length) {
+      showToast('Heads up: some activity data is incomplete', true);
+    }
   } catch(e) {
-    document.getElementById('status-text').textContent = 'Failed to load dashboard';
-    document.getElementById('status-dot').className = 'status-dot dot-rose';
+    showToast('Drill-down lists failed to load. Reopen the section to retry.', true);
+    _ddLoaded = false;
     console.error(e);
   }
 }
@@ -907,6 +858,7 @@ async function loadInsight(){
     const r=await fetch('/api/leadstream/insight',{signal:AbortSignal.timeout(60000)});
     const d=await r.json();
     if(d.error)throw new Error(d.error);
+    renderVerdict(d);
     renderLeaks(d.leaks||[]);
     renderScoreboard(d.scoreboard||[]);
     renderSources(d.sources||[]);
@@ -917,12 +869,23 @@ async function loadInsight(){
   }
 }
 
-loadDashboard();
-loadWeekly();
+/* Insight paints the whole top of the page and answers in under a second.
+   The heavy dashboard walk (agent lists, pond list, history) loads only
+   when a drill-down is opened, so the page never waits on it. */
+let _ddLoaded = false;
+function ensureDrilldowns() {
+  if (_ddLoaded) return;
+  _ddLoaded = true;
+  loadDashboard();
+  loadWeekly();
+}
+['dd-agents', 'dd-pond', 'dd-history'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('toggle', () => { if (el.open) ensureDrilldowns(); });
+});
 loadInsight();
-setInterval(loadDashboard, 3 * 60 * 1000);
-setInterval(loadWeekly, 5 * 60 * 1000);
 setInterval(loadInsight, 5 * 60 * 1000);
+setInterval(() => { if (_ddLoaded) { loadDashboard(); loadWeekly(); } }, 5 * 60 * 1000);
 </script>
 </body>
 </html>

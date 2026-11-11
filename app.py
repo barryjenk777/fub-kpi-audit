@@ -1423,15 +1423,35 @@ def _market_page_context(slug, audience):
 @app.route("/market")
 def market_index():
     import market_pulse as _mp
-    links = "".join(
-        f'<li style="margin:.35rem 0"><b>{name}</b>: '
-        f'<a href="/market/{slug}/sellers" style="color:#b97a12">sellers</a> · '
-        f'<a href="/market/{slug}/buyers" style="color:#b97a12">buyers</a></li>'
+    cards = "".join(
+        f'<div style="background:#fdfcf8;border:1px solid #243050;border-radius:12px;'
+        f'padding:1rem 1.2rem;display:flex;align-items:center;justify-content:space-between">'
+        f'<div style="font-weight:700">{name}</div>'
+        f'<div style="display:flex;gap:.6rem">'
+        f'<a href="/market/{slug}/sellers" style="color:#2340d6;font-weight:600;'
+        f'text-decoration:none">sellers</a>'
+        f'<a href="/market/{slug}/buyers" style="color:#2340d6;font-weight:600;'
+        f'text-decoration:none">buyers</a></div></div>'
         for slug, (name, _, _) in _mp.CITIES.items())
-    return (f"<div style='font-family:sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem'>"
-            f"<h2>Hampton Roads Market Pages</h2>"
-            f"<p><a href='/market/ammo' style='color:#b97a12;font-weight:600'>🎯 Agent Nurture Ammo (scripts)</a></p>"
-            f"<ul style='list-style:none;padding:0'>{links}</ul></div>")
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Market Pages</title>"
+        "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&display=swap'>"
+        "</head><body style=\"margin:0;background:#f4f2ec;color:#191b1e;"
+        "font-family:'Archivo',sans-serif\">"
+        "<div style='max-width:680px;margin:0 auto;padding:2rem 1rem 4rem'>"
+        "<a href='/' style='color:#68789a;text-decoration:none;font-size:.85rem'>&larr; Command Center</a>"
+        "<h2 style='margin:.8rem 0 .3rem'>Hampton Roads Market Pages</h2>"
+        "<p style='color:#68789a;margin:0 0 1.2rem;font-size:.9rem'>"
+        "City-by-city numbers your clients can check themselves. Refreshed the 1st and 15th.</p>"
+        "<a href='/market/ammo' style='display:block;background:#fdfcf8;border:1px solid #243050;"
+        "border-left:4px solid #2340d6;border-radius:12px;padding:1rem 1.2rem;margin-bottom:1rem;"
+        "color:inherit;text-decoration:none'><b>🎯 Agent Nurture Ammo</b>"
+        "<div style='color:#68789a;font-size:.85rem'>Ready-to-send scripts with this month's "
+        "numbers baked in. Bookmark it on your phone.</div></a>"
+        f"<div style='display:grid;gap:.6rem'>{cards}</div>"
+        "</div></body></html>")
 
 
 @app.route("/market/ammo")
@@ -4008,11 +4028,23 @@ def api_leadstream_dashboard():
     import json as _json
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
 
-    # 3-minute cache to avoid hammering FUB API on every page refresh
+    # 10-minute in-process cache, then a shared Postgres tier. The shared
+    # tier matters since the scheduler split: the web process restarts cold
+    # and must not spend 20s of FUB calls on a page view. ?refresh=1 bypasses.
     now = _dt.now(_tz.utc)
+    force = request.args.get("refresh") == "1"
     cached = _ls_dashboard_cache
-    if cached["data"] and cached["time"] and (now - cached["time"]).seconds < 180:
+    if not force and cached["data"] and cached["time"] and (now - cached["time"]).seconds < 600:
         return jsonify(cached["data"])
+    if not force:
+        try:
+            db_hit = _db.db_cache_get("leadstream_dashboard_v2", max_age_hours=1)
+        except Exception:
+            db_hit = None
+        if db_hit:
+            _ls_dashboard_cache["data"] = db_hit
+            _ls_dashboard_cache["time"] = now
+            return jsonify(db_hit)
 
     # ── Load manifest (primary source of truth) ───────────────────────
     _is_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PROJECT_ID"))
@@ -4135,6 +4167,10 @@ def api_leadstream_dashboard():
     if grand_total > 0:
         _ls_dashboard_cache["data"] = result
         _ls_dashboard_cache["time"] = now
+        try:
+            _db.db_cache_set("leadstream_dashboard_v2", result)
+        except Exception:
+            pass
 
         # ── Persist engagement snapshot for weekly tracker ────────────────
         # Keyed by last_run timestamp so each scoring run has one record.
@@ -5871,18 +5907,141 @@ def callaction_page():
                            key=request.args.get("key", ""))
 
 
+_ca_ctx_cache = {}          # person_id -> (epoch, context) CallAction dossiers
+_CA_CTX_TTL = 6 * 3600      # a dossier barely changes within a shift
+_ca_bg_enriching = threading.Lock()
+
+
+def _ca_build_context(client, r):
+    """One lead's dossier: up to 4 FUB reads. Called through the cache only —
+    at ~1s each, uncached loops froze the page for 40s."""
+    try:
+        pid = r["person_id"]
+        p = client._request("GET", "people/%s" % pid, params={
+            "fields": "id,stage,source,created,addresses,phones"}) or {}
+        city = ((p.get("addresses") or [{}])[0] or {}).get("city")
+        phone = ((p.get("phones") or [{}])[0] or {}).get("value")
+        data = client._request("GET", "textMessages", params={
+            "personId": pid, "limit": 30}) or {}
+        txts = next((v for v in data.values()
+                     if isinstance(v, list)), [])
+        inb = sorted([t for t in txts if t.get("isIncoming")],
+                     key=lambda t: t.get("created") or "")
+        outb = [t for t in txts if not t.get("isIncoming")]
+        reply_mins = None
+        if inb:
+            last_in_created = inb[-1].get("created") or ""
+            prior = [t.get("created") for t in outb
+                     if (t.get("created") or "") < last_in_created]
+            if prior:
+                try:
+                    a = datetime.fromisoformat(
+                        max(prior).replace("Z", "+00:00"))
+                    b = datetime.fromisoformat(
+                        last_in_created.replace("Z", "+00:00"))
+                    reply_mins = max(0, int(
+                        (b - a).total_seconds() // 60))
+                except (ValueError, TypeError):
+                    pass
+        # Their words live behind FUB's privacy wall, but CallAction's
+        # FUB notes carry a cact.co deep link straight to the thread.
+        ca_link = None
+        try:
+            import re as _re
+            nd = client._request("GET", "notes", params={
+                "personId": pid, "limit": 10}) or {}
+            for nrow in nd.get("notes") or []:
+                m = _re.search(r"https://cact\.co/[A-Za-z0-9]+",
+                               nrow.get("body") or "")
+                if m:
+                    ca_link = m.group(0)
+                    break
+        except Exception:
+            pass
+        # Verifiable intent without words: did they go back to
+        # browsing homes AFTER texting us back?
+        browsing_after = None
+        try:
+            if inb:
+                evd = client._request("GET", "events", params={
+                    "personId": pid, "limit": 10}) or {}
+                last_in_created = inb[-1].get("created") or ""
+                for ev in evd.get("events") or []:
+                    if (ev.get("created") or "") > last_in_created \
+                            and "propert" in (ev.get("type")
+                                              or "").lower():
+                        browsing_after = (ev.get("created") or "")[:10]
+                        break
+        except Exception:
+            pass
+        # Engagement read: honest signals, never claimed as the
+        # words (notification truth test). 2+ replies or browsing
+        # after replying = engaged; one reply = replied.
+        read, why = None, []
+        if len(inb) >= 2:
+            read = "engaged"
+            why.append("%d replies back and forth" % len(inb))
+        elif len(inb) == 1:
+            read = "replied"
+            why.append("one reply")
+        if reply_mins is not None and reply_mins <= 5:
+            why.append("texted back within %d minute%s"
+                       % (max(reply_mins, 1),
+                          "" if reply_mins <= 1 else "s"))
+        if browsing_after:
+            read = "engaged"
+            why.append("back to browsing homes since replying")
+        ctx = {
+            "stage": p.get("stage"), "source": p.get("source"),
+            "city": city, "phone": phone,
+            "lead_since": (p.get("created") or "")[:4] or None,
+            "replies": len(inb), "drips_sent": len(outb),
+            "last_reply_at": inb[-1].get("created") if inb else None,
+            "reply_mins": reply_mins, "ca_link": ca_link,
+            "read": read, "read_why": ", ".join(why) or None}
+        _ca_ctx_cache[str(pid)] = (time.time(), ctx)
+        return ctx
+    except Exception:
+        return None
+
+
+def _ca_enrich_background(rows):
+    """Fill dossiers for the rows one request couldn't afford, so the NEXT
+    page load has them. One thread at a time; its own FUB client."""
+    if not _ca_bg_enriching.acquire(blocking=False):
+        return
+    try:
+        client = FUBClient()
+        for r in rows[:40]:
+            key = str(r["person_id"])
+            hit = _ca_ctx_cache.get(key)
+            if hit and time.time() - hit[0] < _CA_CTX_TTL:
+                continue
+            _ca_build_context(client, r)
+    except Exception as e:
+        logger.warning("callaction background enrich failed: %s", e)
+    finally:
+        _ca_bg_enriching.release()
+
+
 @app.route("/api/dispatch/callaction")
 def api_ca_list():
     """Pending responses for the audit page. Rows whose text had not
     synced when the tag landed re-read here (self-healing: the tag
-    webhook usually beats the text into FUB)."""
+    webhook usually beats the text into FUB). Dossiers come from a 6h
+    cache; at most 8 are built inline (~5s worst case) and the rest fill
+    in a background thread — the uncached version took 40s per view."""
     if not _dispatch_auth():
         return jsonify({"error": "Unauthorized"}), 401
     rows = _db.get_ca_responses(pending_only=True, limit=200)
     client = None
+    heal_reads = 0
     for r in rows:
         if r.get("message") or r.get("sentiment") != "unread":
             continue
+        if heal_reads >= 10:
+            break
+        heal_reads += 1
         client = client or FUBClient()
         msg, found = _ca_read_inbound(r["person_id"], client)
         if found:
@@ -5891,98 +6050,24 @@ def api_ca_list():
                 r.update({"message": msg, "sentiment": s, "score": sc,
                           "reason": why})
     # Dossier enrichment (Barry, Nov 7 2026: cards without text were "a
-    # waste of space"). FUB hides message CONTENT from API systems until
-    # content access is granted for LegacyCommandCenter, but the metadata
-    # still tells Fhalen a real story: when they replied, how fast after
-    # our drip text, and who the lead actually is.
-    client = client or FUBClient()
+    # waste of space"). Served from cache; see _ca_build_context.
+    now_ts = time.time()
+    to_build = []
     for r in rows[:30]:
-        try:
-            pid = r["person_id"]
-            p = client._request("GET", "people/%s" % pid, params={
-                "fields": "id,stage,source,created,addresses,phones"}) or {}
-            city = ((p.get("addresses") or [{}])[0] or {}).get("city")
-            phone = ((p.get("phones") or [{}])[0] or {}).get("value")
-            data = client._request("GET", "textMessages", params={
-                "personId": pid, "limit": 30}) or {}
-            txts = next((v for v in data.values()
-                         if isinstance(v, list)), [])
-            inb = sorted([t for t in txts if t.get("isIncoming")],
-                         key=lambda t: t.get("created") or "")
-            outb = [t for t in txts if not t.get("isIncoming")]
-            reply_mins = None
-            if inb:
-                last_in_created = inb[-1].get("created") or ""
-                prior = [t.get("created") for t in outb
-                         if (t.get("created") or "") < last_in_created]
-                if prior:
-                    try:
-                        a = datetime.fromisoformat(
-                            max(prior).replace("Z", "+00:00"))
-                        b = datetime.fromisoformat(
-                            last_in_created.replace("Z", "+00:00"))
-                        reply_mins = max(0, int(
-                            (b - a).total_seconds() // 60))
-                    except (ValueError, TypeError):
-                        pass
-            # Their words live behind FUB's privacy wall, but CallAction's
-            # FUB notes carry a cact.co deep link straight to the thread.
-            ca_link = None
-            try:
-                import re as _re
-                nd = client._request("GET", "notes", params={
-                    "personId": pid, "limit": 10}) or {}
-                for nrow in nd.get("notes") or []:
-                    m = _re.search(r"https://cact\.co/[A-Za-z0-9]+",
-                                   nrow.get("body") or "")
-                    if m:
-                        ca_link = m.group(0)
-                        break
-            except Exception:
-                pass
-            # Verifiable intent without words: did they go back to
-            # browsing homes AFTER texting us back?
-            browsing_after = None
-            try:
-                if inb:
-                    evd = client._request("GET", "events", params={
-                        "personId": pid, "limit": 10}) or {}
-                    last_in_created = inb[-1].get("created") or ""
-                    for ev in evd.get("events") or []:
-                        if (ev.get("created") or "") > last_in_created \
-                                and "propert" in (ev.get("type")
-                                                  or "").lower():
-                            browsing_after = (ev.get("created") or "")[:10]
-                            break
-            except Exception:
-                pass
-            # Engagement read: honest signals, never claimed as the
-            # words (notification truth test). 2+ replies or browsing
-            # after replying = engaged; one reply = replied.
-            read, why = None, []
-            if len(inb) >= 2:
-                read = "engaged"
-                why.append("%d replies back and forth" % len(inb))
-            elif len(inb) == 1:
-                read = "replied"
-                why.append("one reply")
-            if reply_mins is not None and reply_mins <= 5:
-                why.append("texted back within %d minute%s"
-                           % (max(reply_mins, 1),
-                              "" if reply_mins <= 1 else "s"))
-            if browsing_after:
-                read = "engaged"
-                why.append("back to browsing homes since replying")
-            r["context"] = {
-                "stage": p.get("stage"), "source": p.get("source"),
-                "city": city, "phone": phone,
-                "lead_since": (p.get("created") or "")[:4] or None,
-                "replies": len(inb), "drips_sent": len(outb),
-                "last_reply_at": inb[-1].get("created") if inb else None,
-                "reply_mins": reply_mins, "ca_link": ca_link,
-                "read": read, "read_why": ", ".join(why) or None}
-        except Exception:
+        hit = _ca_ctx_cache.get(str(r["person_id"]))
+        if hit and now_ts - hit[0] < _CA_CTX_TTL:
+            r["context"] = hit[1]
+        else:
             r["context"] = None
+            to_build.append(r)
+    if to_build:
+        client = client or FUBClient()
+        for r in to_build[:8]:
+            r["context"] = _ca_build_context(client, r)
+        if len(to_build) > 8:
+            pending_bg = [{"person_id": r["person_id"]} for r in to_build[8:]]
+            threading.Thread(target=_ca_enrich_background,
+                             args=(pending_bg,), daemon=True).start()
     rows.sort(key=lambda r: ((r["sentiment"] != "positive"),
                              (r["sentiment"] not in ("neutral", "unread")),
                              r["created_at"]), )
@@ -22643,6 +22728,20 @@ def _alert_on_job_failure(job_name: str, error: str):
         pass  # Don't let alerting failures mask the original error
 
 
+def scheduled_leadstream_dashboard_warm():
+    """Every 10 min, working hours: precompute the LeadStream dashboard into
+    the shared Postgres cache so no page view ever pays the ~20s FUB build.
+    Runs in the worker; the web process serves the db tier."""
+    if not _db.try_acquire_job_lock("leadstream_dash_warm"):
+        return
+    try:
+        with app.test_client() as tc:
+            r = tc.get("/api/leadstream/dashboard?refresh=1")
+            print(f"[SCHEDULER] leadstream dashboard warm: HTTP {r.status_code}")
+    except Exception as e:
+        print(f"[SCHEDULER] leadstream dashboard warm FAILED: {e}")
+
+
 def scheduled_cache_warm():
     """Called by APScheduler 3x/day to keep cache fresh."""
     if not _db.try_acquire_job_lock("cache_warm"):
@@ -26469,7 +26568,15 @@ def api_today():
     except Exception:
         cached = None
     if cached and request.args.get("refresh") != "1":
-        return jsonify(cached)
+        # cache_get keys by day — enforce the 5 minutes ourselves, or the
+        # 7:51am build serves all day (found stale by 11h on Nov 10).
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                cached.get("generated_at", ""))).total_seconds()
+        except (ValueError, TypeError):
+            age = None
+        if age is not None and age < 300:
+            return jsonify(cached)
     items = []
     fub = "https://yourfriendlyagent.followupboss.com/2/people/view/%s"
     try:
@@ -26495,9 +26602,10 @@ def api_today():
     try:
         for h in _flightplan_status():
             if h.get("slip"):
+                _lbl = h["slip"]["label"]
+                _lbl = _lbl[2:] if _lbl.startswith("a ") else _lbl
                 items.append({"sev": 1, "what": "%s is %d days in with no %s"
-                              % (h["agent"].split()[0], h["days_in"],
-                                 h["slip"]["label"]),
+                              % (h["agent"].split()[0], h["days_in"], _lbl),
                               "do": "Call them today, human voice beats "
                                     "another nudge", "link": "/team/onboarding"})
     except Exception as _fe:
@@ -30404,6 +30512,14 @@ def start_scheduler():
     # LeadStream pond refresh: hourly at :37
     _scheduler.add_job(scheduled_run_leadstream_pond, CronTrigger(minute=50, timezone=ET),
                        id="leadstream_pond", name="LeadStream pond refresh (hourly)",
+                       max_instances=1, misfire_grace_time=120)
+
+    # LeadStream dashboard warm: every 10 min working hours, so the page
+    # always serves a <1s cached build instead of a 20s cold FUB walk.
+    _scheduler.add_job(scheduled_leadstream_dashboard_warm,
+                       CronTrigger(minute="*/10", hour="7-20", timezone=ET),
+                       id="leadstream_dash_warm",
+                       name="LeadStream dashboard warm (10 min)",
                        max_instances=1, misfire_grace_time=120)
 
     # LeadStream nightly cleanup: 3am ET
