@@ -23629,6 +23629,60 @@ def api_routing_health():
                              "forward")})
 
 
+@app.route("/api/admin/desk/recovery-batch", methods=["POST"])
+def api_desk_recovery_batch():
+    """Deliberate recovery of MISSED conversions, Barry-approved by
+    explicit list only (born Nov 11 2026, the Ylopo post-mortem: nine
+    real conversions from Nov 1-6 stuck behind the dark lane). These are
+    outside the 48h wall on purpose, so the auto-lanes rightly refuse
+    them; this endpoint routes them as claim offers whose evidence line
+    says plainly when the conversion happened and that the window was
+    missed. {"leads": [{"person_id", "note"}], "apply": false}"""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    leads = body.get("leads") or []
+    apply = bool(body.get("apply"))
+    if not leads or len(leads) > 15:
+        return jsonify({"error": "1-15 leads required"}), 400
+    import dispatch as _dp
+    client = FUBClient()
+    out = []
+    for item in leads:
+        pid = str(item.get("person_id") or "").strip()
+        note = (item.get("note") or "").strip()
+        if not pid:
+            continue
+        try:
+            p = client._request("GET", "people/%s" % pid, params={
+                "fields": "id,name,assignedTo,source,addresses"}) or {}
+        except Exception as e:
+            out.append({"person_id": pid, "error": str(e)[:120]})
+            continue
+        row = {"person_id": pid, "name": p.get("name"),
+               "assigned": p.get("assignedTo"), "note": note}
+        if apply:
+            city = next((a.get("city") for a in (p.get("addresses") or [])
+                         if isinstance(a, dict) and a.get("city")), None)
+            res = _dp.make_offer(
+                "recovery", pid, (p.get("name") or "").strip(), city,
+                notes=("MISSED CONVERSION RECOVERY: %s This one slipped "
+                       "past the desk while a routing bug was live; the "
+                       "trail is real, the delay is ours. Lead with an "
+                       "apology for the wait." % note),
+                audit=cache_get("audit") or {},
+                lead_source=p.get("source"))
+            row["offered"] = bool(res)
+            row["offered_to"] = (res or {}).get("agent_name")
+            _db.log_automation_event(
+                event_type="recovery_offer", person_id=pid,
+                person_name=p.get("name"),
+                agent_name=(res or {}).get("agent_name"),
+                payload={"note": note}, triggered_by="recovery_batch")
+        out.append(row)
+    return jsonify({"ok": True, "applied": apply, "leads": out})
+
+
 @app.route("/api/admin/desk/clear-tags", methods=["POST"])
 def api_desk_clear_tags():
     """Owner tool: un-burn specific desk ledger rows for one lead so the
@@ -23889,6 +23943,29 @@ def scheduled_operator_pulse():
         if un:
             lines.append("%d pond leads said yes to the AI and still have "
                          "no call. Names: %s/outreach" % (int(un), config.BASE_URL))
+        # The routing watchdog (promised Nov 11): conversions mirrored
+        # with no real owner, and the parked-evidence backlog. The first
+        # morning either is nonzero, Barry hears before coffee.
+        try:
+            dark = 0
+            for ev in _db.get_automation_events("ai_convert_seen",
+                                                days=1, limit=100):
+                if _desk_dark_owner((ev.get("payload") or {})
+                                    .get("assigned_to")):
+                    dark += 1
+            if dark:
+                lines.append("%d conversion%s got mirrored with no real "
+                             "owner in the last day. That is a routing "
+                             "failure: %s/api/admin/desk/routing-health"
+                             % (dark, "" if dark == 1 else "s",
+                                config.BASE_URL))
+            parked = len(_db.get_evidence_retries(limit=20))
+            if parked >= 5:
+                lines.append("%d conversions are parked waiting on "
+                             "evidence sync. Normal when small; a pile "
+                             "means a feed is down." % parked)
+        except Exception:
+            pass
         if not lines:
             print("[SCHEDULER] operator pulse: all quiet, no DM")
             return
