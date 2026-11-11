@@ -74,8 +74,9 @@ function rel(iso){var d=new Date(iso);if(isNaN(d))return'';
   if(m<60)return m+'m ago'; if(m<1440)return Math.floor(m/60)+'h ago';
   return Math.floor(m/1440)+'d ago';}
 function load(){
-  fetch('/api/dispatch/callaction?key='+encodeURIComponent(KEY))
-    .then(function(r){return r.json();})
+  fetch('/api/dispatch/callaction?key='+encodeURIComponent(KEY),
+        {signal:AbortSignal.timeout(60000)})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
     .then(function(d){
       var c=d.counts||{};
       document.getElementById('counts').innerHTML=
@@ -139,8 +140,9 @@ function load(){
       });
       el.innerHTML=h;
     })
-    .catch(function(){document.getElementById('list').innerHTML=
-      '<div class="empty-state">Could not load. Pull to refresh.</div>';});
+    .catch(function(e){document.getElementById('list').innerHTML=
+      '<div class="empty-state">Could not load the replies. '+
+      '<a href="#" onclick="load();return false" style="color:inherit;font-weight:700;text-decoration:underline">Try again</a></div>';});
 }
 function decide(id,what,btn){
   var card=document.getElementById('row-'+id);
