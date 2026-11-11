@@ -16517,7 +16517,22 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # softly pinged to an owner, but never offered to the claim
             # board as a hot conversion and never escalated.
             _ask = [t for t in _fresh if t != "y_ai_priority"]
-            _engaged = bool(_ask) and _had_inbound_within(pid, hours=24)
+            # The truth test reads ALL the evidence channels (Nov 11
+            # 2026, Gorg Joyner, second gate same blind spot): our own
+            # reply ledger (sendblue never reaches FUB's text feed) and,
+            # for voice conversion tags, the call disposition feed
+            # (Barry: AI_VOICE_NEEDS_FOLLOW_UP is a conversion tag, it
+            # does not fire on voicemail; the disposition verifies the
+            # conversation is FRESH, since Ylopo tags persist forever).
+            _voice_ask = any(t in _fresh for t in
+                             ("ai_voice_needs_follow_up",
+                              "isa_transfer_unsuccessful",
+                              "isa_attempted_transfer_realtor_unavailable"))
+            _engaged = bool(_ask) and (
+                _db.person_replied_within(pid, hours=24)
+                or _had_inbound_within(pid, hours=24)
+                or (_voice_ask
+                    and bool(_fresh_ai_voice_outcome(pid, hours=48))))
             if (live or "").strip() == "1" and not _owned \
                     and _ask and _engaged:
                 import dispatch as _dp
@@ -23446,6 +23461,21 @@ def scheduled_coach_brief():
               % (to, [a["agent"] for a in data["agents"]]))
     except Exception as e:
         print(f"[SCHEDULER] coach brief FAILED: {e}")
+
+
+@app.route("/api/admin/desk/clear-tags", methods=["POST"])
+def api_desk_clear_tags():
+    """Owner tool: un-burn specific desk ledger rows for one lead so the
+    next sweep re-sees the tags and routes. {"person_id": ..., "tags": []}"""
+    if not _dispatch_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    pid = str(body.get("person_id") or "").strip()
+    tags = body.get("tags") or []
+    if not pid or not tags:
+        return jsonify({"error": "person_id and tags required"}), 400
+    n = _db.clear_desk_tags(pid, tags)
+    return jsonify({"ok": True, "cleared": n})
 
 
 @app.route("/api/admin/snapshots/run", methods=["POST"])
