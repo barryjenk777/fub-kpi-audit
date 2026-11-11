@@ -1740,7 +1740,12 @@ def scheduled_market_pulse_refresh():
 def dashboard():
     """The Operator home (Barry, Nov 7 2026: 'ship it: the whole
     thing'). The classic dashboard lives on at /classic, one click
-    away, nothing removed."""
+    away, nothing removed. Tab deep links (/?tab=outreach etc.) are
+    classic-UI URLs that still live in sidebars and bookmarks: send
+    them to /classic, which reads ?tab= and opens the right view."""
+    if request.args.get("tab"):
+        qs = request.query_string.decode()
+        return redirect("/classic?" + qs)
     return render_template("operator_home.html")
 
 
