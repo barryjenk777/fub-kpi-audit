@@ -23022,6 +23022,106 @@ def scheduled_metric_snapshots():
         print(f"[SCHEDULER] metric snapshots FAILED: {e}")
 
 
+@app.route("/roi")
+def roi_page():
+    """Source accountability: what each source costs, in plain terms, and
+    what it has produced. Born when Realtor.com became the first source
+    Barry pays for with his own money (Nov 2026)."""
+    return render_template("roi_board.html")
+
+
+@app.route("/api/roi/realtor")
+def api_roi_realtor():
+    """The Realtor.com ledger. Leads are counted BOTH ways: people whose
+    FUB source is Realtor.com (created since the first order), plus leads
+    whose RDC inquiry event fired even though FUB kept their old source
+    (Nov 10 2026: a year-old Ylopo lead re-registered on realtor.com and
+    FUB still says Ylopo — the spend earned that lead, the source field
+    lies about it)."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import revenue as _rev
+    spend = _rev.spend_to_date("realtor.com")
+    first_order = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    days_live = max((now - first_order).total_seconds() / 86400.0, 0.1)
+    client = FUBClient()
+    leads = {}
+    # Way 1: FUB source says Realtor.com, created since the first order.
+    try:
+        d = client._request("GET", "people", params={
+            "source": "Realtor.com", "sort": "-created", "limit": 50,
+            "createdAfter": "2026-11-02",
+            "fields": "id,name,created,stage,assignedTo,source"}) or {}
+        for p in next((v for v in d.values() if isinstance(v, list)), []):
+            leads[str(p["id"])] = {
+                "person_id": str(p["id"]), "name": p.get("name"),
+                "created": p.get("created"), "stage": p.get("stage"),
+                "agent": p.get("assignedTo"), "fub_source": p.get("source"),
+                "attribution": "source field"}
+    except Exception as e:
+        logger.warning("roi: people query failed: %s", e)
+    # Way 2: the inquiry events (re-registrations under an old source).
+    _EVENT_TYPES = ("realtor_shootout", "realtor_inquiry_owner_ping",
+                    "realtor_already_assigned", "realtor_inquiry_in_flight",
+                    "realtor_gated")
+    for et in _EVENT_TYPES:
+        for ev in _db.get_automation_events(et, days=int(days_live) + 1,
+                                            limit=100):
+            pid = str(ev.get("person_id") or "")
+            if not pid or pid in leads:
+                continue
+            try:
+                p = client._request("GET", "people/%s" % pid, params={
+                    "fields": "id,name,created,stage,assignedTo,source"}) or {}
+            except Exception:
+                p = {}
+            leads[pid] = {
+                "person_id": pid, "name": p.get("name") or ev.get("person_name"),
+                "created": ev.get("at"), "stage": p.get("stage"),
+                "agent": p.get("assignedTo"),
+                "fub_source": p.get("source"),
+                "attribution": "inquiry event (%s)" % et.replace("realtor_", "")}
+    # Outcomes: appointments for these people, from our own table.
+    pids = list(leads.keys())
+    appts = {}
+    if pids:
+        try:
+            with _db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT person_id::text,
+                               COUNT(*) FILTER (WHERE status != 'canceled'),
+                               COUNT(*) FILTER (WHERE outcome = 'showed'
+                                                OR status = 'showed')
+                        FROM appointments
+                        WHERE person_id::text = ANY(%s)
+                        GROUP BY 1
+                    """, (pids,))
+                    appts = {r[0]: {"set": r[1], "held": r[2]}
+                             for r in cur.fetchall()}
+        except Exception as e:
+            logger.warning("roi: appts query failed: %s", e)
+    for pid, l in leads.items():
+        l["appts"] = appts.get(pid) or {"set": 0, "held": 0}
+    rows = sorted(leads.values(), key=lambda l: l.get("created") or "",
+                  reverse=True)
+    n = len(rows)
+    pace_monthly = round(n / (days_live / 30.44), 1)
+    cpl = round(spend["to_date"] / n, 2) if n else None
+    return jsonify({
+        "ok": True, "spend": spend, "days_live": round(days_live, 1),
+        "leads": rows, "lead_count": n,
+        "pace_monthly": pace_monthly,
+        "cost_per_lead": cpl,
+        "appts_set": sum(l["appts"]["set"] for l in rows),
+        "appts_held": sum(l["appts"]["held"] for l in rows),
+        "deal_terms": _rev.SOURCE_DEAL_TERMS,
+        "referral_fees": {k: int(v * 100)
+                          for k, v in _rev.REFERRAL_FEES.items()},
+    })
+
+
 @app.route("/api/admin/desk/fossil-audit", methods=["POST"])
 def api_desk_fossil_audit():
     """Recheck every conversion the fossil guard suppressed: was there

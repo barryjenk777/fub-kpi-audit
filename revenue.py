@@ -48,6 +48,58 @@ REFERRAL_FEES = {
     "other": 0.0,
 }
 
+# How each source is paid for, in plain words (shown on /roi).
+SOURCE_DEAL_TERMS = {
+    "ylopo": "Ylopo LPT pays for the leads; 40% referral fee comes off GCI at close",
+    "probate": "25% referral fee to the partner brokerage at close",
+    "zbuyer": "free to us",
+    "realtor.com": "our own money, monthly, 12-month terms",
+    "cash_site": "our own site",
+}
+
+# Out-of-pocket spend, per bucket. Realtor.com is the first source Barry
+# pays for directly: the three November 2026 orders, from the Nov 11
+# screenshot of the RDC account (pre-tax).
+SOURCE_SPEND = {
+    "realtor.com": {
+        "orders": [
+            {"start": "2026-11-02", "monthly": 1702.04,
+             "label": "7 slots: 23454, 23456, 23462"},
+            {"start": "2026-11-04", "monthly": 271.37,
+             "label": "1 slot: 23464"},
+            {"start": "2026-11-06", "monthly": 269.78,
+             "label": "1 slot: 23323 Chesapeake"},
+        ],
+        "term_months": 12,
+        "expected_leads_monthly": 30,
+        "note": "pre-tax, 12-month terms",
+    },
+}
+
+
+def spend_to_date(bucket, as_of=None):
+    """Dollars actually incurred so far: each order's monthly rate,
+    prorated by days elapsed since its start (30.44-day months)."""
+    from datetime import datetime as _dt, timezone as _tz
+    cfg = SOURCE_SPEND.get(bucket)
+    if not cfg:
+        return None
+    now = as_of or _dt.now(_tz.utc)
+    total = 0.0
+    monthly_now = 0.0
+    for o in cfg["orders"]:
+        start = _dt.fromisoformat(o["start"]).replace(tzinfo=_tz.utc)
+        days = (now - start).total_seconds() / 86400.0
+        if days <= 0:
+            continue
+        total += o["monthly"] * (days / 30.44)
+        monthly_now += o["monthly"]
+    return {"to_date": round(total, 2), "monthly": round(monthly_now, 2),
+            "term_total": round(sum(o["monthly"] for o in cfg["orders"])
+                                * cfg.get("term_months", 12), 2),
+            "orders": cfg["orders"], "note": cfg.get("note"),
+            "expected_leads_monthly": cfg.get("expected_leads_monthly")}
+
 _CACHE = {"at": 0.0, "data": None}
 _CACHE_TTL = 30 * 60
 _LOCK = threading.Lock()

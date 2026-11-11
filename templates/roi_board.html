@@ -1,0 +1,79 @@
+{% extends "board_base.html" %}
+{% set active='roi' %}
+{% block title %}Source ROI — Legacy Home Team{% endblock %}
+{% block page_title %}💸 Source ROI{% endblock %}
+{% block page_meta %}What each lead source costs, in plain terms, and what it gives back. Your own money gets the microscope.{% endblock %}
+{% block page_actions %}
+  <a class="btn btn-ghost btn-sm" href="/revenue">💰 GCI by source</a>
+{% endblock %}
+{% block content %}
+      <div class="banner">
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div class="dot dot-amber" id="v-dot"></div>
+          <div><div class="banner-text" id="v-text">Reading the ledger&hellip;</div>
+          <div class="banner-meta" id="v-meta"></div></div>
+        </div>
+        <div class="banner-meta" id="v-days"></div>
+      </div>
+
+      <div class="section-header"><span class="icon">🏠</span> Realtor.com, your money
+        <span style="font-weight:400;font-size:.72rem;margin-left:.5rem">first dollar Nov 2, 2026. Every lead below is one the spend earned.</span></div>
+      <div id="rdc-tiles" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:.6rem"></div>
+      <div id="rdc-leads"><div class="skeleton" style="height:120px"></div></div>
+
+      <details style="margin-top:.8rem" open>
+        <summary>🧾 The orders (what you are committed to)</summary>
+        <div id="orders-wrap" style="margin-top:.6rem"></div>
+      </details>
+
+      <div class="section-header"><span class="icon">⚖️</span> Every source, the deal you have</div>
+      <div id="terms-wrap"><div class="skeleton" style="height:120px"></div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+function tile(v,l,sub,color){return '<div class="card" style="padding:.8rem 1rem"><div style="font-size:.63rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">'+l+'</div><div style="font-size:1.6rem;font-weight:800;'+(color?('color:'+color):'')+'">'+v+'</div><div style="font-size:.68rem;color:var(--muted)">'+(sub||'')+'</div></div>';}
+async function load(){
+  try{
+    const d=await (await fetch('/api/roi/realtor',{signal:AbortSignal.timeout(90000)})).json();
+    const s=d.spend||{};
+    const vt=document.getElementById('v-text'),vm=document.getElementById('v-meta'),vd=document.getElementById('v-dot');
+    const early=d.days_live<30;
+    vt.textContent=money(s.to_date)+' spent so far, '+d.lead_count+' lead'+(d.lead_count===1?'':'s')+' earned'+(d.cost_per_lead?(' ('+money(d.cost_per_lead)+' each)'):'');
+    vm.textContent='Pace: '+d.pace_monthly+' leads a month vs the '+(s.expected_leads_monthly||30)+' the account promises. '+
+      (early?'Too early to grade; a fair read needs a full month.':'');
+    vd.className='dot '+(early?'dot-amber':(d.pace_monthly>=((s.expected_leads_monthly||30)*0.7)?'dot-green':'dot-rose'));
+    document.getElementById('v-days').textContent=d.days_live+' days live · '+money(s.monthly)+' a month';
+    document.getElementById('rdc-tiles').innerHTML=
+      tile(money(s.to_date),'Spent to date',s.note||'')+
+      tile(d.lead_count,'Leads earned','source field + re-registrations')+
+      tile(d.cost_per_lead?money(d.cost_per_lead):'—','Cost per lead','so far')+
+      tile(d.appts_set,'Appts set',d.appts_held+' held',(d.appts_set||0)>0?'var(--green)':null)+
+      tile(money(s.term_total),'12-month commitment','if nothing changes');
+    const rows=d.leads||[];
+    document.getElementById('rdc-leads').innerHTML=rows.length?
+      ('<div class="table-wrap"><table><thead><tr><th>Lead</th><th>Came in</th><th>How we know it’s RDC</th><th>FUB source says</th><th>Agent</th><th>Stage</th><th>Appts</th></tr></thead><tbody>'+
+      rows.map(l=>'<tr><td><a target="_blank" style="text-decoration:underline;font-weight:700" href="'+fub(l.person_id)+'">'+esc(l.name||'?')+'</a></td>'+
+        '<td>'+esc((l.created||'').slice(0,10))+'</td>'+
+        '<td>'+esc(l.attribution)+'</td>'+
+        '<td'+((l.fub_source||'').toLowerCase().indexOf('realtor')<0?' style="color:var(--yellow)" title="the source field hides this one from naive counting"':'')+'>'+esc(l.fub_source||'?')+'</td>'+
+        '<td>'+esc(l.agent||'unassigned')+'</td><td>'+esc(l.stage||'')+'</td>'+
+        '<td>'+(l.appts.set||0)+' set / '+(l.appts.held||0)+' held</td></tr>').join('')+'</tbody></table></div>'):
+      '<div style="color:var(--muted);font-size:.82rem">No leads counted yet. They appear here the moment either door sees them.</div>';
+    document.getElementById('orders-wrap').innerHTML='<div class="table-wrap"><table><thead><tr><th>Started</th><th>What</th><th>Monthly</th><th>Over the term</th></tr></thead><tbody>'+
+      (s.orders||[]).map(o=>'<tr><td>'+esc(o.start)+'</td><td>'+esc(o.label)+'</td><td>'+money(o.monthly)+'</td><td>'+money(o.monthly*12)+'</td></tr>').join('')+
+      '<tr style="font-weight:800"><td></td><td>Total</td><td>'+money(s.monthly)+'</td><td>'+money(s.term_total)+'</td></tr>'+
+      '</tbody></table></div>';
+    const T=d.deal_terms||{}, F=d.referral_fees||{};
+    const label={ylopo:'Ylopo',probate:'Probate',zbuyer:'zBuyer','realtor.com':'Realtor.com',cash_site:'Cash offer site'};
+    document.getElementById('terms-wrap').innerHTML='<div class="table-wrap"><table><thead><tr><th>Source</th><th>How it is paid for</th><th>Fee at close</th><th>Monthly out of pocket</th></tr></thead><tbody>'+
+      Object.keys(T).map(k=>'<tr><td style="font-weight:700">'+esc(label[k]||k)+'</td><td>'+esc(T[k])+'</td><td>'+(F[k]||0)+'%</td>'+
+        '<td>'+(k==='realtor.com'?('<b>'+money(s.monthly)+'</b>'):'$0')+'</td></tr>').join('')+'</tbody></table></div>'+
+      '<div style="font-size:.72rem;color:var(--muted);margin-top:.4rem">Net GCI after fees lives on the <a href="/revenue" style="text-decoration:underline">Revenue page</a>; this page is the cost side and the accountability.</div>';
+  }catch(e){
+    document.getElementById('v-text').textContent='Could not load the ledger.';
+    document.getElementById('v-meta').innerHTML='<a href="#" onclick="load();return false" style="text-decoration:underline">Try again</a>';
+  }
+}
+load();
+</script>
+{% endblock %}
