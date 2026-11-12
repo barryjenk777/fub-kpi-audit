@@ -1789,14 +1789,22 @@ def scheduled_market_pulse_refresh():
 
 @app.route("/")
 def dashboard():
-    """The Operator home (Barry, Nov 7 2026: 'ship it: the whole
-    thing'). The classic dashboard lives on at /classic, one click
-    away, nothing removed. Tab deep links (/?tab=outreach etc.) are
-    classic-UI URLs that still live in sidebars and bookmarks: send
-    them to /classic, which reads ?tab= and opens the right view."""
+    """The Command home (Barry, Nov 12 2026: 'I click around and don't
+    get satisfied' — the landing page is now the business assessment:
+    week and month with deltas, who's carrying and who's slipping with
+    the why, and the latest wins). The funnel view lives on at /pulse,
+    classic at /classic, nothing removed. Tab deep links (/?tab=...)
+    still forward to /classic."""
     if request.args.get("tab"):
         qs = request.query_string.decode()
         return redirect("/classic?" + qs)
+    return render_template("command_home.html")
+
+
+@app.route("/pulse")
+def pulse_page():
+    """The operator funnel view (the Nov 7 home): funnel strip,
+    bottleneck, decision queue, peek panels."""
     return render_template("operator_home.html")
 
 
@@ -23627,6 +23635,236 @@ def api_routing_health():
                              "mirrored instead of routing although nobody "
                              "real owns the lead; should be empty going "
                              "forward")})
+
+
+@app.route("/api/command-home")
+def api_command_home():
+    """The landing page's one payload (Barry, Nov 12 2026: 'I click
+    around and don't get satisfied'): the week and the month in numbers
+    that matter with deltas, agents winning and slipping WITH the why,
+    and the latest wins with names. Every number from our own tables
+    and warm caches; no live FUB walks; cached 5 minutes."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    cached = cache_get("command_home")
+    if cached and request.args.get("refresh") != "1":
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                cached.get("generated_at", ""))).total_seconds()
+            if age < 300:
+                return jsonify(cached)
+        except (ValueError, TypeError):
+            pass
+    from zoneinfo import ZoneInfo as _ZI
+    et = _ZI("America/New_York")
+    now_et = datetime.now(et)
+    wk0 = (now_et - timedelta(days=now_et.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    lw0, lw1 = wk0 - timedelta(days=7), wk0
+    mo0 = now_et.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    lmo0 = (mo0 - timedelta(days=1)).replace(day=1)
+
+    def _counts(cur, sql, windows, args=()):
+        out = []
+        for lo, hi in windows:
+            cur.execute(sql, args + (lo, hi))
+            out.append(cur.fetchone()[0] or 0)
+        return out
+    wins_sql = [(wk0, now_et), (lw0, lw1), (mo0, now_et), (lmo0, mo0)]
+    metrics = {}
+    conv_by_uid, appts_by_agent, claims, new_appts = {}, {}, [], []
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                metrics["conversations"] = _counts(cur, """
+                    SELECT COUNT(*) FROM calls_cache
+                    WHERE duration >= 120 AND created >= %s AND created < %s
+                """, wins_sql)
+                metrics["appts_set"] = _counts(cur, """
+                    SELECT COUNT(*) FROM appointments
+                    WHERE status != 'canceled'
+                      AND fub_created_at >= %s AND fub_created_at < %s
+                """, wins_sql)
+                metrics["appts_held"] = _counts(cur, """
+                    SELECT COUNT(*) FROM appointments
+                    WHERE (outcome = 'showed' OR status = 'showed')
+                      AND start_time >= %s AND start_time < %s
+                """, wins_sql)
+                metrics["conversions_routed"] = _counts(cur, """
+                    SELECT COUNT(DISTINCT person_id) FROM dispatch_offers
+                    WHERE offered_at >= %s AND offered_at < %s
+                """, wins_sql)
+                # Per-agent week: conversations + appointments.
+                cur.execute("""
+                    SELECT user_id, COUNT(*) FROM calls_cache
+                    WHERE duration >= 120 AND created >= %s
+                    GROUP BY user_id
+                """, (wk0,))
+                conv_by_uid = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("""
+                    SELECT agent_name,
+                           COUNT(*) FILTER (WHERE status != 'canceled'
+                                            AND fub_created_at >= %s),
+                           COUNT(*) FILTER (WHERE (outcome = 'showed'
+                                            OR status = 'showed')
+                                            AND start_time >= %s)
+                    FROM appointments
+                    WHERE fub_created_at >= %s OR start_time >= %s
+                    GROUP BY agent_name
+                """, (wk0, wk0, wk0, wk0))
+                appts_by_agent = {r[0]: {"set": r[1], "held": r[2]}
+                                  for r in cur.fetchall()}
+                # Wins feed raw: claims, appointments, great calls.
+                cur.execute("""
+                    SELECT accepted_at, agent_name, lead_name, source
+                    FROM dispatch_offers
+                    WHERE accepted_at >= NOW() - INTERVAL '72 hours'
+                    ORDER BY accepted_at DESC LIMIT 12
+                """)
+                claims = cur.fetchall()
+                cur.execute("""
+                    SELECT fub_created_at, agent_name, person_name
+                    FROM appointments
+                    WHERE fub_created_at >= NOW() - INTERVAL '72 hours'
+                      AND status != 'canceled'
+                    ORDER BY fub_created_at DESC LIMIT 12
+                """)
+                new_appts = cur.fetchall()
+    except Exception as e:
+        logger.warning("command home sql failed: %s", e)
+    film = _db.get_maverick_agent_rollup(days=7) or {}
+    great_calls = [c for c in (_db.get_maverick_calls(days=3, limit=120)
+                               or [])
+                   if (c.get("call_grade") or 0) >= 8
+                   and (c.get("duration_sec") or 0) >= 120][:8]
+    # Money: the cached revenue snapshot.
+    money = {"month_closings": None, "month_gci": None,
+             "month_net_gci": None, "under_contract": None,
+             "last_month_closings": None, "last_month_gci": None}
+    try:
+        import revenue as _rev
+        snap = _rev.get_snapshot(FUBClient()) or {}
+        mo_iso, lmo_iso = mo0.date().isoformat(), lmo0.date().isoformat()
+        closed = (snap.get("closed_90") or snap.get("closed") or
+                  (snap.get("pipeline") or {}).get("closed") or [])
+        if not closed:
+            for v in snap.values():
+                if isinstance(v, list) and v and isinstance(v[0], dict) \
+                        and "entered_stage" in v[0]:
+                    closed = v
+                    break
+        this_mo = [r for r in closed if (r.get("entered_stage") or "") >= mo_iso]
+        last_mo = [r for r in closed
+                   if lmo_iso <= (r.get("entered_stage") or "") < mo_iso]
+        money["month_closings"] = len(this_mo)
+        money["month_gci"] = round(sum(r.get("gci") or 0 for r in this_mo))
+        money["month_net_gci"] = round(sum(r.get("net_gci") or 0
+                                           for r in this_mo))
+        money["last_month_closings"] = len(last_mo)
+        money["last_month_gci"] = round(sum(r.get("gci") or 0
+                                            for r in last_mo))
+        money["under_contract"] = (snap.get("pipeline") or {}).get(
+            "under_contract_now",
+            len((snap.get("pipeline") or {}).get("under_contract") or []))
+    except Exception as e:
+        logger.warning("command home revenue failed: %s", e)
+    # Agents: winning and slipping, with the why built from real numbers.
+    profiles = _db.get_agent_profiles(active_only=True) or []
+    pace_by = {}
+    try:
+        with app.test_client() as tc:
+            d = tc.get("/api/agents/money?key=%s"
+                       % os.environ.get("PERPLEXITY_API_KEY", "")
+                       ).get_json() or {}
+            pace_by = {a["agent"]: a for a in d.get("agents", [])}
+    except Exception:
+        pass
+    agents = []
+    for p in profiles:
+        n = p["agent_name"]
+        if (p.get("status") or "active") not in ("active", "onboarding"):
+            continue
+        uid = p.get("fub_user_id")
+        f = film.get(n) or {}
+        ap = appts_by_agent.get(n) or {"set": 0, "held": 0}
+        pc = pace_by.get(n) or {}
+        agents.append({
+            "agent": n, "convos_wk": conv_by_uid.get(uid, 0) if uid else 0,
+            "appts_set_wk": ap["set"], "appts_held_wk": ap["held"],
+            "graded_7d": f.get("graded", 0), "avg_grade": f.get("avg_grade"),
+            "pace_pct": pc.get("pace_pct"), "is_new": pc.get("is_new"),
+            "gap": pc.get("gap")})
+    def _why_win(a):
+        bits = []
+        if a["appts_held_wk"]:
+            bits.append("%d appointment%s held" % (a["appts_held_wk"],
+                        "" if a["appts_held_wk"] == 1 else "s"))
+        if a["appts_set_wk"]:
+            bits.append("%d set" % a["appts_set_wk"])
+        if a["convos_wk"]:
+            bits.append("%d conversations" % a["convos_wk"])
+        if a["avg_grade"] and a["avg_grade"] >= 7:
+            bits.append("calls grading %.1f" % a["avg_grade"])
+        return ", ".join(bits) + " this week"
+    def _why_slip(a):
+        if a["convos_wk"] == 0:
+            return "zero 2-minute conversations this week"
+        bits = []
+        if a["avg_grade"] is not None and a["avg_grade"] < 4 \
+                and a["graded_7d"] >= 3:
+            bits.append("calls grading %.1f across %d graded"
+                        % (a["avg_grade"], a["graded_7d"]))
+        if a["appts_set_wk"] == 0 and a["convos_wk"] >= 10:
+            bits.append("%d conversations, no appointment set"
+                        % a["convos_wk"])
+        if (a["pace_pct"] or 100) < 40 and not a["is_new"]:
+            bits.append("%s%% of pace to goal" % a["pace_pct"])
+        return "; ".join(bits)
+    winners = sorted(
+        [a for a in agents if a["appts_set_wk"] or a["appts_held_wk"]
+         or a["convos_wk"] >= 25],
+        key=lambda a: -(a["appts_held_wk"] * 3 + a["appts_set_wk"] * 2
+                        + a["convos_wk"] / 20.0))[:4]
+    slippers = [a for a in agents if _why_slip(a)
+                and a["agent"] not in [w["agent"] for w in winners]]
+    slippers.sort(key=lambda a: (a["convos_wk"], a["appts_set_wk"]))
+    wins_feed = []
+    for at, agent, lead, src in claims:
+        wins_feed.append({"at": at.isoformat(), "kind": "claim",
+                          "text": "%s claimed %s (%s conversion)"
+                          % ((agent or "?").split()[0], lead or "a lead",
+                             {"ai_text": "AI text", "ai_voice": "AI voice",
+                              "blue_text": "AI text", "fhalen": "Fhalen",
+                              "recovery": "recovered",
+                              "ai_nurture": "AI nurture"}.get(src, src))})
+    for at, agent, lead in new_appts:
+        if not agent:
+            continue
+        wins_feed.append({"at": at.isoformat(), "kind": "appt",
+                          "text": "%s set an appointment with %s"
+                          % (agent.split()[0], lead or "a lead")})
+    for c in great_calls:
+        wins_feed.append({"at": c.get("call_time"), "kind": "call",
+                          "text": "%s graded %.0f on the %s call"
+                          % ((c.get("agent_name") or "?").split()[0],
+                             c.get("call_grade"),
+                             (c.get("lead_name") or "a lead").split()[0])})
+    wins_feed = sorted([w for w in wins_feed if w["at"]],
+                       key=lambda w: w["at"], reverse=True)[:12]
+    out = {
+        "ok": True, "generated_at": datetime.now(timezone.utc).isoformat(),
+        "week": {k: {"now": v[0], "last": v[1]} for k, v in metrics.items()},
+        "month": {k: {"now": v[2], "last": v[3]} for k, v in metrics.items()},
+        "money": money,
+        "winners": [{**a, "why": _why_win(a)} for a in winners],
+        "slipping": [{**a, "why": _why_slip(a)} for a in slippers[:4]],
+        "wins_feed": wins_feed,
+    }
+    try:
+        cache_set("command_home", out)
+    except Exception:
+        pass
+    return jsonify(out)
 
 
 @app.route("/api/admin/desk/recovery-batch", methods=["POST"])

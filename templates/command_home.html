@@ -1,0 +1,149 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&display=swap">
+<title>Command Center</title>
+<style>
+:root{--bg:#f4f2ec;--surface:#fdfcf8;--border:#243050;--line:#e1ddd0;--text:#191b1e;--muted:#68789a;--subtle:#3d506e;
+--green:#0d7a4e;--greenbg:#e4f2ea;--red:#b91c1c;--redbg:#fbeaea;--amber:#92600a;--amberbg:#fef3c7;--gold:#2340d6;
+--shadow:0 4px 24px rgba(0,0,0,.07)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Archivo',-apple-system,'Segoe UI',sans-serif;line-height:1.45}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1180px;margin:0 auto;padding:1.1rem 1rem 4rem}
+.top{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}
+.brand{font-size:1.15rem;font-weight:900}
+.brand small{display:block;font-size:.62rem;font-weight:700;letter-spacing:.16em;color:var(--gold);text-transform:uppercase}
+.quick{display:flex;gap:.45rem;flex-wrap:wrap}
+.quick a,.quick summary{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:.4rem .7rem;font-size:.78rem;font-weight:700;cursor:pointer;list-style:none}
+details.menu{position:relative}
+details.menu div{position:absolute;right:0;top:110%;background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);padding:.6rem;z-index:40;min-width:230px}
+details.menu a{display:block;padding:.4rem .6rem;border-radius:7px;font-size:.82rem;border:none}
+details.menu a:hover{background:var(--bg)}
+h2{font-size:.74rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:1.3rem 0 .6rem}
+h2 b{color:var(--text)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:.75rem .9rem;box-shadow:var(--shadow)}
+.tile a{display:block}
+.tile .l{font-size:.6rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.tile .v{font-size:1.75rem;font-weight:900;letter-spacing:-.5px}
+.d{font-size:.68rem;font-weight:800;border-radius:99px;padding:.1rem .45rem;vertical-align:middle}
+.d.up{background:var(--greenbg);color:var(--green)}
+.d.down{background:var(--redbg);color:var(--red)}
+.d.flat{background:var(--bg);color:var(--muted)}
+.monthline{margin-top:.55rem;background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:.55rem .9rem;font-size:.82rem;color:var(--subtle)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:.9rem}
+@media(max-width:860px){.cols{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:.7rem .9rem;margin-bottom:.55rem;box-shadow:var(--shadow);display:block}
+.card.win{border-left:4px solid var(--green)}
+.card.slip{border-left:4px solid var(--red)}
+.card .nm{font-weight:800;font-size:.95rem}
+.card .why{font-size:.8rem;color:var(--subtle);margin-top:.1rem}
+.feed{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:.4rem .9rem;box-shadow:var(--shadow)}
+.feed .it{display:flex;gap:.6rem;padding:.5rem 0;border-bottom:1px solid #f1eee6;font-size:.84rem;align-items:baseline}
+.feed .it:last-child{border-bottom:none}
+.feed .t{font-size:.68rem;color:var(--muted);white-space:nowrap;min-width:52px}
+.k{width:8px;height:8px;border-radius:50%;flex-shrink:0;position:relative;top:1px}
+.k.claim{background:var(--gold)}.k.appt{background:var(--green)}.k.call{background:#8b5cf6}
+.need{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--gold);border-radius:11px;padding:.6rem .9rem;margin-bottom:.5rem;display:block}
+.need.hot{border-left-color:var(--red)}
+.need .w{font-weight:800;font-size:.9rem}
+.need .do{font-size:.78rem;color:var(--subtle)}
+.need .do::before{content:"\2192  ";color:var(--gold)}
+.empty{color:var(--muted);font-size:.82rem;padding:.5rem 0}
+.stamp{font-size:.66rem;color:#9b9e93;margin-top:1.3rem}
+.skeleton{background:linear-gradient(90deg,#f1eee6,#e7e3d6,#f1eee6);background-size:200% 100%;animation:sk 1.2s infinite;border-radius:12px}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+</style></head><body><div class="wrap">
+
+<div class="top">
+  <div class="brand"><small>Legacy Command Center</small>The business, right now</div>
+  <div class="quick">
+    <a href="/today">Today</a><a href="/team">Team</a><a href="/revenue">Revenue</a><a href="/dispatch">Claims</a>
+    <details class="menu"><summary>Menu ▾</summary><div>
+      <a href="/appointments">Appointments</a><a href="/leadstream">LeadStream</a><a href="/outreach">AI Outreach</a>
+      <a href="/roi">Source ROI</a><a href="/meeting">1-on-1 Prep</a><a href="/isa">ISA Scorecard</a>
+      <a href="/salesfloor">Sales Floor</a><a href="/calls">Call Library</a><a href="/callaction">Drip Replies</a>
+      <a href="/callingly-console">Ring Line</a><a href="/market">Market Pages</a><a href="/training">Training</a>
+      <a href="/team/onboarding">Onboarding</a><a href="/system">Mission Control</a>
+      <a href="/pulse">Funnel view</a><a href="/classic">Classic view</a><a href="/logout">Log out</a>
+    </div></details>
+  </div>
+</div>
+
+<div id="needs"></div>
+
+<h2>The week <span style="font-weight:400;text-transform:none;letter-spacing:0">vs last week, Monday to now</span></h2>
+<div class="tiles" id="week"><div class="tile skeleton" style="height:76px"></div><div class="tile skeleton" style="height:76px"></div><div class="tile skeleton" style="height:76px"></div><div class="tile skeleton" style="height:76px"></div><div class="tile skeleton" style="height:76px"></div></div>
+<div class="monthline" id="month"></div>
+
+<div class="cols" style="margin-top:1.1rem">
+  <div>
+    <h2><b>Carrying the week</b></h2><div id="winners"></div>
+    <h2 style="color:var(--red)"><b style="color:var(--red)">Needs you</b></h2><div id="slipping"></div>
+  </div>
+  <div>
+    <h2><b>Latest wins</b> <span style="font-weight:400;text-transform:none;letter-spacing:0">last 72 hours, newest first</span></h2>
+    <div class="feed" id="feed"><div class="skeleton" style="height:200px"></div></div>
+  </div>
+</div>
+
+<div class="stamp" id="stamp"></div>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function money(n){return '$'+Math.round(n||0).toLocaleString();}
+function delta(now,last){
+  if(last==null)return '';
+  const d=now-last;
+  if(d===0)return ' <span class="d flat">= last wk</span>';
+  return ' <span class="d '+(d>0?'up':'down')+'">'+(d>0?'▲':'▼')+Math.abs(d)+'</span>';
+}
+function ago(iso){const m=Math.floor((Date.now()-new Date(iso))/60000);
+  if(m<60)return m+'m';if(m<1440)return Math.floor(m/60)+'h';return Math.floor(m/1440)+'d';}
+async function load(){
+  try{
+    const d=await (await fetch('/api/command-home',{signal:AbortSignal.timeout(90000)})).json();
+    const w=d.week||{}, m=d.month||{}, $=id=>document.getElementById(id);
+    const tile=(label,o,href)=>'<div class="tile"><a href="'+href+'"><div class="l">'+label+'</div>'+
+      '<div class="v">'+((o&&o.now)!=null?o.now:'?')+delta(o&&o.now,o&&o.last)+'</div></a></div>';
+    const mo=d.money||{};
+    $('week').innerHTML=
+      tile('Conversations (2m+)',w.conversations,'/calls')+
+      tile('Appts set',w.appts_set,'/appointments')+
+      tile('Appts held',w.appts_held,'/appointments')+
+      tile('Conversions routed',w.conversions_routed,'/dispatch')+
+      '<div class="tile"><a href="/revenue"><div class="l">Closings this month</div><div class="v">'+
+      (mo.month_closings??'?')+'<span style="font-size:.85rem;font-weight:700;color:var(--muted)"> &middot; '+money(mo.month_gci)+'</span></div></a></div>';
+    $('month').innerHTML='<b>The month so far:</b> '+
+      ((m.conversations||{}).now??'?')+' conversations &middot; '+((m.appts_set||{}).now??'?')+' appts set &middot; '+
+      ((m.appts_held||{}).now??'?')+' held &middot; '+((m.conversions_routed||{}).now??'?')+' conversions routed &middot; '+
+      (mo.under_contract??'?')+' under contract'+
+      ' &nbsp;<span style="color:var(--muted)">(last month: '+((m.conversations||{}).last??'?')+' convos, '+
+      ((m.appts_set||{}).last??'?')+' set, '+(mo.last_month_closings??'?')+' closings '+money(mo.last_month_gci)+')</span>';
+    $('winners').innerHTML=(d.winners||[]).map(a=>
+      '<a class="card win" href="/agent/'+encodeURIComponent(a.agent)+'"><span class="nm">'+esc(a.agent)+'</span>'+
+      '<div class="why">'+esc(a.why)+'</div></a>').join('')||'<div class="empty">Nobody has put points on the board yet this week.</div>';
+    $('slipping').innerHTML=(d.slipping||[]).map(a=>
+      '<a class="card slip" href="/agent/'+encodeURIComponent(a.agent)+'"><span class="nm">'+esc(a.agent)+'</span>'+
+      '<div class="why">'+esc(a.why)+'</div></a>').join('')||'<div class="empty">Nobody is slipping by the numbers. Enjoy it.</div>';
+    $('feed').innerHTML=(d.wins_feed||[]).map(x=>
+      '<div class="it"><span class="t">'+ago(x.at)+'</span><span class="k '+esc(x.kind)+'"></span><span>'+esc(x.text)+'</span></div>')
+      .join('')||'<div class="empty">No wins logged in the last 72 hours. That is its own signal.</div>';
+    $('stamp').textContent='Every number links to its receipts · refreshes every 5 minutes · built '+new Date(d.generated_at).toLocaleTimeString();
+  }catch(e){
+    document.getElementById('week').innerHTML='<div class="empty">Could not load. <a href="#" style="text-decoration:underline" onclick="load();return false">Try again</a></div>';
+  }
+}
+async function needs(){
+  try{
+    const d=await (await fetch('/api/today')).json();
+    const items=(d.items||[]).slice(0,3);
+    if(!items.length)return;
+    document.getElementById('needs').innerHTML='<h2 style="margin-top:0"><b>Needs you today</b></h2>'+
+      items.map(i=>'<a class="need'+(i.sev===0?' hot':'')+'" href="'+i.link+'"'+(i.link&&i.link.startsWith('http')?' target="_blank"':'')+'>'+
+      '<div class="w">'+esc(i.what)+'</div><div class="do">'+esc(i.do)+'</div></a>').join('')+
+      ((d.items||[]).length>3?'<a href="/today" style="font-size:.76rem;font-weight:700;color:var(--gold)">all '+(d.items||[]).length+' on Today →</a>':'');
+  }catch(e){}
+}
+load();needs();setInterval(load,300000);
+</script>
+</div></body></html>
