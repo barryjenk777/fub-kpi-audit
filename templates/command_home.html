@@ -50,6 +50,11 @@ h2 b{color:var(--text)}
 .need .do{font-size:.9rem;color:var(--subtle)}
 .need .do::before{content:"\2192  ";color:var(--gold)}
 .empty{color:var(--muted);font-size:.82rem;padding:.5rem 0}
+.read{background:#1c2744;color:#f3efe6;border-radius:15px;padding:1.1rem 1.3rem;margin-bottom:1.2rem;box-shadow:var(--shadow)}
+.read .k{font-size:.68rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:#f5a623;margin-bottom:.3rem;width:auto;height:auto;border-radius:0;background:none;display:block;position:static}
+.read .s{font-size:1.12rem;font-weight:700;line-height:1.55}
+.read .one{margin-top:.6rem;font-size:.98rem;color:#ffd58a;font-weight:700}
+.read .one a{text-decoration:underline}
 .stamp{font-size:.66rem;color:#9b9e93;margin-top:1.3rem}
 .skeleton{background:linear-gradient(90deg,#f1eee6,#e7e3d6,#f1eee6);background-size:200% 100%;animation:sk 1.2s infinite;border-radius:12px}
 @keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
@@ -70,6 +75,7 @@ h2 b{color:var(--text)}
   </div>
 </div>
 
+<div class="read" id="read" hidden><span class="k">The read</span><div class="s" id="read-s"></div><div class="one" id="read-one"></div></div>
 <div id="needs"></div>
 
 <h2>The week <span style="font-weight:400;text-transform:none;letter-spacing:0">vs last week, Monday to now</span></h2>
@@ -99,6 +105,35 @@ function delta(now,last){
 }
 function ago(iso){const m=Math.floor((Date.now()-new Date(iso))/60000);
   if(m<60)return m+'m';if(m<1440)return Math.floor(m/60)+'h';return Math.floor(m/1440)+'d';}
+
+function buildRead(d){
+  const w=d.week||{}, mo=d.money||{};
+  const g=k=>((w[k]||{}).now)||0, l=k=>((w[k]||{}).last);
+  const s=[];
+  const cv=g('conversations'), cvl=l('conversations');
+  if(cvl!=null&&cvl>0&&cv<cvl*0.75){ s.push('The floor is quieter than last week: '+cv+' conversations vs '+cvl+'.'); }
+  else if(cvl!=null&&cv>cvl*1.2){ s.push('The floor is louder than last week: '+cv+' conversations vs '+cvl+'.'); }
+  else { s.push(cv+' conversations this week, about even with last week.'); }
+  const held=g('appts_held'), heldl=l('appts_held'), set=g('appts_set'), setl=l('appts_set');
+  if(held>(heldl||0)){ s.push('Appointments are landing: '+held+' held vs '+heldl+' last week.'); }
+  else if(set<(setl||0)&&setl){ s.push('Appointments set slipped to '+set+' from '+setl+'.'); }
+  const zero=(d.slipping||[]).filter(a=>a.convos_wk===0);
+  if(zero.length){ s.push(zero.length+(zero.length===1?' agent has':' agents have')+' not had a single 2-minute conversation yet this week.'); }
+  const win=(d.winners||[])[0];
+  if(win){ s.push(win.agent.split(' ')[0]+' is carrying it: '+win.why+'.'); }
+  document.getElementById('read-s').textContent=s.slice(0,3).join(' ');
+  let one='';
+  if(zero.length){
+    one='If you only do one thing today: talk to '+zero.map(a=>'<a href="/agent/'+encodeURIComponent(a.agent)+'">'+esc(a.agent.split(' ')[0])+'</a>').join(', ')+' about the silence. Dials are the one lever that fixes every other number.';
+  } else if((d.slipping||[]).length){
+    const a=d.slipping[0];
+    one='If you only do one thing today: <a href="/agent/'+encodeURIComponent(a.agent)+'">'+esc(a.agent.split(' ')[0])+'</a>. '+esc(a.why)+'.';
+  } else if(win){
+    one='If you only do one thing today: tell '+esc(win.agent.split(' ')[0])+' you saw the week they are having. Out loud, in front of people.';
+  }
+  document.getElementById('read-one').innerHTML=one;
+  document.getElementById('read').hidden=false;
+}
 async function load(){
   try{
     const d=await (await fetch('/api/command-home',{signal:AbortSignal.timeout(90000)})).json();
@@ -106,6 +141,7 @@ async function load(){
     const tile=(label,o,href)=>'<div class="tile"><a href="'+href+'"><div class="l">'+label+'</div>'+
       '<div class="v">'+((o&&o.now)!=null?o.now:'?')+delta(o&&o.now,o&&o.last)+'</div></a></div>';
     const mo=d.money||{};
+    buildRead(d);
     $('week').innerHTML=
       tile('Conversations (2m+)',w.conversations,'/calls')+
       tile('Appts set',w.appts_set,'/appointments')+
