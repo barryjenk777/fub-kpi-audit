@@ -23806,19 +23806,24 @@ def api_command_home():
         if a["avg_grade"] and a["avg_grade"] >= 7:
             bits.append("calls grading %.1f" % a["avg_grade"])
         return ", ".join(bits) + " this week"
+    import statistics as _stats
+    _convs = sorted(a["convos_wk"] for a in agents)
+    med_convos = int(_stats.median(_convs)) if _convs else 0
     def _why_slip(a):
         if a["convos_wk"] == 0:
-            return "zero 2-minute conversations this week"
+            return ("zero 2-minute conversations this week, while the "
+                    "team median is %d" % med_convos)
         bits = []
         if a["avg_grade"] is not None and a["avg_grade"] < 4 \
                 and a["graded_7d"] >= 3:
-            bits.append("calls grading %.1f across %d graded"
-                        % (a["avg_grade"], a["graded_7d"]))
+            bits.append("calls grading %.1f across %d graded (7 is the "
+                        "bar)" % (a["avg_grade"], a["graded_7d"]))
         if a["appts_set_wk"] == 0 and a["convos_wk"] >= 10:
-            bits.append("%d conversations, no appointment set"
-                        % a["convos_wk"])
+            bits.append("%d conversations without one appointment ask "
+                        "landing" % a["convos_wk"])
         if (a["pace_pct"] or 100) < 40 and not a["is_new"]:
-            bits.append("%s%% of pace to goal" % a["pace_pct"])
+            bits.append("%s%% of pace to their goal with the year "
+                        "closing" % a["pace_pct"])
         return "; ".join(bits)
     winners = sorted(
         [a for a in agents if a["appts_set_wk"] or a["appts_held_wk"]
@@ -23859,6 +23864,8 @@ def api_command_home():
         "winners": [{**a, "why": _why_win(a)} for a in winners],
         "slipping": [{**a, "why": _why_slip(a)} for a in slippers[:4]],
         "wins_feed": wins_feed,
+        "norms": {"median_convos_wk": med_convos,
+                  "active_agents": len(agents)},
     }
     try:
         cache_set("command_home", out)
