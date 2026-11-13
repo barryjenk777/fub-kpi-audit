@@ -24085,12 +24085,27 @@ def scheduled_sheet_followup():
             if called_any:
                 continue
             first = agent.split()[0]
-            names = ", ".join((l or "").split()[0] for _p, l in picks[:3]
-                              if l)
+            # Every name is a tappable link (Cynthia, Nov 12 2026:
+            # "How do I get to these people?"). Token links when the
+            # agent has one (click-tracked), FUB links otherwise.
+            try:
+                _tk = _db.get_token_for_agent(agent)
+            except Exception:
+                _tk = None
+            _base = (os.environ.get("BASE_URL")
+                     or "https://www.legacycommandcenter.com").rstrip("/")
+            def _lnk(pid):
+                if _tk:
+                    return "%s/t/%s/fub/%s?c=f" % (_base, _tk, pid)
+                return ("https://yourfriendlyagent.followupboss.com"
+                        "/2/people/view/%s" % pid)
+            named = "\n".join("%s: %s" % ((l or "a lead").split()[0],
+                                           _lnk(p))
+                               for p, l in picks[:3])
             top = ((picks[0][1] or "").split() or ["the first one"])[0]
             msg = ("Quick check, %s. This morning's names have no call "
-                   "logged yet: %s. %s is the warm one. One dial now and "
-                   "the day still counts." % (first, names, top))
+                   "logged yet. %s is the warm one. One dial now and the "
+                   "day still counts.\n%s" % (first, top, named))
             if _db.queue_agent_imessage(agent, prof.get("fub_user_id"),
                                         prof.get("phone") or "", msg,
                                         week_day="sheet_followup"):
@@ -26930,6 +26945,19 @@ def scheduled_hot_sheets():
         raise
     finally:
         _db.release_job_lock("hot_sheets")
+
+
+@app.route("/api/admin/hotsheet/picks")
+def api_hotsheet_picks():
+    """Today's logged picks for one agent (support tool: answer 'how do
+    I get to these people' with real links)."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    agent = (request.args.get("agent") or "").strip()
+    if not agent:
+        return jsonify({"error": "agent required"}), 400
+    return jsonify({"ok": True, "agent": agent,
+                    "picks": _db.get_today_hotsheet_picks(agent)})
 
 
 @app.route("/api/admin/hotsheet/run", methods=["POST"])
