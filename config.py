@@ -990,3 +990,9 @@ DAILY_COACHING_TEXT_BUDGET = 1
 TEXT_BUDGET_EXEMPT_KINDS = {"dispatch", "handoff", "appt_confirm",
                             "phoenix", "friday_meeting", "hotsheet",
                             "sheet_followup", "callsave", "savebot"}
+
+# Hard ceiling (Nov 12 2026, Dilek's three-text day): the phone gets at
+# most this many system texts per day, and none 8pm-8am ET; overflow and
+# late messages go to Slack. Only TEXT_CRITICAL_KINDS bypass both.
+DAILY_TEXT_CEILING = 2
+TEXT_CRITICAL_KINDS = {"dispatch", "handoff", "appt_confirm", "phoenix"}

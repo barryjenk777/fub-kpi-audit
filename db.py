@@ -7175,25 +7175,50 @@ def queue_agent_imessage(agent_name, fub_user_id, phone, message,
                       else "text")
     except Exception:
         pass
-    # Message governor (Barry, Oct 28 2026): one coaching-class text per
-    # agent per day. Overflow becomes a Slack DM so the phone stays the
-    # coach's voice and Slack stays the clipboard. Fails open: no Slack
-    # mapping means the message still delivers on its normal path.
+    # Message governor (Barry, Oct 28 2026; tightened Nov 12 after Dilek
+    # got three texts in a day, the last at 9:06pm): the phone gets at
+    # most TWO system texts a day and none between 8pm and 8am ET.
+    # Lead-critical kinds (a live lead needs a human now) are the only
+    # exemption from both rules. Overflow and late messages become a
+    # Slack DM. Fails open: no Slack mapping means normal delivery.
     try:
         import config as _cfgb
+        from datetime import datetime as _dtg
+        from zoneinfo import ZoneInfo as _ZIg
         _kind = (week_day or "text")
+        _critical = getattr(_cfgb, "TEXT_CRITICAL_KINDS",
+                            {"dispatch", "handoff", "appt_confirm",
+                             "phoenix"})
         _exempt = getattr(_cfgb, "TEXT_BUDGET_EXEMPT_KINDS", set()) or set()
         _budget = int(getattr(_cfgb, "DAILY_COACHING_TEXT_BUDGET", 0) or 0)
+
+        def _to_slack(reason):
+            _sid = _slack_id_for_agent(agent_name)
+            if _sid:
+                import slack_client as _slb
+                if _slb.is_available() and _slb.dm_user(_sid, message):
+                    logger.info("governor: %s %s, %s delivered via Slack",
+                                agent_name, reason, _kind)
+                    return _record_slack_delivery(
+                        agent_name, fub_user_id, message, week_day)
+            return None
+        if _kind not in _critical:
+            _hr = _dtg.now(_ZIg("America/New_York")).hour
+            if _hr >= 20 or _hr < 8:
+                _r = _to_slack("quiet hours")
+                if _r is not None:
+                    return _r
+            _total = count_agent_coaching_texts_today(agent_name, _critical)
+            _ceiling = int(getattr(_cfgb, "DAILY_TEXT_CEILING", 2) or 2)
+            if _total >= _ceiling:
+                _r = _to_slack("over the daily ceiling of %d" % _ceiling)
+                if _r is not None:
+                    return _r
         if _budget and _kind not in _exempt:
             if count_agent_coaching_texts_today(agent_name, _exempt) >= _budget:
-                _sid = _slack_id_for_agent(agent_name)
-                if _sid:
-                    import slack_client as _slb
-                    if _slb.is_available() and _slb.dm_user(_sid, message):
-                        logger.info("governor: %s over text budget, %s "
-                                    "delivered via Slack", agent_name, _kind)
-                        return _record_slack_delivery(
-                            agent_name, fub_user_id, message, week_day)
+                _r = _to_slack("over coaching budget")
+                if _r is not None:
+                    return _r
     except Exception as _ge:
         logger.warning("message governor failed for %s: %s", agent_name, _ge)
     try:
