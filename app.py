@@ -7382,7 +7382,17 @@ def _maverick_call_effects(c, cid):
                              (_db.get_agent_profiles(active_only=True) or [])
                              if p["agent_name"] == agent), None)
                 if prof:
-                    msg = ("%s, quick save play. Today's call with %s was a "
+                    _pre = ""
+                    try:
+                        for _t in _db.get_agent_texts_today(agent):
+                            if lead1 and lead1.lower() in \
+                                    (_t.get("message") or "").lower():
+                                _pre = ("Different call than this "
+                                        "morning's note. ")
+                                break
+                    except Exception:
+                        pass
+                    msg = (_pre + "%s, quick save play. Today's call with %s was a "
                            "tough one and they are a hot lead, so the door "
                            "is still open. One text tonight keeps it that "
                            "way: a specific next step with a date, nothing "
@@ -7458,12 +7468,24 @@ def _film_text_llm(agent_first, facts):
             "7. Plain language. No team jargon: no Dojo, no Phoenix, no "
             "Maverick, no game film. Say 'yesterday's calls' or "
             "'your call with <name>'.\n"
+            "8. messages_already_sent_today lists what this agent has "
+            "already heard from Barry today. Never contradict or repeat "
+            "them. If your call involves the same lead as an earlier "
+            "message, acknowledge that in a few words (for example: "
+            "'different call than this morning's note').\n"
             "Return ONLY the text message, nothing else.")
+        try:
+            _sent = _db.get_agent_texts_today(facts.get("_agent") or "")
+        except Exception:
+            _sent = []
         msg = _an.Anthropic(api_key=api_key).messages.create(
             model="claude-sonnet-5-5", max_tokens=500,
             system=system,
             messages=[{"role": "user", "content": _json.dumps(
-                {"agent_first": agent_first, **facts}, default=str)}])
+                {"agent_first": agent_first,
+                 "messages_already_sent_today": _sent,
+                 **{k: v for k, v in facts.items()
+                    if not k.startswith("_")}}, default=str)}])
         out = next((b.text for b in (msg.content or [])
                     if getattr(b, "type", "") == "text"), "").strip()
         # Guardrails: length, dashes, and it must mention the lead.
@@ -7496,6 +7518,7 @@ def _practice_line_for(pick):
 
 def _film_facts(pick, kind):
     return {
+        "_agent": pick.get("agent_name"),
         "practice_line_for_this_call": _practice_line_for(pick),
         "kind": kind,
         "lead_first": (pick.get("lead_name") or "the lead").split()[0],

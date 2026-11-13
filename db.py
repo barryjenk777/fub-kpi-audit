@@ -12147,3 +12147,27 @@ def clear_desk_tags(person_id, tags):
     except Exception as e:
         logger.warning("clear_desk_tags failed: %s", e)
         return 0
+
+
+def get_agent_texts_today(agent_name, limit=6):
+    """What this agent has already heard from Barry today (ET), oldest
+    first: the day-memory every new message is composed against, so the
+    system never contradicts itself (the Wayne whiplash, Nov 12 2026)."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COALESCE(week_day, 'text'), message
+                    FROM agent_imessage_queue
+                    WHERE agent_name = %s
+                      AND (created_at AT TIME ZONE 'America/New_York')::date
+                        = (NOW() AT TIME ZONE 'America/New_York')::date
+                    ORDER BY created_at LIMIT %s
+                """, (agent_name, limit))
+                return [{"kind": r[0], "message": (r[1] or "")[:300]}
+                        for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_agent_texts_today failed: %s", e)
+        return []
