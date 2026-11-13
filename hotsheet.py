@@ -526,10 +526,22 @@ def run_hot_sheets(dry_run=False, coaching=None, prep=None):
                     continue
                 try:
                     pr = client._request("GET", "people/%s" % pid, params={
-                        "fields": "id,assignedPondId"}) or {}
+                        "fields": "id,assignedPondId,source,tags"}) or {}
                     if int(pr.get("assignedPondId") or 0) == _storage:
                         logger.info("[HOT SHEET] dropped Storage Pond lead "
                                     "%s (%s) from %s's sheet", pid, pk[1],
+                                    agent)
+                        continue
+                    # Sphere stays personal (Barry, Nov 12 2026): the
+                    # system never nudges an agent about their own
+                    # sphere. Same fetch, zero extra FUB calls.
+                    _src = (pr.get("source") or "").lower()
+                    _tgs = " ".join(pr.get("tags") or []).lower()
+                    if ("sphere" in _src or _src in ("soi", "s.o.i.")
+                            or "soi" in _src.split()
+                            or "sphere" in _tgs or " soi" in " " + _tgs):
+                        logger.info("[HOT SHEET] dropped sphere lead %s "
+                                    "(%s) from %s's sheet", pid, pk[1],
                                     agent)
                         continue
                 except Exception:
