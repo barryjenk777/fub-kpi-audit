@@ -16637,10 +16637,11 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
             # (Barry: AI_VOICE_NEEDS_FOLLOW_UP is a conversion tag, it
             # does not fire on voicemail; the disposition verifies the
             # conversation is FRESH, since Ylopo tags persist forever).
-            _voice_ask = any(t in _fresh for t in
+            _voice_ask = any(t in _fresh or t in tags_l for t in
                              ("ai_voice_needs_follow_up",
                               "isa_transfer_unsuccessful",
-                              "isa_attempted_transfer_realtor_unavailable"))
+                              "isa_attempted_transfer_realtor_unavailable",
+                              "ylopo_ai_voice", "ai_engaged"))
             _engaged = bool(_ask) and (
                 _db.person_replied_within(pid, hours=24)
                 or _had_inbound_within(pid, hours=24)
@@ -23987,7 +23988,14 @@ def api_desk_clear_tags():
     if not pid or not tags:
         return jsonify({"error": "person_id and tags required"}), 400
     n = _db.clear_desk_tags(pid, tags)
-    return jsonify({"ok": True, "cleared": n})
+    routed = None
+    if body.get("route", True):
+        try:
+            _desk_intake_people([int(pid)], triggered_by="clear_tags")
+            routed = True
+        except Exception as e:
+            routed = "failed: %s" % str(e)[:120]
+    return jsonify({"ok": True, "cleared": n, "reprocessed": routed})
 
 
 @app.route("/api/admin/snapshots/run", methods=["POST"])
@@ -24057,6 +24065,15 @@ def scheduled_evidence_recheck():
             if alive:
                 cleared = _db.clear_desk_tags(pid, r["tags"])
                 _db.delete_evidence_retry(pid)
+                # Route NOW: the 10-minute sweep only re-finds leads
+                # updated in the last 40 minutes, so a lead parked longer
+                # than that would sit un-burned forever (Gorg, Nov 11).
+                try:
+                    _desk_intake_people([int(pid)],
+                                        triggered_by="evidence_recheck")
+                except Exception as _ie:
+                    logger.warning("recheck intake failed for %s: %s",
+                                   pid, _ie)
                 _db.log_automation_event(
                     event_type="desk_evidence_recovered", person_id=pid,
                     person_name=r["person_name"], agent_name=None,
