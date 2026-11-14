@@ -16530,6 +16530,7 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                     # a seller replied with an address and a price two
                     # seconds before this gate called him a fossil).
                     _alive = (_db.person_replied_within(pid, hours=48)
+                              or bool(_fresh_strict_ai_alert(pid, hours=48))
                               or bool(_fresh_ai_voice_outcome(pid, hours=48))
                               or _had_inbound_within(pid, hours=48))
                 except Exception as _sle:
@@ -16644,6 +16645,10 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                               "ylopo_ai_voice", "ai_engaged"))
             _engaged = bool(_ask) and (
                 _db.person_replied_within(pid, hours=24)
+                # Ylopo AI TEXT threads never sync into FUB (Jack Gaines
+                # canon), so for text conversions the strict "successfully
+                # engage" alert IS the evidence (Zaniyah, Nov 13 2026).
+                or bool(_fresh_strict_ai_alert(pid, hours=24))
                 or _had_inbound_within(pid, hours=24)
                 or (_voice_ask
                     and bool(_fresh_ai_voice_outcome(pid, hours=48))))
@@ -24058,6 +24063,7 @@ def scheduled_evidence_recheck():
             pid = r["person_id"]
             try:
                 alive = (_db.person_replied_within(pid, hours=48)
+                         or bool(_fresh_strict_ai_alert(pid, hours=48))
                          or bool(_fresh_ai_voice_outcome(pid, hours=48))
                          or _had_inbound_within(pid, hours=48))
             except Exception:
