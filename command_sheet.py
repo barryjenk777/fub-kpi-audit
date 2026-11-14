@@ -330,7 +330,7 @@ def _gen_agent_lines(client, payload, fallback_pace, fallback_teach):
     if client is None:
         return fallback_pace, fallback_teach
     prompt = f"""Write two lines for one agent's card in the Friday meeting email.
-Line 1 starts with "PACE:" then Barry's blessed goal pace formula: goal dollars, percent of pace, then THE SMALLEST DAILY ACTION that closes the gap, then a reframe. Register example (do not copy its numbers): "Goal $130K. 41% of pace. The math: 6 conversations a day closes the gap, about 13 dials at his contact rate. He is closer than the percent looks, say that first."
+Line 1 starts with "PACE:" then Barry's blessed goal pace formula: goal dollars, percent of pace, then THE SMALLEST DAILY ACTION that closes the gap, then a reframe. Register example (do not copy its numbers): "Goal $130K. 41% of pace. The math: 6 conversations a day closes the gap, about 13 dials at the actual contact rate. Closer than the percent looks, say that first."
 Line 2 starts with "TEACH:" then one teaching moment from this agent's week. LEAD WITH THE EARNED WIN, then the one gap, then what to teach. Never shame, always reframe.
 
 THE ONLY NUMBERS YOU MAY USE:
@@ -375,10 +375,10 @@ def _agent_gap_math(pace, targets, goal, week):
     convos = int(week.get("convos") or 0)
     if calls >= 10 and convos > 0:
         contact = convos / calls
-        contact_src = "his actual contact rate last week"
+        contact_src = "the actual contact rate last week"
     else:
         contact = float((goal or {}).get("contact_rate") or 0.15)
-        contact_src = "the contact rate in his goal plan"
+        contact_src = "the contact rate in the goal plan"
     daily_dials = max(int(math.ceil(daily_convos / max(contact, 0.01))), daily_convos)
     return {"daily_convos": daily_convos, "daily_dials": daily_dials,
             "contact_rate_used": round(contact, 3), "contact_rate_source": contact_src}
@@ -402,7 +402,7 @@ def _fallback_pace_line(goal, pace, gap):
     if pct is not None and pct < 70:
         parts.append("The percent looks worse than the math. Say the math first.")
     elif pct is not None and pct >= 90:
-        parts.append("Ahead of the math. Protect the habit that got him here.")
+        parts.append("Ahead of the math. Protect the habit that got them here.")
     else:
         parts.append("Closer than it feels. Say that first.")
     return " ".join(parts)
@@ -549,8 +549,13 @@ def _pick_pipeline_leads(fub, user_id, missing_outcome_appts,
             if len(picks) >= max_leads:
                 return picks
 
-    # (d) top LeadStream leads from the manifest (no API cost)
+    # (d) top LeadStream leads from the manifest (no API cost). A lead in
+    # a closed or dead stage is not a call pick (Brenda Pittman, stage
+    # Closed, sat on Cynthia's sheet).
+    _dead = ("closed", "trash", "archive", "do not contact", "sphere")
     for ml in manifest_leads:
+        if any(k in str(ml.get("stage") or "").lower() for k in _dead):
+            continue
         _add(ml.get("id"), ml.get("name"),
              f"Top of LeadStream, score {ml.get('score')}"
              + (f", stage {ml.get('stage')}" if ml.get("stage") else ""),
@@ -954,6 +959,20 @@ def run_command_sheet(dry_run=True, email_to_barry=False,
                 }
                 pace = _db.compute_pace(goal, targets, actuals,
                                         start_date=(profiles.get(name) or {}).get("start_date"))
+                # One pace definition across the app (Nov 14 2026 QA: the
+                # sheet said Tanya 3670% while /team said 17%). Activity
+                # targets prorated for fall hires are tiny, so call-count
+                # pace explodes; GCI pace is the one /team and the money
+                # board use, so the sheet uses it too.
+                try:
+                    _now = datetime.now(_ET)
+                    _el = max((_now.date() - date(_now.year, 1, 1)).days / 365.0, 0.05)
+                    _g = float(goal.get("gci_goal") or 0)
+                    if pace is not None and _g > 0:
+                        pace["overall_pct"] = round(
+                            (float(actuals["gci_ytd"]) / _el) / _g * 100)
+                except Exception:
+                    pass
                 gap = _agent_gap_math(pace, targets, goal, week)
             except Exception as e:
                 logger.warning("[COMMAND SHEET] pace failed for %s: %s", name, e)
@@ -1093,7 +1112,13 @@ def run_command_sheet(dry_run=True, email_to_barry=False,
     })
 
     if rdc_html:
-        html += rdc_html
+        _mark = "Every number traces to a named source."
+        _i = html.find(_mark)
+        if _i > 0:
+            _j = html.rfind("<div", 0, _i)
+            html = html[:_j] + rdc_html + html[_j:]
+        else:
+            html += rdc_html
     summary["subject"] = subject
     summary["html"] = html
     summary["lever"] = ({k: v for k, v in lever.items()} if lever else None)

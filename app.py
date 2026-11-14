@@ -10464,7 +10464,30 @@ def _system_status():
 
     def _jobs():
         if _scheduler is None:
-            return {"dot": "red", "summary": "Scheduler is not running.",
+            # Since the scheduler split (Nov 10 2026) jobs run in the
+            # WORKER service, so this web process correctly has none.
+            # Judge the worker by its heartbeat: the 10-minute evidence
+            # recheck leaves a job lock row every run.
+            try:
+                with _db.get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("""
+                            SELECT MAX(locked_at) FROM scheduler_locks
+                        """)
+                        last = cur.fetchone()[0]
+            except Exception:
+                last = None
+            if last is None:
+                return {"dot": "amber", "summary": "Jobs run in the worker "
+                        "service; no heartbeat readable from here.",
+                        "detail_rows": []}
+            age_min = (datetime.now(timezone.utc) - last).total_seconds() / 60
+            if age_min <= 30:
+                return {"dot": "green", "summary": "Worker is running: last "
+                        "job fired %d minutes ago." % int(age_min),
+                        "detail_rows": []}
+            return {"dot": "red", "summary": "Worker looks stalled: no job "
+                    "has fired in %d minutes." % int(age_min),
                     "detail_rows": []}
         jobs = _scheduler.get_jobs()
         dead = [j for j in jobs if j.next_run_time is None]
