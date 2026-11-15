@@ -63,6 +63,7 @@ COACHING_TEXT_EXCLUDED_AGENTS = {
     "Ana Pena",        # transaction manager, was still getting agent texts (bug, Sep 2026)
     "Niella Davis",    # leaving the team per Barry, Sep 2026 — no texts, no emails
     "Jessica Mandley", # decided not to join per Barry, Oct 2026 — full offboard
+    "Dilek Yunt",      # PAUSED from everything per Barry, Nov 15 2026, until he says otherwise
 }
 
 # Agents on Android phones. iMessage from Barry's personal cell does not reach
@@ -938,7 +939,10 @@ FASTTRACK_EXEMPT = {
 # Unpause = remove the name and deploy.
 # Damon Parker removed Nov 7 2026 (Barry: he has an iPhone, "add him to
 # whatever texts we do"; the Oct 16 pause is over).
-TEXT_PAUSED_AGENTS = set()
+# Dilek Yunt added Nov 15 2026 (Barry: pause her from all systems until
+# further notice). Also in COACHING_TEXT_EXCLUDED_AGENTS; remove from both
+# to unpause.
+TEXT_PAUSED_AGENTS = {"Dilek Yunt"}
 
 # ── Slack CC window ─────────────────────────────────────────────────────
 # Barry, Oct 29 2026: "For 2 weeks, cc me on all slack messages" — every
