@@ -1775,7 +1775,27 @@ Do the math: if your average commission check is $6,000 per deal, you hit the ca
 
 There's also a Business Builder option ($500 flat per transaction, $5,000 cap, 100% from day one) that works better for high-volume agents focused on rapid growth. Full comparison is in Section 8 of the onboarding portal.
 
-One more money thing: Ana, our transaction manager, is sending you a dotloop with the commission agreement and handbook to sign. Ana touches every closing you will ever have here, so when her name shows up in your inbox, that is a good day. Sign it when it arrives. You are not fully on the team until it comes back.
+Now the part of this team I am most excited for you to use.
+
+Meet Ana, your transaction manager.
+
+A lot of agents write their own contracts late at night, chase their own signatures, and upload their own paperwork. You don't have to. Ana will draft your buyer contracts and your seller contracts, handle the scheduling, and upload everything to dotloop. She can do as much or as little as you want. Hand her the whole file, or just the one piece you don't enjoy.
+
+What it costs:
+Team leads (any lead the team gives you): free.
+Your own sphere deals: $250.
+
+Read that again. On a team lead, a full transaction manager costs you nothing.
+
+When she works: Monday through Friday, 10 to 6. She is also on call for a couple of hours on Saturday and Sunday, because contracts don't wait for Monday.
+
+How to reach her:
+Text: (757) 520-8955
+Email: ana@yourfriendlyagent.net
+
+Here's what I want you to do today: save her number in your phone and text her a quick hello. Every hour she takes off your plate is an hour you get back for conversations.
+
+One more thing from Ana: she is sending you a dotloop with the commission agreement and handbook to sign. Sign it when it arrives.
 
 What the team covers: leads, FUB CRM, AI engagement, ISA support, weekly training, 1:1 coaching, office access, and all LPT tools.
 
@@ -1870,7 +1890,7 @@ Every week we sit down with you and go through your numbers. Calls, conversation
 
 Text me at (757) 816-4037 to get your weekly 1:1 on the calendar.
 
-Two people to meet this week if you haven't yet. Matt does a systems walkthrough with every new agent to make sure Follow Up Boss and your daily workflow actually make sense; grab 20 minutes with him. And get 10 minutes with Ana, our transaction manager. She will run every closing you have here, and knowing her before your first deal makes that first deal smooth.
+Two people to meet this week if you haven't yet. Matt does a systems walkthrough with every new agent to make sure Follow Up Boss and your daily workflow actually make sense; grab 20 minutes with him. And get 10 minutes with Ana, our transaction manager. She drafts contracts, handles scheduling, and uploads to dotloop, free on team leads and $250 on your own sphere deals. Knowing her before your first deal makes that first deal smooth. Text her at (757) 520-8955 or email ana@yourfriendlyagent.net.
 
 The Maverick system will flag leads that need attention. When it does, log a call or a text and it clears. No drama. Just stay on top of it.
 
