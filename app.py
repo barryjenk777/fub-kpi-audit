@@ -14619,6 +14619,45 @@ def _fresh_strict_ai_alert(person_id, hours=48):
     return None
 
 
+def _prospecting_reply_fresh(person_id, person=None, hours=48):
+    """Ylopo Prospecting leads ARE AI text conversions (Barry, Nov 16 2026,
+    second correction): Ylopo cold-texts homeowners and only creates and
+    assigns the lead after the person replies; the conversation arrives as
+    a note. So for this source the proof is the lead itself. Fresh means
+    the lead was created inside the window, or a Ylopo AI Text alert note
+    (either wording) landed inside it. Non-prospecting sources: False."""
+    try:
+        if person is None:
+            person = FUBClient()._request(
+                "GET", "people/%s" % person_id,
+                params={"fields": "id,source,created"}) or {}
+        if "prospecting" not in (person.get("source") or "").lower():
+            return False
+        now = datetime.now(timezone.utc)
+
+        def _within(when):
+            try:
+                dt = datetime.strptime((when or "")[:19],
+                                       "%Y-%m-%dT%H:%M:%S") \
+                    .replace(tzinfo=timezone.utc)
+            except ValueError:
+                return False
+            return (now - dt) <= timedelta(hours=hours)
+
+        if _within(person.get("created")):
+            return True
+        nd = FUBClient()._request("GET", "notes", params={
+            "personId": person_id, "limit": 15}) or {}
+        for n in nd.get("notes") or []:
+            if "ylopo ai text has" in (n.get("body") or "").lower() \
+                    and _within(n.get("created")):
+                return True
+    except Exception as e:
+        logger.warning("prospecting reply check failed for %s: %s",
+                       person_id, e)
+    return False
+
+
 def _promote_to_shark_tank(pid, person, reason, triggered_by="system"):
     """Move a Storage Pond lead into Shark Tank so it enters the scored
     working pool. Only ever pond 6 -> pond 4; owned leads and leads in
@@ -16549,7 +16588,9 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                     _alive = (_db.person_replied_within(pid, hours=48)
                               or bool(_fresh_strict_ai_alert(pid, hours=48))
                               or bool(_fresh_ai_voice_outcome(pid, hours=48))
-                              or _had_inbound_within(pid, hours=48))
+                              or _had_inbound_within(pid, hours=48)
+                              or _prospecting_reply_fresh(pid, person,
+                                                          hours=48))
                 except Exception as _sle:
                     logger.warning("desk life recheck failed for %s: %s",
                                    pid, _sle)
@@ -16668,7 +16709,9 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                 or bool(_fresh_strict_ai_alert(pid, hours=24))
                 or _had_inbound_within(pid, hours=24)
                 or (_voice_ask
-                    and bool(_fresh_ai_voice_outcome(pid, hours=48))))
+                    and bool(_fresh_ai_voice_outcome(pid, hours=48)))
+                # Ylopo Prospecting: the lead exists because they replied.
+                or _prospecting_reply_fresh(pid, person, hours=48))
             if (live or "").strip() == "1" and not _owned \
                     and _ask and _engaged:
                 import dispatch as _dp
@@ -16800,7 +16843,7 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                         # corrected the Salma ping).
                         _prospecting = "prospecting" in (
                             (person.get("source") or "").strip().lower())
-                        if _ask and _prospecting and not _engaged:
+                        if _ask and _prospecting:
                             # Barry's exact wording (Nov 11 2026).
                             _msg = ("%s, your homeowner %s responded to "
                                     "Ylopo's AI text indicating interest "
@@ -24082,7 +24125,8 @@ def scheduled_evidence_recheck():
                 alive = (_db.person_replied_within(pid, hours=48)
                          or bool(_fresh_strict_ai_alert(pid, hours=48))
                          or bool(_fresh_ai_voice_outcome(pid, hours=48))
-                         or _had_inbound_within(pid, hours=48))
+                         or _had_inbound_within(pid, hours=48)
+                         or _prospecting_reply_fresh(pid, hours=48))
             except Exception:
                 alive = False
             if alive:
