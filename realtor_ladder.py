@@ -43,6 +43,20 @@ CONTACT_INBOUND_SECS = 30
 LEAD_COST_USD = 80
 
 
+def owner_blocks_claim(prior_owner, claimer, owner_is_dark,
+                       released_claimers=()):
+    """The accept re-check's one decision: does the name FUB shows on the
+    lead stop this claim? A working agent other than the claimer blocks
+    it. A yanked claimer does not: the yank released the claim in our
+    ledger but FUB still carries their name, and without this the reopened
+    shootout could never change hands (Nov 16 2026). Pure, so it is
+    testable without FUB or a database."""
+    owner = (prior_owner or "").strip()
+    if not owner or owner == claimer or owner_is_dark:
+        return False
+    return owner not in set(released_claimers or ())
+
+
 def due_calls(day_no):
     """Cumulative call attempts required by end of day `day_no` since claim."""
     if day_no <= 0:

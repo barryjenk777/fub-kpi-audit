@@ -5697,8 +5697,18 @@ def _dispatch_accept(offer):
     try:
         _live = client.get_person(offer["person_id"]) or {}
         prior_owner = (_live.get("assignedTo") or "").strip() or None
+        # A yanked Realtor.com claim releases the lead in our ledger but
+        # FUB still shows the yanked agent. That name is not a working
+        # owner (no dial logged), so it must not block the reopened round
+        # (Nov 16 2026). A late dial takes them off the released list and
+        # the block stands, same as any working agent.
+        _released = set()
         if prior_owner and prior_owner != agent \
-                and not _desk_dark_owner(prior_owner):
+                and offer["source"] == "realtor":
+            _released = _db.released_claimers(offer["person_id"])
+        import realtor_ladder as _rl
+        if _rl.owner_blocks_claim(prior_owner, agent,
+                                  _desk_dark_owner(prior_owner), _released):
             _db.log_automation_event(
                 event_type="dispatch_accept_blocked",
                 person_id=offer["person_id"], person_name=offer["lead_name"],

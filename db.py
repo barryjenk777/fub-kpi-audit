@@ -10950,7 +10950,10 @@ def resolve_dispatch_offer(offer_id, outcome, reason=None):
                     # two taps in the same second both used to resolve and
                     # both agents were told "yours". Serialize on the person
                     # for this transaction, then refuse if anyone already
-                    # won this lead in the last hour.
+                    # won this lead in the last hour. A yanked claim stays
+                    # accepted but is marked terminal; it is a released
+                    # claim, not a winner, or the reopened round could
+                    # never be claimed (Nov 16 2026).
                     cur.execute("SELECT person_id FROM dispatch_offers WHERE id = %s",
                                 (offer_id,))
                     prow = cur.fetchone()
@@ -10962,6 +10965,7 @@ def resolve_dispatch_offer(offer_id, outcome, reason=None):
                         SELECT 1 FROM dispatch_offers
                          WHERE person_id = %s AND id <> %s
                            AND accepted_at IS NOT NULL
+                           AND terminal = FALSE
                            AND accepted_at > NOW() - INTERVAL '1 hour'
                          LIMIT 1""", (prow[0], offer_id))
                     if cur.fetchone():
@@ -11040,6 +11044,31 @@ def get_claims_pending_call(source="realtor", hours=24):
     except Exception as e:
         logger.warning("get_claims_pending_call failed: %s", e)
         return []
+
+
+def released_claimers(person_id, source="realtor", hours=24):
+    """Agents whose claim on this lead was yanked (accepted, then marked
+    terminal by the claim-to-call enforcer) and who still have no dial
+    logged. FUB keeps their name on the lead after a yank, so the accept
+    re-check uses this to tell a released claim from a working owner. A
+    late dial stamps first_call_at and takes them back off this list.
+    Fails closed: any error returns an empty set, so the block stands."""
+    if not is_available():
+        return set()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT agent_name FROM dispatch_offers
+                    WHERE person_id = %s AND source = %s
+                      AND accepted_at IS NOT NULL AND terminal = TRUE
+                      AND first_call_at IS NULL
+                      AND accepted_at >= NOW() - make_interval(hours => %s)
+                """, (str(person_id), source, int(hours)))
+                return {r[0] for r in cur.fetchall() if r[0]}
+    except Exception as e:
+        logger.warning("released_claimers failed: %s", e)
+        return set()
 
 
 def due_dispatch_offers():
