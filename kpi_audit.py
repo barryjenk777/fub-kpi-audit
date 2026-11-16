@@ -684,7 +684,10 @@ def update_priority_group(client, results, passed_agents):
         return False
 
     user_ids = []
+    _paused = set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()) or ())
     for name in passed_agents:
+        if name in _paused:
+            continue  # paused agents stay out of the live transfer group
         user_id = results[name]["user"]["id"]
         user_ids.append(user_id)
 

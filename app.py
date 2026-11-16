@@ -1931,8 +1931,18 @@ def api_update_group():
     try:
         client = FUBClient()
 
+        # Paused agents never sit in the Priority group: the AI live
+        # transfer round robin routes straight from it (Barry, Nov 16 2026).
+        _paused_ids = set()
+        for pname in getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()) or ():
+            try:
+                puser = client.get_user_by_name(pname)
+            except Exception:
+                puser = None
+            if puser:
+                _paused_ids.add(puser["id"])
+        all_ids = [i for i in passed_user_ids if i not in _paused_ids]
         # Add protected agents
-        all_ids = list(passed_user_ids)
         if config.PROTECTED_AGENTS:
             for pname in config.PROTECTED_AGENTS:
                 puser = client.get_user_by_name(pname)
@@ -3563,6 +3573,13 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
         desk_routes["voice_convos"] = voice_n
     except Exception as _vc:
         logger.warning("hype-email: voice convo count failed: %s", _vc)
+
+    # Paused agents (COACHING_TEXT_EXCLUDED_AGENTS) are off the roster and
+    # off the send list (Barry, Nov 16 2026: Dilek, paused the day before,
+    # still got this email and was shown on the live transfer roster).
+    _paused = set(getattr(config, "COACHING_TEXT_EXCLUDED_AGENTS", set()) or ())
+    agents = [a for a in agents if a.get("name") not in _paused]
+    to_emails = [t for t in (to_emails or []) if t[0] not in _paused]
 
     return {
         "agents":         agents,
