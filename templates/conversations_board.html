@@ -1,0 +1,113 @@
+{% extends "board_base.html" %}
+{% set active='conversations' %}
+{% block title %}AI Conversations | Legacy Home Team{% endblock %}
+{% block page_title %}🤝 AI Conversations{% endblock %}
+{% block page_meta %}Every lead who talked to the AI, one row per conversation, and who followed up. This is the count the Sunday email uses.{% endblock %}
+{% block page_actions %}
+  <label class="btn btn-ghost btn-sm" style="cursor:pointer">⬆️ Upload Ylopo export
+    <input id="up" type="file" accept=".csv" multiple style="display:none" onchange="upload(this)"></label>
+{% endblock %}
+{% block content %}
+      <div class="banner">
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div class="dot dot-amber" id="v-dot"></div>
+          <div><div class="banner-text" id="v-text">Reading the ledger&hellip;</div>
+          <div class="banner-meta" id="v-meta"></div></div>
+        </div>
+        <div class="banner-meta" style="display:flex;gap:.4rem;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="shift(-7)">&larr; Week before</button>
+          <span id="v-range" style="font-weight:700"></span>
+          <button class="btn btn-ghost btn-sm" onclick="shift(7)">Week after &rarr;</button>
+        </div>
+      </div>
+
+      <div id="tiles" class="cards" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:.6rem"></div>
+
+      <div class="section-header"><span class="icon">📵</span> Nobody has followed up
+        <span style="font-weight:400;font-size:.72rem;margin-left:.5rem">no call or text from a person in Follow Up Boss since the lead talked to the AI. Calls from a personal cell do not show here.</span></div>
+      <div id="notouch"><div class="skeleton" style="height:90px"></div></div>
+
+      <div class="section-header"><span class="icon">📋</span> Every conversation</div>
+      <div id="rows"><div class="skeleton" style="height:160px"></div></div>
+
+      <details style="margin-top:.9rem">
+        <summary>🔎 Does this match Ylopo? (how each row was proven)</summary>
+        <div id="recon" style="margin-top:.6rem;font-size:.82rem"></div>
+      </details>
+{% endblock %}
+{% block scripts %}
+<script>
+var END=null;
+function iso(d){return d.toISOString().slice(0,10);}
+function tile(v,l,sub,color){return '<div class="card" style="padding:.8rem 1rem"><div style="font-size:.63rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">'+l+'</div><div style="font-size:1.6rem;font-weight:800;'+(color?('color:'+color):'')+'">'+v+'</div><div style="font-size:.68rem;color:var(--muted)">'+(sub||'')+'</div></div>';}
+function when(s){if(!s)return '';var d=new Date(s);return d.toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}
+function took(m){if(m==null)return '';if(m<60)return m+' min';if(m<1440)return Math.round(m/60)+' hr';return Math.round(m/1440)+' days';}
+function proof(r){
+  if(r.in_export&&r.fub_evidence)return '<span class="pill pill-green">Ylopo + Follow Up Boss</span>';
+  if(r.in_export)return '<span class="pill pill-amber" title="Follow Up Boss showed nothing. Only the Ylopo export caught this one.">Ylopo export only</span>';
+  if(r.fub_evidence==='fub_loose_alert')return '<span class="pill pill-muted" title="A weaker Ylopo alert. Not counted until an export confirms it.">Not confirmed yet</span>';
+  return '<span class="pill pill-green" title="Dated proof in Follow Up Boss. Ylopo export not uploaded for this one yet.">Follow Up Boss</span>';
+}
+function rowHtml(r){
+  var touch=r.first_human_touch_at?
+    ('<b>'+esc(r.touched_by||'')+'</b> '+esc(r.touch_kind||'')+' after '+took(r.minutes_to_touch)):
+    '<span style="color:var(--red);font-weight:700">Nobody yet</span>';
+  return '<tr><td><a target="_blank" style="text-decoration:underline;font-weight:700" href="'+fub(r.person_id)+'">'+esc(r.lead_name||('Lead '+r.person_id))+'</a></td>'+
+    '<td>'+(r.channel==='voice'?'📞 AI voice':'💬 AI text')+'</td>'+
+    '<td>'+esc(when(r.convo_at))+'</td>'+
+    '<td>'+esc(r.outcome||(r.channel==='text'?'Replied to the AI':''))+'</td>'+
+    '<td>'+esc(r.owner_at_event||'')+'</td>'+
+    '<td>'+touch+'</td><td>'+proof(r)+'</td></tr>';
+}
+function table(rows,empty){
+  if(!rows.length)return '<div style="color:var(--muted);font-size:.82rem">'+empty+'</div>';
+  return '<div class="table-wrap"><table><thead><tr><th>Lead</th><th>How</th><th>When (ET)</th><th>What happened</th><th>Who has the lead</th><th>Follow-up</th><th>Proof</th></tr></thead><tbody>'+rows.map(rowHtml).join('')+'</tbody></table></div>';
+}
+async function load(){
+  var q=END?('?end='+END):'';
+  try{
+    const d=await (await fetch('/api/conversations'+q,{signal:AbortSignal.timeout(90000)})).json();
+    END=d.end;
+    const c=d.counts, rec=d.reconciliation;
+    document.getElementById('v-range').textContent=d.start+' to '+d.end;
+    document.getElementById('v-text').textContent=c.conversations+' AI conversation'+(c.conversations===1?'':'s')+': '+c.text+' text + '+c.voice+' voice, from '+c.unique_people+' people';
+    var li=d.last_import;
+    document.getElementById('v-meta').textContent=(c.no_touch?(c.no_touch+' have had no follow-up. '):'Every one has been followed up. ')+
+      (li?('Ylopo export last uploaded '+when(li.at)+' (covers through '+li.to+').'):'No Ylopo export uploaded yet, so text replies are undercounted.');
+    document.getElementById('v-dot').className='dot '+(c.no_touch?'dot-rose':'dot-green');
+    var vo=c.voice_outcomes||{};
+    document.getElementById('tiles').innerHTML=
+      tile(c.text,'AI text replies','the lead wrote back')+
+      tile(c.voice,'AI voice conversations',Object.keys(vo).map(k=>vo[k]+' '+k.toLowerCase()).join(', '))+
+      tile(c.unique_people,'People','some did both')+
+      tile(c.touched,'Followed up',c.median_minutes_to_touch!=null?('typical wait '+took(c.median_minutes_to_touch)):'',c.touched?'var(--green)':null)+
+      tile(c.no_touch,'No follow-up','see the list below',c.no_touch?'var(--red)':null);
+    document.getElementById('notouch').innerHTML=table(d.no_touch,'Every conversation in this range has a follow-up logged.');
+    document.getElementById('rows').innerHTML=table(d.rows,'No conversations recorded in this range.');
+    document.getElementById('recon').innerHTML=
+      '<p><b>'+rec.both+'</b> conversations are proven both ways (Ylopo listed them and Follow Up Boss has dated proof).</p>'+
+      '<p><b>'+rec.ylopo_only.length+'</b> are in Ylopo&rsquo;s export but left no trace in Follow Up Boss. These are why the export has to be uploaded: without it they are invisible.</p>'+
+      '<p><b>'+rec.ledger_only.length+'</b> have dated proof in Follow Up Boss but are not in an uploaded export'+(rec.ledger_only.length?': '+rec.ledger_only.map(r=>esc(r.lead_name||r.person_id)).join(', '):'')+'.</p>'+
+      '<p><b>'+rec.unconfirmed.length+'</b> have only a weaker alert and are not counted'+(rec.unconfirmed.length?': '+rec.unconfirmed.map(r=>esc(r.lead_name||r.person_id)).join(', '):'')+'.</p>';
+  }catch(e){
+    document.getElementById('v-text').textContent='Could not load the ledger.';
+    document.getElementById('v-meta').innerHTML='<a href="#" onclick="load();return false" style="text-decoration:underline">Try again</a>';
+  }
+}
+function shift(n){var d=new Date((END||iso(new Date()))+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);END=iso(d);load();}
+async function upload(inp){
+  if(!inp.files.length)return;
+  var fd=new FormData();
+  for(var i=0;i<inp.files.length;i++)fd.append('f'+i,inp.files[i]);
+  showToast('Uploading and checking Follow Up Boss. This can take a minute.');
+  try{
+    const r=await (await fetch('/api/admin/conversations/import',{method:'POST',body:fd,signal:AbortSignal.timeout(300000)})).json();
+    var n=0,bad=[];(r.imports||[]).forEach(function(x){if(x.error)bad.push(x.error);else n+=x.rows;});
+    showToast(bad.length?bad[0]:(n+' conversations read from the export.'),bad.length>0);
+    END=null;load();
+  }catch(e){showToast('Upload failed. Try again.',true);}
+  inp.value='';
+}
+load();
+</script>
+{% endblock %}

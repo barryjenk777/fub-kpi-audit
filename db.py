@@ -12162,3 +12162,180 @@ def get_agent_texts_today(agent_name, limit=6):
     except Exception as e:
         logger.warning("get_agent_texts_today failed: %s", e)
         return []
+
+
+# ── AI conversation ledger: one row per conversation, not per person ────────
+# Replaces isa_transfers as the source of truth for "how many AI transfers".
+# Keyed on (person, channel, ET day of the conversation), dated by the
+# conversation itself and never by when a scan happened to see a tag.
+
+def ensure_ai_conversations():
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS ai_conversations (
+                        id            SERIAL PRIMARY KEY,
+                        person_id     BIGINT NOT NULL,
+                        channel       TEXT NOT NULL,
+                        convo_day     DATE NOT NULL,
+                        convo_at      TIMESTAMPTZ NOT NULL,
+                        outcome       TEXT,
+                        lead_name     TEXT,
+                        lead_source   TEXT,
+                        owner_at_event TEXT,
+                        stage         TEXT,
+                        in_export     BOOLEAN NOT NULL DEFAULT FALSE,
+                        fub_evidence  TEXT,
+                        first_human_touch_at TIMESTAMPTZ,
+                        touched_by    TEXT,
+                        touch_kind    TEXT,
+                        minutes_to_touch INTEGER,
+                        touch_checked_at TIMESTAMPTZ,
+                        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        UNIQUE (person_id, channel, convo_day)
+                    );
+                    CREATE INDEX IF NOT EXISTS ai_conversations_day
+                        ON ai_conversations (convo_day);
+                """)
+    except Exception as e:
+        logger.warning("ensure_ai_conversations failed: %s", e)
+
+
+def upsert_ai_conversation(person_id, channel, convo_day, convo_at,
+                           outcome=None, lead_name=None, lead_source=None,
+                           owner=None, stage=None, in_export=False,
+                           fub_evidence=None):
+    """Insert or merge one conversation. Ylopo's export wins on time and
+    outcome; FUB evidence fills what the export has not said yet. Returns
+    'new', 'merged' or None on failure."""
+    if not is_available():
+        return None
+    ensure_ai_conversations()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO ai_conversations
+                        (person_id, channel, convo_day, convo_at, outcome,
+                         lead_name, lead_source, owner_at_event, stage,
+                         in_export, fub_evidence)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (person_id, channel, convo_day) DO UPDATE SET
+                        convo_at = CASE
+                            WHEN EXCLUDED.in_export THEN EXCLUDED.convo_at
+                            WHEN ai_conversations.in_export
+                                THEN ai_conversations.convo_at
+                            ELSE LEAST(ai_conversations.convo_at,
+                                       EXCLUDED.convo_at) END,
+                        outcome = CASE
+                            WHEN EXCLUDED.in_export
+                                THEN COALESCE(EXCLUDED.outcome,
+                                              ai_conversations.outcome)
+                            ELSE COALESCE(ai_conversations.outcome,
+                                          EXCLUDED.outcome) END,
+                        lead_name = COALESCE(ai_conversations.lead_name,
+                                             EXCLUDED.lead_name),
+                        lead_source = COALESCE(ai_conversations.lead_source,
+                                               EXCLUDED.lead_source),
+                        owner_at_event = COALESCE(
+                            ai_conversations.owner_at_event,
+                            EXCLUDED.owner_at_event),
+                        stage = COALESCE(EXCLUDED.stage,
+                                         ai_conversations.stage),
+                        in_export = ai_conversations.in_export
+                                    OR EXCLUDED.in_export,
+                        fub_evidence = COALESCE(EXCLUDED.fub_evidence,
+                                                ai_conversations.fub_evidence),
+                        updated_at = NOW()
+                    RETURNING (xmax = 0)
+                """, (person_id, channel, convo_day, convo_at, outcome,
+                      lead_name, lead_source, owner, stage, bool(in_export),
+                      fub_evidence))
+                return "new" if cur.fetchone()[0] else "merged"
+    except Exception as e:
+        logger.warning("upsert_ai_conversation failed for %s: %s",
+                       person_id, e)
+        return None
+
+
+_AI_CONVO_COLS = ("id", "person_id", "channel", "convo_day", "convo_at",
+                  "outcome", "lead_name", "lead_source", "owner_at_event",
+                  "stage", "in_export", "fub_evidence",
+                  "first_human_touch_at", "touched_by", "touch_kind",
+                  "minutes_to_touch", "touch_checked_at")
+
+
+def get_ai_conversations(start_day, end_day):
+    """Rows with convo_day in [start_day, end_day], newest first."""
+    if not is_available():
+        return []
+    ensure_ai_conversations()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT %s FROM ai_conversations "
+                            "WHERE convo_day BETWEEN %%s AND %%s "
+                            "ORDER BY convo_at DESC"
+                            % ", ".join(_AI_CONVO_COLS),
+                            (start_day, end_day))
+                out = []
+                for r in cur.fetchall():
+                    d = dict(zip(_AI_CONVO_COLS, r))
+                    for k in ("convo_day", "convo_at", "first_human_touch_at",
+                              "touch_checked_at"):
+                        if d.get(k) is not None:
+                            d[k] = d[k].isoformat()
+                    out.append(d)
+                return out
+    except Exception as e:
+        logger.warning("get_ai_conversations failed: %s", e)
+        return []
+
+
+def set_ai_conversation_touch(row_id, touch_at=None, touched_by=None,
+                              touch_kind=None, minutes=None):
+    """Stamp the first human touch (or just that we looked)."""
+    if not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE ai_conversations SET
+                        first_human_touch_at = COALESCE(%s, first_human_touch_at),
+                        touched_by = COALESCE(%s, touched_by),
+                        touch_kind = COALESCE(%s, touch_kind),
+                        minutes_to_touch = COALESCE(%s, minutes_to_touch),
+                        touch_checked_at = NOW()
+                    WHERE id = %s
+                """, (touch_at, touched_by, touch_kind, minutes, row_id))
+    except Exception as e:
+        logger.warning("set_ai_conversation_touch failed: %s", e)
+
+
+def get_recent_ai_candidate_pids(hours=72, limit=150):
+    """People our own event log saw an AI signal on recently: the list the
+    FUB evidence fill walks between Ylopo imports."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, MAX(created_at) FROM automation_event_log
+                    WHERE created_at > NOW() - (%s || ' hours')::interval
+                      AND person_id IS NOT NULL
+                      AND event_type IN ('ai_convert_seen',
+                          'desk_evidence_pending', 'desk_evidence_recovered',
+                          'claude_text_converted', 'desk_intake',
+                          'desk_owner_ping', 'transfer_already_routed')
+                    GROUP BY person_id ORDER BY 2 DESC LIMIT %s
+                """, (str(int(hours)), int(limit)))
+                return [int(r[0]) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_recent_ai_candidate_pids failed: %s", e)
+        return []

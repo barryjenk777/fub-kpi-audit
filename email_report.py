@@ -617,10 +617,19 @@ def build_hype_email(agents, period_label, ai_text_count, ai_voice_count,
     # MaverickRE figures, never double-counted below zero.
     text_convos = int(desk_routes.get("text_convos") or 0)
     voice_convos = int(desk_routes.get("voice_convos") or 0)
-    ai_text_count = max(ai_text_count, text_convos)
-    ai_voice_count = max(ai_voice_count, voice_convos)
-    total_leads = (ai_text_count + ai_voice_count + fhalen_appts
-                   + nurture_routed + ring_wins)
+    if desk_routes.get("ledger"):
+        # The conversation ledger is the count (Nov 16 2026): one per
+        # person per channel, reconciled to Ylopo's export. Desk routes
+        # are mostly the same people, so they are shown beside the
+        # number and never added into it.
+        ai_text_count = text_convos
+        ai_voice_count = voice_convos
+        total_leads = ai_text_count + ai_voice_count + fhalen_appts
+    else:
+        ai_text_count = max(ai_text_count, text_convos)
+        ai_voice_count = max(ai_voice_count, voice_convos)
+        total_leads = (ai_text_count + ai_voice_count + fhalen_appts
+                       + nurture_routed + ring_wins)
 
     # ── Build per-agent performance narrative ────────────────────────────────
     def agent_narrative(a):
@@ -704,11 +713,19 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
             detail_parts.append(f"{ai_voice_count} AI voice")
         if fhalen_appts > 0:
             detail_parts.append(f"{fhalen_appts} Human ISA appointments")
+        also_parts = []
         if nurture_routed > 0:
-            detail_parts.append(f"{nurture_routed} AI conversation routes")
+            (also_parts if desk_routes.get("ledger") else detail_parts) \
+                .append(f"{nurture_routed} AI conversation routes")
         if ring_wins > 0:
-            detail_parts.append(f"{ring_wins} Realtor.com ring answers")
+            (also_parts if desk_routes.get("ledger") else detail_parts) \
+                .append(f"{ring_wins} Realtor.com ring answers")
         detail_str = " + ".join(detail_parts)
+        if also_parts:
+            detail_str += ("<br><span style='font-size:12px'>Also offered "
+                           "through the Lead Desk (already counted above "
+                           "where they overlap): "
+                           + ", ".join(also_parts) + "</span>")
 
         html += f"""
 <div style="background:#fff;border-radius:10px;border:2px solid #f59e0b;padding:20px 24px;margin-bottom:20px;text-align:center">

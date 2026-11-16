@@ -3541,38 +3541,19 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
             "callingly", hours=168)
     except Exception as _dr:
         logger.warning("hype-email: desk route count failed: %s", _dr)
-    # Verified AI conversions, auto-counted (Barry, Nov 9 2026: "we
-    # should be prioritizing our conversion to the agents via that
-    # weekly email"). Text = Claude_Text_Converted ledger events (each
-    # one backed by Ylopo's strict conversation alert). Voice = recent
-    # transfer stamps that carry a real conversational disposition.
+    # AI conversations come from the conversation ledger (Nov 16 2026):
+    # one row per person per channel per day, dated by the conversation
+    # itself, reconciled to Ylopo's export. The old sources (tag stamps in
+    # isa_transfers, claude_text_converted events) double counted and
+    # dated by scan time; the Nov 15 email said 45 against Ylopo's 22.
     try:
-        with _db.get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT COUNT(DISTINCT person_id)
-                    FROM automation_event_log
-                    WHERE event_type = 'claude_text_converted'
-                      AND created_at > NOW() - INTERVAL '7 days'
-                """)
-                desk_routes["text_convos"] = int(cur.fetchone()[0] or 0)
-    except Exception as _tc:
-        logger.warning("hype-email: text convo count failed: %s", _tc)
-    try:
-        voice_n = 0
-        with _db.get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT person_id FROM isa_transfers
-                    WHERE transfer_date > NOW() - INTERVAL '7 days'
-                """)
-                pids = [r[0] for r in cur.fetchall()]
-        for _pid in pids[:25]:
-            if _fresh_ai_voice_outcome(_pid, hours=24 * 7):
-                voice_n += 1
-        desk_routes["voice_convos"] = voice_n
-    except Exception as _vc:
-        logger.warning("hype-email: voice convo count failed: %s", _vc)
+        import convo_ledger as _cl
+        _wk = _cl.weekly_counts(days=7)
+        desk_routes["text_convos"] = _wk["text"]
+        desk_routes["voice_convos"] = _wk["voice"]
+        desk_routes["ledger"] = True
+    except Exception as _lc:
+        logger.warning("hype-email: ledger count failed: %s", _lc)
 
     # Paused agents (COACHING_TEXT_EXCLUDED_AGENTS) are off the roster and
     # off the send list (Barry, Nov 16 2026: Dilek, paused the day before,
@@ -3599,7 +3580,16 @@ def api_hype_transfer_counts():
     """Read-only: the auto-computed weekly AI text + AI voice transfer counts.
     Lets Barry verify the numbers the Sunday hype job will use before it sends."""
     try:
-        return jsonify({"success": True, **_count_weekly_transfers()})
+        out = {"success": True, **_count_weekly_transfers()}
+        try:
+            import convo_ledger as _cl
+            out["ledger"] = _cl.weekly_counts(days=7)
+            out["note"] = ("The Sunday email uses 'ledger'. ai_text and "
+                           "ai_voice are the old tag-stamp counts, kept "
+                           "for comparison only.")
+        except Exception as _le:
+            out["ledger_error"] = str(_le)
+        return jsonify(out)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -23401,6 +23391,109 @@ def scheduled_metric_snapshots():
         print(f"[SCHEDULER] metric snapshots FAILED: {e}")
 
 
+# ── AI conversation ledger: one record per conversation ─────────────────────
+
+def _run_convo_ledger_scan(days=3, extra_pids=None):
+    """Fill the ledger from FUB evidence for people our event log saw an AI
+    signal on, then look for the first human touch on open rows."""
+    import convo_ledger as _cl
+    pids = _db.get_recent_ai_candidate_pids(hours=24 * days, limit=150)
+    for _p in (extra_pids or []):
+        if _p not in pids:
+            pids.append(_p)
+    filled = _cl.fill_from_fub(pids, days=days)
+    _today = datetime.now(_cl.ET).date()
+    touched = _cl.refresh_touches(_today - timedelta(days=14), _today)
+    return {"fill": filled, "touches": touched}
+
+
+def scheduled_convo_ledger_scan():
+    """Every 30 min, 7am to 9pm ET: keep the conversation ledger current
+    between Ylopo imports and stamp follow-up as it happens."""
+    if not _db.try_acquire_job_lock("convo_ledger_scan"):
+        return
+    try:
+        r = _run_convo_ledger_scan(days=3)
+        print("[SCHEDULER] convo ledger: %s" % json.dumps(r))
+    except Exception as e:
+        print(f"[SCHEDULER] convo ledger scan FAILED: {e}")
+    finally:
+        _db.release_job_lock("convo_ledger_scan")
+
+
+@app.route("/conversations")
+def conversations_page():
+    """Every AI conversation, where it came from, and who followed up."""
+    return render_template("conversations_board.html")
+
+
+@app.route("/api/conversations")
+def api_conversations():
+    """The ledger for a date range (default: last 7 ET days) with counts,
+    reconciliation against Ylopo's export, and the nobody-called list."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import convo_ledger as _cl
+    _today = datetime.now(_cl.ET).date()
+    try:
+        end = (datetime.strptime(request.args["end"], "%Y-%m-%d").date()
+               if request.args.get("end") else _today)
+        start = (datetime.strptime(request.args["start"], "%Y-%m-%d").date()
+                 if request.args.get("start") else end - timedelta(days=6))
+    except ValueError:
+        return jsonify({"error": "dates are YYYY-MM-DD"}), 400
+    return jsonify({"ok": True, **_cl.report(start, end)})
+
+
+@app.route("/api/admin/conversations/import", methods=["POST"])
+def api_conversations_import():
+    """Upload Ylopo's export CSVs (text follow-up and/or call successful).
+    Accepts multipart files, or JSON {"csv": "..."} / {"files": ["..."]}.
+    Then fills FUB evidence and follow-up for the same people."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import convo_ledger as _cl
+    texts = []
+    for f in request.files.values():
+        texts.append(f.read().decode("utf-8-sig", errors="replace"))
+    body = request.get_json(silent=True) or {}
+    if body.get("csv"):
+        texts.append(body["csv"])
+    texts.extend(body.get("files") or [])
+    if not texts:
+        return jsonify({"ok": False, "reason": "no CSV received"}), 400
+    results, pids, days = [], [], []
+    for t in texts:
+        try:
+            parsed = _cl.parse_export(t)
+            results.append(_cl.import_export(t))
+            pids.extend(r["person_id"] for r in parsed["rows"])
+            days.extend(r["convo_day"] for r in parsed["rows"])
+        except ValueError as e:
+            results.append({"error": str(e)})
+    scan = None
+    if pids and body.get("scan", True) is not False:
+        try:
+            span = (datetime.now(_cl.ET).date() - min(days)).days + 2
+            scan = {"fill": _cl.fill_from_fub(sorted(set(pids)),
+                                              days=min(span, 30)),
+                    "touches": _cl.refresh_touches(min(days), max(days))}
+        except Exception as e:
+            scan = {"error": str(e)}
+    return jsonify({"ok": True, "imports": results, "scan": scan})
+
+
+@app.route("/api/admin/conversations/scan", methods=["POST"])
+def api_conversations_scan():
+    """Run the FUB evidence fill and follow-up check now."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    return jsonify({"ok": True, **_run_convo_ledger_scan(
+        days=int(body.get("days") or 3),
+        extra_pids=[int(x) for x in (body.get("person_ids") or [])])})
+
+
 @app.route("/roi")
 def roi_page():
     """Source accountability: what each source costs, in plain terms, and
@@ -25664,6 +25757,10 @@ def scheduled_send_hype_email():
                   f"{fresh.get('period', {}).get('end')})")
         except Exception as _fe:
             print(f"[SCHEDULER] Hype email: fresh audit FAILED, falling back to cache: {_fe}")
+        try:
+            _run_convo_ledger_scan(days=7)
+        except Exception as _se:
+            print(f"[SCHEDULER] Hype email: ledger scan failed: {_se}")
         counts = _count_weekly_transfers()
         with app.test_client() as tc:
             resp = tc.post(f"/api/send-hype-email?key={_internal_key()}", json={
@@ -32313,6 +32410,13 @@ def start_scheduler():
                        id="isa_live_credit",
                        name="Fhalen live transfer credit (7:40pm)",
                        max_instances=1, misfire_grace_time=3600)
+
+    # Conversation ledger: FUB evidence + follow-up, between Ylopo imports.
+    _scheduler.add_job(scheduled_convo_ledger_scan,
+                       CronTrigger(hour="7-20", minute="9,39", timezone=ET),
+                       id="convo_ledger_scan",
+                       name="AI conversation ledger scan (30 min)",
+                       max_instances=1, misfire_grace_time=300)
 
     # Evidence recheck: parked conversions re-tested every 10 minutes.
     _scheduler.add_job(scheduled_evidence_recheck,
