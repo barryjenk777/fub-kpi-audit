@@ -5299,6 +5299,85 @@ def _onboard_new_hire(agent_name, agent_email, base_url):
     return seeded
 
 
+def _slack_invite_url():
+    """The live Slack invite link, or "" when unset or past 28 days (a dead
+    link is worse than no link)."""
+    try:
+        raw, _ = _db.get_app_state("slack_invite_link")
+        d = json.loads(raw or "{}")
+        link = (d.get("url") or "").strip()
+        if not link:
+            return ""
+        set_at = datetime.fromisoformat(d.get("set_at"))
+        if (datetime.now(timezone.utc) - set_at) > timedelta(days=28):
+            logger.warning("[ONBOARD] Slack invite link is stale (set %s). "
+                           "Refresh it.", d.get("set_at"))
+            return ""
+        return link
+    except Exception:
+        return ""
+
+
+def _slack_joined(agent_name, email):
+    """True once the hire's email resolves to a Slack account. Also wires
+    them into the Slack user map so the Lead Desk can reach them."""
+    try:
+        raw, _ = _db.get_app_state("slack_user_map")
+        m = json.loads(raw or "{}")
+        if m.get(agent_name):
+            return True
+        import slack_client as _sl
+        if not _sl.is_available() or not email:
+            return False
+        sid = _sl.lookup_user_by_email(email.strip())
+        if not sid:
+            return False
+        m[agent_name] = sid
+        _db.set_app_state("slack_user_map", json.dumps(m))
+        return True
+    except Exception:
+        return False
+
+
+def _send_slack_invite_email(agent_name, email):
+    """Day 1, its own email so it is not buried: the link to join the team
+    Slack. Once per hire. Skipped (and logged) when the link is stale."""
+    if not email:
+        return False
+    link = _slack_invite_url()
+    if not link:
+        logger.warning("[ONBOARD] no live Slack invite link, %s got no "
+                       "Slack email", agent_name)
+        return False
+    if not _db.claim_once("slack_invite_%s" % agent_name.replace(" ", "_")):
+        return False
+    first = agent_name.split()[0]
+    import postmark_client as _pm
+    try:
+        _pm.send(to="%s <%s>" % (agent_name, email),
+                 from_email=config.EMAIL_FROM, cc=config.EMAIL_FROM,
+                 subject="%s, join the team Slack today" % first,
+                 html="""<div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;font-size:15px;line-height:1.7;color:#1a1f26;max-width:560px">
+Hi %s,<br><br>
+One thing to do today: join our team Slack. This is where new leads get
+offered to agents and where the team shares wins, so you want to be in it
+from day one.<br><br>
+<a href="%s" style="font-weight:700">Tap here to join the team Slack</a><br><br>
+Use this email address when you create your account so the system can
+find you. Then put the Slack app on your phone and turn notifications on.
+Lead offers go to whoever taps first.<br><br>
+If the link gives you trouble, reply to this email and I will get you
+sorted.<br><br>
+<strong>Barry Jenkins</strong>
+</div>""" % (first, link))
+        logger.info("[ONBOARD] Slack invite email sent to %s", agent_name)
+        return True
+    except Exception as e:
+        logger.warning("[ONBOARD] Slack invite email failed for %s: %s",
+                       agent_name, e)
+        return False
+
+
 def _slack_join_line():
     """One <br> line inviting the new hire into the team Slack, shown in the
     door-opening email. Slack's invite API is Enterprise-only, so the link is
@@ -5309,19 +5388,8 @@ def _slack_join_line():
     in 30 days on this plan: past 28 days the line is omitted (a dead link is
     worse than no link) and a warning logs. Refresh via
     POST /api/admin/desk/invite-link {"url": "..."}."""
-    try:
-        raw, _ = _db.get_app_state("slack_invite_link")
-        d = json.loads(raw or "{}")
-        link = (d.get("url") or "").strip()
-        set_at = datetime.fromisoformat(d.get("set_at"))
-        if not link:
-            return ""
-        if (datetime.now(timezone.utc) - set_at) > timedelta(days=28):
-            logger.warning("[ONBOARD] Slack invite link is stale (set %s) — "
-                           "omitted from door-opening email. Refresh it.",
-                           d.get("set_at"))
-            return ""
-    except Exception:
+    link = _slack_invite_url()
+    if not link:
         return ""
     return ("<br><strong>Team Slack.</strong> Join here: "
             "<a href='%s'>%s</a>. Lead offers and team wins live there. "
@@ -30471,6 +30539,7 @@ def scheduled_onboarding_escalation():
                 try:
                     _onboard_new_hire(name, email, base_url)
                     print(f"[ONBOARDING] Day One Pipeline seeded for {name}")
+                    _send_slack_invite_email(name, email)
                 except Exception as _pe:
                     print(f"[ONBOARDING] pipeline seed failed for {name}: {_pe}")
             except Exception as e:
@@ -30523,6 +30592,15 @@ def scheduled_onboarding_escalation():
                     if _row and _row.get("join_token") else None
                 for _t in _tasks:
                     lbl = _t["label"]
+                    if _t["key"] == "join_slack":
+                        if _slack_joined(name, email):
+                            _db.mark_onboarding_task(agent_name=name,
+                                                     task_key="join_slack",
+                                                     done_by="auto")
+                            continue
+                        _sl_url = _slack_invite_url()
+                        if _sl_url:
+                            lbl = "Join the team Slack: %s" % _sl_url
                     if _t["key"] == "headshot_bio" and _join:
                         lbl += " (two minutes: %s)" % _join
                     open_items.append(lbl)

@@ -9950,6 +9950,7 @@ def stamp_handoff_variant_minutes(person_id):
 ONBOARDING_TASKS = [
     # (key, lane, owner, label)
     ("sign_docs",      "agent", "ana",   "Commission agreement + handbook signed (dotloop)"),
+    ("join_slack",     "agent", "agent", "Join the team Slack"),
     ("goals_setup",    "agent", "agent", "Goals set in Command Center"),
     ("fasttrack",      "agent", "agent", "Fast Track course completed"),
     ("headshot_bio",   "agent", "agent", "Headshot + bio submitted"),
