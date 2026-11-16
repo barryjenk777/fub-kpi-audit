@@ -5269,8 +5269,8 @@ def _onboard_new_hire(agent_name, agent_email, base_url):
 <tr><td style="background:#ffffff;padding:22px 30px;font-size:15px;line-height:1.7;color:#1a1f26">
   <strong>1. Dotloop first, it gates everything:</strong> create a loop named
   <strong>"%s - Onboarding Docs"</strong> with the commission agreement and the
-  handbook, and send it to %s%s and Barry to sign. They are not on the team
-  until this is signed, so this one is same-day.
+  handbook, and send it to %s%s and Barry to sign. Please send it the
+  same day.
   <a href="%s" style="color:#9a741f;font-weight:700">Mark done</a><br><br>
   <strong>2.</strong> Add %s to the roster spreadsheet.
   <a href="%s" style="color:#9a741f;font-weight:700">Mark done</a><br>
@@ -5378,28 +5378,10 @@ sorted.<br><br>
         return False
 
 
-def _slack_join_line():
-    """One <br> line inviting the new hire into the team Slack, shown in the
-    door-opening email. Slack's invite API is Enterprise-only, so the link is
-    the auto-add: they tap it, they're in, and the nightly automap wires them
-    to the Lead Desk with zero clicks.
-
-    The link lives in app_state (not env) because Slack invite links expire
-    in 30 days on this plan: past 28 days the line is omitted (a dead link is
-    worse than no link) and a warning logs. Refresh via
-    POST /api/admin/desk/invite-link {"url": "..."}."""
-    link = _slack_invite_url()
-    if not link:
-        return ""
-    return ("<br><strong>Team Slack.</strong> Join here: "
-            "<a href='%s'>%s</a>. Lead offers and team wins live there. "
-            "Turn notifications on." % (link, link))
-
-
 @app.route("/api/admin/desk/invite-link", methods=["GET", "POST"])
 def api_desk_invite_link():
     """Read or refresh the Slack workspace invite link used in the
-    door-opening email. POST {"url": "https://join.slack.com/..."} stamps
+    day-one Slack email and the onboarding reminders. POST {"url": "https://join.slack.com/..."} stamps
     set_at now; links older than 28 days stop rendering automatically."""
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
@@ -5417,52 +5399,6 @@ def api_desk_invite_link():
     return jsonify({"ok": True, **d})
 
 
-def _docs_signed_email(agent_name):
-    """The door opening. Docs came back signed, the gate lifts, and the
-    agent hears it immediately instead of the machine switching on in
-    silence. Once per hire via claim_once."""
-    if not _db.claim_once("docs_signed_%s" % agent_name.replace(" ", "_")):
-        return
-    profile = next((p for p in (_db.get_agent_profiles(active_only=True) or [])
-                    if p["agent_name"] == agent_name), None)
-    email = (profile or {}).get("email")
-    if not email:
-        return
-    first = agent_name.split()[0]
-    try:
-        import postmark_client as _pm
-        _pm.send(to="%s <%s>" % (agent_name, email),
-                 from_email=config.EMAIL_FROM,
-                 cc=config.EMAIL_FROM,
-                 subject="%s, you're in. Everything just switched on." % first,
-                 html="""<div style="background:#f4f4f0;padding:24px 0">
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0"><tr><td align="center">
-<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;font-family:-apple-system,'Segoe UI',Arial,sans-serif">
-<tr><td style="background:#0d1117;padding:24px 30px">
-  <div style="font-size:11px;font-weight:800;letter-spacing:.2em;color:#f5a623;text-transform:uppercase;margin-bottom:6px">Legacy Home Team</div>
-  <div style="font-size:24px;font-weight:900;color:#ffffff">%s, you're officially in.</div>
-</td></tr>
-<tr><td style="height:4px;background:#f5a623;font-size:0">&nbsp;</td></tr>
-<tr><td style="background:#ffffff;padding:22px 30px;font-size:15px;line-height:1.7;color:#1a1f26">
-  Your signatures just came back, and here is what switched on the moment
-  they did:<br><br>
-  <strong>Your leads.</strong> LeadStream starts ranking them for you tonight.<br>
-  <strong>Your morning text.</strong> Weekdays at 8:15, three calls picked
-  and verified. Make them before lunch.<br>
-  <strong>Your Tuesday Nurture Run.</strong> Ten quiet leads, messages
-  already written, two taps each.<br>
-  <strong>The transfer line.</strong> Hit your weekly numbers and live
-  transfers come to you.%s<br><br>
-  Nobody eases onto this team. The machine treats you like a full agent
-  starting now, because you are one.<br><br>
-  Let's get it,<br><strong>Barry Jenkins</strong>
-</td></tr>
-</table></td></tr></table></div>""" % (first, _slack_join_line()))
-        logger.info("[ONBOARD] docs-signed email sent to %s", agent_name)
-    except Exception as e:
-        logger.warning("[ONBOARD] docs-signed email failed: %s", e)
-
-
 @app.route("/ob/<token>/done")
 def onboarding_task_done_link(token):
     """One-click task completion from the ops emails."""
@@ -5470,8 +5406,6 @@ def onboarding_task_done_link(token):
     if not r:
         return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
                 "This link has expired or was already used."), 404
-    if r.get("task_key") == "sign_docs":
-        _docs_signed_email(r["agent_name"])
     return ("<div style='font-family:sans-serif;padding:3rem;text-align:center'>"
             "<h2>&#10003; Done</h2><p>%s: <b>%s</b> is checked off. "
             "Thank you.</p></div>" % (r["agent_name"], r["label"]))
@@ -5599,8 +5533,6 @@ def api_onboarding_task_done():
                                  done_by=body.get("done_by") or "board")
     if not r:
         return jsonify({"error": "not found"}), 404
-    if r.get("task_key") == "sign_docs" and body.get("done_by") != "backfill":
-        _docs_signed_email(r["agent_name"])
     return jsonify({"ok": True, **r})
 
 

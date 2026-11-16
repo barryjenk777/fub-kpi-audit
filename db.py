@@ -10107,21 +10107,11 @@ def mark_onboarding_task(agent_name=None, task_key=None, token=None, done_by=Non
 
 
 def get_onboarding_gated():
-    """Hires whose docs are unsigned: not on the team yet, per Barry. These
-    names are excluded from lead routing and the accountability rhythm."""
-    if not is_available():
-        return set()
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT agent_name FROM onboarding_tasks
-                    WHERE task_key = 'sign_docs' AND done_at IS NULL
-                """)
-                return {r[0] for r in cur.fetchall()}
-    except Exception as e:
-        logger.warning("get_onboarding_gated failed: %s", e)
-        return set()
+    """Retired gate (Barry, Nov 16 2026): a hire is a full agent the moment
+    they are added to Follow Up Boss. Unsigned docs no longer hold anyone
+    out of lead routing or the daily rhythm; sign_docs is a board item only.
+    Kept as an empty set so every caller stays valid."""
+    return set()
 
 
 # Statuses that do NOT work leads: no picks, no ladders, no scoreboards,
