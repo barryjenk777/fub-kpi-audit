@@ -523,8 +523,10 @@ _NEGATIVE_REPLY = re.compile(
     r"^\s*(?:(?:no|nope|no thanks|no thank you)\s*[.!]*\s*$"
     r"|(?:stop|unsubscribe|remove me|not interested|wrong number"
     r"|wrong person|this is not \w+|who is this)\b)", re.I)
-_DEAD_STAGES = ("closed", "trash", "archive", "do not contact", "dnc",
-                "past client", "sphere")
+# "Contact" is this team's second trash stage (Barry, Nov 16 2026: "contact
+# stage for us is like trash"). Under Contract is an agent's live deal.
+_DEAD_STAGES = ("closed", "trash", "archive", "contact", "dnc",
+                "past client", "sphere", "under contract")
 
 
 def is_sphere(person):

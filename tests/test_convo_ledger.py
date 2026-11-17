@@ -84,6 +84,12 @@ class HandoffWatchRules(unittest.TestCase):
                      "No problem, call me"):
             self.assertFalse(cl._NEGATIVE_REPLY.search(said), said)
 
+    def test_contact_stage_is_treated_like_trash(self):
+        for stage in ("Contact", "Trash", "Closed", "Under Contract"):
+            self.assertTrue(any(d in stage.lower() for d in cl._DEAD_STAGES))
+        for stage in ("Lead", "A - Hot 1-3 Months", "C - Cold 6+ Months"):
+            self.assertFalse(any(d in stage.lower() for d in cl._DEAD_STAGES))
+
     def test_fhalen_transfers_count(self):
         self.assertTrue(cl.is_confirmed(
             {"in_export": False, "fub_evidence": "isa_call"}))
