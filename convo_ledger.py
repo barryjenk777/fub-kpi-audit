@@ -60,7 +60,7 @@ OUTCOME_LABELS = {
 
 # Evidence strong enough to count without Ylopo's export agreeing.
 CONFIRMING_EVIDENCE = {"fub_disposition", "fub_followup_alert",
-                       "fub_ai_reply"}
+                       "fub_ai_reply", "isa_call", "isa_appointment"}
 
 _DISP_RE = re.compile(r"Call Disposition:\s*([A-Za-z_ ]+)")
 
@@ -303,9 +303,83 @@ def fill_text_from_fub_replies(days=3):
     return {"tagged_people_read": seen, "replies_written": wrote}
 
 
+# ── Fhalen's transfers (Barry, Nov 16 2026: "I want Fhalen's transfers
+# to be included") ───────────────────────────────────────────────────────────
+
+ISA_NAME = "Fhalen Tendencia"
+
+
+def fill_isa(days, is_dark_owner):
+    """Fhalen's handoffs to agents, channel 'isa'. Two proofs, both only
+    when a working agent owns the lead (her own pipeline, recruits and
+    cash-offer sellers sit on her name or nobody's and never count):
+      - a call of 3+ minutes she had with the lead
+      - an appointment she is on that has the lead attached"""
+    import config
+    isa_uid = int(getattr(config, "ISA_USER_ID", 0) or 0)
+    if not isa_uid:
+        return {"isa_written": 0}
+    client = FUBClient()
+    found = {}   # (pid, day) -> (when, outcome, evidence)
+    try:
+        with _db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, created, duration FROM calls_cache
+                    WHERE user_id = %s AND duration >= 180
+                      AND created >= NOW() - make_interval(days => %s)
+                      AND person_id IS NOT NULL
+                    ORDER BY created
+                """, (isa_uid, int(days)))
+                for pid, created, duration in cur.fetchall():
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    found.setdefault((int(pid), _et_day(created)), (
+                        created, "Live transfer (%d min call)"
+                        % round(duration / 60), "isa_call"))
+    except Exception as e:
+        logger.warning("ledger isa calls read failed: %s", e)
+    try:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        for a in client.get_appointments(
+                since=since - timedelta(days=1),
+                until=datetime.now(timezone.utc) + timedelta(days=60)) or []:
+            inv = a.get("invitees") or []
+            if not any(i.get("userId") == isa_uid for i in inv):
+                continue
+            made = _parse_fub_dt(a.get("created") or a.get("createdAt"))
+            if not made or made < since:
+                continue
+            for i in inv:
+                if i.get("personId"):
+                    key = (int(i["personId"]), _et_day(made))
+                    found[key] = (found.get(key, (made,))[0],
+                                  "Appointment set", "isa_appointment")
+    except Exception as e:
+        logger.warning("ledger isa appointments read failed: %s", e)
+    wrote = 0
+    for (pid, day), (when, outcome, evidence) in found.items():
+        try:
+            p = client._request("GET", "people/%s" % pid, params={
+                "fields": "id,name,source,assignedTo,stage"}) or {}
+        except Exception:
+            continue
+        owner = (p.get("assignedTo") or "").strip()
+        if is_dark_owner(owner):
+            continue
+        if _db.upsert_ai_conversation(
+                pid, "isa", day, when, outcome=outcome,
+                lead_name=(p.get("name") or "").strip() or None,
+                lead_source=(p.get("source") or "").strip() or None,
+                owner=owner, stage=(p.get("stage") or "").strip() or None,
+                in_export=False, fub_evidence=evidence):
+            wrote += 1
+    return {"isa_written": wrote}
+
+
 # ── 3. Follow-up: the first human touch after the conversation ──────────────
 
-def first_human_touch(person_id, convo_at, client=None):
+def first_human_touch(person_id, convo_at, client=None, exclude=()):
     """Earliest human call or text at or after the conversation. AI calls
     (they carry a Call Disposition) and unanswered inbound calls never
     count. Calls from a personal cell do not reach FUB and cannot be seen."""
@@ -318,7 +392,7 @@ def first_human_touch(person_id, convo_at, client=None):
         for c in next((v for v in cd.values() if isinstance(v, list)), []):
             when = _parse_fub_dt(c.get("created"))
             who = (c.get("userName") or "").strip()
-            if not when or when < start or not who:
+            if not when or when < start or not who or who in exclude:
                 continue
             if "Call Disposition" in (c.get("note") or ""):
                 continue
@@ -335,7 +409,8 @@ def first_human_touch(person_id, convo_at, client=None):
         for t in next((v for v in td.values() if isinstance(v, list)), []):
             when = _parse_fub_dt(t.get("created"))
             who = (t.get("userName") or "").strip()
-            if not when or when < start or not who or t.get("isIncoming"):
+            if not when or when < start or not who or t.get("isIncoming") \
+                    or who in exclude:
                 continue
             touches.append((when, who, "texted"))
     except Exception as e:
@@ -356,7 +431,9 @@ def refresh_touches(start_day, end_day, limit=60):
             continue
         checked += 1
         convo_at = datetime.fromisoformat(row["convo_at"])
-        t = first_human_touch(row["person_id"], convo_at, client=client)
+        t = first_human_touch(
+            row["person_id"], convo_at, client=client,
+            exclude=(ISA_NAME,) if row["channel"] == "isa" else ())
         if t:
             found += 1
             _db.set_ai_conversation_touch(row["id"], t["at"], t["by"],
@@ -373,6 +450,7 @@ def report(start_day, end_day):
     confirmed = [r for r in rows if is_confirmed(r)]
     text = [r for r in confirmed if r["channel"] == "text"]
     voice = [r for r in confirmed if r["channel"] == "voice"]
+    isa = [r for r in confirmed if r["channel"] == "isa"]
     outcomes = {}
     for r in voice:
         k = r.get("outcome") or "Unknown"
@@ -389,7 +467,7 @@ def report(start_day, end_day):
     return {
         "start": str(start_day), "end": str(end_day),
         "counts": {
-            "text": len(text), "voice": len(voice),
+            "text": len(text), "voice": len(voice), "isa": len(isa),
             "conversations": len(confirmed),
             "unique_people": len({r["person_id"] for r in confirmed}),
             "voice_outcomes": outcomes,
@@ -429,5 +507,68 @@ def weekly_counts(days=7):
         "text": len({r["person_id"] for r in rows if r["channel"] == "text"}),
         "voice": len({r["person_id"] for r in rows
                       if r["channel"] == "voice"}),
+        "isa": len({r["person_id"] for r in rows if r["channel"] == "isa"}),
         "unique_people": len({r["person_id"] for r in rows}),
         "start": start.isoformat(), "end": today.isoformat()}
+
+
+# ── 5. Handoff watch: nobody waits more than a day ──────────────────────────
+# Barry, Nov 16 2026: "if the agent doesn't contact the lead within 24
+# hours, as long as it's not sphere lead source, reassign lead." And: "I
+# should not have any leads assigned to me as I am not selling."
+
+NUDGE_HOURS = 4
+REASSIGN_HOURS = 24
+_NEGATIVE_REPLY = re.compile(
+    r"^\s*(?:(?:no|nope|no thanks|no thank you)\s*[.!]*\s*$"
+    r"|(?:stop|unsubscribe|remove me|not interested|wrong number"
+    r"|wrong person|this is not \w+|who is this)\b)", re.I)
+_DEAD_STAGES = ("closed", "trash", "archive", "do not contact", "dnc",
+                "past client", "sphere")
+
+
+def is_sphere(person):
+    src = (person.get("source") or "").strip().lower()
+    tags = " ".join(t.lower() for t in (person.get("tags") or []))
+    return ("sphere" in src or src in ("soi", "s.o.i.")
+            or "sphere" in tags or " soi" in " " + tags)
+
+
+def watch_candidates(max_age_hours=72):
+    """Untouched AI conversations, newest row per person, inside the
+    window. Fhalen's transfers are tracked but not policed here."""
+    today = datetime.now(ET).date()
+    start = today - timedelta(days=max_age_hours // 24 + 1)
+    now = datetime.now(timezone.utc)
+    newest = {}
+    for r in _db.get_ai_conversations(start, today):
+        if r["channel"] not in ("text", "voice") or not is_confirmed(r):
+            continue
+        cur = newest.get(r["person_id"])
+        if cur is None or r["convo_at"] > cur["convo_at"]:
+            newest[r["person_id"]] = r
+    out = []
+    for r in newest.values():
+        if r.get("first_human_touch_at"):
+            continue
+        age_h = (now - datetime.fromisoformat(r["convo_at"])) \
+            .total_seconds() / 3600
+        if age_h > max_age_hours:
+            continue
+        r = dict(r)
+        r["age_hours"] = round(age_h, 1)
+        out.append(r)
+    return out
+
+
+def reassign_note(row):
+    when = datetime.fromisoformat(row["convo_at"]).astimezone(ET) \
+        .strftime("%a %b %-d at %-I:%M %p")
+    how = ("talked with the AI on the phone" if row["channel"] == "voice"
+           else "replied to the AI by text")
+    said = (' They said: "%s".' % row["reply_text"]) \
+        if row.get("reply_text") else ""
+    return ("%s %s on %s and has not had a call or text from us since.%s "
+            "Pick up the thread naturally, no apology for the gap, just "
+            "call." % ((row.get("lead_name") or "This lead").split()[0],
+                       how, when, said))

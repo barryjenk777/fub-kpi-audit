@@ -737,6 +737,16 @@ def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
     route_path = "named"
     if not agent_name:
         prior = {o["agent"] for o in _db.dispatch_person_state(person_id)}
+        if source == "reassign":
+            # Never offer a neglected lead back to the agent losing it.
+            try:
+                from fub_client import FUBClient as _FC
+                _cur = (_FC()._request("GET", "people/%s" % person_id, params={
+                    "fields": "id,assignedTo"}) or {}).get("assignedTo")
+                if (_cur or "").strip():
+                    prior.add(_cur.strip())
+            except Exception as _e:
+                logger.warning("reassign owner lookup failed: %s", _e)
         cands, route_path = _ordered_candidates(lead_city, audit, source,
                                                 person_id, hop,
                                                 lead_source=lead_source)

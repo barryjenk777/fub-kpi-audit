@@ -53,7 +53,7 @@ function rowHtml(r){
     ('<b>'+esc(r.touched_by||'')+'</b> '+esc(r.touch_kind||'')+' after '+took(r.minutes_to_touch)):
     '<span style="color:var(--red);font-weight:700">Nobody yet</span>';
   return '<tr><td><a target="_blank" style="text-decoration:underline;font-weight:700" href="'+fub(r.person_id)+'">'+esc(r.lead_name||('Lead '+r.person_id))+'</a></td>'+
-    '<td>'+(r.channel==='voice'?'📞 AI voice':'💬 AI text')+'</td>'+
+    '<td>'+(r.channel==='voice'?'📞 AI voice':(r.channel==='isa'?'🙋 Fhalen':'💬 AI text'))+'</td>'+
     '<td>'+esc(when(r.convo_at))+'</td>'+
     '<td>'+esc(r.outcome||(r.channel==='text'?(r.reply_text?('Said: "'+r.reply_text+'"'):'Replied to the AI'):''))+'</td>'+
     '<td>'+esc(r.owner_at_event||'')+'</td>'+
@@ -70,7 +70,7 @@ async function load(){
     END=d.end;
     const c=d.counts, rec=d.reconciliation;
     document.getElementById('v-range').textContent=d.start+' to '+d.end;
-    document.getElementById('v-text').textContent=c.conversations+' AI conversation'+(c.conversations===1?'':'s')+': '+c.text+' text + '+c.voice+' voice, from '+c.unique_people+' people';
+    document.getElementById('v-text').textContent=c.conversations+' transfer'+(c.conversations===1?'':'s')+': '+c.text+' AI text + '+c.voice+' AI voice + '+(c.isa||0)+' from Fhalen, '+c.unique_people+' people';
     var li=d.last_import;
     document.getElementById('v-meta').textContent=(c.no_touch?(c.no_touch+' have had no follow-up. '):'Every one has been followed up. ')+
       'Read automatically from Follow Up Boss every 30 minutes.';
@@ -79,6 +79,7 @@ async function load(){
     document.getElementById('tiles').innerHTML=
       tile(c.text,'AI text replies','the lead wrote back')+
       tile(c.voice,'AI voice conversations',Object.keys(vo).map(k=>vo[k]+' '+k.toLowerCase()).join(', '))+
+      tile(c.isa||0,'From Fhalen','long call or appointment on an agent\u2019s lead')+
       tile(c.unique_people,'People','some did both')+
       tile(c.touched,'Followed up',c.median_minutes_to_touch!=null?('typical wait '+took(c.median_minutes_to_touch)):'',c.touched?'var(--green)':null)+
       tile(c.no_touch,'No follow-up','see the list below',c.no_touch?'var(--red)':null);

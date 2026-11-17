@@ -67,3 +67,23 @@ class Counting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HandoffWatchRules(unittest.TestCase):
+    def test_sphere_is_left_alone(self):
+        self.assertTrue(cl.is_sphere({"source": "Sphere"}))
+        self.assertTrue(cl.is_sphere({"source": "SOI"}))
+        self.assertTrue(cl.is_sphere({"source": "Zillow", "tags": ["Sphere"]}))
+        self.assertFalse(cl.is_sphere({"source": "Ylopo PPC+", "tags": []}))
+
+    def test_a_lead_who_said_no_is_not_offered(self):
+        for said in ("No", "STOP", "This is not jasmine", "wrong number",
+                     "not interested thanks"):
+            self.assertTrue(cl._NEGATIVE_REPLY.search(said), said)
+        for said in ("Not yet, not this year", "Yes", "Either or is perfect.",
+                     "No problem, call me"):
+            self.assertFalse(cl._NEGATIVE_REPLY.search(said), said)
+
+    def test_fhalen_transfers_count(self):
+        self.assertTrue(cl.is_confirmed(
+            {"in_export": False, "fub_evidence": "isa_call"}))

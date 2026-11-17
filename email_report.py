@@ -624,6 +624,10 @@ def build_hype_email(agents, period_label, ai_text_count, ai_voice_count,
         # number and never added into it.
         ai_text_count = text_convos
         ai_voice_count = voice_convos
+        # Fhalen's transfers come from the same record: her 3+ minute
+        # calls and appointments on leads a working agent owns. Recruiting
+        # and cash-offer appointments never qualify.
+        fhalen_appts = int(desk_routes.get("isa_convos") or 0)
         total_leads = ai_text_count + ai_voice_count + fhalen_appts
     else:
         ai_text_count = max(ai_text_count, text_convos)
@@ -712,7 +716,10 @@ body{{font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-wi
         if ai_voice_count > 0:
             detail_parts.append(f"{ai_voice_count} AI voice")
         if fhalen_appts > 0:
-            detail_parts.append(f"{fhalen_appts} Human ISA appointments")
+            detail_parts.append(
+                f"{fhalen_appts} live transfers from {fhalen_name.split()[0]}"
+                if desk_routes.get("ledger")
+                else f"{fhalen_appts} Human ISA appointments")
         also_parts = []
         if nurture_routed > 0:
             (also_parts if desk_routes.get("ledger") else detail_parts) \

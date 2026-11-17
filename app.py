@@ -3551,6 +3551,7 @@ def _gather_hype_data(ai_text_count=None, ai_voice_count=None, human_isa=None):
         _wk = _cl.weekly_counts(days=7)
         desk_routes["text_convos"] = _wk["text"]
         desk_routes["voice_convos"] = _wk["voice"]
+        desk_routes["isa_convos"] = _wk["isa"]
         desk_routes["ledger"] = True
     except Exception as _lc:
         logger.warning("hype-email: ledger count failed: %s", _lc)
@@ -5697,6 +5698,16 @@ def _dispatch_accept(offer):
     try:
         _live = client.get_person(offer["person_id"]) or {}
         prior_owner = (_live.get("assignedTo") or "").strip() or None
+        # The 24-hour rule (Barry, Nov 16 2026): a "reassign" offer exists
+        # to take a neglected lead from its owner, so the owner's name is
+        # not a block, unless they have called or texted since.
+        _takeover = False
+        if offer.get("source") == "reassign" and prior_owner \
+                and prior_owner != agent:
+            try:
+                _takeover = _handoff_untouched(offer["person_id"])
+            except Exception as _te:
+                logger.warning("[DISPATCH] takeover check failed: %s", _te)
         # A yanked Realtor.com claim releases the lead in our ledger but
         # FUB still shows the yanked agent. That name is not a working
         # owner (no dial logged), so it must not block the reopened round
@@ -5707,8 +5718,9 @@ def _dispatch_accept(offer):
                 and offer["source"] == "realtor":
             _released = _db.released_claimers(offer["person_id"])
         import realtor_ladder as _rl
-        if _rl.owner_blocks_claim(prior_owner, agent,
-                                  _desk_dark_owner(prior_owner), _released):
+        if not _takeover and _rl.owner_blocks_claim(
+                prior_owner, agent, _desk_dark_owner(prior_owner),
+                _released):
             _db.log_automation_event(
                 event_type="dispatch_accept_blocked",
                 person_id=offer["person_id"], person_name=offer["lead_name"],
@@ -23412,6 +23424,10 @@ def _run_convo_ledger_scan(days=3, extra_pids=None):
         if _p not in pids:
             pids.append(_p)
     replies = _cl.fill_text_from_fub_replies(days=days)
+    try:
+        replies.update(_cl.fill_isa(days, _desk_dark_owner))
+    except Exception as _ie:
+        logger.warning("ledger isa fill failed: %s", _ie)
     filled = _cl.fill_from_fub(pids, days=days)
     _today = datetime.now(_cl.ET).date()
     touched = _cl.refresh_touches(_today - timedelta(days=14), _today)
@@ -23431,6 +23447,171 @@ def scheduled_convo_ledger_scan():
         print(f"[SCHEDULER] convo ledger scan FAILED: {e}")
     finally:
         _db.release_job_lock("convo_ledger_scan")
+
+
+def _handoff_untouched(person_id):
+    """True when the newest AI conversation on this lead still has no
+    human call or text after it. Checked live at claim time so a lead is
+    never taken from an agent who just picked up the phone."""
+    import convo_ledger as _cl
+    _today = datetime.now(_cl.ET).date()
+    rows = [r for r in _db.get_ai_conversations(
+                _today - timedelta(days=10), _today)
+            if str(r["person_id"]) == str(person_id)
+            and r["channel"] in ("text", "voice")]
+    if not rows:
+        return False
+    newest = max(rows, key=lambda r: r["convo_at"])
+    return not _cl.first_human_touch(
+        person_id, datetime.fromisoformat(newest["convo_at"]))
+
+
+def _run_handoff_watch(apply=True, max_age_hours=72):
+    """Nobody waits more than a day (Barry, Nov 16 2026). For every AI
+    conversation with no call or text logged after it:
+      - nobody working owns it (pond, Barry, Fhalen, paused or departed
+        agent): offered to the team now
+      - an agent owns it: one reminder at 4 hours, and at 24 hours the
+        lead is offered to another agent
+    Sphere leads, dead stages and leads who told the AI no are left alone."""
+    import convo_ledger as _cl
+    import dispatch as _dp
+    import slack_client as _sl
+    client = FUBClient()
+    out = []
+    for r in _cl.watch_candidates(max_age_hours):
+        pid = r["person_id"]
+        try:
+            p = client._request("GET", "people/%s" % pid, params={
+                "fields": "id,name,assignedTo,source,tags,stage,addresses"
+            }) or {}
+        except Exception as e:
+            out.append({"person_id": pid, "action": "error: %s" % str(e)[:80]})
+            continue
+        owner = (p.get("assignedTo") or "").strip()
+        name = (p.get("name") or r.get("lead_name") or "").strip()
+        lead1 = (name or "your lead").split()[0]
+        row = {"person_id": pid, "lead": name, "owner": owner or "nobody",
+               "channel": r["channel"], "age_hours": r["age_hours"],
+               "said": r.get("reply_text")}
+        stage = (p.get("stage") or "").lower()
+        dark = _desk_dark_owner(owner)
+        try:
+            _open = [o for o in (_db.dispatch_person_state(pid, hours=72) or [])
+                     if not o.get("accepted") and not o.get("passed")
+                     and not o.get("expired") and o.get("secs_left")]
+        except Exception:
+            _open = []
+        if _cl.is_sphere(p):
+            row["action"] = "left alone: sphere lead"
+        elif any(d in stage for d in _cl._DEAD_STAGES):
+            row["action"] = "left alone: stage %s" % (p.get("stage") or "")
+        elif r.get("reply_text") and _cl._NEGATIVE_REPLY.search(r["reply_text"]):
+            row["action"] = "left alone: the lead told the AI no"
+        elif _open:
+            row["action"] = "already being offered"
+        elif dark or r["age_hours"] >= _cl.REASSIGN_HOURS:
+            row["action"] = "offer to the team" if dark else \
+                "reassign from %s" % owner
+            if apply and _db.claim_once("handoff_move_%s_%s"
+                                        % (pid, r["convo_day"])):
+                city = next((a.get("city") for a in (p.get("addresses") or [])
+                             if isinstance(a, dict) and a.get("city")), None)
+                res = _dp.make_offer(
+                    "recovery" if dark else "reassign", pid, name, city,
+                    notes=_cl.reassign_note(r),
+                    audit=cache_get("audit") or {},
+                    lead_source=p.get("source"))
+                row["offered_to"] = (res or {}).get("agent_name")
+                _db.log_automation_event(
+                    event_type="handoff_reassign" if not dark
+                    else "handoff_offer",
+                    person_id=pid, person_name=name,
+                    agent_name=row["offered_to"],
+                    payload={"from": owner or None,
+                             "age_hours": r["age_hours"],
+                             "channel": r["channel"]},
+                    triggered_by="handoff_watch")
+                flink = ("https://yourfriendlyagent.followupboss.com/2/"
+                         "people/view/%s" % pid)
+                if not dark and res and _sl.is_available():
+                    _oid = _dp._slack_user_id(owner)
+                    if _oid:
+                        _sl.dm_user(_oid, (
+                            "%s, %s talked with the AI %d hours ago and "
+                            "there is still no call or text logged in "
+                            "Follow Up Boss, so the lead is being offered "
+                            "to another agent. If you reached them from "
+                            "your personal phone, log it in Follow Up Boss "
+                            "next time so this does not happen."
+                            % (owner.split()[0], lead1,
+                               int(r["age_hours"]))))
+                    _bid = _dp._slack_user_id("Barry Jenkins")
+                    if _bid:
+                        _sl.dm_user(_bid, (
+                            "Reassigning <%s|%s>: %s had the lead and "
+                            "logged no call or text in the %d hours since "
+                            "the AI conversation. Offered to %s."
+                            % (flink, name or "a lead", owner,
+                               int(r["age_hours"]),
+                               row["offered_to"] or "the next agent")))
+        elif r["age_hours"] >= _cl.NUDGE_HOURS:
+            row["action"] = "remind %s" % owner
+            if apply and _sl.is_available() and _db.claim_once(
+                    "handoff_nudge_%s_%s" % (pid, r["convo_day"])):
+                _oid = _dp._slack_user_id(owner)
+                flink = ("https://yourfriendlyagent.followupboss.com/2/"
+                         "people/view/%s" % pid)
+                if _oid:
+                    _sl.dm_user(_oid, (
+                        "%s, %s talked with the AI about %d hours ago and "
+                        "there is no call or text logged in Follow Up Boss "
+                        "yet. Please call them now: <%s|open %s in Follow "
+                        "Up Boss>. If nothing is logged within 24 hours of "
+                        "their conversation, the lead is offered to "
+                        "another agent."
+                        % (owner.split()[0], lead1, int(r["age_hours"]),
+                           flink, lead1)))
+                    _db.log_automation_event(
+                        event_type="handoff_nudge", person_id=pid,
+                        person_name=name, agent_name=owner,
+                        payload={"age_hours": r["age_hours"]},
+                        triggered_by="handoff_watch")
+        else:
+            row["action"] = "waiting (under %d hours)" % _cl.NUDGE_HOURS
+        out.append(row)
+    return out
+
+
+def scheduled_handoff_watch():
+    """Every 30 min, 8am to 8pm ET: remind at 4 hours, reassign at 24."""
+    if not _db.try_acquire_job_lock("handoff_watch"):
+        return
+    try:
+        rows = _run_handoff_watch(apply=True)
+        acted = [r for r in rows if r.get("offered_to")
+                 or (r.get("action") or "").startswith("remind")]
+        print("[SCHEDULER] handoff watch: %d open, %d acted"
+              % (len(rows), len(acted)))
+    except Exception as e:
+        print(f"[SCHEDULER] handoff watch FAILED: {e}")
+    finally:
+        _db.release_job_lock("handoff_watch")
+
+
+@app.route("/api/admin/conversations/watch", methods=["GET", "POST"])
+def api_conversations_watch():
+    """GET: what the handoff watch would do right now (changes nothing).
+    POST {"apply": true, "max_age_hours": 72}: do it."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    apply = request.method == "POST" and bool(body.get("apply"))
+    hours = min(int(body.get("max_age_hours")
+                    or request.args.get("max_age_hours") or 72), 24 * 10)
+    return jsonify({"ok": True, "applied": apply,
+                    "rows": _run_handoff_watch(apply=apply,
+                                               max_age_hours=hours)})
 
 
 @app.route("/conversations")
@@ -32431,6 +32612,13 @@ def start_scheduler():
                        id="isa_live_credit",
                        name="Fhalen live transfer credit (7:40pm)",
                        max_instances=1, misfire_grace_time=3600)
+
+    # Handoff watch: remind at 4 hours, reassign at 24.
+    _scheduler.add_job(scheduled_handoff_watch,
+                       CronTrigger(hour="8-19", minute="14,44", timezone=ET),
+                       id="handoff_watch",
+                       name="AI handoff watch (remind 4h, reassign 24h)",
+                       max_instances=1, misfire_grace_time=300)
 
     # Conversation ledger: FUB evidence + follow-up, between Ylopo imports.
     _scheduler.add_job(scheduled_convo_ledger_scan,
