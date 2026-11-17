@@ -975,6 +975,10 @@ DESK_DAILY_CLAIM_CAP = 2
 # back to the group. Gate: app_state "realtor_live".
 REALTOR_SOURCE_KEYWORD = "realtor"   # lowercase substring match on FUB source
 REALTOR_SHOOTOUT_SIZE = 3            # round-1 simultaneous offers
+# A claim held overnight gets a longer first-call window once 8am opens
+# (the agent may be driving in): nudge, then release back to the group.
+REALTOR_MORNING_NUDGE_MIN = 15
+REALTOR_MORNING_YANK_MIN = 30
 REALTOR_OFFER_MINUTES = 2            # claim window per round
 REALTOR_CALL_NUDGE_MIN = 5           # claimed, no dial: private nudge
 REALTOR_CALL_YANK_MIN = 10           # claimed, no dial: claim released

@@ -11046,6 +11046,79 @@ def get_claims_pending_call(source="realtor", hours=24):
         return []
 
 
+def get_realtor_night_claims(hours=13):
+    """Realtor.com leads claimed after hours and not yet dialed: the
+    agents the 8am release tells they are clear to call."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, person_id, lead_name, agent_name
+                    FROM dispatch_offers
+                    WHERE source = 'realtor' AND accepted_at IS NOT NULL
+                      AND terminal = FALSE AND first_call_at IS NULL
+                      AND notes LIKE 'After hours%%'
+                      AND accepted_at >= NOW() - make_interval(hours => %s)
+                """, (int(hours),))
+                keys = ("id", "person_id", "lead_name", "agent_name")
+                return [dict(zip(keys, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_realtor_night_claims failed: %s", e)
+        return []
+
+
+def get_realtor_night_unclaimed(hours=13):
+    """Realtor.com leads offered after hours that nobody claimed: one
+    row per lead, for the 8am re-offer."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, MAX(lead_name), MAX(lead_city)
+                    FROM dispatch_offers o
+                    WHERE source = 'realtor' AND notes LIKE 'After hours%%'
+                      AND offered_at >= NOW() - make_interval(hours => %s)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM dispatch_offers w
+                          WHERE w.person_id = o.person_id
+                            AND w.accepted_at IS NOT NULL
+                            AND w.terminal = FALSE
+                            AND w.offered_at >= NOW() - make_interval(hours => %s))
+                    GROUP BY person_id
+                """, (int(hours), int(hours)))
+                keys = ("person_id", "lead_name", "lead_city")
+                return [dict(zip(keys, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_realtor_night_unclaimed failed: %s", e)
+        return []
+
+
+def live_realtor_claim(person_id, hours=24):
+    """The agent holding a live (claimed, not released) Realtor.com claim
+    on this lead, or None. Fails closed to None."""
+    if not is_available():
+        return None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name FROM dispatch_offers
+                    WHERE person_id = %s AND source = 'realtor'
+                      AND accepted_at IS NOT NULL AND terminal = FALSE
+                      AND accepted_at >= NOW() - make_interval(hours => %s)
+                    ORDER BY accepted_at DESC LIMIT 1
+                """, (str(person_id), int(hours)))
+                r = cur.fetchone()
+                return r[0] if r else None
+    except Exception as e:
+        logger.warning("live_realtor_claim failed: %s", e)
+        return None
+
+
 def released_claimers(person_id, source="realtor", hours=24):
     """Agents whose claim on this lead was yanked (accepted, then marked
     terminal by the claim-to-call enforcer) and who still have no dial

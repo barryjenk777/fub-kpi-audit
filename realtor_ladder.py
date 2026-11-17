@@ -43,6 +43,64 @@ CONTACT_INBOUND_SECS = 30
 LEAD_COST_USD = 80
 
 
+# ── After hours (Barry, Nov 17 2026) ─────────────────────────────────────
+# No calls or texts to a lead between 9pm and 8am Eastern. A lead that
+# registers in that window skips the phone ring, goes to the whole team on
+# Slack so one agent owns it overnight, and the claimer is told to hold
+# until 8am. Everything here is pure so it tests without a clock or FUB.
+QUIET_START_HOUR = 21
+QUIET_END_HOUR = 8
+# Night offers carry this at the front of their notes; it is how every
+# later step (claim copy, round advance, the 8am release) knows the offer
+# was made after hours.
+NIGHT_NOTE = "After hours"
+
+
+def is_quiet(now_et, start=QUIET_START_HOUR, end=QUIET_END_HOUR):
+    """True between 9pm and 8am Eastern (start inclusive, end exclusive)."""
+    return now_et.hour >= start or now_et.hour < end
+
+
+def last_open(now_et, end=QUIET_END_HOUR):
+    """The most recent 8:00am Eastern at or before now."""
+    opened = now_et.replace(hour=end, minute=0, second=0, microsecond=0)
+    if now_et < opened:
+        opened -= timedelta(days=1)
+    return opened
+
+
+def minutes_until_open(now_et, start=QUIET_START_HOUR, end=QUIET_END_HOUR):
+    """Whole minutes from now until calling opens (0 when already open)."""
+    if not is_quiet(now_et, start, end):
+        return 0
+    nxt = last_open(now_et, end) + timedelta(days=1)
+    return max(1, int((nxt - now_et).total_seconds() // 60))
+
+
+def call_clock(age_min, minutes_since_open):
+    """The claim-to-call clock never runs while calling is closed.
+    Returns (minutes on the clock, held_overnight). A claim older than
+    this morning's 8am was held overnight, so its clock starts at 8am."""
+    age = int(age_min or 0)
+    since = int(minutes_since_open or 0)
+    if age > since:
+        return since, True
+    return age, False
+
+
+def is_night_offer(notes):
+    return (notes or "").startswith(NIGHT_NOTE)
+
+
+def answer_keeps_owner(fub_owner, answerer, owner_is_dark):
+    """A phone-ring answer never takes a lead a working agent already
+    holds. Returns that owner's name when the answer must not reassign."""
+    owner = (fub_owner or "").strip()
+    if not owner or owner == (answerer or "").strip() or owner_is_dark:
+        return None
+    return owner
+
+
 def owner_blocks_claim(prior_owner, claimer, owner_is_dark,
                        released_claimers=()):
     """The accept re-check's one decision: does the name FUB shows on the

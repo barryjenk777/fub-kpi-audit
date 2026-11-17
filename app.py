@@ -5830,6 +5830,15 @@ def dispatch_accept_page(token):
                             "</p></div>" % lead_first)
                 if offer["source"] == "realtor":
                     _realtor_post_claim(offer, claim_secs=lat)
+                import realtor_ladder as _rln
+                if _rln.is_night_offer(offer.get("notes")):
+                    return ("<div style='font-family:sans-serif;padding:3rem;"
+                            "text-align:center;max-width:440px;margin:0 auto'>"
+                            "<h2 style='color:#2e7d4f'>&#10003; %s is yours"
+                            "</h2><p>They are assigned to you in Follow Up "
+                            "Boss right now. <b>Do not call or text until "
+                            "8am.</b> You will get a message at 8 when you "
+                            "are clear to call.</p></div>" % lead_first)
                 return ("<div style='font-family:sans-serif;padding:3rem;"
                         "text-align:center;max-width:440px;margin:0 auto'>"
                         "<h2 style='color:#2e7d4f'>&#10003; %s is yours</h2>"
@@ -6749,6 +6758,24 @@ def api_slack_actions():
                     _realtor_post_claim(offer, claim_secs=lat)
                 fub_link = ("https://yourfriendlyagent.followupboss.com"
                             "/2/people/view/%s" % offer["person_id"])
+                import realtor_ladder as _rln
+                if _rln.is_night_offer(offer.get("notes")):
+                    # After hours: the claim holds the lead, the call waits.
+                    _say("✅ *%s is yours.* Assigned to you in FUB right "
+                         "now. *Do not call or text until 8am.* You will "
+                         "get a message at 8 when you are clear to call: "
+                         "<%s|open %s in FUB>."
+                         % (lead_first, fub_link, lead_first))
+                    try:
+                        import slack_client as _sl
+                        _sl.post_message(
+                            os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk"),
+                            "✅ %s claimed %s after hours. The call goes "
+                            "out at 8am."
+                            % (offer["agent_name"].split()[0], lead_first))
+                    except Exception:
+                        pass
+                    return
                 closers = ["The clock that matters starts now.",
                            "Call before the coffee gets cold.",
                            "They said yes minutes ago. Keep it warm.",
@@ -14953,6 +14980,70 @@ def _callingly_ring_first(pid, person, triggered_by):
     return True
 
 
+def _callingly_tell_both(pid, lead_name, owner, answerer):
+    """The phone ring connected one agent to a lead another agent holds.
+    Both hear the same plain fact: the lead stays with its owner."""
+    try:
+        import slack_client as _sl
+        import dispatch as _dp
+        if not _sl.is_available():
+            return
+        link = ("https://yourfriendlyagent.followupboss.com/2/people/"
+                "view/%s" % pid)
+        a_sid = _dp._slack_user_id(answerer) if answerer else None
+        o_sid = _dp._slack_user_id(owner)
+        if a_sid and answerer != owner:
+            _sl.dm_user(a_sid,
+                "Heads up: %s already belongs to %s, so the lead stays "
+                "with them. If you spoke with the lead, add a note on the "
+                "record so %s knows what was said: %s"
+                % (lead_name, owner, owner.split()[0], link))
+        if o_sid:
+            _sl.dm_user(o_sid,
+                "Heads up: the phone ring connected %s to your lead %s. "
+                "The lead is still yours. Check the record for a note "
+                "and follow up: %s"
+                % ((answerer or "a teammate").split()[0], lead_name, link))
+    except Exception as e:
+        logger.warning("[CALLINGLY] tell-both DM failed: %s", e)
+
+
+def _callingly_protect_claim(pid, lead_name, answerer, _recheck=True):
+    """A lead claimed in Slack must not change hands because a late phone
+    ring got answered (Nov 16 to 17 2026: a 9pm ring was held until 8am,
+    answered by a second agent, and the lead moved off its claimer). If
+    FUB now shows the answering agent on a lead someone else claimed, put
+    the claimer back. Checked now and again two minutes later, because
+    the phone system writes to FUB on its own schedule."""
+    claimer = _db.live_realtor_claim(pid)
+    if not claimer or claimer == answerer:
+        return False
+    p = FUBClient().get_person(pid) or {}
+    owner = (p.get("assignedTo") or "").strip()
+    restored = False
+    if owner and owner != claimer and owner == (answerer or "").strip():
+        prof = next((x for x in (_db.get_agent_profiles(active_only=True) or [])
+                     if x["agent_name"] == claimer), None)
+        if prof and prof.get("fub_user_id"):
+            FUBClient().update_person_fields(
+                pid, {"assignedUserId": prof["fub_user_id"]})
+            restored = True
+            _db.log_automation_event(
+                event_type="callingly_claim_restored", person_id=pid,
+                person_name=lead_name, agent_name=claimer,
+                payload={"moved_to": owner}, triggered_by="callingly")
+            _callingly_tell_both(pid, lead_name, claimer, answerer)
+    if _recheck and not restored:
+        try:
+            t = threading.Timer(120, _callingly_protect_claim,
+                                args=(pid, lead_name, answerer, False))
+            t.daemon = True
+            t.start()
+        except Exception:
+            pass
+    return restored
+
+
 def _callingly_fallback_sweep():
     """Every minute via the dispatch cascade: rings nobody answered
     inside the window fall back to the exact claim-button shootout the
@@ -15232,7 +15323,32 @@ def callingly_webhook(secret):
             pid, "answered", agent_name=agent_name,
             outcome="voicemail" if is_vm else (lead_status or status))
         if row is None:
+            # A late answer on a ring we already closed (the lead went to
+            # Slack and someone claimed it). The claim stands.
+            try:
+                _callingly_protect_claim(pid, lead_name, agent_name)
+            except Exception as e:
+                logger.warning("[CALLINGLY] claim protect failed: %s", e)
             return jsonify({"ok": True, "note": "already resolved"})
+        # Never take a lead a working agent already holds (Nov 17 2026).
+        _kept = None
+        try:
+            import realtor_ladder as _rlk
+            _fo = ((FUBClient().get_person(pid) or {}).get("assignedTo")
+                   or "").strip()
+            _kept = _rlk.answer_keeps_owner(_fo, agent_name,
+                                            _desk_dark_owner(_fo))
+        except Exception as e:
+            logger.warning("[CALLINGLY] owner check failed for %s: %s",
+                           pid, e)
+        if _kept:
+            _db.log_automation_event(
+                event_type="callingly_answer_kept_owner", person_id=pid,
+                person_name=lead_name, agent_name=agent_name,
+                payload={"owner": _kept}, triggered_by="callingly")
+            _callingly_tell_both(pid, lead_name, _kept, agent_name)
+            return jsonify({"ok": True, "result": "owner_kept",
+                            "owner": _kept})
         import secrets as _sec
         oid = _db.create_dispatch_offer(
             "callingly", pid, lead_name, None, None,
@@ -15983,6 +16099,118 @@ def _realtor_inquiry_intake(event_ids=None, events=None,
     return routed
 
 
+def _realtor_et_now():
+    from zoneinfo import ZoneInfo as _ZI
+    return datetime.now(_ZI("America/New_York"))
+
+
+def _realtor_minutes_until_open():
+    """Minutes until 8am Eastern when we are inside the 9pm to 8am
+    no-contact window, else 0."""
+    import realtor_ladder as _rl
+    return _rl.minutes_until_open(_realtor_et_now())
+
+
+def _realtor_morning_reoffer(person_id, lead_name, lead_city=None):
+    """A lead offered after hours that nobody claimed goes back out to
+    the whole team once calling opens. Once per lead; from here it is an
+    ordinary round two (no claim lands it with Fhalen, as before)."""
+    if not _db.claim_once("rshoot_r2_%s" % person_id):
+        return
+    try:
+        p = FUBClient().get_person(person_id) or {}
+        _own = (p.get("assignedTo") or "").strip()
+        _stage = (p.get("stage") or "").strip().lower()
+        if not _desk_dark_owner(_own) or _stage in ("trash", "contact"):
+            _db.log_automation_event(
+                event_type="realtor_morning_skip", person_id=person_id,
+                person_name=lead_name, agent_name=_own or None,
+                payload={"stage": _stage}, triggered_by="morning_release")
+            return
+    except Exception as e:
+        logger.warning("[REALTOR] morning owner check failed for %s: %s",
+                       person_id, e)
+    import dispatch as _dp
+    made = _dp.make_shootout(
+        person_id, lead_name, lead_city=lead_city,
+        notes="Paid Realtor.com lead from overnight. Nobody claimed it, "
+              "and calling is open now, so first claim wins.",
+        audit=cache_get("audit") or {}, round_no=2, include_prior=True)
+    _db.log_automation_event(
+        event_type="realtor_shootout", person_id=person_id,
+        person_name=lead_name, agent_name=None,
+        payload={"round": 2, "morning": True,
+                 "agents": [m["agent_name"] for m in (made or [])]},
+        triggered_by="morning_release")
+    if not made:
+        _realtor_terminal(person_id, lead_name)
+
+
+def scheduled_realtor_morning_release():
+    """8:01am ET, daily. Two jobs for leads that came in after hours:
+    tell each agent who claimed one that they are clear to call, and
+    send any that nobody claimed back out to the whole team."""
+    if not _db.try_acquire_job_lock("realtor_morning_release"):
+        return
+    try:
+        import dispatch as _dp
+        client = FUBClient()
+        for r in _db.get_realtor_night_claims():
+            if not _db.claim_once("rmorning_%s" % r["id"]):
+                continue
+            agent = r["agent_name"] or ""
+            try:
+                p = client.get_person(r["person_id"]) or {}
+                if (p.get("assignedTo") or "").strip() != agent:
+                    # Moved by hand overnight: the claim is over.
+                    _db.mark_dispatch_terminal(r["id"])
+                    continue
+            except Exception:
+                pass
+            first = agent.split()[0] if agent else "Good morning"
+            link = ("https://yourfriendlyagent.followupboss.com/2/people/"
+                    "view/%s" % r["person_id"])
+            msg = ("%s, good morning. %s from Realtor.com is yours from "
+                   "last night, and you are clear to call now. Realtor.com "
+                   "sends this lead to other agents too, so the first "
+                   "call matters: %s"
+                   % (first, r["lead_name"] or "Your lead", link))
+            sent = False
+            try:
+                import slack_client as _sl
+                sid = _dp._slack_user_id(agent)
+                if _sl.is_available() and sid:
+                    sent = bool(_sl.dm_user(sid, msg))
+            except Exception:
+                pass
+            try:
+                _prof = next((x for x in
+                              (_db.get_agent_profiles(active_only=True) or [])
+                              if x["agent_name"] == agent), None)
+                if _prof:
+                    _db.queue_agent_imessage(
+                        agent, _prof.get("fub_user_id"),
+                        _prof.get("phone") or _prof.get("fub_phone"),
+                        msg, week_day="dispatch")
+                    sent = True
+            except Exception as e:
+                logger.warning("[REALTOR] morning text failed for %s: %s",
+                               agent, e)
+            _db.log_automation_event(
+                event_type="realtor_clear_to_call", person_id=r["person_id"],
+                person_name=r["lead_name"], agent_name=agent,
+                payload={"sent": sent}, triggered_by="morning_release")
+        for r in _db.get_realtor_night_unclaimed():
+            try:
+                _realtor_morning_reoffer(r["person_id"], r["lead_name"],
+                                         r["lead_city"])
+            except Exception as e:
+                logger.warning("[REALTOR] morning re-offer failed for %s: "
+                               "%s", r["person_id"], e)
+    finally:
+        _db.release_job_lock("realtor_morning_release")
+
+
 def _realtor_intake(pid, person, triggered_by="webhook_fub", inquiry=None):
     """Realtor.com shootout lane front door (Barry, Nov 2 2026: purchased
     SHARED leads, competing agents outside the team get the same lead).
@@ -16088,6 +16316,27 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub", inquiry=None):
             payload={"inquiry_id": inquiry.get("id")},
             triggered_by=triggered_by)
         return True
+    # After hours (Barry, Nov 17 2026): between 9pm and 8am nobody calls
+    # or texts a lead. No phone ring. The whole team sees the lead in
+    # Slack so one agent owns it overnight, and the 8am release tells
+    # the claimer when calling opens (or re-offers it if nobody claimed).
+    _wait = _realtor_minutes_until_open()
+    if _wait > 0:
+        import realtor_ladder as _rln
+        made = _dp.make_shootout(
+            pid, person.get("name"), lead_city=city,
+            notes="%s. Paid Realtor.com lead. Claim it now and it is "
+                  "yours. Do not call or text until 8am."
+                  % _rln.NIGHT_NOTE,
+            audit=cache_get("audit") or {}, round_no=1,
+            night_minutes=_wait)
+        _db.log_automation_event(
+            event_type="realtor_after_hours", person_id=pid,
+            person_name=person.get("name"), agent_name=None,
+            payload={"source": src, "minutes_until_8am": _wait,
+                     "agents": [m["agent_name"] for m in (made or [])]},
+            triggered_by=triggered_by)
+        return True
     if _callingly_ring_first(pid, person, triggered_by):
         return True
     made = _dp.make_shootout(
@@ -16156,6 +16405,15 @@ def _realtor_after_resolve(offer):
     if any(not s["accepted"] and not s["passed"] and not s["expired"]
            for s in state):
         return  # a sibling clock is still running
+    import realtor_ladder as _rln
+    if _rln.is_night_offer(offer.get("notes")):
+        # An after-hours round never escalates overnight. Once calling
+        # opens it goes back out to everyone (also swept at 8:01am).
+        if _realtor_minutes_until_open() > 0:
+            return
+        _realtor_morning_reoffer(offer["person_id"], offer["lead_name"],
+                                 offer["lead_city"])
+        return
     if offer["hop"] < 2:
         if not _db.claim_once("rshoot_r2_%s" % offer["person_id"]):
             return
@@ -16228,11 +16486,23 @@ def _realtor_call_enforcer():
         return
     if not rows:
         return
-    nudge_min = int(getattr(config, "REALTOR_CALL_NUDGE_MIN", 5))
-    yank_min = int(getattr(config, "REALTOR_CALL_YANK_MIN", 10))
+    # After hours the clock is stopped: nobody is nudged or loses a claim
+    # for not dialing between 9pm and 8am. A claim held overnight starts
+    # its clock at 8am, on a longer morning window.
+    import realtor_ladder as _rlq
+    _now_et = _realtor_et_now()
+    if _rlq.is_quiet(_now_et):
+        return
+    _since_open = int((_now_et - _rlq.last_open(_now_et)).total_seconds() // 60)
+    day_nudge = int(getattr(config, "REALTOR_CALL_NUDGE_MIN", 5))
+    day_yank = int(getattr(config, "REALTOR_CALL_YANK_MIN", 10))
     import dispatch as _dp
     for r in rows:
-        age = int(r.get("age_min") or 0)
+        age, held = _rlq.call_clock(r.get("age_min"), _since_open)
+        nudge_min, yank_min = day_nudge, day_yank
+        if held:
+            nudge_min = int(getattr(config, "REALTOR_MORNING_NUDGE_MIN", 15))
+            yank_min = int(getattr(config, "REALTOR_MORNING_YANK_MIN", 30))
         first = (r["agent_name"] or "").split()[0]
         lead1 = (r["lead_name"] or "the lead").split()[0]
         link = ("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
@@ -16244,7 +16514,13 @@ def _realtor_call_enforcer():
             try:
                 import slack_client as _sl
                 sid = _dp._slack_user_id(r["agent_name"])
-                if _sl.is_available() and sid:
+                if _sl.is_available() and sid and held:
+                    _sl.dm_user(sid, "%s, you claimed %s last night, and "
+                        "calling opened at 8am. FUB has not seen a dial in "
+                        "the %d minutes since, so the lead just reopened "
+                        "to the group. The next one is yours the moment "
+                        "you claim and dial." % (first, lead1, age))
+                elif _sl.is_available() and sid:
                     _sl.dm_user(sid, "%s, straight talk: you claimed %s %d "
                         "minutes ago and no dial has hit FUB, so the "
                         "shootout just reopened to the group. No lecture, "
@@ -16262,9 +16538,18 @@ def _realtor_call_enforcer():
             if r["hop"] < 2:
                 made = _dp.make_shootout(
                     r["person_id"], r["lead_name"],
-                    lead_city=r["lead_city"], notes=r["notes"],
+                    lead_city=r["lead_city"],
+                    # A released night claim reopens as a daytime offer:
+                    # the "wait until 8am" wording must not ride along.
+                    notes=("Paid Realtor.com lead from overnight. Calling "
+                           "is open now, so first claim wins."
+                           if _rlq.is_night_offer(r.get("notes"))
+                           else r["notes"]),
                     audit=cache_get("audit") or {}, round_no=2,
-                    exclude={r["agent_name"]})
+                    exclude={r["agent_name"]},
+                    # The whole team saw the night offer; without this
+                    # nobody would be left to take a released night claim.
+                    include_prior=_rlq.is_night_offer(r.get("notes")))
             if not made:
                 _realtor_terminal(r["person_id"], r["lead_name"])
         elif age >= nudge_min:
@@ -16274,7 +16559,13 @@ def _realtor_call_enforcer():
             try:
                 import slack_client as _sl
                 sid = _dp._slack_user_id(r["agent_name"])
-                if _sl.is_available() and sid:
+                if _sl.is_available() and sid and held:
+                    sent = _sl.dm_user(sid, "%s, %s is yours from last "
+                        "night and calling has been open since 8am. FUB "
+                        "has not seen a dial yet. %d more minutes and the "
+                        "lead reopens to the group. Call now: %s"
+                        % (first, lead1, max(yank_min - age, 1), link))
+                elif _sl.is_available() and sid:
                     sent = _sl.dm_user(sid, "%s, %s said yes %d minutes ago "
                         "and FUB hasn't seen a dial yet. Realtor.com sold "
                         "this lead to other agents too, and the first voice "
@@ -33234,6 +33525,11 @@ def start_scheduler():
                        max_instances=1, coalesce=True)
     # Realtor.com attempt ladder: the 7pm "you are behind the plan" sweep
     # and the Friday receipt to Barry (paid shared leads, $80 each).
+    _scheduler.add_job(scheduled_realtor_morning_release,
+                       CronTrigger(hour=8, minute=1, timezone=ET),
+                       id="realtor_morning_release",
+                       name="Realtor after-hours release (8:01am)",
+                       max_instances=1, coalesce=True)
     _scheduler.add_job(scheduled_realtor_ladder_sweep,
                        CronTrigger(hour=19, minute=0, timezone=ET),
                        id="realtor_ladder", name="Realtor ladder sweep (7pm)",

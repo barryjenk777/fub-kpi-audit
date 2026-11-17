@@ -441,6 +441,50 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
         week_day="dispatch"))
 
 
+def _notify_shootout_night(agent_name, offer_token, lead_name, lead_city):
+    """After-hours offer (Barry, Nov 17 2026): Slack only, no text to the
+    agent's phone, no countdown. Claiming holds the lead overnight; the
+    8am release tells the claimer when calling opens."""
+    first = agent_name.split()[0]
+    lead_first = (lead_name or "a new lead").split()[0]
+    where = (" in %s" % lead_city.title()) if lead_city else ""
+    try:
+        import json as _json
+        import slack_client as _sl
+        sid = _slack_user_id(agent_name)
+        if not (_sl.is_available() and sid):
+            return False
+        head = ("\U0001f319 *%s, a Realtor.com lead came in after hours: "
+                "%s%s.*\nClaim it now and it is yours. *Do not call or "
+                "text the lead until 8am.* You will get a message at 8 "
+                "when you are clear to call. The whole team is seeing "
+                "this, and the first CLAIM takes it."
+                % (first, lead_first, where))
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": head}},
+            {"type": "actions", "elements": [
+                {"type": "button", "style": "primary",
+                 "text": {"type": "plain_text", "text": "CLAIM"},
+                 "action_id": "desk_claim",
+                 "value": _json.dumps({"token": offer_token})},
+                {"type": "button",
+                 "text": {"type": "plain_text", "text": "Pass"},
+                 "action_id": "desk_pass",
+                 "value": _json.dumps({"token": offer_token})},
+            ]},
+            {"type": "context", "elements": [
+                {"type": "mrkdwn",
+                 "text": "Buttons not working? <%s|Claim here instead>."
+                         % _accept_url(offer_token)}]},
+        ]
+        return bool(_sl.dm_user(sid, "After-hours lead: %s" % lead_first,
+                                blocks=blocks))
+    except Exception as e:
+        logger.warning("[SHOOTOUT] night offer failed for %s: %s",
+                       agent_name, e)
+        return False
+
+
 def _notify_shootout(agent_name, offer_token, lead_name, lead_city,
                      round_no, rivals):
     """The shootout offer. Same two channels as _notify (Slack DM with
@@ -549,7 +593,8 @@ def _notify_shootout(agent_name, offer_token, lead_name, lead_city,
 
 
 def make_shootout(person_id, lead_name, lead_city=None, notes=None,
-                  audit=None, round_no=1, exclude=None, dry_run=False):
+                  audit=None, round_no=1, exclude=None, dry_run=False,
+                  night_minutes=0, include_prior=False):
     """Realtor.com lane (Barry, Nov 2 2026): shared paid leads get
     SIMULTANEOUS offers, first CLAIM wins. Round 1 = the next
     REALTOR_SHOOTOUT_SIZE eligible priority agents (rotation-ordered, so
@@ -557,11 +602,18 @@ def make_shootout(person_id, lead_name, lead_city=None, notes=None,
     this lead yet: a shared lead rotting on doctrine still loses the
     deal. The desk_claim handler voids the losing siblings on first
     claim. Daily claim caps deliberately don't apply here — the fastest
-    hands win a shootout, fairness yields to a dying lead."""
+    hands win a shootout, fairness yields to a dying lead.
+
+    night_minutes > 0 = an after-hours offer: the whole roster sees it in
+    Slack only, the window runs until calling opens, and it stays a
+    round-1 offer so the morning can still open round 2. include_prior
+    lets a morning round reach agents who already saw the night offer."""
     exclude = set(exclude or ())
-    prior = {o["agent"] for o in _db.dispatch_person_state(person_id)}
+    night = int(night_minutes or 0) > 0
+    prior = set() if include_prior else \
+        {o["agent"] for o in _db.dispatch_person_state(person_id)}
     size = int(getattr(config, "REALTOR_SHOOTOUT_SIZE", 3))
-    if round_no <= 1:
+    if round_no <= 1 and not night:
         cands = []
         for cand in eligible_agents(lead_city, audit=audit):
             if cand in prior or cand in exclude:
@@ -596,12 +648,13 @@ def make_shootout(person_id, lead_name, lead_city=None, notes=None,
         return [{"agent_name": n, "dry_run": True} for n in cands]
     if not cands:
         return []
-    if round_no <= 1:
+    if round_no <= 1 and not night:
         # Advance past the whole trio so the next lead's round 1 starts
         # on fresh names (same per-offer doctrine as make_offer).
         for _ in cands:
             advance_rotation()
-    mins = int(getattr(config, "REALTOR_OFFER_MINUTES", 2))
+    mins = int(night_minutes) if night else \
+        int(getattr(config, "REALTOR_OFFER_MINUTES", 2))
     if "Evidence" not in (notes or ""):
         try:
             ev = evidence_line(person_id)
@@ -617,11 +670,15 @@ def make_shootout(person_id, lead_name, lead_city=None, notes=None,
         if not oid:
             continue
         try:
-            _db.set_offer_route(oid, "shootout:r%d" % round_no)
+            _db.set_offer_route(oid, "shootout:night" if night
+                                else "shootout:r%d" % round_no)
         except Exception:
             pass
-        sent = _notify_shootout(agent, token, lead_name, lead_city,
-                                round_no, rivals=len(cands))
+        if night:
+            sent = _notify_shootout_night(agent, token, lead_name, lead_city)
+        else:
+            sent = _notify_shootout(agent, token, lead_name, lead_city,
+                                    round_no, rivals=len(cands))
         logger.info("[SHOOTOUT] offer %s: %s -> %s (round %d, sent=%s)",
                     oid, lead_name, agent, round_no, sent)
         made.append({"offer_id": oid, "agent_name": agent, "token": token,
