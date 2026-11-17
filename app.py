@@ -32064,6 +32064,28 @@ def scheduled_owner_daily_brief():
                     gd_html = _warn + gd_html
         except Exception as _ile:
             logger.warning("brief invite-link check failed: %s", _ile)
+        # Ylopo export freshness (Nov 16 2026): FUB shows fewer than half
+        # of AI text handoffs, so Sunday's email count is only right if
+        # the week's export was uploaded. Remind on the weekend.
+        try:
+            from zoneinfo import ZoneInfo as _ZIx
+            _now_et = datetime.now(_ZIx("America/New_York"))
+            if _now_et.weekday() >= 5:
+                _raw_ex, _ = _db.get_app_state("ylopo_export_last_import")
+                _ex = json.loads(_raw_ex or "{}")
+                _ex_at = (datetime.fromisoformat(_ex["at"])
+                          if _ex.get("at") else None)
+                if not _ex_at or (datetime.now(timezone.utc) - _ex_at) \
+                        > timedelta(hours=30):
+                    gd_html = ("<p style='font-size:13px;color:#b00020;"
+                               "font-weight:600'>Upload this week's two "
+                               "Ylopo exports (text follow-up and call "
+                               "successful) at /conversations before "
+                               "Sunday 9pm. Without them the weekly email "
+                               "undercounts AI text transfers.</p>"
+                               + gd_html)
+        except Exception as _exe:
+            logger.warning("brief export-freshness check failed: %s", _exe)
         html = f"""
 <div style='font-family:-apple-system,sans-serif;max-width:600px;margin:24px auto;color:#222'>
 <h2 style='margin:0 0 4px;font-size:20px'>Legacy Home Team — Owner Brief</h2>
