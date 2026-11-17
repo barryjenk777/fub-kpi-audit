@@ -59,7 +59,8 @@ OUTCOME_LABELS = {
     "CALLBACK SCHEDULED": "Callback Scheduled"}
 
 # Evidence strong enough to count without Ylopo's export agreeing.
-CONFIRMING_EVIDENCE = {"fub_disposition", "fub_followup_alert"}
+CONFIRMING_EVIDENCE = {"fub_disposition", "fub_followup_alert",
+                       "fub_ai_reply"}
 
 _DISP_RE = re.compile(r"Call Disposition:\s*([A-Za-z_ ]+)")
 
@@ -251,6 +252,57 @@ def fill_from_fub(person_ids, days=3):
     return {"people": len(person_ids), "events_written": wrote}
 
 
+HANDOFF_TAG = "AI_NEEDS_FOLLOW_UP"
+_REPLY_FIELDS = ("id,name,source,assignedTo,stage,updated,"
+                 "lastReceivedInboxAppMessage,lastCommunication")
+
+
+def fill_text_from_fub_replies(days=3):
+    """The automatic text source (found Nov 16 2026). Ylopo's AI text
+    thread is an inbox app in FUB: the messages never reach the message
+    APIs, but every person record carries lastReceivedInboxAppMessage, the
+    time of the lead's last reply to the AI. A person tagged
+    AI_NEEDS_FOLLOW_UP with a reply inside the window IS a row of Ylopo's
+    text follow-up export: checked against Nov 9 to 15, 14 of 14 matched
+    to the minute. No upload needed.
+
+    Walks everyone carrying the tag (about 2,200 people, 22 pages)."""
+    client = FUBClient()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    seen = wrote = 0
+    offset = 0
+    while offset < 6000:
+        r = client._request("GET", "people", params={
+            "tags": HANDOFF_TAG, "sort": "-updated", "limit": 100,
+            "offset": offset, "fields": _REPLY_FIELDS}) or {}
+        people = r.get("people") or []
+        for p in people:
+            seen += 1
+            raw = p.get("lastReceivedInboxAppMessage") or ""
+            when = _parse_fub_dt(raw)
+            if not when or when < since:
+                continue
+            lc = p.get("lastCommunication") or {}
+            said = None
+            if lc.get("direction") == "incoming" \
+                    and (lc.get("date") or "")[:16] == raw[:16]:
+                said = (lc.get("content") or "").strip()[:300] or None
+            res = _db.upsert_ai_conversation(
+                p["id"], "text", _et_day(when), when,
+                lead_name=(p.get("name") or "").strip() or None,
+                lead_source=(p.get("source") or "").strip() or None,
+                owner=(p.get("assignedTo") or "").strip() or None,
+                stage=(p.get("stage") or "").strip() or None,
+                in_export=False, fub_evidence="fub_ai_reply",
+                reply_text=said)
+            if res:
+                wrote += 1
+        if len(people) < 100:
+            break
+        offset += 100
+    return {"tagged_people_read": seen, "replies_written": wrote}
+
+
 # ── 3. Follow-up: the first human touch after the conversation ──────────────
 
 def first_human_touch(person_id, convo_at, client=None):
@@ -346,8 +398,9 @@ def report(start_day, end_day):
             "median_minutes_to_touch": (mins[len(mins) // 2]
                                         if mins else None)},
         "reconciliation": {
-            # Ylopo listed it and FUB showed us nothing: only an import
-            # could have caught these.
+            # Ylopo listed it and FUB showed us nothing. Should be empty
+            # now that text comes from the reply field; anything here is a
+            # gap worth a look.
             "ylopo_only": [r for r in rows if r.get("in_export")
                            and not r.get("fub_evidence")],
             # We saw strong evidence and Ylopo's export does not list it.

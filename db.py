@@ -12200,6 +12200,8 @@ def ensure_ai_conversations():
                     );
                     CREATE INDEX IF NOT EXISTS ai_conversations_day
                         ON ai_conversations (convo_day);
+                    ALTER TABLE ai_conversations
+                        ADD COLUMN IF NOT EXISTS reply_text TEXT;
                     UPDATE ai_conversations SET fub_evidence = 'fub_engaged_alert'
                         WHERE fub_evidence = 'fub_strict_alert';
                     UPDATE ai_conversations SET fub_evidence = 'fub_followup_alert'
@@ -12212,7 +12214,7 @@ def ensure_ai_conversations():
 def upsert_ai_conversation(person_id, channel, convo_day, convo_at,
                            outcome=None, lead_name=None, lead_source=None,
                            owner=None, stage=None, in_export=False,
-                           fub_evidence=None):
+                           fub_evidence=None, reply_text=None):
     """Insert or merge one conversation. Ylopo's export wins on time and
     outcome; FUB evidence fills what the export has not said yet. Returns
     'new', 'merged' or None on failure."""
@@ -12226,8 +12228,8 @@ def upsert_ai_conversation(person_id, channel, convo_day, convo_at,
                     INSERT INTO ai_conversations
                         (person_id, channel, convo_day, convo_at, outcome,
                          lead_name, lead_source, owner_at_event, stage,
-                         in_export, fub_evidence)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         in_export, fub_evidence, reply_text)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (person_id, channel, convo_day) DO UPDATE SET
                         convo_at = CASE
                             WHEN EXCLUDED.in_export THEN EXCLUDED.convo_at
@@ -12252,13 +12254,18 @@ def upsert_ai_conversation(person_id, channel, convo_day, convo_at,
                                          ai_conversations.stage),
                         in_export = ai_conversations.in_export
                                     OR EXCLUDED.in_export,
-                        fub_evidence = COALESCE(EXCLUDED.fub_evidence,
-                                                ai_conversations.fub_evidence),
+                        fub_evidence = CASE
+                            WHEN ai_conversations.fub_evidence = 'fub_ai_reply'
+                                THEN ai_conversations.fub_evidence
+                            ELSE COALESCE(EXCLUDED.fub_evidence,
+                                          ai_conversations.fub_evidence) END,
+                        reply_text = COALESCE(EXCLUDED.reply_text,
+                                              ai_conversations.reply_text),
                         updated_at = NOW()
                     RETURNING (xmax = 0)
                 """, (person_id, channel, convo_day, convo_at, outcome,
                       lead_name, lead_source, owner, stage, bool(in_export),
-                      fub_evidence))
+                      fub_evidence, reply_text))
                 return "new" if cur.fetchone()[0] else "merged"
     except Exception as e:
         logger.warning("upsert_ai_conversation failed for %s: %s",
@@ -12268,7 +12275,7 @@ def upsert_ai_conversation(person_id, channel, convo_day, convo_at,
 
 _AI_CONVO_COLS = ("id", "person_id", "channel", "convo_day", "convo_at",
                   "outcome", "lead_name", "lead_source", "owner_at_event",
-                  "stage", "in_export", "fub_evidence",
+                  "stage", "in_export", "fub_evidence", "reply_text",
                   "first_human_touch_at", "touched_by", "touch_kind",
                   "minutes_to_touch", "touch_checked_at")
 

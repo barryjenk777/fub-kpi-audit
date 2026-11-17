@@ -4,7 +4,7 @@
 {% block page_title %}🤝 AI Conversations{% endblock %}
 {% block page_meta %}Every lead who talked to the AI, one row per conversation, and who followed up. This is the count the Sunday email uses.{% endblock %}
 {% block page_actions %}
-  <label class="btn btn-ghost btn-sm" style="cursor:pointer">⬆️ Upload Ylopo export
+  <label class="btn btn-ghost btn-sm" style="cursor:pointer" title="Optional. The page fills itself from Follow Up Boss. Upload a Ylopo export only if you want to double-check it.">🔎 Check against a Ylopo export
     <input id="up" type="file" accept=".csv" multiple style="display:none" onchange="upload(this)"></label>
 {% endblock %}
 {% block content %}
@@ -44,9 +44,9 @@ function when(s){if(!s)return '';var d=new Date(s);return d.toLocaleString('en-U
 function took(m){if(m==null)return '';if(m<60)return m+' min';if(m<1440)return Math.round(m/60)+' hr';return Math.round(m/1440)+' days';}
 function proof(r){
   if(r.in_export&&r.fub_evidence)return '<span class="pill pill-green">Ylopo + Follow Up Boss</span>';
-  if(r.in_export)return '<span class="pill pill-amber" title="Follow Up Boss showed nothing. Only the Ylopo export caught this one.">Ylopo export only</span>';
+  if(r.in_export)return '<span class="pill pill-amber" title="In a Ylopo export but not found in Follow Up Boss.">Ylopo export only</span>';
   if(r.fub_evidence==='fub_engaged_alert')return '<span class="pill pill-muted" title="The lead replied and the AI is still talking with them. Ylopo has not handed them to a person yet, so this is not counted.">AI still talking</span>';
-  return '<span class="pill pill-green" title="Dated proof in Follow Up Boss. Ylopo export not uploaded for this one yet.">Follow Up Boss</span>';
+  return '<span class="pill pill-green" title="Dated proof in Follow Up Boss.">Follow Up Boss</span>';
 }
 function rowHtml(r){
   var touch=r.first_human_touch_at?
@@ -55,7 +55,7 @@ function rowHtml(r){
   return '<tr><td><a target="_blank" style="text-decoration:underline;font-weight:700" href="'+fub(r.person_id)+'">'+esc(r.lead_name||('Lead '+r.person_id))+'</a></td>'+
     '<td>'+(r.channel==='voice'?'📞 AI voice':'💬 AI text')+'</td>'+
     '<td>'+esc(when(r.convo_at))+'</td>'+
-    '<td>'+esc(r.outcome||(r.channel==='text'?'Replied to the AI':''))+'</td>'+
+    '<td>'+esc(r.outcome||(r.channel==='text'?(r.reply_text?('Said: "'+r.reply_text+'"'):'Replied to the AI'):''))+'</td>'+
     '<td>'+esc(r.owner_at_event||'')+'</td>'+
     '<td>'+touch+'</td><td>'+proof(r)+'</td></tr>';
 }
@@ -73,7 +73,7 @@ async function load(){
     document.getElementById('v-text').textContent=c.conversations+' AI conversation'+(c.conversations===1?'':'s')+': '+c.text+' text + '+c.voice+' voice, from '+c.unique_people+' people';
     var li=d.last_import;
     document.getElementById('v-meta').textContent=(c.no_touch?(c.no_touch+' have had no follow-up. '):'Every one has been followed up. ')+
-      (li?('Ylopo export last uploaded '+when(li.at)+' (covers through '+li.to+').'):'No Ylopo export uploaded yet, so text replies are undercounted.');
+      'Read automatically from Follow Up Boss every 30 minutes.';
     document.getElementById('v-dot').className='dot '+(c.no_touch?'dot-rose':'dot-green');
     var vo=c.voice_outcomes||{};
     document.getElementById('tiles').innerHTML=
@@ -86,8 +86,8 @@ async function load(){
     document.getElementById('rows').innerHTML=table(d.rows,'No conversations recorded in this range.');
     document.getElementById('recon').innerHTML=
       '<p><b>'+rec.both+'</b> conversations are proven both ways (Ylopo listed them and Follow Up Boss has dated proof).</p>'+
-      '<p><b>'+rec.ylopo_only.length+'</b> are in Ylopo&rsquo;s export but left no trace in Follow Up Boss. These are why the export has to be uploaded: without it they are invisible.</p>'+
-      '<p><b>'+rec.ledger_only.length+'</b> have dated proof in Follow Up Boss but are not in an uploaded export'+(rec.ledger_only.length?': '+rec.ledger_only.map(r=>esc(r.lead_name||r.person_id)).join(', '):'')+'.</p>'+
+      '<p><b>'+rec.ylopo_only.length+'</b> are in an uploaded Ylopo export but were not found in Follow Up Boss. This should be zero.</p>'+
+      '<p><b>'+rec.ledger_only.length+'</b> have dated proof in Follow Up Boss and are not in an uploaded Ylopo export'+(rec.ledger_only.length?': '+rec.ledger_only.map(r=>esc(r.lead_name||r.person_id)).join(', '):'')+'.</p>'+
       '<p><b>'+rec.engaged_not_handed_off.length+'</b> replied to the AI but Ylopo has not handed them to a person yet (the AI is still talking with them). They are not counted'+(rec.engaged_not_handed_off.length?': '+rec.engaged_not_handed_off.map(r=>esc(r.lead_name||r.person_id)).join(', '):'')+'.</p>';
   }catch(e){
     document.getElementById('v-text').textContent='Could not load the ledger.';

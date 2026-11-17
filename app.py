@@ -23401,15 +23401,17 @@ def _run_convo_ledger_scan(days=3, extra_pids=None):
     for _p in (extra_pids or []):
         if _p not in pids:
             pids.append(_p)
+    replies = _cl.fill_text_from_fub_replies(days=days)
     filled = _cl.fill_from_fub(pids, days=days)
     _today = datetime.now(_cl.ET).date()
     touched = _cl.refresh_touches(_today - timedelta(days=14), _today)
-    return {"fill": filled, "touches": touched}
+    return {"text_replies": replies, "fill": filled, "touches": touched}
 
 
 def scheduled_convo_ledger_scan():
-    """Every 30 min, 7am to 9pm ET: keep the conversation ledger current
-    between Ylopo imports and stamp follow-up as it happens."""
+    """Every 30 min, around the clock: read AI text replies and voice
+    outcomes straight from FUB and stamp follow-up as it happens. No
+    Ylopo upload involved."""
     if not _db.try_acquire_job_lock("convo_ledger_scan"):
         return
     try:
@@ -32064,28 +32066,6 @@ def scheduled_owner_daily_brief():
                     gd_html = _warn + gd_html
         except Exception as _ile:
             logger.warning("brief invite-link check failed: %s", _ile)
-        # Ylopo export freshness (Nov 16 2026): FUB shows fewer than half
-        # of AI text handoffs, so Sunday's email count is only right if
-        # the week's export was uploaded. Remind on the weekend.
-        try:
-            from zoneinfo import ZoneInfo as _ZIx
-            _now_et = datetime.now(_ZIx("America/New_York"))
-            if _now_et.weekday() >= 5:
-                _raw_ex, _ = _db.get_app_state("ylopo_export_last_import")
-                _ex = json.loads(_raw_ex or "{}")
-                _ex_at = (datetime.fromisoformat(_ex["at"])
-                          if _ex.get("at") else None)
-                if not _ex_at or (datetime.now(timezone.utc) - _ex_at) \
-                        > timedelta(hours=30):
-                    gd_html = ("<p style='font-size:13px;color:#b00020;"
-                               "font-weight:600'>Upload this week's two "
-                               "Ylopo exports (text follow-up and call "
-                               "successful) at /conversations before "
-                               "Sunday 9pm. Without them the weekly email "
-                               "undercounts AI text transfers.</p>"
-                               + gd_html)
-        except Exception as _exe:
-            logger.warning("brief export-freshness check failed: %s", _exe)
         html = f"""
 <div style='font-family:-apple-system,sans-serif;max-width:600px;margin:24px auto;color:#222'>
 <h2 style='margin:0 0 4px;font-size:20px'>Legacy Home Team — Owner Brief</h2>
@@ -32444,7 +32424,7 @@ def start_scheduler():
 
     # Conversation ledger: FUB evidence + follow-up, between Ylopo imports.
     _scheduler.add_job(scheduled_convo_ledger_scan,
-                       CronTrigger(hour="7-20", minute="9,39", timezone=ET),
+                       CronTrigger(minute="9,39", timezone=ET),
                        id="convo_ledger_scan",
                        name="AI conversation ledger scan (30 min)",
                        max_instances=1, misfire_grace_time=300)
