@@ -53,16 +53,16 @@ class ParseExport(unittest.TestCase):
 
 
 class Counting(unittest.TestCase):
-    def test_loose_alert_alone_is_not_counted(self):
+    def test_engaged_alert_alone_is_not_a_transfer(self):
         self.assertFalse(cl.is_confirmed(
-            {"in_export": False, "fub_evidence": "fub_loose_alert"}))
+            {"in_export": False, "fub_evidence": "fub_engaged_alert"}))
 
-    def test_export_or_strong_evidence_counts(self):
+    def test_export_or_handoff_evidence_counts(self):
         self.assertTrue(cl.is_confirmed({"in_export": True}))
         self.assertTrue(cl.is_confirmed(
             {"in_export": False, "fub_evidence": "fub_disposition"}))
         self.assertTrue(cl.is_confirmed(
-            {"in_export": False, "fub_evidence": "fub_strict_alert"}))
+            {"in_export": False, "fub_evidence": "fub_followup_alert"}))
 
 
 if __name__ == "__main__":

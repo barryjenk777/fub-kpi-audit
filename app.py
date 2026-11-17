@@ -23489,9 +23489,18 @@ def api_conversations_scan():
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(silent=True) or {}
-    return jsonify({"ok": True, **_run_convo_ledger_scan(
-        days=int(body.get("days") or 3),
-        extra_pids=[int(x) for x in (body.get("person_ids") or [])])})
+    _days = int(body.get("days") or 3)
+    _extra = [int(x) for x in (body.get("person_ids") or [])]
+
+    def _bg():
+        try:
+            print("[LEDGER] manual scan: %s" % json.dumps(
+                _run_convo_ledger_scan(days=_days, extra_pids=_extra)))
+        except Exception as e:
+            print("[LEDGER] manual scan FAILED: %s" % e)
+    # A wide scan walks FUB for up to 150 people: too slow for a request.
+    threading.Thread(target=_bg, daemon=True).start()
+    return jsonify({"ok": True, "started": True, "days": _days})
 
 
 @app.route("/roi")

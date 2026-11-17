@@ -12,9 +12,16 @@ Three writers, one table (db.ai_conversations):
   3. Follow-up (refresh_touches): the first human call or text after the
      conversation, who made it, and how many minutes it took
 
-Verified against the Nov 9 to 15 export: FUB shows every voice
-conversation (8 of 8) but fewer than half of the text replies (6 of 14),
-so text is only complete after an import.
+Verified against the Nov 9 to 15 export (22 rows, 20 people):
+  - Voice: FUB's dated Call Disposition matched 8 of 8, to the minute.
+  - Text: Ylopo's export is exactly the AI_NEEDS_FOLLOW_UP stage (the AI
+    handed off to a human). The "has engaged X and they need follow up"
+    alert note matched it 6 of 6 with no extras, but 8 of 14 left no
+    dated trace in FUB at all, so text is only complete after an import.
+  - The "started to successfully engage" alert is an EARLIER stage
+    (AI_ENGAGED: the lead replied and the AI is still working them).
+    12 people had it that week and none were in Ylopo's export. It is
+    recorded as 'engaged' and never counted as a transfer.
 """
 import csv
 import io
@@ -52,7 +59,7 @@ OUTCOME_LABELS = {
     "CALLBACK SCHEDULED": "Callback Scheduled"}
 
 # Evidence strong enough to count without Ylopo's export agreeing.
-CONFIRMING_EVIDENCE = {"fub_disposition", "fub_strict_alert"}
+CONFIRMING_EVIDENCE = {"fub_disposition", "fub_followup_alert"}
 
 _DISP_RE = re.compile(r"Call Disposition:\s*([A-Za-z_ ]+)")
 
@@ -186,11 +193,14 @@ def fub_events_for(person_id, since_utc, client=None):
                 continue
             if "ylopo ai text has" not in low:
                 continue
-            strict = "successfully engage" in low
+            if "need follow up" in low:
+                ev_kind = "fub_followup_alert"     # the handoff
+            elif "successfully engage" in low:
+                ev_kind = "fub_engaged_alert"      # AI still talking
+            else:
+                continue
             events.append({"channel": "text", "convo_at": when,
-                           "outcome": None,
-                           "evidence": ("fub_strict_alert" if strict
-                                        else "fub_loose_alert")})
+                           "outcome": None, "evidence": ev_kind})
     except Exception as e:
         logger.warning("ledger notes read failed for %s: %s", person_id, e)
     # One event per (channel, ET day): strongest evidence, earliest time.
@@ -343,8 +353,10 @@ def report(start_day, end_day):
             # We saw strong evidence and Ylopo's export does not list it.
             "ledger_only": [r for r in rows if not r.get("in_export")
                             and r.get("fub_evidence") in CONFIRMING_EVIDENCE],
-            # Loose alert only: not counted until an export confirms it.
-            "unconfirmed": [r for r in rows if not is_confirmed(r)],
+            # Replied to the AI, AI still working them: not a handoff yet,
+            # so not counted. Shown so nobody wonders where they went.
+            "engaged_not_handed_off": [r for r in rows
+                                       if not is_confirmed(r)],
             "both": len([r for r in rows if r.get("in_export")
                          and r.get("fub_evidence")])},
         "no_touch": [r for r in confirmed

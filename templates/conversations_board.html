@@ -45,7 +45,7 @@ function took(m){if(m==null)return '';if(m<60)return m+' min';if(m<1440)return M
 function proof(r){
   if(r.in_export&&r.fub_evidence)return '<span class="pill pill-green">Ylopo + Follow Up Boss</span>';
   if(r.in_export)return '<span class="pill pill-amber" title="Follow Up Boss showed nothing. Only the Ylopo export caught this one.">Ylopo export only</span>';
-  if(r.fub_evidence==='fub_loose_alert')return '<span class="pill pill-muted" title="A weaker Ylopo alert. Not counted until an export confirms it.">Not confirmed yet</span>';
+  if(r.fub_evidence==='fub_engaged_alert')return '<span class="pill pill-muted" title="The lead replied and the AI is still talking with them. Ylopo has not handed them to a person yet, so this is not counted.">AI still talking</span>';
   return '<span class="pill pill-green" title="Dated proof in Follow Up Boss. Ylopo export not uploaded for this one yet.">Follow Up Boss</span>';
 }
 function rowHtml(r){
@@ -88,7 +88,7 @@ async function load(){
       '<p><b>'+rec.both+'</b> conversations are proven both ways (Ylopo listed them and Follow Up Boss has dated proof).</p>'+
       '<p><b>'+rec.ylopo_only.length+'</b> are in Ylopo&rsquo;s export but left no trace in Follow Up Boss. These are why the export has to be uploaded: without it they are invisible.</p>'+
       '<p><b>'+rec.ledger_only.length+'</b> have dated proof in Follow Up Boss but are not in an uploaded export'+(rec.ledger_only.length?': '+rec.ledger_only.map(r=>esc(r.lead_name||r.person_id)).join(', '):'')+'.</p>'+
-      '<p><b>'+rec.unconfirmed.length+'</b> have only a weaker alert and are not counted'+(rec.unconfirmed.length?': '+rec.unconfirmed.map(r=>esc(r.lead_name||r.person_id)).join(', '):'')+'.</p>';
+      '<p><b>'+rec.engaged_not_handed_off.length+'</b> replied to the AI but Ylopo has not handed them to a person yet (the AI is still talking with them). They are not counted'+(rec.engaged_not_handed_off.length?': '+rec.engaged_not_handed_off.map(r=>esc(r.lead_name||r.person_id)).join(', '):'')+'.</p>';
   }catch(e){
     document.getElementById('v-text').textContent='Could not load the ledger.';
     document.getElementById('v-meta').innerHTML='<a href="#" onclick="load();return false" style="text-decoration:underline">Try again</a>';

@@ -12200,6 +12200,10 @@ def ensure_ai_conversations():
                     );
                     CREATE INDEX IF NOT EXISTS ai_conversations_day
                         ON ai_conversations (convo_day);
+                    UPDATE ai_conversations SET fub_evidence = 'fub_engaged_alert'
+                        WHERE fub_evidence = 'fub_strict_alert';
+                    UPDATE ai_conversations SET fub_evidence = 'fub_followup_alert'
+                        WHERE fub_evidence = 'fub_loose_alert';
                 """)
     except Exception as e:
         logger.warning("ensure_ai_conversations failed: %s", e)
