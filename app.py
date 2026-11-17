@@ -23588,7 +23588,17 @@ def scheduled_handoff_watch():
     if not _db.try_acquire_job_lock("handoff_watch"):
         return
     try:
-        rows = _run_handoff_watch(apply=True)
+        # One-shot wider window for an approved backlog sweep: set
+        # app_state handoff_watch_once_hours and the next run uses it once.
+        _hours = 72
+        try:
+            _once, _ = _db.get_app_state("handoff_watch_once_hours")
+            if (_once or "").strip().isdigit():
+                _hours = min(int(_once), 240)
+                _db.set_app_state("handoff_watch_once_hours", "")
+        except Exception:
+            pass
+        rows = _run_handoff_watch(apply=True, max_age_hours=_hours)
         acted = [r for r in rows if r.get("offered_to")
                  or (r.get("action") or "").startswith("remind")]
         print("[SCHEDULER] handoff watch: %d open, %d acted"
@@ -23609,6 +23619,13 @@ def api_conversations_watch():
     apply = request.method == "POST" and bool(body.get("apply"))
     hours = min(int(body.get("max_age_hours")
                     or request.args.get("max_age_hours") or 72), 24 * 10)
+    if request.method == "POST" and body.get("next_run_hours"):
+        # Queue a one-time wider sweep for the next scheduled run (8am to
+        # 8pm ET), so approved backlog offers never go out in quiet hours.
+        _db.set_app_state("handoff_watch_once_hours",
+                          str(min(int(body["next_run_hours"]), 240)))
+        return jsonify({"ok": True, "queued_for_next_run_hours":
+                        min(int(body["next_run_hours"]), 240)})
     return jsonify({"ok": True, "applied": apply,
                     "rows": _run_handoff_watch(apply=apply,
                                                max_age_hours=hours)})
