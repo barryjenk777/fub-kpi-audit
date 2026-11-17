@@ -17118,9 +17118,55 @@ def webhook_fub():
     if not event:
         return jsonify({"ok": True, "action": "ignored_no_event"})
 
-    threading.Thread(target=_fub_process_webhook,
-                     args=(event, uri, resource_ids), daemon=True).start()
+    # Load shedding (Nov 17 2026): a Ylopo bulk tag sync on the 200k
+    # storage pool sent ~200 people webhooks a minute. One unbounded thread
+    # per webhook exhausted the DB pool and took the whole site down. Work
+    # now runs on a small fixed pool. When the backlog is deep, bulk-prone
+    # people events are acknowledged and dropped (the 10-minute desk sweep
+    # re-finds any real conversion); calls, texts and appointments are
+    # never dropped.
+    global _FUB_HOOK_PENDING
+    _bulk_prone = event.startswith("people")
+    with _FUB_HOOK_LOCK:
+        _deep = _FUB_HOOK_PENDING >= (_FUB_HOOK_SHED_AT if _bulk_prone
+                                      else _FUB_HOOK_HARD_CAP)
+        if not _deep:
+            _FUB_HOOK_PENDING += 1
+    if _deep:
+        _fub_hook_note_shed(event)
+        return jsonify({"ok": True, "queued": False, "shed": True,
+                        "event": event})
+
+    def _run():
+        global _FUB_HOOK_PENDING
+        try:
+            _fub_process_webhook(event, uri, resource_ids)
+        finally:
+            with _FUB_HOOK_LOCK:
+                _FUB_HOOK_PENDING -= 1
+    _FUB_HOOK_POOL.submit(_run)
     return jsonify({"ok": True, "queued": True, "event": event})
+
+
+from concurrent.futures import ThreadPoolExecutor as _HookPool
+_FUB_HOOK_POOL = _HookPool(max_workers=4, thread_name_prefix="fubhook")
+_FUB_HOOK_LOCK = threading.Lock()
+_FUB_HOOK_PENDING = 0
+_FUB_HOOK_SHED_AT = 40      # people events dropped past this backlog
+_FUB_HOOK_HARD_CAP = 400    # everything else dropped only past this
+_FUB_HOOK_SHED = {"n": 0, "logged_at": 0.0}
+
+
+def _fub_hook_note_shed(event):
+    """Count shed webhooks; log at most once a minute so a flood does not
+    also flood the logs."""
+    _FUB_HOOK_SHED["n"] += 1
+    now = time.time()
+    if now - _FUB_HOOK_SHED["logged_at"] > 60:
+        logger.warning("[WEBHOOK] shedding load: %d webhooks dropped so far "
+                       "(latest %s, backlog %d)", _FUB_HOOK_SHED["n"], event,
+                       _FUB_HOOK_PENDING)
+        _FUB_HOOK_SHED["logged_at"] = now
 
 
 # ---- BatchLeads → FUB Webhook (via Zapier) ----
