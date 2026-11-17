@@ -7895,6 +7895,56 @@ def api_realtor_lane():
                     "events_7d": events})
 
 
+def _pond_promote_excluded(person):
+    """Leads the Storage Pond mover never touches (Barry, Nov 17 2026):
+    Branded Website source, and Trash or Contact stage (Contact is trash
+    on this team)."""
+    src = (person.get("source") or "").strip().lower()
+    stage = (person.get("stage") or "").strip().lower()
+    return "branded website" in src or stage in ("trash", "contact")
+
+
+def _seed_handraiser_baseline():
+    """One-time: record every Storage Pond lead that already carries
+    HANDRAISER so none of them move. Only when the full walk finishes
+    does handraiser_seeded flip on and the mover start watching the tag."""
+    client = FUBClient()
+    rows, next_tok, pages = [], None, 0
+    try:
+        while True:
+            params = {"tags": "HANDRAISER", "assignedPondId": 6,
+                      "limit": 100, "sort": "-created", "fields": "id,tags"}
+            if next_tok:
+                params["next"] = next_tok
+            data = client._request("GET", "people", params=params) or {}
+            ppl = data.get("people") or []
+            rows.extend((str(p.get("id")), "handraiser") for p in ppl
+                        if "HANDRAISER" in (p.get("tags") or []))
+            pages += 1
+            nxt = (data.get("_metadata") or {}).get("next")
+            if not ppl or not nxt or nxt == next_tok:
+                break
+            next_tok = nxt
+            if pages > 400:
+                raise RuntimeError("handraiser walk did not end")
+        added = 0
+        for i in range(0, len(rows), 500):
+            added += _db.seed_desk_tags_bulk(rows[i:i + 500])
+        _db.set_app_state("handraiser_seeded", "1")
+        _db.set_app_state("handraiser_seed_result", json.dumps(
+            {"walked": len(rows), "recorded": added, "pages": pages,
+             "at": datetime.now(timezone.utc).isoformat()}))
+        logger.info("[YPROMOTE] handraiser baseline: %d walked, %d recorded",
+                    len(rows), added)
+    except Exception as e:
+        logger.error("[YPROMOTE] handraiser baseline failed: %s", e)
+        try:
+            _db.set_app_state("handraiser_seed_result",
+                              json.dumps({"error": str(e)[:200]}))
+        except Exception:
+            pass
+
+
 def run_ypriority_promoter(window_hours=1, cap=150, dry_run=False):
     """YPRIORITY is IDX browsing behavior, a signal of significance, not a
     conversion (Barry, Oct 31 2026). It never routes to an agent; a
@@ -7907,25 +7957,43 @@ def run_ypriority_promoter(window_hours=1, cap=150, dry_run=False):
     since = (now - timedelta(hours=window_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
     daykey = now.strftime("%Y%m%d")
     client = FUBClient()
-    candidates, next_tok = [], None
-    while True:
-        params = {"tags": "YPRIORITY", "assignedPondId": 6,
-                  "updatedAfter": since, "limit": 100,
-                  "fields": "id,name,tags,assignedPondId,created"}
-        if next_tok:
-            params["next"] = next_tok
-        data = client._request("GET", "people", params=params) or {}
-        ppl = data.get("people") or []
-        candidates.extend(p for p in ppl
-                          if "YPRIORITY" in (p.get("tags") or []))
-        nxt = (data.get("_metadata") or {}).get("next")
-        if not ppl or not nxt or nxt == next_tok:
-            break
-        next_tok = nxt
-    pids = [str(p.get("id")) for p in candidates]
+    # HANDRAISER joined Nov 17 2026 (Barry): same move, same guards. It
+    # only runs once its own baseline is seeded (2,917 Storage Pond leads
+    # already carried the tag), or every one of them would move at once.
+    tags = ["YPRIORITY"]
+    try:
+        _hs, _ = _db.get_app_state("handraiser_seeded")
+        if (_hs or "").strip() == "1":
+            tags.append("HANDRAISER")
+    except Exception:
+        pass
+    candidates, skipped = [], 0   # (person, ledger key)
+    for tag in tags:
+        next_tok = None
+        while True:
+            params = {"tags": tag, "assignedPondId": 6,
+                      "updatedAfter": since, "limit": 100,
+                      "fields": "id,name,tags,assignedPondId,created,"
+                                "source,stage"}
+            if next_tok:
+                params["next"] = next_tok
+            data = client._request("GET", "people", params=params) or {}
+            ppl = data.get("people") or []
+            for p in ppl:
+                if tag not in (p.get("tags") or []):
+                    continue
+                if _pond_promote_excluded(p):
+                    skipped += 1
+                    continue
+                candidates.append((p, tag.lower()))
+            nxt = (data.get("_metadata") or {}).get("next")
+            if not ppl or not nxt or nxt == next_tok:
+                break
+            next_tok = nxt
+    pids = list({str(p.get("id")) for p, _k in candidates})
     seen = _db.get_seen_desk_tag_pairs(pids) if pids else set()
-    fresh = [p for p in candidates
-             if (str(p.get("id")), "ypriority") not in seen]
+    fresh = [(p, k) for p, k in candidates
+             if (str(p.get("id")), k) not in seen]
     try:
         raw, _ = _db.get_app_state("ypromote_count_%s" % daykey)
         done_today = int(raw or 0)
@@ -7933,22 +8001,31 @@ def run_ypriority_promoter(window_hours=1, cap=150, dry_run=False):
         done_today = 0
     out = {"candidates": len(candidates), "fresh": len(fresh),
            "promoted": [], "cap": cap, "done_today": done_today,
-           "dry_run": dry_run}
+           "dry_run": dry_run, "tags": tags,
+           "skipped_source_or_stage": skipped}
     capped = False
-    for p in fresh:
+    moved = set()
+    for p, key in fresh:
         if done_today >= cap:
             capped = True
             break
         pid = str(p.get("id"))
         if dry_run:
-            out["promoted"].append({"person_id": pid, "lead": p.get("name")})
-            done_today += 1
+            if pid not in moved:
+                moved.add(pid)
+                out["promoted"].append({"person_id": pid,
+                                        "lead": p.get("name"), "tag": key})
+                done_today += 1
             continue
-        if not _db.filter_new_desk_tags(pid, ["ypriority"]):
+        if not _db.filter_new_desk_tags(pid, [key]):
             continue  # another worker got there first
-        if _promote_to_shark_tank(pid, p, "ypriority signal",
+        if pid in moved:
+            continue  # both tags landed together; one move is enough
+        if _promote_to_shark_tank(pid, p, "%s signal" % key,
                                   "ypriority_promoter"):
-            out["promoted"].append({"person_id": pid, "lead": p.get("name")})
+            moved.add(pid)
+            out["promoted"].append({"person_id": pid, "lead": p.get("name"),
+                                    "tag": key})
             done_today += 1
     if not dry_run:
         try:
@@ -8001,6 +8078,15 @@ def api_ypriority_scan():
     if not _perplexity_auth():
         return jsonify({"error": "Unauthorized"}), 401
     body = request.get_json(silent=True) or {}
+    if body.get("seed_handraiser"):
+        threading.Thread(target=_seed_handraiser_baseline,
+                         daemon=True).start()
+        return jsonify({"ok": True, "seeding": "handraiser"})
+    if body.get("handraiser_status"):
+        _s, _ = _db.get_app_state("handraiser_seeded")
+        _r, _ = _db.get_app_state("handraiser_seed_result")
+        return jsonify({"ok": True, "seeded": (_s or "") == "1",
+                        "result": _r})
     if "live" in body:
         _db.set_app_state("ypriority_live", "1" if body["live"] else "0")
         if len(body) == 1:
