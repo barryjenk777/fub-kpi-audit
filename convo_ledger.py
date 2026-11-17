@@ -571,6 +571,7 @@ def reassign_note(row):
     said = (' They said: "%s".' % row["reply_text"]) \
         if row.get("reply_text") else ""
     return ("%s %s on %s and has not had a call or text from us since.%s "
-            "Pick up the thread naturally, no apology for the gap, just "
-            "call." % ((row.get("lead_name") or "This lead").split()[0],
-                       how, when, said))
+            "When you call, pick up where the AI left off. No need to "
+            "apologize for the wait."
+            % ((row.get("lead_name") or "This lead").split()[0],
+               how, when, said))

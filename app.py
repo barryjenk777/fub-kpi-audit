@@ -5842,10 +5842,10 @@ def dispatch_accept_page(token):
                 return ("<div style='font-family:sans-serif;padding:3rem;"
                         "text-align:center;max-width:440px;margin:0 auto'>"
                         "<h2 style='color:#2e7d4f'>&#10003; %s is yours</h2>"
-                        "<p>Accepted in %d seconds. They are assigned to you "
-                        "in Follow Up Boss right now%s. The clock that "
-                        "matters starts now: call while they still remember "
-                        "saying yes.</p></div>"
+                        "<p>Claimed in %d seconds. They are assigned to you "
+                        "in Follow Up Boss right now%s. Call from the "
+                        "Follow Up Boss app now so the call is logged. "
+                        "The sooner you call, the better it goes.</p></div>"
                         % (lead_first, int(lat),
                            (", appointment %s" % offer["appt_time"])
                            if offer["appt_time"] else ""))
@@ -6776,29 +6776,43 @@ def api_slack_actions():
                     except Exception:
                         pass
                     return
-                closers = ["The clock that matters starts now.",
-                           "Call before the coffee gets cold.",
-                           "They said yes minutes ago. Keep it warm.",
-                           "Speed got you the lead. Speed books the appointment."]
+                # The confirmation says what to do next, and matches what
+                # really happened to this lead (Nov 17 2026 copy pass).
+                closers = ["The sooner you call, the better it goes.",
+                           "Call while the conversation is still fresh.",
+                           "Speed got you the lead. A quick call books "
+                           "the appointment."]
                 try:
                     ci = int("".join(c for c in str(offer["person_id"])
                                      if c.isdigit()) or 0) % len(closers)
                 except Exception:
                     ci = 0
-                _extra = ""
-                if offer["source"] == "realtor":
-                    _extra = (" One more thing: Realtor.com sends this lead "
-                              "to competing agents too, and your claim "
-                              "holds for %d minutes without a dial before "
-                              "it reopens to the group. Phone first, "
-                              "everything else second."
-                              % int(getattr(config,
-                                            "REALTOR_CALL_YANK_MIN", 10)))
-                _say("✅ *%s is yours.* Claimed in %s. Assigned to you "
-                     "in FUB right now. Call from the FUB app while they're "
-                     "warm: <%s|open %s in FUB>. %s%s"
-                     % (lead_first, _dp.fmt_secs(lat), fub_link, lead_first,
-                        closers[ci], _extra))
+                _next = ("Call from the Follow Up Boss app now so the call "
+                         "is logged: <%s|open %s in Follow Up Boss>. %s"
+                         % (fub_link, lead_first, closers[ci]))
+                if offer["source"] in ("reassign", "recovery"):
+                    _next = ("They have been waiting on a call, so call "
+                             "from the Follow Up Boss app now: <%s|open %s "
+                             "in Follow Up Boss>. Pick up where the AI "
+                             "left off. No need to apologize for the wait."
+                             % (fub_link, lead_first))
+                elif offer["source"] == "ai_nurture":
+                    _next = ("Their timeline is longer, so there is no "
+                             "fire drill, but call today while they "
+                             "remember the conversation: <%s|open %s in "
+                             "Follow Up Boss>." % (fub_link, lead_first))
+                elif offer["source"] == "realtor":
+                    _next = ("Call from the Follow Up Boss app right now: "
+                             "<%s|open %s in Follow Up Boss>. Realtor.com "
+                             "sends this lead to other agents too, so the "
+                             "first call matters. If no call is logged in "
+                             "%d minutes, the lead reopens to the group."
+                             % (fub_link, lead_first,
+                                int(getattr(config,
+                                            "REALTOR_CALL_YANK_MIN", 10))))
+                _say("✅ *%s is yours.* Claimed in %s and assigned to you "
+                     "in Follow Up Boss. %s"
+                     % (lead_first, _dp.fmt_secs(lat), _next))
                 try:
                     import slack_client as _sl
                     wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
@@ -16471,10 +16485,10 @@ def _realtor_post_claim(offer, claim_secs=None):
         for name in losers:
             sid = _dp._slack_user_id(name)
             if _sl.is_available() and sid:
-                _sl.dm_user(sid, "⚡ %s claimed %s in %s. Beaten by a "
-                                 "heartbeat, not a habit. The next shootout "
-                                 "is yours if your thumb is faster."
-                            % (winner, lead1, when))
+                _sl.dm_user(sid, "%s claimed %s in %s, so this one is "
+                                 "taken. You were close. Keep your "
+                                 "notifications on and the next one can be "
+                                 "yours." % (winner, lead1, when))
     except Exception as e:
         logger.warning("[SHOOTOUT] beaten DM failed: %s", e)
 
@@ -16607,12 +16621,12 @@ def _realtor_call_enforcer():
                         "to the group. The next one is yours the moment "
                         "you claim and dial." % (first, lead1, age))
                 elif _sl.is_available() and sid:
-                    _sl.dm_user(sid, "%s, straight talk: you claimed %s %d "
-                        "minutes ago and no dial has hit FUB, so the "
-                        "shootout just reopened to the group. No lecture, "
-                        "just physics: a paid shared lead dies by the "
-                        "minute. Next one is yours the moment you claim "
-                        "AND dial." % (first, lead1, age))
+                    _sl.dm_user(sid, "%s, you claimed %s %d minutes ago and "
+                        "Follow Up Boss has not seen a call, so the lead "
+                        "just reopened to the group. Other teams are "
+                        "calling this same lead, which is why the window "
+                        "is short. The next one is yours the moment you "
+                        "claim and call." % (first, lead1, age))
             except Exception:
                 pass
             _db.log_automation_event(
@@ -16652,11 +16666,12 @@ def _realtor_call_enforcer():
                         "lead reopens to the group. Call now: %s"
                         % (first, lead1, max(yank_min - age, 1), link))
                 elif _sl.is_available() and sid:
-                    sent = _sl.dm_user(sid, "%s, %s said yes %d minutes ago "
-                        "and FUB hasn't seen a dial yet. Realtor.com sold "
-                        "this lead to other agents too, and the first voice "
-                        "usually wins. %d more minutes and the claim "
-                        "reopens to the group. Call now: %s"
+                    sent = _sl.dm_user(sid, "%s, you claimed %s %d minutes ago "
+                        "and Follow Up Boss has not seen a call yet. "
+                        "Realtor.com sends this lead to other agents too, "
+                        "and the first agent to call usually wins. %d more "
+                        "minutes and the lead reopens to the group. Call "
+                        "now: %s"
                         % (first, lead1, age, max(yank_min - age, 1), link))
             except Exception:
                 pass
@@ -16671,9 +16686,9 @@ def _realtor_call_enforcer():
                         _db.queue_agent_imessage(
                             r["agent_name"], _prof.get("fub_user_id"),
                             _prof.get("phone") or _prof.get("fub_phone"),
-                            "%s, %s is claimed to you with no dial logged "
-                            "yet. %d more minutes and it reopens to the "
-                            "group. Call now." % (first, lead1,
+                            "%s, you claimed %s and no call is logged "
+                            "yet. %d more minutes and the lead reopens to "
+                            "the group. Call now." % (first, lead1,
                                                   max(yank_min - age, 1)),
                             week_day="dispatch")
                 except Exception:
@@ -23961,20 +23976,22 @@ def _run_handoff_watch(apply=True, max_age_hours=72):
                     _oid = _dp._slack_user_id(owner)
                     if _oid:
                         _sl.dm_user(_oid, (
-                            "%s, %s talked with the AI %d hours ago and "
-                            "there is still no call or text logged in "
-                            "Follow Up Boss, so the lead is being offered "
-                            "to another agent. If you reached them from "
-                            "your personal phone, log it in Follow Up Boss "
-                            "next time so this does not happen."
+                            "%s, heads up on %s. They talked with our AI "
+                            "%d hours ago and Follow Up Boss shows no call "
+                            "or text since, so the lead is going to "
+                            "another agent. Nothing to do on your end. If "
+                            "you did reach them from your personal phone, "
+                            "tell Barry today. And going forward, call or "
+                            "text from Follow Up Boss so your work shows "
+                            "up and the lead stays yours."
                             % (owner.split()[0], lead1,
                                int(r["age_hours"]))))
                     _bid = _dp._slack_user_id("Barry Jenkins")
                     if _bid:
                         _sl.dm_user(_bid, (
-                            "Reassigning <%s|%s>: %s had the lead and "
-                            "logged no call or text in the %d hours since "
-                            "the AI conversation. Offered to %s."
+                            "24 hour rule: <%s|%s> talked with our AI and "
+                            "%s logged no call or text in the %d hours "
+                            "since. Now offered to %s."
                             % (flink, name or "a lead", owner,
                                int(r["age_hours"]),
                                row["offered_to"] or "the next agent")))
@@ -23987,12 +24004,13 @@ def _run_handoff_watch(apply=True, max_age_hours=72):
                          "people/view/%s" % pid)
                 if _oid:
                     _sl.dm_user(_oid, (
-                        "%s, %s talked with the AI about %d hours ago and "
-                        "there is no call or text logged in Follow Up Boss "
-                        "yet. Please call them now: <%s|open %s in Follow "
-                        "Up Boss>. If nothing is logged within 24 hours of "
-                        "their conversation, the lead is offered to "
-                        "another agent."
+                        "%s, %s talked with our AI about %d hours ago and "
+                        "is still waiting on a call. Follow Up Boss shows "
+                        "no call or text from you yet. Give them a call "
+                        "now: <%s|open %s in Follow Up Boss>. The lead "
+                        "stays yours as long as a call or text is logged "
+                        "within 24 hours of their conversation. After "
+                        "that it goes to another agent."
                         % (owner.split()[0], lead1, int(r["age_hours"]),
                            flink, lead1)))
                     _db.log_automation_event(
@@ -24758,11 +24776,10 @@ def api_desk_recovery_batch():
                          if isinstance(a, dict) and a.get("city")), None)
             res = _dp.make_offer(
                 "recovery", pid, (p.get("name") or "").strip(), city,
-                notes=("%s The system didn't fire when this one "
-                       "converted, so you are the first human touch. "
-                       "Act like we didn't miss anything: pick up the "
-                       "thread naturally, no apology for the gap, just "
-                       "call." % note),
+                notes=("%s Nobody has called this lead yet, so you are "
+                       "the first person they hear from. When you call, "
+                       "pick up where the AI left off. No need to "
+                       "apologize for the wait." % note),
                 audit=cache_get("audit") or {},
                 lead_source=p.get("source"))
             row["offered"] = bool(res)
