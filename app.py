@@ -24299,7 +24299,7 @@ def _run_handoff_watch(apply=True, max_age_hours=72):
                     _bid = _dp._slack_user_id("Barry Jenkins")
                     if _bid:
                         _sl.dm_user(_bid, (
-                            "24 hour rule: <%s|%s> talked with our AI and "
+                            "One day rule: <%s|%s> talked with our AI and "
                             "%s logged no call or text in the %d hours "
                             "since. Now offered to %s."
                             % (flink, name or "a lead", owner,
@@ -24319,7 +24319,7 @@ def _run_handoff_watch(apply=True, max_age_hours=72):
                         "no call or text from you yet. Give them a call "
                         "now: <%s|open %s in Follow Up Boss>. The lead "
                         "stays yours as long as a call or text is logged "
-                        "within 24 hours of their conversation (9pm to "
+                        "within one day of their conversation (9pm to "
                         "8am does not count). After that it goes to "
                         "another agent."
                         % (owner.split()[0], lead1, int(r["age_hours"]),

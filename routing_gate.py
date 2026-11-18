@@ -108,11 +108,41 @@ def is_sphere(lead):
             or "sphere" in tags or " soi" in " " + tags)
 
 
-def stop_tag(lead):
-    """The first stop tag on the lead, or None."""
+# A lead who said no to the AI and then picks up the phone and calls us
+# is open again (Barry, Nov 18 2026). These never reopen on their own.
+HARD_STOP_TAGS = {"DO_NOT_CALL", "NO_MARKETING", "WRONG_NUMBER",
+                  "DISCONNECTED_NUMBER"}
+CALLED_IN_SECS = 30
+CALLED_IN_DAYS = 14
+
+
+def stop_tag(lead, called_in=False):
+    """The first stop tag that still applies, or None. A lead who called
+    in after opting out of the AI is only held by the hard stops."""
     have = {str(t).strip().upper() for t in (lead.get("tags") or [])}
-    hit = sorted(have & STOP_TAGS)
+    hit = sorted(have & (HARD_STOP_TAGS if called_in else STOP_TAGS))
     return hit[0] if hit else None
+
+
+def lead_called_in(calls, now=None, days=CALLED_IN_DAYS,
+                   min_secs=CALLED_IN_SECS):
+    """True when the lead phoned us and connected, inside the window.
+    `calls` are Follow Up Boss call records."""
+    from datetime import timedelta
+    now = now or datetime.now(timezone.utc)
+    for c in calls or []:
+        try:
+            if not c.get("isIncoming") \
+                    or int(c.get("duration") or 0) < min_secs:
+                continue
+            at = datetime.strptime((c.get("created") or "")[:19],
+                                   "%Y-%m-%dT%H:%M:%S").replace(
+                tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        if timedelta(0) <= now - at <= timedelta(days=days):
+            return True
+    return False
 
 
 _DATE = re.compile(r"(20\d\d-\d\d-\d\d)")
@@ -143,7 +173,7 @@ def _answer(action, question, reason, agent=None):
 
 
 def decide(lane, lead, now_et, owner_is_working=False, talked_agent=None,
-           proof_hours=None, check_proof=True):
+           proof_hours=None, check_proof=True, called_in=False):
     """One answer for one lead in one lane.
 
     lead            the Follow Up Boss person (stage, source, tags,
@@ -163,7 +193,7 @@ def decide(lane, lead, now_et, owner_is_working=False, talked_agent=None,
     if stage in DEAL_STAGES:
         return _answer(BLOCK, 1, "stage is %s, the deal has an agent"
                        % stage.title())
-    tag = stop_tag(lead)
+    tag = stop_tag(lead, called_in=called_in)
     if tag:
         return _answer(BLOCK, 1, "the lead asked us to stop (%s)" % tag)
     if lane == "reassign" and is_sphere(lead):

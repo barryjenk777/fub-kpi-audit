@@ -694,11 +694,13 @@ def gate_check(lane, person_id, notes=None, offered_to=None):
     working = _working_agents()
     owner = (lead.get("assignedTo") or "").strip()
     talked = None
+    called_in = False
     try:
         import convo_ledger as _cl
         data = client._request("GET", "calls", params={
             "personId": person_id, "limit": 20}) or {}
         calls = next((v for v in data.values() if isinstance(v, list)), [])
+        called_in = _rg.lead_called_in(calls)
         hit = _cl.agent_who_talked(calls, lambda n: n in working)
         talked = (hit or {}).get("agent")
     except Exception:
@@ -709,7 +711,7 @@ def gate_check(lane, person_id, notes=None, offered_to=None):
         lane, lead, datetime.now(_ZI("America/New_York")),
         owner_is_working=bool(owner) and owner in working
         and owner != offered_to,
-        talked_agent=talked,
+        talked_agent=talked, called_in=called_in,
         proof_hours=_rg.proof_age_hours(notes))
 
 

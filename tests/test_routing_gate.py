@@ -40,6 +40,26 @@ class TestAllowed(unittest.TestCase):
         self.assertEqual(got["action"], g.BLOCK)
         self.assertIn("asked us to stop", got["reason"])
 
+    def test_a_lead_who_calls_in_after_opting_out_is_open_again(self):
+        # Nov 18 2026: opted out of AI texts, then called and talked to
+        # an agent for 12 minutes.
+        lead = _lead(tags=["AI_OPT_OUT"])
+        self.assertEqual(_go(lead=lead, called_in=True)["action"], g.ROUTE)
+        hard = _lead(tags=["AI_OPT_OUT", "DO_NOT_CALL"])
+        self.assertEqual(_go(lead=hard, called_in=True)["action"], g.BLOCK)
+
+    def test_called_in_means_a_connected_inbound_call(self):
+        now = datetime(2026, 11, 18, 15, 0, tzinfo=timezone.utc)
+        ok = {"isIncoming": True, "duration": 707,
+              "created": "2026-11-17T18:56:37Z"}
+        self.assertTrue(g.lead_called_in([ok], now))
+        self.assertFalse(g.lead_called_in(
+            [dict(ok, isIncoming=False)], now))
+        self.assertFalse(g.lead_called_in([dict(ok, duration=5)], now))
+        self.assertFalse(g.lead_called_in(
+            [dict(ok, created="2026-10-01T18:56:37Z")], now))
+        self.assertFalse(g.lead_called_in(None, now))
+
     def test_registry_tag_alone_does_not_block(self):
         # Barry, Nov 18 2026: these leads registered themselves.
         got = _go(lead=_lead(tags=["Y_DNC_REGISTRY_TRUE"]))

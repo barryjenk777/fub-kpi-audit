@@ -518,7 +518,9 @@ def weekly_counts(days=7):
 # should not have any leads assigned to me as I am not selling."
 
 NUDGE_HOURS = 4
-REASSIGN_HOURS = 24
+# Counted on the paused clock (9pm to 8am does not count), so 13 hours
+# is one full day: the same time tomorrow (Barry, Nov 18 2026).
+REASSIGN_HOURS = 13
 _NEGATIVE_REPLY = re.compile(
     r"^\s*(?:(?:no|nope|no thanks|no thank you)\s*[.!]*\s*$"
     r"|(?:stop|unsubscribe|remove me|not interested|wrong number"
