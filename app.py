@@ -17099,6 +17099,72 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                     _own_name = _claimer
                     person["assignedTo"] = _claimer
                     _owned = True
+            # The agent who already talked to the lead keeps the lead
+            # (Barry, Nov 18 2026: Caren Collier spoke with one agent for
+            # 12 minutes and was then offered to three others). A call of
+            # 2 minutes or longer with a working agent in the last 48
+            # hours makes that agent the owner: assign in FUB, tell them,
+            # and never offer the lead to the team.
+            if not _owned and (live or "").strip() == "1":
+                try:
+                    import convo_ledger as _clt
+                    _cr = FUBClient()._request("GET", "calls", params={
+                        "personId": pid, "limit": 20}) or {}
+                    _talk = _clt.agent_who_talked(
+                        next((v for v in _cr.values()
+                              if isinstance(v, list)), []),
+                        lambda n: not _desk_dark_owner(n)
+                        and any(p["agent_name"] == n for p in
+                                (_db.get_agent_profiles(active_only=True)
+                                 or [])))
+                except Exception as _te:
+                    _talk = None
+                    logger.warning("talked-agent lookup failed for %s: %s",
+                                   pid, _te)
+                if _talk:
+                    _tname = _talk["agent"]
+                    _tok = False
+                    try:
+                        _tprof = next((p for p in (_db.get_agent_profiles(
+                            active_only=True) or [])
+                            if p["agent_name"] == _tname), None)
+                        if _tprof and _tprof.get("fub_user_id"):
+                            FUBClient().update_person_fields(
+                                pid, {"assignedUserId": _tprof["fub_user_id"]})
+                            _tok = True
+                    except Exception as _ae:
+                        logger.warning("talked-agent assign failed for %s: "
+                                       "%s", pid, _ae)
+                    _db.log_automation_event(
+                        event_type="owner_from_call", person_id=pid,
+                        person_name=person.get("name"), agent_name=_tname,
+                        payload={"call_at": _talk["at"],
+                                 "seconds": _talk["seconds"],
+                                 "assigned": _tok, "tags": _fresh},
+                        triggered_by=triggered_by)
+                    if _tok:
+                        try:
+                            import slack_client as _slt
+                            import dispatch as _dpt
+                            _tsid = _dpt._slack_user_id(_tname)
+                            if _slt.is_available() and _tsid:
+                                _slt.dm_user(_tsid,
+                                    "%s, %s is yours. You talked with them "
+                                    "for %d minutes, so the lead is "
+                                    "assigned to you in Follow Up Boss "
+                                    "instead of going out to the team. "
+                                    "Log your next step on the record: "
+                                    "https://yourfriendlyagent.followupboss"
+                                    ".com/2/people/view/%s"
+                                    % (_tname.split()[0],
+                                       (person.get("name") or "This lead"),
+                                       max(1, _talk["seconds"] // 60), pid))
+                        except Exception:
+                            pass
+                        _own_name = _tname
+                        person["assignedTo"] = _tname
+                        # Assigned and told: nothing else to route or ping.
+                        continue
             # The truth test (Barry, Nov 4 2026: false fire drills were
             # devaluing every notification): a CONVERSION is a human-ask
             # tag plus a real inbound communication. Everything else is

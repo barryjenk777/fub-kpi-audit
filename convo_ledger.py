@@ -608,6 +608,41 @@ def watch_candidates(max_age_hours=72):
     return out
 
 
+TALKED_CALL_SECS = 120
+TALKED_WINDOW_HOURS = 48
+
+
+def agent_who_talked(calls, is_working_agent, now=None,
+                     hours=TALKED_WINDOW_HOURS, min_secs=TALKED_CALL_SECS):
+    """The working agent who already had a real phone conversation with
+    this lead: the most recent call of 2 minutes or longer, either
+    direction, inside the window. That agent keeps the lead instead of it
+    being offered to the team (Barry, Nov 18 2026: a lead who talked with
+    one agent for 12 minutes was offered to three others). Pure: `calls`
+    are FUB call records, `is_working_agent(name)` decides who counts."""
+    now = now or datetime.now(timezone.utc)
+    best = None
+    for c in calls or []:
+        name = (c.get("userName") or "").strip()
+        if not name or not is_working_agent(name):
+            continue
+        try:
+            if int(c.get("duration") or 0) < min_secs:
+                continue
+            at = datetime.strptime((c.get("created") or "")[:19],
+                                   "%Y-%m-%dT%H:%M:%S").replace(
+                tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        if now - at > timedelta(hours=hours) or at > now + timedelta(minutes=5):
+            continue
+        if best is None or at > best[0]:
+            best = (at, name, int(c.get("duration") or 0))
+    if not best:
+        return None
+    return {"agent": best[1], "at": best[0].isoformat(), "seconds": best[2]}
+
+
 def reassign_note(row):
     when = datetime.fromisoformat(row["convo_at"]).astimezone(ET) \
         .strftime("%a %b %-d at %-I:%M %p")
