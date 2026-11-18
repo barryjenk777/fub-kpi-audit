@@ -5705,7 +5705,8 @@ def _dispatch_accept(offer):
         if offer.get("source") == "reassign" and prior_owner \
                 and prior_owner != agent:
             try:
-                _takeover = _handoff_untouched(offer["person_id"])
+                _takeover = _handoff_untouched(offer["person_id"],
+                                               owner=prior_owner)
             except Exception as _te:
                 logger.warning("[DISPATCH] takeover check failed: %s", _te)
         # A yanked Realtor.com claim releases the lead in our ledger but
@@ -23905,11 +23906,14 @@ def scheduled_convo_ledger_scan():
         _db.release_job_lock("convo_ledger_scan")
 
 
-def _handoff_untouched(person_id):
+def _handoff_untouched(person_id, owner=None):
     """True when the newest AI conversation on this lead still has no
     human call or text after it. Checked live at claim time so a lead is
-    never taken from an agent who just picked up the phone."""
+    never taken from an agent who just picked up the phone. An owner who
+    has ever called or texted the lead keeps it (Barry, Nov 18 2026)."""
     import convo_ledger as _cl
+    if owner and _cl.fetch_owner_attempt(person_id, owner):
+        return False
     _today = datetime.now(_cl.ET).date()
     rows = [r for r in _db.get_ai_conversations(
                 _today - timedelta(days=10), _today)
@@ -23922,13 +23926,35 @@ def _handoff_untouched(person_id):
         person_id, datetime.fromisoformat(newest["convo_at"]))
 
 
+def _owner_tried(client, pid, owner, row):
+    """The 24 hour rule covers a newly assigned lead the agent never
+    tried. True (and the row says why) when the owner has a call or text
+    logged on the lead, or when FUB cannot be read: a lead is never moved
+    on a guess."""
+    import convo_ledger as _cl
+    try:
+        t = _cl.fetch_owner_attempt(pid, owner, client=client)
+    except Exception as e:
+        row["action"] = "left alone: could not read %s's calls (%s)" % (
+            owner, str(e)[:60])
+        return True
+    if not t:
+        return False
+    row["action"] = "left alone: %s already working it (first %s %s)" % (
+        owner, t["kind"], t["at"].astimezone(_cl.ET).strftime("%b %-d"))
+    return True
+
+
 def _run_handoff_watch(apply=True, max_age_hours=72):
     """Nobody waits more than a day (Barry, Nov 16 2026). For every AI
     conversation with no call or text logged after it:
       - nobody working owns it (pond, Barry, Fhalen, paused or departed
         agent): offered to the team now
-      - an agent owns it: one reminder at 4 hours, and at 24 hours the
-        lead is offered to another agent
+      - an agent owns it and has never called or texted the lead: one
+        reminder at 4 hours, and at 24 hours the lead is offered to
+        another agent
+      - an agent owns it and has tried even once: left alone. A later AI
+        text never restarts the clock (Barry, Nov 18 2026)
     Sphere leads, dead stages and leads who told the AI no are left alone."""
     import convo_ledger as _cl
     import dispatch as _dp
@@ -23966,6 +23992,8 @@ def _run_handoff_watch(apply=True, max_age_hours=72):
             row["action"] = "left alone: the lead told the AI no"
         elif _open:
             row["action"] = "already being offered"
+        elif not dark and _owner_tried(client, pid, owner, row):
+            pass
         elif dark or r["age_hours"] >= _cl.REASSIGN_HOURS:
             row["action"] = "offer to the team" if dark else \
                 "reassign from %s" % owner

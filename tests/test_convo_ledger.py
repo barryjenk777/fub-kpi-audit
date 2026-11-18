@@ -93,3 +93,35 @@ class HandoffWatchRules(unittest.TestCase):
     def test_fhalen_transfers_count(self):
         self.assertTrue(cl.is_confirmed(
             {"in_export": False, "fub_evidence": "isa_call"}))
+
+
+class OwnerAttempt(unittest.TestCase):
+    """Nov 18 2026: an agent talked to a lead twice, the AI texted her
+    again a week later, and the 24 hour rule gave her to someone else. An
+    owner who has tried keeps the lead."""
+    AI = {"userName": "Team Lead", "isIncoming": False,
+          "created": "2026-11-04T22:32:58Z",
+          "note": "Call Outcome from AI Voice\nCall Disposition: VOICEMAIL"}
+    DIAL = {"userName": "Agent One", "isIncoming": False,
+            "duration": 11, "created": "2026-11-16T16:20:36Z", "note": None}
+
+    def test_a_no_connect_dial_still_counts(self):
+        t = cl.owner_attempt([self.AI, self.DIAL], [], "Agent One")
+        self.assertEqual(t["kind"], "called")
+        self.assertEqual(t["count"], 1)
+
+    def test_a_text_counts(self):
+        t = cl.owner_attempt([], [{"userName": "Agent One",
+                                   "isIncoming": False,
+                                   "created": "2026-11-11T22:11:52Z"}],
+                             "Agent One")
+        self.assertEqual(t["kind"], "texted")
+
+    def test_ai_calls_and_other_agents_do_not_count(self):
+        self.assertIsNone(cl.owner_attempt([self.AI], [], "Team Lead"))
+        self.assertIsNone(cl.owner_attempt([self.DIAL], [], "Agent Two"))
+
+    def test_inbound_and_no_owner_do_not_count(self):
+        inbound = dict(self.DIAL, isIncoming=True)
+        self.assertIsNone(cl.owner_attempt([inbound], [], "Agent One"))
+        self.assertIsNone(cl.owner_attempt([self.DIAL], [], ""))

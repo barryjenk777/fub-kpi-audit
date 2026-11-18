@@ -529,6 +529,51 @@ _DEAD_STAGES = ("closed", "trash", "archive", "contact", "dnc",
                 "past client", "sphere", "under contract")
 
 
+def owner_attempt(calls, texts, owner):
+    """The owner's earliest logged try at this lead: a call they placed
+    (connected or not) or a text they sent. Barry, Nov 18 2026: the 24
+    hour rule is about a newly assigned lead nobody tried. Once the agent
+    has tried, the lead is theirs, and a later AI text (the AI keeps
+    texting after we connect) never restarts the clock. AI calls carry a
+    Call Disposition and never count. Pure, so it tests without FUB."""
+    who = (owner or "").strip()
+    if not who:
+        return None
+    tries = []
+    for c in calls or []:
+        if (c.get("userName") or "").strip() != who or c.get("isIncoming"):
+            continue
+        if "Call Disposition" in (c.get("note") or ""):
+            continue
+        when = _parse_fub_dt(c.get("created"))
+        if when:
+            tries.append((when, "called"))
+    for t in texts or []:
+        if (t.get("userName") or "").strip() != who or t.get("isIncoming"):
+            continue
+        when = _parse_fub_dt(t.get("created"))
+        if when:
+            tries.append((when, "texted"))
+    if not tries:
+        return None
+    when, kind = min(tries)
+    return {"at": when, "kind": kind, "count": len(tries)}
+
+
+def fetch_owner_attempt(person_id, owner, client=None):
+    """owner_attempt against live FUB. Raises when FUB cannot be read, so
+    the caller leaves the lead where it is instead of guessing."""
+    client = client or FUBClient()
+    cd = client._request("GET", "calls", params={
+        "personId": person_id, "limit": 100}) or {}
+    td = client._request("GET", "textMessages", params={
+        "personId": person_id, "limit": 100}) or {}
+    return owner_attempt(
+        next((v for v in cd.values() if isinstance(v, list)), []),
+        next((v for v in td.values() if isinstance(v, list)), []),
+        owner)
+
+
 def is_sphere(person):
     src = (person.get("source") or "").strip().lower()
     tags = " ".join(t.lower() for t in (person.get("tags") or []))
