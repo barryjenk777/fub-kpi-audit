@@ -11097,6 +11097,79 @@ def get_realtor_night_unclaimed(hours=13):
         return []
 
 
+# Realtor.com leads that arrive between 9pm and 8am are not offered to
+# anyone overnight (Barry, Nov 18 2026). They wait here and the 8am
+# release routes them like a daytime lead.
+_realtor_hold_ready = False
+
+
+def _ensure_realtor_hold():
+    global _realtor_hold_ready
+    if _realtor_hold_ready or not is_available():
+        return
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS realtor_night_hold (
+                        person_id   TEXT PRIMARY KEY,
+                        person_name TEXT,
+                        lead_city   TEXT,
+                        held_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                """)
+        _realtor_hold_ready = True
+    except Exception as e:
+        logger.warning("ensure realtor_night_hold failed: %s", e)
+
+
+def add_realtor_night_hold(person_id, person_name, lead_city=None):
+    """True when the lead is safely parked for the morning."""
+    try:
+        _ensure_realtor_hold()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO realtor_night_hold
+                        (person_id, person_name, lead_city)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (person_id) DO NOTHING
+                """, (str(person_id), person_name, lead_city))
+        return True
+    except Exception as e:
+        logger.warning("add_realtor_night_hold failed: %s", e)
+        return False
+
+
+def get_realtor_night_holds():
+    """Held leads, newest first: the freshest lead gets the first ring."""
+    try:
+        _ensure_realtor_hold()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT person_id, person_name, lead_city, held_at
+                    FROM realtor_night_hold ORDER BY held_at DESC
+                """)
+                keys = ("person_id", "person_name", "lead_city", "held_at")
+                return [dict(zip(keys, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_realtor_night_holds failed: %s", e)
+        return []
+
+
+def delete_realtor_night_hold(person_id):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM realtor_night_hold "
+                            "WHERE person_id = %s", (str(person_id),))
+        return True
+    except Exception as e:
+        logger.warning("delete_realtor_night_hold failed: %s", e)
+        return False
+
+
 def live_realtor_claim(person_id, hours=24):
     """The agent holding a live (claimed, not released) Realtor.com claim
     on this lead, or None. Fails closed to None."""

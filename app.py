@@ -9418,6 +9418,15 @@ def scheduled_dispatch_cascade():
         except Exception as _rce:
             logger.warning("[SHOOTOUT] call enforcer failed: %s", _rce)
         try:
+            # Safety net for the 8:01am release: if that job was missed
+            # (a deploy at 8am), parked leads still route within minutes.
+            _et = _realtor_et_now()
+            if _et.minute % 5 == 3 and _realtor_minutes_until_open() == 0:
+                threading.Thread(target=_realtor_release_holds,
+                                 daemon=True).start()
+        except Exception as _rhe:
+            logger.warning("[REALTOR] hold catch-up failed: %s", _rhe)
+        try:
             _callingly_fallback_sweep()
         except Exception as _cfe:
             logger.warning("[CALLINGLY] fallback sweep failed: %s", _cfe)
@@ -16308,6 +16317,9 @@ def scheduled_realtor_morning_release():
             except Exception as e:
                 logger.warning("[REALTOR] morning re-offer failed for %s: "
                                "%s", r["person_id"], e)
+        # Leads parked overnight (nothing was offered at night) route now.
+        if _realtor_minutes_until_open() == 0:
+            _realtor_release_holds()
     finally:
         _db.release_job_lock("realtor_morning_release")
 
@@ -16417,32 +16429,60 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub", inquiry=None):
             payload={"inquiry_id": inquiry.get("id")},
             triggered_by=triggered_by)
         return True
-    # After hours (Barry, Nov 17 2026): between 9pm and 8am nobody calls
-    # or texts a lead. No phone ring. The whole team sees the lead in
-    # Slack so one agent owns it overnight, and the 8am release tells
-    # the claimer when calling opens (or re-offers it if nobody claimed).
+    # After hours (Barry, Nov 18 2026): between 9pm and 8am nothing goes
+    # to agents and nobody calls or texts a lead. The lead is parked and
+    # the 8am release routes it exactly like a daytime lead (phone ring
+    # first when Callingly is on, claim buttons otherwise).
     _wait = _realtor_minutes_until_open()
     if _wait > 0:
-        import realtor_ladder as _rln
-        made = _dp.make_shootout(
-            pid, person.get("name"), lead_city=city,
-            notes="%s. Paid Realtor.com lead. Claim it now and it is "
-                  "yours. Do not call or text until 8am."
-                  % _rln.NIGHT_NOTE,
-            audit=cache_get("audit") or {}, round_no=1,
-            night_minutes=_wait)
+        held = _db.add_realtor_night_hold(pid, person.get("name"), city)
         _db.log_automation_event(
             event_type="realtor_after_hours", person_id=pid,
             person_name=person.get("name"), agent_name=None,
             payload={"source": src, "minutes_until_8am": _wait,
-                     "agents": [m["agent_name"] for m in (made or [])]},
+                     "held": bool(held)},
             triggered_by=triggered_by)
+        if not held:
+            # The system failing is the one thing Barry hears about at
+            # night. The lead itself still waits for 8am.
+            _owner_alert("A Realtor.com lead (%s) came in after hours and "
+                         "could not be saved for the 8am release. It needs "
+                         "to be routed by hand in the morning: %s"
+                         % (person.get("name") or pid, _fub_person_url(pid)))
         return True
+    _realtor_route_now(pid, person, city, src, triggered_by,
+                       "Paid Realtor.com lead, shared with competing agents")
+    return True
+
+
+def _fub_person_url(pid):
+    return ("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
+            % pid)
+
+
+def _owner_alert(text):
+    """A system problem, told to Barry right away at any hour (his call,
+    Nov 18 2026). Never used for lead offers."""
+    try:
+        import dispatch as _dp
+        import slack_client as _sl
+        sid = _dp._slack_user_id("Barry Jenkins")
+        if _sl.is_available() and sid:
+            return bool(_sl.dm_user(sid, text))
+    except Exception as e:
+        logger.error("[ALERT] owner alert failed: %s (%s)", e, text)
+    return False
+
+
+def _realtor_route_now(pid, person, city, src, triggered_by, notes):
+    """Daytime routing for one Realtor.com lead: the phone ring first when
+    Callingly is on, otherwise three claim buttons, then the whole team,
+    then Fhalen. Used by the live front door and the 8am release."""
+    import dispatch as _dp
     if _callingly_ring_first(pid, person, triggered_by):
-        return True
+        return "ring"
     made = _dp.make_shootout(
-        pid, person.get("name"), lead_city=city,
-        notes="Paid Realtor.com lead, shared with competing agents",
+        pid, person.get("name"), lead_city=city, notes=notes,
         audit=cache_get("audit") or {}, round_no=1)
     _db.log_automation_event(
         event_type="realtor_shootout", person_id=pid,
@@ -16450,20 +16490,85 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub", inquiry=None):
         payload={"source": src, "round": 1,
                  "agents": [m["agent_name"] for m in (made or [])]},
         triggered_by=triggered_by)
-    if not made:
-        made2 = _dp.make_shootout(
-            pid, person.get("name"), lead_city=city,
-            notes="Paid Realtor.com lead, shared with competing agents",
-            audit=cache_get("audit") or {}, round_no=2)
+    if made:
+        return "shootout"
+    made2 = _dp.make_shootout(
+        pid, person.get("name"), lead_city=city, notes=notes,
+        audit=cache_get("audit") or {}, round_no=2)
+    _db.log_automation_event(
+        event_type="realtor_shootout", person_id=pid,
+        person_name=person.get("name"), agent_name=None,
+        payload={"source": src, "round": 2,
+                 "agents": [m["agent_name"] for m in (made2 or [])]},
+        triggered_by=triggered_by)
+    if made2:
+        return "shootout"
+    _realtor_terminal(pid, person.get("name"))
+    return "terminal"
+
+
+def _realtor_release_holds():
+    """8am: every Realtor.com lead parked overnight routes now, newest
+    first. A lead that found an owner overnight, or went to Trash or
+    Contact, is dropped with a reason."""
+    import time as _time
+    holds = _db.get_realtor_night_holds()
+    if not holds or not _db.try_acquire_job_lock("realtor_hold_release"):
+        return
+    try:
+        _realtor_release_hold_rows(holds, _time)
+    finally:
+        _db.release_job_lock("realtor_hold_release")
+
+
+def _realtor_release_hold_rows(holds, _time):
+    client = FUBClient()
+    rang = 0
+    # Six per run keeps one run inside its 10 minute lock; the catch-up
+    # five minutes later takes the rest.
+    for h in holds[:6]:
+        pid = h["person_id"]
+        try:
+            person = client.get_person(pid) or {}
+        except Exception as e:
+            logger.warning("[REALTOR] 8am release could not read %s: %s",
+                           pid, e)
+            continue  # stays parked; the next sweep tries again
+        _own = (person.get("assignedTo") or "").strip()
+        _stage = (person.get("stage") or "").strip().lower()
+        if not person.get("id") or not _desk_dark_owner(_own) \
+                or _stage in ("trash", "contact"):
+            _db.delete_realtor_night_hold(pid)
+            _db.log_automation_event(
+                event_type="realtor_morning_skip", person_id=pid,
+                person_name=h["person_name"], agent_name=_own or None,
+                payload={"stage": _stage}, triggered_by="morning_release")
+            continue
+        if not person.get("name"):
+            person["name"] = h["person_name"]
+        if rang:
+            # One phone ring at a time: give the first lead its window
+            # before the next one starts ringing the same agents.
+            _time.sleep(75 if _callingly_team() else 5)
+        try:
+            how = _realtor_route_now(
+                pid, person, h["lead_city"], "realtor.com",
+                "morning_release",
+                "Paid Realtor.com lead that came in overnight. Calling is "
+                "open now. Shared with competing agents")
+        except Exception as e:
+            logger.error("[REALTOR] 8am release failed for %s: %s", pid, e)
+            _owner_alert("The 8am release could not route the overnight "
+                         "Realtor.com lead %s. Please route it by hand: %s"
+                         % (h["person_name"] or pid, _fub_person_url(pid)))
+            continue
+        rang += 1
+        # Marked done only after the lead was actually routed.
+        _db.delete_realtor_night_hold(pid)
         _db.log_automation_event(
-            event_type="realtor_shootout", person_id=pid,
-            person_name=person.get("name"), agent_name=None,
-            payload={"source": src, "round": 2,
-                     "agents": [m["agent_name"] for m in (made2 or [])]},
-            triggered_by=triggered_by)
-        if not made2:
-            _realtor_terminal(pid, person.get("name"))
-    return True
+            event_type="realtor_morning_release", person_id=pid,
+            person_name=h["person_name"], agent_name=None,
+            payload={"routed": how}, triggered_by="morning_release")
 
 
 def _realtor_post_claim(offer, claim_secs=None):
@@ -24582,6 +24687,52 @@ def scheduled_isa_live_credit():
                      or "none"))
     except Exception as e:
         print(f"[SCHEDULER] isa live credit FAILED: {e}")
+
+
+@app.route("/api/admin/desk/front-door")
+def api_front_door():
+    """The front door in shadow mode: how often the shared rules agreed
+    with what each lane actually sent, and every disagreement with its
+    reason. ?check=<person_id>&lane=<lane> asks it about one lead now."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    import dispatch as _dp
+    pid = (request.args.get("check") or "").strip()
+    if pid:
+        try:
+            return jsonify(_dp.gate_check(
+                request.args.get("lane") or "ai_text", pid,
+                notes=_dp.evidence_line(pid)))
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    days = min(int(request.args.get("days", 7) or 7), 30)
+    rows = _db.get_automation_events("gate_shadow", days=days, limit=2000)
+    by_lane, disagree = {}, []
+    for r in rows:
+        p = r.get("payload") or {}
+        lane = p.get("lane") or "unknown"
+        b = by_lane.setdefault(lane, {"offers": 0, "agreed": 0})
+        b["offers"] += 1
+        if p.get("agree"):
+            b["agreed"] += 1
+        else:
+            disagree.append({"at": r["at"], "lead": r["person_name"],
+                             "person_id": r["person_id"],
+                             "offered_to": r["agent_name"], "lane": lane,
+                             "hop": p.get("hop"),
+                             "front_door_says": p.get("action"),
+                             "reason": p.get("reason")})
+    holds = []
+    try:
+        holds = [{"person_id": h["person_id"], "lead": h["person_name"],
+                  "held_at": h["held_at"].isoformat() if h["held_at"] else None}
+                 for h in _db.get_realtor_night_holds()]
+    except Exception:
+        pass
+    return jsonify({"days": days, "mode": "shadow", "offers": len(rows),
+                    "agreed": len(rows) - len(disagree), "by_lane": by_lane,
+                    "disagreements": disagree,
+                    "realtor_leads_waiting_for_8am": holds})
 
 
 @app.route("/api/admin/desk/routing-health")

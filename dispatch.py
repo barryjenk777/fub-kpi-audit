@@ -637,6 +637,78 @@ def _notify_shootout(agent_name, offer_token, lead_name, lead_city,
         week_day="dispatch"))
 
 
+def _working_agents():
+    """Active agents who work leads: the only names that count as an
+    owner at the front door."""
+    try:
+        return {p["agent_name"] for p in
+                (_db.get_agent_profiles(active_only=True) or [])
+                if p.get("agent_name")
+                and p["agent_name"] not in _EXCLUDED
+                and p["agent_name"] not in ("Barry Jenkins",
+                                            "Fhalen Tendencia")}
+    except Exception:
+        return set()
+
+
+def gate_check(lane, person_id, notes=None, offered_to=None):
+    """Ask the front door about one lead. Reads Follow Up Boss, never
+    writes. Returns the routing_gate answer."""
+    import routing_gate as _rg
+    from zoneinfo import ZoneInfo as _ZI
+    from fub_client import FUBClient
+    client = FUBClient()
+    lead = client._request("GET", "people/%s" % person_id, params={
+        "fields": "id,stage,source,tags,assignedTo"}) or {}
+    working = _working_agents()
+    owner = (lead.get("assignedTo") or "").strip()
+    talked = None
+    try:
+        import convo_ledger as _cl
+        data = client._request("GET", "calls", params={
+            "personId": person_id, "limit": 20}) or {}
+        calls = next((v for v in data.values() if isinstance(v, list)), [])
+        hit = _cl.agent_who_talked(calls, lambda n: n in working)
+        talked = (hit or {}).get("agent")
+    except Exception:
+        pass
+    if talked and talked == offered_to:
+        talked = None  # offering it to the agent who talked is the rule
+    return _rg.decide(
+        lane, lead, datetime.now(_ZI("America/New_York")),
+        owner_is_working=bool(owner) and owner in working
+        and owner != offered_to,
+        talked_agent=talked,
+        proof_hours=_rg.proof_age_hours(notes))
+
+
+def _gate_shadow(lane, person_id, lead_name, notes, hop, agent):
+    """Shadow mode (Barry, Nov 18 2026): the front door runs beside every
+    offer and records its own answer. It changes nothing yet. A row where
+    it says anything but 'route' is a lead the lane sent that the shared
+    rules would not have."""
+    def _run():
+        try:
+            got = gate_check(lane, person_id, notes=notes, offered_to=agent)
+            _db.log_automation_event(
+                event_type="gate_shadow", person_id=person_id,
+                person_name=lead_name, agent_name=agent,
+                payload={"lane": lane, "hop": hop,
+                         "action": got["action"],
+                         "question": got["question"],
+                         "reason": got["reason"],
+                         "agree": got["action"] == "route"},
+                triggered_by="front_door")
+        except Exception as e:
+            logger.warning("[GATE] shadow check failed for %s: %s",
+                           person_id, e)
+    try:
+        import threading as _th
+        _th.Thread(target=_run, daemon=True).start()
+    except Exception:
+        pass
+
+
 def make_shootout(person_id, lead_name, lead_city=None, notes=None,
                   audit=None, round_no=1, exclude=None, dry_run=False,
                   night_minutes=0, include_prior=False):
@@ -728,6 +800,8 @@ def make_shootout(person_id, lead_name, lead_city=None, notes=None,
                     oid, lead_name, agent, round_no, sent)
         made.append({"offer_id": oid, "agent_name": agent, "token": token,
                      "sent": sent})
+    if made:
+        _gate_shadow("realtor", person_id, lead_name, notes, round_no, None)
     return made
 
 
@@ -922,6 +996,7 @@ def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
         pass
     sent = _notify(agent_name, token, lead_name, lead_city, appt_time,
                    source, hop, notes=notes, person_id_for_copy=person_id)
+    _gate_shadow(source, person_id, lead_name, notes, hop, agent_name)
     # Fhalen's feedback loop: her pick let it slide, tell her where it went.
     if source == "fhalen" and hop > 1:
         try:
