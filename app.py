@@ -14041,6 +14041,74 @@ def api_goals_scorecard_meta():
 
 # ---- LeadStream: Weekly Engagement Tracker ----
 
+@app.route("/api/leadstream/wins")
+def api_leadstream_wins():
+    """The top of the LeadStream page (Barry, Nov 18 2026: 80 percent
+    wins, 20 percent what needs attention). Counts, a feed of what went
+    right, and who is winning, all from stamped events in the window."""
+    from datetime import timedelta as _td
+    days = min(int(request.args.get("days", 7) or 7), 30)
+    since = datetime.now(timezone.utc) - _td(days=days)
+    rows = _db.get_desk_wins(days)
+
+    def _in(ts):
+        return ts is not None and ts >= since
+
+    def _short(name):
+        parts = (name or "A lead").split()
+        return parts[0] + ((" " + parts[-1][:1] + ".")
+                           if len(parts) > 1 else "")
+
+    totals = {"claimed": 0, "called": 0, "conversations": 0,
+              "appointments": 0, "met": 0}
+    agents, feed = {}, []
+    for r in rows:
+        a = agents.setdefault(r["agent"], {
+            "agent": r["agent"], "claimed": 0, "called": 0,
+            "conversations": 0, "appointments": 0, "met": 0,
+            "fastest_claim_secs": None})
+        first, lead = (r["agent"] or "?").split()[0], _short(r["lead"])
+        for key, stamp, text in (
+                ("claimed", r["claimed_at"], None),
+                ("called", r["called_at"], None),
+                ("conversations", r["convo_at"],
+                 "%s had a real conversation with %s" % (first, lead)),
+                ("appointments", r["appt_set_at"],
+                 "%s booked an appointment with %s" % (first, lead)),
+                ("met", r["appt_met_at"],
+                 "%s met with %s" % (first, lead))):
+            if not _in(stamp):
+                continue
+            totals[key] += 1
+            a[key] += 1
+            if text:
+                feed.append({"at": stamp.isoformat(), "kind": key,
+                             "text": text})
+        if _in(r["claimed_at"]):
+            secs = r["claim_secs"]
+            if secs is not None and (a["fastest_claim_secs"] is None
+                                     or secs < a["fastest_claim_secs"]):
+                a["fastest_claim_secs"] = secs
+            if r["called_at"] and r["claimed_at"]:
+                mins = int((r["called_at"] - r["claimed_at"])
+                           .total_seconds() // 60)
+                if 0 <= mins <= 5:
+                    feed.append({
+                        "at": r["called_at"].isoformat(), "kind": "fast",
+                        "text": "%s claimed %s and called within %s"
+                                % (first, lead, "a minute" if mins <= 1
+                                   else "%d minutes" % mins)})
+    feed.sort(key=lambda f: f["at"], reverse=True)
+    board = sorted(
+        (a for a in agents.values()
+         if a["claimed"] or a["conversations"] or a["appointments"]
+         or a["met"]),
+        key=lambda a: (a["met"], a["appointments"], a["conversations"],
+                       a["called"], a["claimed"]), reverse=True)
+    return jsonify({"days": days, "totals": totals, "feed": feed[:25],
+                    "board": board})
+
+
 @app.route("/api/leadstream/weekly")
 def api_leadstream_weekly():
     """Return 7-day per-agent engagement history. Reads from disk only — no FUB API calls."""

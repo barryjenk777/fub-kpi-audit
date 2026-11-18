@@ -10826,6 +10826,38 @@ def mark_desk_milestone(person_id, kind, window_days=45, caller_uid=None):
         return None
 
 
+def get_desk_wins(days=7):
+    """What went right on claimed leads in the window: every claim, with
+    the moment it was called, turned into a conversation, became an
+    appointment, and was met. One row per claimed offer, newest first.
+    Nothing is estimated: a blank stamp means it has not happened."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name, lead_name, source, accepted_at,
+                           EXTRACT(EPOCH FROM accepted_at - offered_at)::int,
+                           first_call_at, convo_at, appt_set_at, appt_met_at
+                    FROM dispatch_offers
+                    WHERE accepted_at IS NOT NULL
+                      AND GREATEST(accepted_at,
+                                   COALESCE(first_call_at, accepted_at),
+                                   COALESCE(convo_at, accepted_at),
+                                   COALESCE(appt_set_at, accepted_at),
+                                   COALESCE(appt_met_at, accepted_at))
+                          >= NOW() - make_interval(days => %s)
+                    ORDER BY accepted_at DESC LIMIT 400
+                """, (int(days),))
+                keys = ("agent", "lead", "lane", "claimed_at", "claim_secs",
+                        "called_at", "convo_at", "appt_set_at", "appt_met_at")
+                return [dict(zip(keys, r)) for r in cur.fetchall()]
+    except Exception as e:
+        logger.warning("get_desk_wins failed: %s", e)
+        return []
+
+
 def get_offer_response_stats(days=30):
     """Per agent over the window: offers that ran out with no tap, offers
     claimed, and the last claim. Feeds the back of the line rule. Offers

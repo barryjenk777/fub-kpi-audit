@@ -271,7 +271,7 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
     <div class="topbar">
       <div class="topbar-left">
         <div class="topbar-title">⚡ LeadStream</div>
-        <div class="topbar-meta">The engine hand-picks who is worth calling. This page answers one question: are we calling them?</div>
+        <div class="topbar-meta">What is working this week: the leads your agents claimed, called, talked to and booked.</div>
       </div>
       <div class="topbar-actions">
         <button class="btn btn-ghost btn-sm" id="btn-pond" onclick="runNow(true)">🦈 Pond Only</button>
@@ -281,31 +281,30 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
 
     <div class="container">
 
-      <!-- The verdict: one line, from the most urgent leak -->
-      <div class="status-banner" id="verdict-band">
+      <!-- ══ WINS FIRST (Barry, Nov 18 2026: 80 percent wins) ══ -->
+      <div class="status-banner" id="wins-band">
         <div class="status-left">
-          <div class="status-dot dot-amber" id="verdict-dot"></div>
+          <div class="status-dot dot-green" id="wins-dot" style="background:var(--green)"></div>
           <div>
-            <div class="status-text" id="verdict-text">Reading the board&hellip;</div>
-            <div class="status-meta" id="verdict-meta"></div>
+            <div class="status-text" id="wins-text">Counting the wins&hellip;</div>
+            <div class="status-meta" id="wins-meta"></div>
           </div>
         </div>
         <div class="status-right">
-          <div style="text-align:right;margin-right:8px">
-            <div style="font-size:.68rem;color:var(--muted)">Engine</div>
-            <div style="font-size:.78rem;font-weight:700" id="run-meta">&mdash;</div>
-          </div>
+          <button class="btn btn-ghost btn-sm" id="wins-7" onclick="loadWins(7)">7 days</button>
+          <button class="btn btn-ghost btn-sm" id="wins-30" onclick="loadWins(30)">30 days</button>
         </div>
       </div>
 
-      <!-- ══ INSIGHT LAYER (v2): leaks, scoreboard, sources, pond health ══ -->
-      <div class="section-header"><span class="icon">🚨</span> Where money is leaking
-        <span style="font-weight:400;font-size:.72rem;color:var(--muted);margin-left:.5rem">right now, most urgent first</span></div>
-      <div id="leaks-wrap"><div class="skeleton" style="height:90px;border-radius:12px"></div></div>
+      <div id="wins-tiles"><div class="skeleton" style="height:90px;border-radius:12px"></div></div>
 
-      <div class="section-header"><span class="icon">🧑‍💼</span> Who is working their priority leads
-        <span style="font-weight:400;font-size:.72rem;color:var(--muted);margin-left:.5rem">the engine hand-picks these; "worked" = any outbound touch since tagged</span></div>
-      <div id="scoreboard-wrap"><div class="skeleton" style="height:160px;border-radius:12px"></div></div>
+      <div class="section-header"><span class="icon">🏆</span> Who is winning
+        <span style="font-weight:400;font-size:.72rem;color:var(--muted);margin-left:.5rem">appointments first, then conversations, then calls</span></div>
+      <div id="wins-board"><div class="skeleton" style="height:160px;border-radius:12px"></div></div>
+
+      <div class="section-header"><span class="icon">🎉</span> What went right
+        <span style="font-weight:400;font-size:.72rem;color:var(--muted);margin-left:.5rem">newest first</span></div>
+      <div id="wins-feed"><div class="skeleton" style="height:140px;border-radius:12px"></div></div>
 
       <div class="section-header"><span class="icon">💰</span> Are the leads we buy any good
         <span style="font-weight:400;font-size:.72rem;color:var(--muted);margin-left:.5rem">appointments last 60 days, contracts and GCI last 90</span></div>
@@ -315,8 +314,25 @@ tbody tr.actioned-row td:first-child{border-left:2px solid var(--green)}
         <span style="font-weight:400;font-size:.72rem;color:var(--muted);margin-left:.5rem">is the machine recycling dormant leads</span></div>
       <div id="pondhealth-wrap"><div class="skeleton" style="height:70px;border-radius:12px"></div></div>
 
+      <!-- ══ THE 20 PERCENT: what needs attention, folded ══ -->
+      <details style="margin-top:1.6rem" id="dd-attention">
+        <summary style="cursor:pointer;font-weight:700;font-size:.9rem;padding:.5rem 0">⚠️ Needs attention
+          <span style="font-weight:400;font-size:.78rem;color:var(--muted);margin-left:.4rem" id="verdict-text">checking&hellip;</span></summary>
+        <div style="font-size:.76rem;color:var(--muted);margin:.2rem 0 .6rem">
+          <span class="status-dot dot-amber" id="verdict-dot" style="display:inline-block;vertical-align:middle;margin-right:.3rem"></span>
+          <span id="verdict-meta"></span>
+          <span style="margin-left:.6rem">Engine: <strong id="run-meta">&mdash;</strong></span>
+        </div>
+        <div class="section-header"><span class="icon">🚨</span> Leads waiting on a call
+          <span style="font-weight:400;font-size:.72rem;color:var(--muted);margin-left:.5rem">most urgent first</span></div>
+        <div id="leaks-wrap"><div class="skeleton" style="height:90px;border-radius:12px"></div></div>
+        <div class="section-header"><span class="icon">🧑‍💼</span> Priority leads not yet worked
+          <span style="font-weight:400;font-size:.72rem;color:var(--muted);margin-left:.5rem">"worked" = any outbound touch since the lead was flagged</span></div>
+        <div id="scoreboard-wrap"><div class="skeleton" style="height:160px;border-radius:12px"></div></div>
+      </details>
+
       <!-- ══ DRILL-DOWN: the raw lists, folded ══ -->
-      <details style="margin-top:1.4rem" id="dd-agents">
+      <details style="margin-top:.6rem" id="dd-agents">
         <summary style="cursor:pointer;font-weight:700;font-size:.9rem;padding:.5rem 0">👤 Drill down: per-agent priority lists</summary>
         <div class="agents-grid" id="agents-grid">
           <div class="agent-card"><div class="skeleton" style="height:200px"></div></div>
@@ -900,6 +916,73 @@ function ensureDrilldowns() {
   const el = document.getElementById(id);
   if (el) el.addEventListener('toggle', () => { if (el.open) ensureDrilldowns(); });
 });
+/* Wins first (Barry, Nov 18 2026). Every number is a stamped event on a
+   lead an agent claimed: nothing estimated. */
+let _winDays = 7;
+const _esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function _ago(iso){
+  const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (m < 60) return m <= 1 ? 'just now' : m + ' min ago';
+  const h = Math.round(m / 60);
+  if (h < 24) return h + (h === 1 ? ' hour ago' : ' hours ago');
+  const d = Math.round(h / 24);
+  return d + (d === 1 ? ' day ago' : ' days ago');
+}
+async function loadWins(days){
+  if (days) _winDays = days;
+  ['wins-7','wins-30'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.className = 'btn btn-sm ' + (id === 'wins-' + _winDays ? 'btn-primary' : 'btn-ghost');
+  });
+  try{
+    const d = await (await fetch('/api/leadstream/wins?days=' + _winDays, {signal: AbortSignal.timeout(30000)})).json();
+    const t = d.totals || {};
+    const span = _winDays === 7 ? 'this week' : 'in the last 30 days';
+    const head = t.appointments
+      ? `${t.appointments} appointment${t.appointments === 1 ? '' : 's'} booked ${span}`
+      : t.conversations
+        ? `${t.conversations} real conversation${t.conversations === 1 ? '' : 's'} ${span}`
+        : `${t.claimed || 0} lead${t.claimed === 1 ? '' : 's'} claimed ${span}`;
+    document.getElementById('wins-text').textContent = head;
+    document.getElementById('wins-meta').textContent =
+      `${t.claimed || 0} claimed · ${t.called || 0} called · ${t.conversations || 0} conversations · ${t.met || 0} met in person`;
+    const tile = (v, l, c) => `<div class="stat-card" style="text-align:left"><div class="label">${l}</div><div class="value" style="font-size:1.7rem;color:${c}">${v}</div></div>`;
+    document.getElementById('wins-tiles').innerHTML = `<div class="stat-grid">
+      ${tile(t.claimed || 0, 'Leads claimed', 'var(--text)')}
+      ${tile(t.called || 0, 'Called after claiming', 'var(--blue)')}
+      ${tile(t.conversations || 0, 'Real conversations', 'var(--purple)')}
+      ${tile(t.appointments || 0, 'Appointments booked', 'var(--green)')}
+      ${tile(t.met || 0, 'Met in person', 'var(--green)')}
+    </div>`;
+    const board = d.board || [];
+    const cell = (v, strong) => `<td style="padding:.5rem .7rem;text-align:right;${strong && v ? 'font-weight:700;color:var(--green)' : (v ? '' : 'color:var(--muted)')}">${v || 0}</td>`;
+    document.getElementById('wins-board').innerHTML = board.length
+      ? `<div class="table-wrap"><table style="width:100%;border-collapse:collapse;font-size:.84rem">
+          <thead><tr style="text-align:right;color:var(--muted);font-size:.72rem">
+            <th style="padding:.5rem .7rem;text-align:left">Agent</th>
+            <th style="padding:.5rem .7rem">Appointments</th><th style="padding:.5rem .7rem">Met</th>
+            <th style="padding:.5rem .7rem">Conversations</th><th style="padding:.5rem .7rem">Called</th>
+            <th style="padding:.5rem .7rem">Claimed</th><th style="padding:.5rem .7rem">Fastest claim</th>
+          </tr></thead><tbody>${board.map((a, i) => `<tr style="border-top:1px solid var(--border-sub)">
+            <td style="padding:.5rem .7rem;font-weight:600">${i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : ''}${_esc(a.agent)}</td>
+            ${cell(a.appointments, true)}${cell(a.met, true)}${cell(a.conversations)}${cell(a.called)}${cell(a.claimed)}
+            <td style="padding:.5rem .7rem;text-align:right;color:var(--muted)">${a.fastest_claim_secs != null ? a.fastest_claim_secs + ' sec' : ''}</td>
+          </tr>`).join('')}</tbody></table></div>`
+      : `<div style="color:var(--muted);font-size:.84rem;padding:.6rem 0">No claimed leads in this window yet.</div>`;
+    const icon = {appointments: '📅', met: '🤝', conversations: '🗣️', fast: '⚡'};
+    const feed = d.feed || [];
+    document.getElementById('wins-feed').innerHTML = feed.length
+      ? `<div class="table-wrap" style="padding:.3rem .2rem">${feed.map(f => `<div style="display:flex;justify-content:space-between;gap:1rem;padding:.5rem .7rem;border-top:1px solid var(--border-sub);font-size:.86rem">
+            <span>${icon[f.kind] || '✅'} ${_esc(f.text)}</span>
+            <span style="color:var(--muted);font-size:.74rem;white-space:nowrap">${_ago(f.at)}</span></div>`).join('')}</div>`
+      : `<div style="color:var(--muted);font-size:.84rem;padding:.6rem 0">Nothing logged in this window yet. Wins show up here as soon as a claimed lead is called, talked to or booked.</div>`;
+  }catch(e){
+    document.getElementById('wins-text').textContent = 'Wins could not load';
+    document.getElementById('wins-meta').textContent = e.message;
+  }
+}
+loadWins(7);
+setInterval(() => loadWins(), 5 * 60 * 1000);
 loadInsight();
 setInterval(loadInsight, 5 * 60 * 1000);
 setInterval(() => { if (_ddLoaded) { loadDashboard(); loadWeekly(); } }, 5 * 60 * 1000);
