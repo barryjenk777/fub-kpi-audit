@@ -278,9 +278,18 @@ def fmt_secs(secs):
     return "%d min %d sec" % (secs // 60, secs % 60)
 
 
+# Marks an offer for a lead whose conversation was not minutes ago (held
+# overnight, or proven late by the retry queue). The wording drops "just".
+EARLIER_NOTE = "This conversation was earlier, not just now."
+
+
 def _offer_text(kind, first, lead, did, minutes):
     """The offer as a text message. One job: say what really happened and
     how long the agent has. Pure, so the wording is tested."""
+    if kind == "earlier":
+        return ("%s, %s %s earlier and still needs a call from an agent. "
+                "First tap takes the lead. It goes to the next agent in %d "
+                "minutes." % (first, lead, did, minutes))
     if kind == "waiting":
         return ("%s, %s talked with our AI and still has not gotten a call "
                 "from us. First tap takes the lead. It goes to the next "
@@ -317,6 +326,9 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
     did = ("just talked with Fhalen" if source == "fhalen" else
            "just talked with our AI on the phone" if source == "ai_voice"
            else "just replied to our AI by text")
+    if kind == "fresh" and (notes or "").startswith(EARLIER_NOTE):
+        kind = "earlier"
+        did = did.replace("just ", "", 1)
     again = " You are next in line on this one." if hop > 1 else ""
 
     # ── Slack DM first ────────────────────────────────────────────────────
@@ -349,6 +361,11 @@ def _notify(agent_name, offer_token, lead_name, lead_city, appt_time, source,
                     "else has them.",
                     "%(first)s, %(lead)s got talking with our AI. No owner "
                     "yet. Claim it and it is yours.",
+                ]
+            elif kind == "earlier":
+                headers = [
+                    "%(first)s, %(lead)s %(did)s earlier and still needs a "
+                    "call from an agent. First tap takes the lead.",
                 ]
             elif kind == "waiting":
                 headers = [

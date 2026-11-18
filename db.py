@@ -12194,7 +12194,7 @@ def get_evidence_retries(limit=20):
                 cur.execute("""
                     SELECT person_id, person_name, tags, first_seen, checks
                     FROM desk_evidence_retry
-                    ORDER BY first_seen LIMIT %s
+                    ORDER BY last_check NULLS FIRST, first_seen LIMIT %s
                 """, (limit,))
                 return [{"person_id": r[0], "person_name": r[1],
                          "tags": r[2] or [], "first_seen": r[3],

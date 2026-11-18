@@ -17016,6 +17016,18 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                                             or {}).get("createdAt"))},
                     triggered_by=triggered_by)
                 continue
+            # Overnight hold (Barry, Nov 18 2026: "we sent texts to the
+            # agents at midnight"). Between 9pm and 8am nobody can call a
+            # lead, so nothing is offered and nobody is pinged. The lead
+            # waits in the retry queue and routes at the first check
+            # after 8am, as long as its proof is still inside 48 hours.
+            if _realtor_minutes_until_open() > 0:
+                _db.add_evidence_retry(pid, person.get("name"), _fresh)
+                _db.log_automation_event(
+                    event_type="desk_quiet_hold", person_id=pid,
+                    person_name=person.get("name"), agent_name=None,
+                    payload={"tags": _fresh}, triggered_by=triggered_by)
+                continue
             # A genuine conversion out of the 200k storage pool graduates
             # to Shark Tank (Barry, Oct 31 2026: Ylopo is reactivating the
             # pond and responders must stay in the scored working pool,
@@ -17162,9 +17174,15 @@ def _desk_intake_people(resource_ids, triggered_by="webhook_fub"):
                         continue
                 except Exception as _fbe:
                     logger.warning("flood breaker check failed: %s", _fbe)
+                # A lead released from the retry queue did not "just"
+                # reply: the offer wording reads this marker and says
+                # "earlier" instead (it rides the notes through every hop).
+                _notes = _desk_evidence(pid)
+                if triggered_by == "evidence_recheck":
+                    _notes = "%s %s" % (_dp.EARLIER_NOTE, _notes or "")
                 _res = _dp.make_offer(src_kind, pid,
                                (person.get("name") or "").strip(),
-                               _city, notes=_desk_evidence(pid),
+                               _city, notes=(_notes or "").strip() or None,
                                audit=cache_get("audit") or {},
                                lead_source=person.get("source"))
                 if _res:
@@ -24865,11 +24883,19 @@ def api_callfilm_preview():
 def scheduled_evidence_recheck():
     """Every 10 min: re-test the three evidence doors for leads parked by
     the fossil gate. Pass -> un-burn their ledger rows so the desk sweep
-    routes them within minutes. 12 hours with nothing -> fossil, final."""
+    routes them within minutes. 24 hours with nothing -> fossil, final.
+
+    Nov 18 2026: this job routed a lead to three agents at 12:43am. It
+    now stands down from 9pm to 8am (nothing is offered while nobody can
+    call), releases its lock so it truly runs every 10 minutes, and takes
+    the least recently checked leads first so a full queue cannot leave
+    one lead unchecked for hours."""
+    if _realtor_minutes_until_open() > 0:
+        return
     if not _db.try_acquire_job_lock("evidence_recheck"):
         return
     try:
-        rows = _db.get_evidence_retries(limit=20)
+        rows = _db.get_evidence_retries(limit=40)
         recovered, expired = 0, 0
         for r in rows:
             pid = r["person_id"]
@@ -24903,7 +24929,7 @@ def scheduled_evidence_recheck():
                 continue
             age_h = ((datetime.now(timezone.utc) - r["first_seen"])
                      .total_seconds() / 3600) if r.get("first_seen") else 0
-            if age_h >= 12:
+            if age_h >= 24:
                 _db.delete_evidence_retry(pid)
                 _db.log_automation_event(
                     event_type="desk_batch_artifact", person_id=pid,
@@ -24919,6 +24945,8 @@ def scheduled_evidence_recheck():
                   "%d expired" % (len(rows), recovered, expired))
     except Exception as e:
         print(f"[SCHEDULER] evidence recheck FAILED: {e}")
+    finally:
+        _db.release_job_lock("evidence_recheck")
 
 
 def scheduled_sheet_followup():

@@ -48,6 +48,15 @@ class TestOfferText(unittest.TestCase):
         self.assertIn("no fire drill", nurture)
         self.assertNotIn("just", nurture.lower())
 
+    def test_a_held_lead_never_says_just(self):
+        # Nov 18 2026: a lead proven 11 hours late went out at 12:43am
+        # reading as if it had just happened.
+        t = dispatch._offer_text("earlier", "Jullan", "Caren in Norfolk",
+                                 "replied to our AI by text", 5)
+        self.assertIn("earlier", t)
+        self.assertNotIn("just", t.lower())
+        self.assertNotIn("new lead", t.lower())
+
     def test_every_text_names_the_clock_and_has_no_dashes(self):
         for t in self._all():
             self.assertIn("5 minutes", t)
