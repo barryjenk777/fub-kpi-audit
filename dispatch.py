@@ -637,6 +637,37 @@ def _notify_shootout(agent_name, offer_token, lead_name, lead_city,
         week_day="dispatch"))
 
 
+_back_cache = {"at": None, "who": {}}
+
+
+def back_of_line_agents():
+    """{agent: reason} for agents currently offered last. Refreshed every
+    10 minutes. DESK_BACK_OF_LINE = False in config switches it off."""
+    if not getattr(config, "DESK_BACK_OF_LINE", True):
+        return {}
+    now = datetime.now(timezone.utc)
+    if _back_cache["at"] and now - _back_cache["at"] < timedelta(minutes=10):
+        return _back_cache["who"]
+    try:
+        import routing_gate as _rg
+        who = _rg.back_of_line(_db.get_offer_response_stats(30), now)
+    except Exception as e:
+        logger.warning("[GATE] back of line check failed: %s", e)
+        who = {}
+    _back_cache.update(at=now, who=who)
+    return who
+
+
+def _earned_order(cands):
+    """Agents who have stopped responding to offers go behind the ones
+    who answer, so a lead is not parked 5 minutes on a silent phone."""
+    back = back_of_line_agents()
+    if not back:
+        return cands
+    front = [c for c in cands if c not in back]
+    return front + [c for c in cands if c in back]
+
+
 def _working_agents():
     """Active agents who work leads: the only names that count as an
     owner at the front door."""
@@ -732,7 +763,7 @@ def make_shootout(person_id, lead_name, lead_city=None, notes=None,
     size = int(getattr(config, "REALTOR_SHOOTOUT_SIZE", 3))
     if round_no <= 1 and not night:
         cands = []
-        for cand in eligible_agents(lead_city, audit=audit):
+        for cand in _earned_order(eligible_agents(lead_city, audit=audit)):
             if cand in prior or cand in exclude:
                 continue
             try:
@@ -926,6 +957,7 @@ def _make_offer_inner(source, person_id, lead_name, lead_city, appt_time,
         cands, route_path = _ordered_candidates(lead_city, audit, source,
                                                 person_id, hop,
                                                 lead_source=lead_source)
+        cands = _earned_order(cands)
         capped_fallback = []
         for cand in cands:
             if cand in prior:

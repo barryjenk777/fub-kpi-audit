@@ -48,6 +48,59 @@ def is_quiet(now_et):
     return now_et.hour >= QUIET_START_HOUR or now_et.hour < QUIET_END_HOUR
 
 
+def working_hours_between(start_et, end_et):
+    """Hours between two Eastern times, not counting 9pm to 8am (Barry,
+    Nov 18 2026: the 24 hour clock pauses overnight, because an agent
+    cannot call a lead then). Both arguments are Eastern wall-clock
+    datetimes."""
+    from datetime import timedelta
+    if end_et <= start_et:
+        return 0.0
+    total = 0.0
+    day = start_et.replace(hour=0, minute=0, second=0, microsecond=0)
+    while day <= end_et:
+        opens = day.replace(hour=QUIET_END_HOUR)
+        closes = day.replace(hour=QUIET_START_HOUR)
+        lo, hi = max(opens, start_et), min(closes, end_et)
+        if hi > lo:
+            total += (hi - lo).total_seconds() / 3600.0
+        day += timedelta(days=1)
+    return round(total, 2)
+
+
+BACK_MIN_OFFERS = 10      # enough offers to judge fairly
+BACK_MIN_RATE = 0.10      # claimed fewer than 1 in 10
+BACK_RECENT_DAYS = 7      # one claim in the last week earns the spot back
+
+
+def back_of_line(stats, now, min_offers=BACK_MIN_OFFERS,
+                 min_rate=BACK_MIN_RATE, recent_days=BACK_RECENT_DAYS):
+    """Agents who go to the back of the line (Barry, Nov 18 2026). An
+    agent with at least 10 offers in 30 days who claimed fewer than 1 in
+    10, and has not claimed anything in the last 7 days. They still get
+    offers, after everyone else. One claim brings them straight back.
+    Returns {agent: plain reason}."""
+    from datetime import timedelta
+    out = {}
+    for name, s in (stats or {}).items():
+        ignored, claimed = int(s.get("ignored") or 0), int(s.get("claimed") or 0)
+        seen = ignored + claimed
+        if seen < min_offers or claimed / float(seen) >= min_rate:
+            continue
+        last = s.get("last_claim")
+        if last is not None and now - last <= timedelta(days=recent_days):
+            continue
+        out[name] = ("claimed %d of %d offers in the last 30 days"
+                     % (claimed, seen))
+    return out
+
+
+def order_with_back(cands, back):
+    """Same order, with back of the line agents moved behind the rest."""
+    front = [c for c in cands if c not in back]
+    return front + [c for c in cands if c in back]
+
+
 def is_sphere(lead):
     src = (lead.get("source") or "").strip().lower()
     tags = " ".join(str(t).lower() for t in (lead.get("tags") or []))

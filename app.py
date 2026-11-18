@@ -5857,14 +5857,19 @@ def dispatch_accept_page(token):
             if lat is not None:
                 if offer["source"] == "realtor":
                     _realtor_after_resolve(offer)
-                elif offer["hop"] < _dp.MAX_HOPS:
-                    _dp.make_offer(offer["source"], offer["person_id"],
-                                   offer["lead_name"], offer["lead_city"],
-                                   offer["appt_time"], offer["notes"],
-                                   hop=offer["hop"] + 1,
-                                   audit=cache_get("audit") or {})
                 else:
-                    _db.mark_dispatch_terminal(offer["id"])
+                    # A pass with nobody left to offer is a dead end, and
+                    # a dead end always lands with Fhalen (Nov 18 2026).
+                    _nxt = None
+                    if offer["hop"] < _dp.MAX_HOPS:
+                        _nxt = _dp.make_offer(
+                            offer["source"], offer["person_id"],
+                            offer["lead_name"], offer["lead_city"],
+                            offer["appt_time"], offer["notes"],
+                            hop=offer["hop"] + 1,
+                            audit=cache_get("audit") or {})
+                    if not _nxt:
+                        _desk_terminal(offer)
                 return ("<div style='font-family:sans-serif;padding:3rem;"
                         "text-align:center'><h2>Passed</h2><p>%s moves to the "
                         "next agent. Passing is fine when the reason is real; "
@@ -6837,14 +6842,21 @@ def api_slack_actions():
                          "the group. Honest passes cost respect from no "
                          "one." % lead_first)
                     return
+                _nxt = None
                 if offer["hop"] < _dp.MAX_HOPS:
-                    _dp.make_offer(offer["source"], offer["person_id"],
-                                   offer["lead_name"], offer["lead_city"],
-                                   offer["appt_time"], offer["notes"],
-                                   hop=offer["hop"] + 1,
-                                   audit=cache_get("audit") or {})
-                else:
-                    _db.mark_dispatch_terminal(offer["id"])
+                    _nxt = _dp.make_offer(
+                        offer["source"], offer["person_id"],
+                        offer["lead_name"], offer["lead_city"],
+                        offer["appt_time"], offer["notes"],
+                        hop=offer["hop"] + 1,
+                        audit=cache_get("audit") or {})
+                if not _nxt:
+                    # Nobody left to offer: the lead lands with Fhalen.
+                    _desk_terminal(offer)
+                    _say("Passed. Nobody else is available right now, so "
+                         "%s goes to Fhalen. Honest passes cost rotation "
+                         "position, not respect." % lead_first)
+                    return
                 _say("Passed. %s moves to the next agent in seconds. Honest "
                      "passes cost rotation position, not respect." % lead_first)
 
@@ -9452,56 +9464,7 @@ def scheduled_dispatch_cascade():
                                      audit=cache_get("audit") or {})
                 if nxt:
                     continue
-            if offer["source"] == "ai_nurture":
-                # Nurture lane (Barry, Nov 6 2026): a full pass-through is
-                # information, not an emergency. No escalation, no room
-                # post, no Fhalen email — the lead stays where it was and
-                # the weekly receipt counts it.
-                _db.mark_dispatch_terminal(oid)
-                _db.log_automation_event(
-                    event_type="ai_nurture_unclaimed",
-                    person_id=offer["person_id"],
-                    person_name=offer["lead_name"], agent_name=None,
-                    payload={"hops": offer["hop"]}, triggered_by="dispatch")
-                continue
-            _db.mark_dispatch_terminal(oid)
-            try:
-                import escalation as _esc
-                _esc.open_escalation(
-                    "unclaimed", offer["person_id"], offer["lead_name"],
-                    owner_agent=None,
-                    note="cascaded through %d agents, none claimed" % offer["hop"])
-            except Exception as _ee:
-                logger.warning("escalation open failed: %s", _ee)
-            # Say it in the room (Barry, Oct 2026: a weekend of leads died
-            # in silence). Factual and forward-looking, never a shame post.
-            try:
-                import slack_client as _slw
-                _wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
-                _lead1 = (offer["lead_name"] or "A lead").split()[0]
-                if _slw.is_available():
-                    _slw.post_message(_wins,
-                        ":raised_hand: %s converted and is still waiting on a "
-                        "human. The claim ran its course unclaimed, so Fhalen "
-                        "has the next call. Fastest recovery wins the lead."
-                        % _lead1)
-            except Exception as _we:
-                logger.warning("[DISPATCH] terminal room post failed: %s", _we)
-            try:
-                import postmark_client as _pm
-                fhalen = getattr(config, "LIVE_CALLS_ADMIN_EMAIL", None)
-                _pm.send(to=", ".join(filter(None, [config.EMAIL_FROM, fhalen])),
-                         from_email=config.EMAIL_FROM,
-                         subject="Unclaimed handoff: %s" % (offer["lead_name"] or
-                                                            offer["person_id"]),
-                         html="<p>%s cascaded through %d agents with no "
-                              "acceptance. They are unowned. Dispatch board: "
-                              "%s/dispatch</p>"
-                              % (offer["lead_name"] or "A converted lead",
-                                 offer["hop"],
-                                 (os.environ.get("BASE_URL") or "").rstrip("/")))
-            except Exception as e:
-                logger.warning("[DISPATCH] terminal alert failed: %s", e)
+            _desk_terminal(offer)
     except Exception as e:
         logger.warning("[DISPATCH] cascade error: %s", e)
     finally:
@@ -14318,7 +14281,16 @@ def _fub_upsert_appt_resource(appt, event_name):
     # Desk funnel ceremony: appointment set / met on claimed leads, straight
     # off webhooks we already process.
     if person_id:
-        if "Created" in event_name:
+        # Follow Up Boss often attaches the lead on an Updated event a
+        # moment after Created, so credit on Created alone read zero
+        # appointments for a month (Nov 18 2026 audit). Any event on a
+        # live appointment made in the last two days counts; the stamp
+        # itself is once per claimed lead, so nothing double counts.
+        _new_appt = "Created" in event_name
+        if not _new_appt and created_dt and status != "canceled":
+            _new_appt = (datetime.now(timezone.utc) - created_dt
+                         <= timedelta(days=2))
+        if _new_appt:
             _desk_celebrate("appt_set", person_id)
         if outcome == "Met with Client" and prev_outcome != outcome:
             _desk_celebrate("appt_met", person_id)
@@ -16455,6 +16427,120 @@ def _realtor_intake(pid, person, triggered_by="webhook_fub", inquiry=None):
     return True
 
 
+def _desk_terminal(offer):
+    """The one ending for an offer nobody took, whether it expired
+    through every agent or was passed with nobody left. Longer timeline
+    leads end quietly (Barry, Nov 6 2026). Every other lead is assigned
+    to Fhalen in Follow Up Boss, and she, the room and the escalation
+    list are told."""
+    oid = offer["id"]
+    if offer["source"] == "ai_nurture":
+        _db.mark_dispatch_terminal(oid)
+        _db.log_automation_event(
+            event_type="ai_nurture_unclaimed",
+            person_id=offer["person_id"],
+            person_name=offer["lead_name"], agent_name=None,
+            payload={"hops": offer["hop"]}, triggered_by="dispatch")
+        return
+    _db.mark_dispatch_terminal(oid)
+    why = "offered to %d agents and nobody claimed" % offer["hop"]
+    assigned = _dead_end_to_fhalen(offer["person_id"], offer["lead_name"],
+                                   why)
+    try:
+        import escalation as _esc
+        _esc.open_escalation(
+            "unclaimed", offer["person_id"], offer["lead_name"],
+            owner_agent=None,
+            note="cascaded through %d agents, none claimed" % offer["hop"])
+    except Exception as _ee:
+        logger.warning("escalation open failed: %s", _ee)
+    # Say it in the room (Barry, Oct 2026: a weekend of leads died in
+    # silence). Factual and forward-looking, never a shame post. Held
+    # overnight like everything else that reaches agents.
+    try:
+        import slack_client as _slw
+        _wins = os.environ.get("SLACK_WINS_CHANNEL", "#lead-desk")
+        _lead1 = (offer["lead_name"] or "A lead").split()[0]
+        if _slw.is_available() and _realtor_minutes_until_open() == 0:
+            _slw.post_message(_wins,
+                ":raised_hand: %s is still waiting on a call and nobody "
+                "claimed, so the lead is %s." % (
+                    _lead1, "assigned to Fhalen and she has the next call"
+                    if assigned else "with Fhalen for the next call"))
+    except Exception as _we:
+        logger.warning("[DISPATCH] terminal room post failed: %s", _we)
+    try:
+        import postmark_client as _pm
+        fhalen = getattr(config, "LIVE_CALLS_ADMIN_EMAIL", None)
+        _pm.send(to=", ".join(filter(None, [config.EMAIL_FROM, fhalen])),
+                 from_email=config.EMAIL_FROM,
+                 subject="Unclaimed handoff: %s" % (offer["lead_name"] or
+                                                    offer["person_id"]),
+                 html="<p>%s was offered to %d agents and nobody claimed. "
+                      "%s <a href='%s'>Open in Follow Up Boss</a>. Dispatch "
+                      "board: %s/dispatch</p>"
+                      % (offer["lead_name"] or "A converted lead",
+                         offer["hop"],
+                         "The lead is now assigned to Fhalen." if assigned
+                         else "The lead could not be assigned to Fhalen, "
+                              "please check the owner.",
+                         _fub_person_url(offer["person_id"]),
+                         (os.environ.get("BASE_URL") or "").rstrip("/")))
+    except Exception as e:
+        logger.warning("[DISPATCH] terminal alert failed: %s", e)
+
+
+def _dead_end_to_fhalen(person_id, lead_name, why):
+    """A lead that ran out of agents gets a named owner: Fhalen (Barry,
+    Nov 18 2026). Never takes a lead from a working agent and never
+    touches a dead stage. Recorded only after Follow Up Boss accepts the
+    change. True when Fhalen owns the lead afterwards."""
+    try:
+        client = FUBClient()
+        p = client._request("GET", "people/%s" % person_id, params={
+            "fields": "id,assignedTo,stage"}) or {}
+        owner = (p.get("assignedTo") or "").strip()
+        stage = (p.get("stage") or "").strip().lower()
+        if owner == config.ISA_NAME:
+            return True
+        if (owner and not _desk_dark_owner(owner)) \
+                or stage in ("trash", "contact"):
+            _db.log_automation_event(
+                event_type="dead_end_left_alone", person_id=person_id,
+                person_name=lead_name, agent_name=owner or None,
+                payload={"why": why, "stage": stage},
+                triggered_by="dead_end")
+            return False
+        client._request("PUT", "people/%s" % person_id,
+                        json_data={"assignedUserId": config.ISA_USER_ID})
+        _db.log_automation_event(
+            event_type="dead_end_to_fhalen", person_id=person_id,
+            person_name=lead_name, agent_name=config.ISA_NAME,
+            payload={"why": why, "from": owner or "pond"},
+            triggered_by="dead_end")
+    except Exception as e:
+        logger.error("[DEAD END] could not assign %s to Fhalen: %s",
+                     person_id, e)
+        _owner_alert("A lead ran out of agents and could not be assigned "
+                     "to Fhalen (%s). Please assign it by hand: %s"
+                     % (lead_name or person_id, _fub_person_url(person_id)))
+        return False
+    try:
+        if _realtor_minutes_until_open() == 0:
+            import dispatch as _dp
+            import slack_client as _sl
+            sid = _dp._slack_user_id(config.ISA_NAME)
+            if _sl.is_available() and sid:
+                _sl.dm_user(sid, (
+                    "Fhalen, %s is now assigned to you in Follow Up Boss "
+                    "(%s). Please give them a call: %s"
+                    % (lead_name or "a lead", why,
+                       _fub_person_url(person_id))))
+    except Exception as e:
+        logger.warning("[DEAD END] Fhalen DM failed: %s", e)
+    return True
+
+
 def _fub_person_url(pid):
     return ("https://yourfriendlyagent.followupboss.com/2/people/view/%s"
             % pid)
@@ -16645,10 +16731,16 @@ def _realtor_terminal(person_id, lead_name, last_offer_id=None):
     (Fhalen asked immediately via the unclaimed rung) and Barry hears it
     directly — a paid shared lead dying unclaimed is a business problem,
     not a log line."""
-    if not _db.claim_once("rshoot_term_%s" % person_id):
+    # Once per lead per day: a repeat inquirer weeks later gets the full
+    # ending again instead of silence.
+    if not _db.claim_once("rshoot_term_%s_%s" % (
+            person_id, _realtor_et_now().strftime("%Y%m%d"))):
         return
     if last_offer_id:
         _db.mark_dispatch_terminal(last_offer_id)
+    _dead_end_to_fhalen(person_id, lead_name,
+                        "Realtor.com lead, offered to the whole team and "
+                        "nobody claimed")
     try:
         import escalation as _esc
         _esc.open_escalation("unclaimed", person_id, lead_name,
@@ -24146,6 +24238,7 @@ def _run_handoff_watch(apply=True, max_age_hours=72):
         lead1 = (name or "your lead").split()[0]
         row = {"person_id": pid, "lead": name, "owner": owner or "nobody",
                "channel": r["channel"], "age_hours": r["age_hours"],
+               "clock_hours": r.get("work_hours"),
                "said": r.get("reply_text")}
         stage = (p.get("stage") or "").lower()
         dark = _desk_dark_owner(owner)
@@ -24165,7 +24258,7 @@ def _run_handoff_watch(apply=True, max_age_hours=72):
             row["action"] = "already being offered"
         elif not dark and _owner_tried(client, pid, owner, row):
             pass
-        elif dark or r["age_hours"] >= _cl.REASSIGN_HOURS:
+        elif dark or r.get("work_hours", r["age_hours"]) >= _cl.REASSIGN_HOURS:
             row["action"] = "offer to the team" if dark else \
                 "reassign from %s" % owner
             if apply and _db.claim_once("handoff_move_%s_%s"
@@ -24212,7 +24305,7 @@ def _run_handoff_watch(apply=True, max_age_hours=72):
                             % (flink, name or "a lead", owner,
                                int(r["age_hours"]),
                                row["offered_to"] or "the next agent")))
-        elif r["age_hours"] >= _cl.NUDGE_HOURS:
+        elif r.get("work_hours", r["age_hours"]) >= _cl.NUDGE_HOURS:
             row["action"] = "remind %s" % owner
             if apply and _sl.is_available() and _db.claim_once(
                     "handoff_nudge_%s_%s" % (pid, r["convo_day"])):
@@ -24226,8 +24319,9 @@ def _run_handoff_watch(apply=True, max_age_hours=72):
                         "no call or text from you yet. Give them a call "
                         "now: <%s|open %s in Follow Up Boss>. The lead "
                         "stays yours as long as a call or text is logged "
-                        "within 24 hours of their conversation. After "
-                        "that it goes to another agent."
+                        "within 24 hours of their conversation (9pm to "
+                        "8am does not count). After that it goes to "
+                        "another agent."
                         % (owner.split()[0], lead1, int(r["age_hours"]),
                            flink, lead1)))
                     _db.log_automation_event(
@@ -24729,10 +24823,28 @@ def api_front_door():
                  for h in _db.get_realtor_night_holds()]
     except Exception:
         pass
+    try:
+        _back = _dp.back_of_line_agents()
+    except Exception:
+        _back = {}
     return jsonify({"days": days, "mode": "shadow", "offers": len(rows),
+                    "back_of_the_line": _back,
                     "agreed": len(rows) - len(disagree), "by_lane": by_lane,
                     "disagreements": disagree,
                     "realtor_leads_waiting_for_8am": holds})
+
+
+@app.route("/api/admin/desk/appointment-backfill", methods=["GET", "POST"])
+def api_desk_appointment_backfill():
+    """Appointments on claimed leads that never got credit. GET lists
+    them; POST writes the credit."""
+    if not _read_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    days = min(int(request.args.get("days", 45) or 45), 90)
+    rows = _db.backfill_desk_appointments(
+        days=days, apply=(request.method == "POST"))
+    return jsonify({"days": days, "applied": request.method == "POST",
+                    "count": len(rows), "rows": rows})
 
 
 @app.route("/api/admin/desk/routing-health")

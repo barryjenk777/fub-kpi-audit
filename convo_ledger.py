@@ -604,6 +604,15 @@ def watch_candidates(max_age_hours=72):
             continue
         r = dict(r)
         r["age_hours"] = round(age_h, 1)
+        # The clock an agent is held to pauses from 9pm to 8am.
+        try:
+            import routing_gate as _rg
+            _at = datetime.fromisoformat(r["convo_at"]).astimezone(ET)
+            r["work_hours"] = _rg.working_hours_between(
+                _at.replace(tzinfo=None),
+                now.astimezone(ET).replace(tzinfo=None))
+        except Exception:
+            r["work_hours"] = r["age_hours"]
         out.append(r)
     return out
 

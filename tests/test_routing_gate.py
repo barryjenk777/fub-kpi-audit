@@ -124,5 +124,55 @@ class TestTime(unittest.TestCase):
             self.assertNotIn("–", c["reason"])
 
 
+class TestPausedClock(unittest.TestCase):
+    def test_overnight_does_not_count(self):
+        w = g.working_hours_between
+        self.assertEqual(w(datetime(2026, 11, 16, 23, 0),
+                           datetime(2026, 11, 17, 7, 0)), 0.0)
+        self.assertEqual(w(datetime(2026, 11, 16, 20, 30),
+                           datetime(2026, 11, 17, 8, 30)), 1.0)
+
+    def test_a_full_day_is_thirteen_working_hours(self):
+        self.assertEqual(g.working_hours_between(
+            datetime(2026, 11, 16, 12, 0), datetime(2026, 11, 17, 12, 0)),
+            13.0)
+
+    def test_backwards_is_zero(self):
+        self.assertEqual(g.working_hours_between(
+            datetime(2026, 11, 17, 12, 0), datetime(2026, 11, 16, 12, 0)),
+            0.0)
+
+
+class TestBackOfLine(unittest.TestCase):
+    NOW = datetime(2026, 11, 18, 15, 0, tzinfo=timezone.utc)
+
+    def _back(self, **stats):
+        return g.back_of_line(stats, self.NOW)
+
+    def test_an_agent_who_ignores_offers_goes_to_the_back(self):
+        back = self._back(Quiet={"ignored": 45, "claimed": 1,
+                                 "last_claim": datetime(2026, 10, 25,
+                                                        tzinfo=timezone.utc)})
+        self.assertIn("Quiet", back)
+        self.assertIn("1 of 46", back["Quiet"])
+
+    def test_a_few_offers_is_not_enough_to_judge(self):
+        self.assertEqual(self._back(New={"ignored": 6, "claimed": 0,
+                                         "last_claim": None}), {})
+
+    def test_one_claim_this_week_earns_the_spot_back(self):
+        self.assertEqual(self._back(Back={
+            "ignored": 45, "claimed": 1,
+            "last_claim": datetime(2026, 11, 16, tzinfo=timezone.utc)}), {})
+
+    def test_responders_keep_their_place(self):
+        self.assertEqual(self._back(Fast={"ignored": 20, "claimed": 12,
+                                          "last_claim": None}), {})
+
+    def test_back_agents_still_get_offers_last(self):
+        self.assertEqual(g.order_with_back(["A", "B", "C", "D"], {"A", "C"}),
+                         ["B", "D", "A", "C"])
+
+
 if __name__ == "__main__":
     unittest.main()

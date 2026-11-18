@@ -10826,6 +10826,76 @@ def mark_desk_milestone(person_id, kind, window_days=45, caller_uid=None):
         return None
 
 
+def get_offer_response_stats(days=30):
+    """Per agent over the window: offers that ran out with no tap, offers
+    claimed, and the last claim. Feeds the back of the line rule. Offers
+    another agent won first are not counted against anyone."""
+    if not is_available():
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT agent_name,
+                           COUNT(*) FILTER (WHERE expired_at IS NOT NULL
+                                            AND accepted_at IS NULL
+                                            AND COALESCE(notes, '')
+                                                NOT LIKE 'After hours%%'),
+                           COUNT(*) FILTER (WHERE accepted_at IS NOT NULL),
+                           MAX(accepted_at)
+                    FROM dispatch_offers
+                    WHERE offered_at >= NOW() - make_interval(days => %s)
+                    GROUP BY agent_name
+                """, (int(days),))
+                return {r[0]: {"ignored": int(r[1] or 0),
+                               "claimed": int(r[2] or 0),
+                               "last_claim": r[3]}
+                        for r in cur.fetchall()}
+    except Exception as e:
+        logger.warning("get_offer_response_stats failed: %s", e)
+        return {}
+
+
+def backfill_desk_appointments(days=45, apply=False):
+    """Credit appointments the live stamp missed (it only fired at the
+    instant an appointment was created, before Follow Up Boss attached
+    the lead). A claimed lead gets appointment credit when an appointment
+    for that person was created after the claim. Returns the rows found;
+    writes only when apply is True."""
+    if not is_available():
+        return []
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT d.id, d.agent_name, d.lead_name, d.source,
+                           MIN(COALESCE(a.fub_created_at, a.updated_at))
+                    FROM dispatch_offers d
+                    JOIN appointments a
+                      ON a.person_id::text = d.person_id::text
+                     AND COALESCE(a.fub_created_at, a.updated_at)
+                         >= d.accepted_at
+                     AND COALESCE(a.status, '') <> 'canceled'
+                    WHERE d.accepted_at IS NOT NULL
+                      AND d.appt_set_at IS NULL
+                      AND d.accepted_at >= NOW() - make_interval(days => %s)
+                    GROUP BY d.id, d.agent_name, d.lead_name, d.source
+                """, (int(days),))
+                rows = cur.fetchall()
+                if apply:
+                    for r in rows:
+                        cur.execute("UPDATE dispatch_offers SET appt_set_at "
+                                    "= %s WHERE id = %s AND appt_set_at IS "
+                                    "NULL", (r[4], r[0]))
+        return [{"offer_id": r[0], "agent": r[1], "lead": r[2],
+                 "lane": r[3],
+                 "appointment_made": r[4].isoformat() if r[4] else None}
+                for r in rows]
+    except Exception as e:
+        logger.warning("backfill_desk_appointments failed: %s", e)
+        return [{"error": str(e)[:200]}]
+
+
 def get_desk_agent_snapshot(agent_name, days=14):
     """Personalization read for offer copy: offers, claims, median claim
     seconds for one agent over the window."""
