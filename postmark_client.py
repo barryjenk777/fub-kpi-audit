@@ -24,9 +24,12 @@ def send(
     text: str = "",
     cc=None,
     reply_to: str = "",
+    attachments=None,
 ) -> dict:
     """
     Send a single email via Postmark.
+
+    attachments: optional list of {"Name", "Content" (base64), "ContentType"}.
 
     Args:
         to         — recipient address or "Name <email>" string
@@ -72,6 +75,9 @@ def send(
 
     if reply_to:
         payload["ReplyTo"] = reply_to
+
+    if attachments:
+        payload["Attachments"] = attachments
 
     resp = _requests.post(
         _POSTMARK_URL,

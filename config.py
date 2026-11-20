@@ -915,10 +915,11 @@ FRIDAY_MEETING_TEXT_OVERRIDES = {
     ),
     # Barry, Nov 19 2026: the price reduction teaching.
     "2026-11-20": (
-        "Hey {first}! {time} today on Zoom: {zoom}. I'm teaching what I "
-        "believe will be a key strategy for selling a lot of houses in 2027: "
-        "how to get your sellers to reduce their price. Bring one listing "
-        "that should have sold by now. See you in there."
+        "Hey {first}! {time} today on Zoom: {zoom}. I'm going over the "
+        "Price Adjustment Playbook, our strategy to sell more listings in "
+        "2027 and how you get your sellers to reduce their price. The "
+        "playbook is in your email. Bring one listing that should have "
+        "sold by now. See you in there."
     ),
 }
 
@@ -930,23 +931,32 @@ FRIDAY_MEETING_TEXT_OVERRIDES = {
 # Copy is Barry's voice: no dashes, nothing he did not say he would teach.
 FRIDAY_MEETING_TOPICS = {
     "2026-11-20": {
-        "announce_subject": ("Tomorrow at 11:30am: how to get your sellers "
-                             "to reduce their price"),
+        # Numbers below come from the playbook itself (REIN, October 2026).
+        "attachment": "assets/meeting/price-adjustment-playbook.pdf",
+        "attachment_name": "Price Adjustment Playbook.pdf",
+        "announce_subject": ("Tomorrow at 11:30am: how we sell more "
+                             "listings in 2027"),
         "announce_before": [
-            "I'll be candid with you. The conversation most of us avoid is "
-            "the one I believe will sell the most houses in 2027.",
-            "It's the price conversation.",
-            "You know the one. The listing has been sitting. The showings "
-            "have slowed down. You know the number is the problem, and your "
-            "seller is still waiting on the right buyer. So you stay quiet, "
-            "because you don't want to upset them.",
-            "That isn't kindness. That's being too nice to your comfort "
-            "zone, and your seller is the one who pays for it.",
-            "Tomorrow at <b>{time}</b> on Zoom, I'm teaching what I believe "
-            "will be a key strategy for agents who want to sell a lot of "
-            "houses in 2027: <b>how to get your sellers to reduce their "
-            "price.</b>",
+            "Right now in Hampton Roads, what's selling is priced at "
+            "$360,000. What's sitting is priced at $410,000.",
+            "That's a $50,000 gap. And I believe closing it is how we sell "
+            "a lot of houses in 2027.",
+            "Active listings are up 18.5% from a year ago. Buyers slowed "
+            "down. What's sitting is priced above what's selling.",
+            "So tomorrow at <b>{time}</b> on Zoom, I'm going over the "
+            "<b>Price Adjustment Playbook</b>. It's our strategy to make "
+            "sure we sell more listings in 2027, and it's how you get your "
+            "sellers to reduce their price.",
+            "Here's what I love about it. The price reduction isn't won in "
+            "an awkward phone call weeks after the sign goes up. It's won "
+            "at the listing appointment and collected at the checkpoint. "
+            "One system. No surprises.",
+            "<b>The playbook is attached.</b> Look it over tonight if you "
+            "can, so tomorrow we spend our time on how to use it.",
         ],
+        "announce_footnote": ("Numbers: REIN, October 2026 Statistical "
+                              "Report. Internal training, please don't "
+                              "share outside the team."),
         "announce_after": [
             "<b>Here's what I want you to do before then.</b> Pick one "
             "listing that should have sold by now. Yours, or one you've "
@@ -956,17 +966,18 @@ FRIDAY_MEETING_TOPICS = {
             "your next one sold.",
             "If something has you tied up and you can't make it, shoot me a "
             "text so I'm not looking for you.",
-            "A seller with the right price gets a sold sign. Clarity is "
-            "kindness.",
+            "Most of us stay quiet on price because we don't want to upset "
+            "the seller. That isn't kindness. Clarity is kindness.",
         ],
-        "day_of_subject": ("Today at 11:30am: how to get your sellers to "
-                           "reduce their price"),
+        "day_of_subject": ("Today at 11:30am: how we sell more listings "
+                           "in 2027"),
         "day_of_para": (
-            "Today I'm teaching what I believe will be a key strategy for "
-            "selling a lot of houses in 2027: <b>how to get your sellers to "
-            "reduce their price.</b> Bring one listing that should have sold "
-            "by now, yours or one you've been watching, so you can put it "
-            "to work on a real house."
+            "Today I'm going over the <b>Price Adjustment Playbook</b>: our "
+            "strategy to make sure we sell more listings in 2027, and how "
+            "you get your sellers to reduce their price. The playbook is "
+            "attached. Bring one listing that should have sold by now, "
+            "yours or one you've been watching, so you can put it to work "
+            "on a real house."
         ),
     },
 }

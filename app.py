@@ -31002,6 +31002,20 @@ def _friday_meeting_topic(days_ahead=0):
     return getattr(config, "FRIDAY_MEETING_TOPICS", {}).get(day)
 
 
+def _friday_topic_attachments(topic):
+    """Postmark attachment list for a topic's file, or None."""
+    path = (topic or {}).get("attachment")
+    if not path:
+        return None
+    import base64 as _b64
+    import os as _os2
+    full = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)), path)
+    with open(full, "rb") as fh:
+        content = _b64.b64encode(fh.read()).decode("ascii")
+    return [{"Name": topic.get("attachment_name") or _os2.path.basename(path),
+             "Content": content, "ContentType": "application/pdf"}]
+
+
 def _friday_meeting_subject():
     topic = _friday_meeting_topic()
     if topic and topic.get("day_of_subject"):
@@ -31026,10 +31040,13 @@ def _friday_announce_email_html(agent_name, topic):
   </p>
   <p style="font-size:14px;color:#52606d">Zoom link:
      <a href="%s" style="color:#1c6fd1">%s</a></p>%s
-  <p>See you tomorrow,<br>Barry</p>
+  <p>See you tomorrow,<br>Barry</p>%s
 </div>""" % (first, paras("announce_before"), config.FRIDAY_MEETING_ZOOM,
              config.FRIDAY_MEETING_TIME, config.FRIDAY_MEETING_ZOOM,
-             config.FRIDAY_MEETING_ZOOM, paras("announce_after")))
+             config.FRIDAY_MEETING_ZOOM, paras("announce_after"),
+             ('\n  <p style="font-size:12px;color:#7b8794">%s</p>'
+              % topic["announce_footnote"])
+             if topic.get("announce_footnote") else ""))
 
 
 def _friday_meeting_email_html(agent_name):
@@ -31077,7 +31094,9 @@ def scheduled_friday_meeting_email():
                 _pm.send(to=email, from_email=config.EMAIL_FROM,
                          subject=_friday_meeting_subject(),
                          html=_friday_meeting_email_html(p["agent_name"]),
-                         reply_to=config.EMAIL_FROM)
+                         reply_to=config.EMAIL_FROM,
+                         attachments=_friday_topic_attachments(
+                             _friday_meeting_topic()))
                 sent.append(p["agent_name"])
                 _db.log_attention(p["agent_name"], "friday_meeting", "email")
             except Exception as e:
@@ -31201,13 +31220,16 @@ def api_friday_meeting_announce():
         return jsonify({
             "ok": True, "dry_run": True, "subject": subject,
             "recipients": [p["agent_name"] for p in recipients],
+            "attachment": [(f["Name"], len(f["Content"]))
+                           for f in (_friday_topic_attachments(topic) or [])],
             "html_sample": _friday_announce_email_html(
                 recipients[0]["agent_name"] if recipients else "Barry", topic)})
     import postmark_client as _pm
+    files = _friday_topic_attachments(topic)
     if test_to:
         _pm.send(to=test_to, from_email=config.EMAIL_FROM, subject=subject,
                  html=_friday_announce_email_html("Barry", topic),
-                 reply_to=config.EMAIL_FROM)
+                 reply_to=config.EMAIL_FROM, attachments=files)
         return jsonify({"ok": True, "test_to": test_to})
     hour = datetime.now(_ZI("America/New_York")).hour
     if hour >= 21 or hour < 8:
@@ -31229,7 +31251,7 @@ def api_friday_meeting_announce():
                          subject=subject,
                          html=_friday_announce_email_html(p["agent_name"],
                                                           topic),
-                         reply_to=config.EMAIL_FROM)
+                         reply_to=config.EMAIL_FROM, attachments=files)
                 sent.append(p["agent_name"])
                 _db.log_attention(p["agent_name"], "friday_meeting", "email")
             except Exception as e:
@@ -31238,7 +31260,7 @@ def api_friday_meeting_announce():
             _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
                      subject=subject,
                      html=_friday_announce_email_html("Barry", topic),
-                     reply_to=config.EMAIL_FROM)
+                     reply_to=config.EMAIL_FROM, attachments=files)
         except Exception as e:
             failed.append("Barry copy (%s)" % str(e)[:80])
         _record_fired("friday_meeting_announce")
