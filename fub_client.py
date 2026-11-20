@@ -234,6 +234,7 @@ class FUBClient:
     BASE_URL = "https://api.followupboss.com/v1"
     RATE_LIMIT_DELAY = 0.35  # legacy; pacing now lives in _FubThrottle (FUB_RPM)
     REQUEST_TIMEOUT = (10, 30)  # (connect, read) seconds — prevents indefinite hangs
+    NETWORK_RETRIES = 2  # extra tries for a GET that times out or drops
 
     def __init__(self, api_key=None):
         self.api_key = api_key or os.environ.get("FUB_API_KEY")
@@ -262,6 +263,7 @@ class FUBClient:
         url = f"{self.BASE_URL}/{endpoint}"
         self._request_count += 1
         response = None
+        drops = 0
         for attempt in range(5):
             _THROTTLE.acquire()
             try:
@@ -269,6 +271,22 @@ class FUBClient:
                     method, url, params=params, json=json_data,
                     timeout=self.REQUEST_TIMEOUT,
                 )
+            except (requests.exceptions.Timeout,
+                    requests.exceptions.ConnectionError) as e:
+                # One slow FUB answer used to kill a whole scheduled run
+                # (Nov 20 2026: a single 30s read timeout failed the 2:50am
+                # pond refresh). Reads are safe to repeat, so a GET gets two
+                # more tries. Writes never retry here: FUB may have applied
+                # the change before the line went quiet.
+                drops += 1
+                if method.upper() != "GET" or drops > self.NETWORK_RETRIES:
+                    raise
+                wait = 2.0 * drops + random.random()
+                logger.warning("FUB %s on GET %s (try %d/%d), retrying in "
+                               "%.1fs", type(e).__name__, endpoint, drops,
+                               self.NETWORK_RETRIES + 1, wait)
+                time.sleep(wait)
+                continue
             finally:
                 _THROTTLE.release()
             if response.status_code != 429:
