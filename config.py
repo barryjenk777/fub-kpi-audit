@@ -913,6 +913,62 @@ FRIDAY_MEETING_TEXT_OVERRIDES = {
         "I'll still be talking from 11:30 to 12 and you can join on the Zoom "
         "link: {zoom}. Hope to see you there."
     ),
+    # Barry, Nov 19 2026: the price reduction teaching.
+    "2026-11-20": (
+        "Hey {first}! {time} today on Zoom: {zoom}. I'm teaching what I "
+        "believe will be a key strategy for selling a lot of houses in 2027: "
+        "how to get your sellers to reduce their price. Bring one listing "
+        "that should have sold by now. See you in there."
+    ),
+}
+
+# Meeting topics, keyed by the Friday's date in ET (YYYY-MM-DD). When a
+# topic exists for a Friday:
+#   - the night-before announcement can be fired
+#     (POST /api/admin/friday-meeting/announce)
+#   - the 8am email leads with the topic and uses day_of_subject
+# Copy is Barry's voice: no dashes, nothing he did not say he would teach.
+FRIDAY_MEETING_TOPICS = {
+    "2026-11-20": {
+        "announce_subject": ("Tomorrow at 11:30am: how to get your sellers "
+                             "to reduce their price"),
+        "announce_before": [
+            "I'll be candid with you. The conversation most of us avoid is "
+            "the one I believe will sell the most houses in 2027.",
+            "It's the price conversation.",
+            "You know the one. The listing has been sitting. The showings "
+            "have slowed down. You know the number is the problem, and your "
+            "seller is still waiting on the right buyer. So you stay quiet, "
+            "because you don't want to upset them.",
+            "That isn't kindness. That's being too nice to your comfort "
+            "zone, and your seller is the one who pays for it.",
+            "Tomorrow at <b>{time}</b> on Zoom, I'm teaching what I believe "
+            "will be a key strategy for agents who want to sell a lot of "
+            "houses in 2027: <b>how to get your sellers to reduce their "
+            "price.</b>",
+        ],
+        "announce_after": [
+            "<b>Here's what I want you to do before then.</b> Pick one "
+            "listing that should have sold by now. Yours, or one you've "
+            "been watching. Bring it with you so you can put this to work "
+            "on a real house.",
+            "No listing right now? Come anyway. This is the skill that gets "
+            "your next one sold.",
+            "If something has you tied up and you can't make it, shoot me a "
+            "text so I'm not looking for you.",
+            "A seller with the right price gets a sold sign. Clarity is "
+            "kindness.",
+        ],
+        "day_of_subject": ("Today at 11:30am: how to get your sellers to "
+                           "reduce their price"),
+        "day_of_para": (
+            "Today I'm teaching what I believe will be a key strategy for "
+            "selling a lot of houses in 2027: <b>how to get your sellers to "
+            "reduce their price.</b> Bring one listing that should have sold "
+            "by now, yours or one you've been watching, so you can put it "
+            "to work on a real house."
+        ),
+    },
 }
 
 # ── Team Access Password ─────────────────────────────────────────────────

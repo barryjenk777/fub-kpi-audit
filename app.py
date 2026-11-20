@@ -30994,14 +30994,55 @@ def _friday_meeting_text_for(agent_name):
                        zoom=config.FRIDAY_MEETING_ZOOM)
 
 
+def _friday_meeting_topic(days_ahead=0):
+    """The topic entry for today's meeting (or the one N days out), or None."""
+    from zoneinfo import ZoneInfo as _ZI
+    day = (datetime.now(_ZI("America/New_York"))
+           + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    return getattr(config, "FRIDAY_MEETING_TOPICS", {}).get(day)
+
+
+def _friday_meeting_subject():
+    topic = _friday_meeting_topic()
+    if topic and topic.get("day_of_subject"):
+        return topic["day_of_subject"]
+    return "Team meeting at %s today, see you on Zoom" % config.FRIDAY_MEETING_TIME
+
+
+def _friday_announce_email_html(agent_name, topic):
+    """Night-before announcement: the topic, the time, the link, one ask."""
+    first = agent_name.split()[0]
+    fmt = lambda s: s.replace("{time}", config.FRIDAY_MEETING_TIME)
+    paras = lambda key: "".join(
+        "\n  <p>%s</p>" % fmt(p) for p in topic.get(key, []))
+    return ("""
+<div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:520px;
+            margin:0 auto;color:#1c2733;line-height:1.6;padding:8px 4px">
+  <p>Hey %s,</p>%s
+  <p style="margin:18px 0">
+    <a href="%s" style="background:#2ea44f;color:#ffffff;text-decoration:none;
+       font-weight:700;padding:12px 26px;border-radius:10px;display:inline-block">
+       Join tomorrow at %s &rarr; zoomwithbarry.com</a>
+  </p>
+  <p style="font-size:14px;color:#52606d">Zoom link:
+     <a href="%s" style="color:#1c6fd1">%s</a></p>%s
+  <p>See you tomorrow,<br>Barry</p>
+</div>""" % (first, paras("announce_before"), config.FRIDAY_MEETING_ZOOM,
+             config.FRIDAY_MEETING_TIME, config.FRIDAY_MEETING_ZOOM,
+             config.FRIDAY_MEETING_ZOOM, paras("announce_after")))
+
+
 def _friday_meeting_email_html(agent_name):
     first = agent_name.split()[0]
-    return ("""
+    topic = _friday_meeting_topic()
+    topic_para = ("\n  <p>%s</p>" % topic["day_of_para"]
+                  if topic and topic.get("day_of_para") else "")
+    return (("""
 <div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;max-width:520px;
             margin:0 auto;color:#1c2733;line-height:1.6;padding:8px 4px">
   <p>Hey %s,</p>
   <p>Quick reminder that we've got our team meeting this morning at
-     <b>%s</b> on Zoom.</p>
+     <b>%s</b> on Zoom.</p>""" + topic_para.replace("%", "%%") + """
   <p style="margin:18px 0">
     <a href="%s" style="background:#2ea44f;color:#ffffff;text-decoration:none;
        font-weight:700;padding:12px 26px;border-radius:10px;display:inline-block">
@@ -31013,7 +31054,7 @@ def _friday_meeting_email_html(agent_name):
   <p>If something has you tied up and you can't make it, just shoot me a
      text so I'm not looking for you.</p>
   <p>See you at %s,<br>Barry</p>
-</div>""" % (first, config.FRIDAY_MEETING_TIME, config.FRIDAY_MEETING_ZOOM,
+</div>""") % (first, config.FRIDAY_MEETING_TIME, config.FRIDAY_MEETING_ZOOM,
              config.FRIDAY_MEETING_TIME, config.FRIDAY_MEETING_TIME))
 
 
@@ -31034,8 +31075,7 @@ def scheduled_friday_meeting_email():
                 continue
             try:
                 _pm.send(to=email, from_email=config.EMAIL_FROM,
-                         subject="Team meeting at %s today, see you on Zoom"
-                                 % config.FRIDAY_MEETING_TIME,
+                         subject=_friday_meeting_subject(),
                          html=_friday_meeting_email_html(p["agent_name"]),
                          reply_to=config.EMAIL_FROM)
                 sent.append(p["agent_name"])
@@ -31121,8 +31161,7 @@ def api_friday_meeting_run():
                  "phone": p.get("phone"),
                  "text_copy": _friday_meeting_text_for(p["agent_name"])}
                 for p in recipients],
-            "email_subject": "Team meeting at %s today, see you on Zoom"
-                             % config.FRIDAY_MEETING_TIME,
+            "email_subject": _friday_meeting_subject(),
             "email_html_sample": _friday_meeting_email_html(
                 recipients[0]["agent_name"]) if recipients else None,
         })
@@ -31135,6 +31174,77 @@ def api_friday_meeting_run():
         ran.append("text")
     return jsonify({"ok": True, "dry_run": False, "ran": ran,
                     "recipients": [p["agent_name"] for p in recipients]})
+
+
+@app.route("/api/admin/friday-meeting/announce", methods=["POST"])
+def api_friday_meeting_announce():
+    """Night-before announcement for a meeting with a topic in
+    config.FRIDAY_MEETING_TOPICS (keyed by tomorrow's date). Body:
+      {"dry_run": true|false, "test_to": "someone@example.com"}
+    dry_run (the default) sends nothing and returns the exact copy.
+    test_to sends ONE copy to that address and does not count as fired.
+    A real send goes to the Friday roster plus a copy to Barry, once only,
+    and never between 9pm and 8am ET."""
+    if not _perplexity_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    from zoneinfo import ZoneInfo as _ZI
+    body = request.get_json(silent=True) or {}
+    dry_run = body.get("dry_run")
+    dry_run = True if dry_run is None else bool(dry_run)
+    test_to = (body.get("test_to") or "").strip()
+    topic = _friday_meeting_topic(days_ahead=1)
+    if not topic:
+        return jsonify({"error": "no topic set for tomorrow"}), 400
+    recipients = _friday_meeting_recipients()
+    subject = topic["announce_subject"]
+    if dry_run:
+        return jsonify({
+            "ok": True, "dry_run": True, "subject": subject,
+            "recipients": [p["agent_name"] for p in recipients],
+            "html_sample": _friday_announce_email_html(
+                recipients[0]["agent_name"] if recipients else "Barry", topic)})
+    import postmark_client as _pm
+    if test_to:
+        _pm.send(to=test_to, from_email=config.EMAIL_FROM, subject=subject,
+                 html=_friday_announce_email_html("Barry", topic),
+                 reply_to=config.EMAIL_FROM)
+        return jsonify({"ok": True, "test_to": test_to})
+    hour = datetime.now(_ZI("America/New_York")).hour
+    if hour >= 21 or hour < 8:
+        return jsonify({"error": "quiet hours, nothing goes to agents "
+                                 "between 9pm and 8am"}), 409
+    if _already_fired_recently("friday_meeting_announce", within_hours=20):
+        return jsonify({"error": "already sent within 20h"}), 409
+    if not _db.try_acquire_job_lock("friday_meeting_announce"):
+        return jsonify({"error": "already running"}), 409
+    try:
+        sent, failed = [], []
+        for p in recipients:
+            email = (p.get("email") or "").strip()
+            if not email:
+                failed.append("%s (no email on file)" % p["agent_name"])
+                continue
+            try:
+                _pm.send(to=email, from_email=config.EMAIL_FROM,
+                         subject=subject,
+                         html=_friday_announce_email_html(p["agent_name"],
+                                                          topic),
+                         reply_to=config.EMAIL_FROM)
+                sent.append(p["agent_name"])
+                _db.log_attention(p["agent_name"], "friday_meeting", "email")
+            except Exception as e:
+                failed.append("%s (%s)" % (p["agent_name"], str(e)[:80]))
+        try:
+            _pm.send(to=config.BARRY_EMAIL, from_email=config.EMAIL_FROM,
+                     subject=subject,
+                     html=_friday_announce_email_html("Barry", topic),
+                     reply_to=config.EMAIL_FROM)
+        except Exception as e:
+            failed.append("Barry copy (%s)" % str(e)[:80])
+        _record_fired("friday_meeting_announce")
+        return jsonify({"ok": True, "sent": sent, "failed": failed})
+    finally:
+        _db.release_job_lock("friday_meeting_announce")
 
 
 def scheduled_send_appointment_email():
